@@ -1,0 +1,366 @@
+import type { OralSessionProjection } from "../api/generated";
+import { ApiError, type HttpOptions } from "../api/http";
+import { sameId, uuid, version } from "../api/wireValidation";
+import { ClosedAccessError, type OpenedAccess } from "../app/openedAccess";
+import { createOralApi, type OralRead } from "./oralApi";
+import { OralCommandController, type OralCommandSnapshot, type OralTransition } from "./oralCommandController";
+import type { OralCommandLane, OralSessionPendingStore, OralStopPendingStore } from "./oralPending";
+
+type AccessCredentials = Parameters<Parameters<OpenedAccess["run"]>[0]>[0];
+
+declare const presentationBrand: unique symbol;
+/** Only reference equality authenticates a ticket; its contents are intentionally opaque. */
+export type OralPresentationTicket = Readonly<{ [presentationBrand]: true }>;
+export type OralDocumentSnapshot = {
+  phase: "loading" | "idle" | "prefetched" | "visible_unconfirmed" | "question" | "revealed"
+    | "unknown" | "summary" | "stopping" | "closed" | "stale" | "disposed";
+  sessionId: string | null;
+  current: OralSessionProjection | null;
+  stateVersion: string;
+  terminalSessionIds: string[];
+  commands: Record<OralCommandLane, OralCommandSnapshot>;
+  problem: string | null;
+  presentationTicket: OralPresentationTicket | null;
+  canStart: boolean; canReveal: boolean; canGrade: boolean; canStop: boolean; canSummaryHome: boolean;
+  canRetry: Record<OralCommandLane, boolean>;
+};
+export type OralDocumentOptions = {
+  access: OpenedAccess;
+  transport: HttpOptions;
+  studyStore: OralSessionPendingStore;
+  stopStore: OralStopPendingStore;
+  newId(): string;
+  /** Only a shared resume read that confirmed mode=oral may supply this seed. */
+  initialSessionId: string | null;
+  minimumStateVersion?(): string | null;
+  terminalSessionIds?: readonly string[];
+  enabled?: boolean;
+  /** Adapter source guard also applies before React effect cleanup. */
+  isLive?(): boolean;
+  /** Adapter may close activity gates during render, before its effects run. */
+  activity?(): { enabled: boolean; visible: boolean };
+  onUpdate(snapshot: OralDocumentSnapshot): void;
+};
+
+/** Owns one immutable opened source. Durable slots outlive this Module. */
+export class OralDocumentController {
+  private readonly options: Readonly<OralDocumentOptions>;
+  private readonly commands: Record<OralCommandLane, OralCommandController>;
+  private readonly terminal = new Set<string>();
+  private readonly receiptSessions = new Set<string>();
+  private readonly processed: Partial<Record<OralCommandLane, string>> = {};
+  private readonly sendEpoch: Record<OralCommandLane, number> = { study: -1, stop: -1 };
+  private readonly busy: Record<OralCommandLane, boolean> = { study: false, stop: false };
+  private disposed = false;
+  private enabled: boolean;
+  private visible = true;
+  private foregroundBlocked = false;
+  private activityEpoch = 0;
+  private recovered = false;
+  private refreshing: Promise<void> | null = null;
+  private sessionId: string | null;
+  private floor: string;
+  private current: OralSessionProjection | null = null;
+  private currentVersion: string | null = null;
+  private problem: string | null = null;
+  private ticket: OralPresentationTicket | null = null;
+  private shownPending = false;
+  private stopRight: { sessionId: string; version: string; stop: boolean; home: boolean } | null = null;
+
+  constructor(options: OralDocumentOptions) {
+    if (options.initialSessionId !== null && !uuid(options.initialSessionId)
+      || !version(options.access.profile.state_version)
+      || options.terminalSessionIds?.some(item => !uuid(item))) throw new Error("invalid oral document context");
+    this.options = { ...options };
+    this.enabled = options.enabled !== false;
+    this.sessionId = options.initialSessionId;
+    this.floor = options.access.profile.state_version;
+    for (const item of options.terminalSessionIds ?? []) this.terminal.add(item.toLowerCase());
+    const api = createOralApi(options.transport), access = options.access;
+    const read = (sessionId: string) => this.exchange(({ token, proof, clientInstanceId, documentId }) => {
+      return api.read(token, proof, { session_id: sessionId, client_instance_id: clientInstanceId, document_id: documentId });
+    });
+    const make = (lane: OralCommandLane) => new OralCommandController({
+      profileId: access.profile.profile_id, clientInstanceId: access.document.clientInstanceId,
+      pair: `${access.profile.dictionary_language}-de` as OralSessionProjection["pair"], lane,
+      pendingStore: lane === "study" ? options.studyStore : options.stopStore,
+      stateVersion: this.floor, minimumStateVersion: () => this.minimum(),
+      newId: options.newId, isLive: () => this.live(), read,
+      check: intent => this.exchange(({ token, proof, clientInstanceId, documentId }) => {
+        return api.status(token, proof, { ...intent, client_instance_id: clientInstanceId, document_id: documentId });
+      }),
+      send: intent => this.exchange(({ token, proof, clientInstanceId, documentId }) => {
+        if (!this.active(lane) || this.sendEpoch[lane] !== this.activityEpoch) throw new ClosedAccessError();
+        return api.send(token, proof, { ...intent, client_instance_id: clientInstanceId, document_id: documentId });
+      }),
+      onUpdate: snapshot => {
+        if (!this.live()) return;
+        this.ingest(lane, snapshot);
+        this.emit();
+      },
+    });
+    this.commands = { study: make("study"), stop: make("stop") };
+  }
+  private live(): boolean {
+    return !this.disposed && (this.options.isLive?.() ?? true) && this.options.access.isLive()
+      && this.options.access.profile.access.status === "admitted";
+  }
+  private requireLive(): void { if (!this.live()) throw new ClosedAccessError(); }
+  /** Cut off an obsolete owner's response before OpenedAccess can handle denial.
+   * Activity is deliberately separate: already sent intents still settle while disabled. */
+  private exchange<T>(operation: (credentials: AccessCredentials) => Promise<T>): Promise<T> {
+    return this.options.access.run(async credentials => {
+      this.requireLive();
+      try {
+        const result = await operation(credentials);
+        this.requireLive();
+        return result;
+      } catch (error) {
+        this.requireLive();
+        throw error;
+      }
+    });
+  }
+  private minimum(): string {
+    // Never ask a publisher belonging to a disposed document for new observations.
+    if (!this.live()) return this.floor;
+    const external = this.options.minimumStateVersion?.() ?? null;
+    if (external !== null && !version(external)) throw new Error("invalid oral document version");
+    if (external !== null) this.raise(external);
+    return this.floor;
+  }
+  private raise(value: string): void { if (BigInt(value) > BigInt(this.floor)) this.floor = value; }
+  private active(lane: OralCommandLane): boolean {
+    if (!this.live()) return false;
+    const activity = this.options.activity?.();
+    return this.visible && !this.foregroundBlocked && activity?.visible !== false
+      && (lane === "stop" || this.enabled && activity?.enabled !== false);
+  }
+  private markClosed(sessionId: string): void {
+    this.terminal.add(sessionId.toLowerCase());
+    if (this.sessionId && sameId(sessionId, this.sessionId)) {
+      this.current = null; this.ticket = null; this.shownPending = false; this.stopRight = null;
+    }
+  }
+  private observe(read: OralRead): void {
+    const floor = this.minimum();
+    if (BigInt(read.state_version) < BigInt(floor)) { this.problem = "stale_response"; return; }
+    this.raise(read.state_version);
+    const current = read.current;
+    if (current.status === "closed") this.markClosed(current.session_id);
+    if (!this.sessionId || !sameId(current.session_id, this.sessionId)) return;
+    this.ticket = null; this.shownPending = false;
+    if (!('pair' in current) || current.pair !== `${this.options.access.profile.dictionary_language}-de`) {
+      this.current = null; this.currentVersion = null; this.stopRight = null;
+      this.problem = 'pair' in current ? "pair_changed" : current.status; return;
+    }
+    if (this.terminal.has(current.session_id.toLowerCase())) return;
+    this.current = structuredClone(current); this.currentVersion = read.state_version; this.problem = null;
+    this.stopRight = { sessionId: current.session_id, version: read.state_version,
+      stop: current.capabilities.stop, home: current.capabilities.summary_home };
+  }
+  private ingest(lane: OralCommandLane, snapshot: OralCommandSnapshot): void {
+    if (snapshot.sessionId) this.receiptSessions.add(snapshot.sessionId.toLowerCase());
+    if (snapshot.resolved) this.receiptSessions.add(snapshot.resolved.sessionId.toLowerCase());
+    const stamp = JSON.stringify([snapshot.stateVersion, snapshot.current, snapshot.closedSession, snapshot.resolved, snapshot.outcome]);
+    if (this.processed[lane] === stamp) return;
+    this.processed[lane] = stamp;
+    if (snapshot.stateVersion) this.raise(snapshot.stateVersion);
+    if (lane === "study" && snapshot.outcome !== null && snapshot.resolved) {
+      this.current = null; this.currentVersion = null; this.ticket = null;
+    }
+    if (snapshot.closedSession) this.markClosed(snapshot.closedSession.session_id);
+    if (snapshot.outcome === "accepted" && snapshot.resolved?.kind === "session.stop") this.markClosed(snapshot.resolved.sessionId);
+    if (snapshot.current && "session_id" in snapshot.current && snapshot.stateVersion) {
+      this.observe({ current: snapshot.current, state_version: snapshot.stateVersion });
+    }
+  }
+  private ready(snapshot: OralCommandSnapshot): boolean {
+    return !snapshot.pending && ["idle", "settled"].includes(snapshot.phase);
+  }
+  snapshot(): OralDocumentSnapshot {
+    const live = this.live();
+    if (live) this.minimum();
+    const commands = { study: this.commands.study.snapshot(), stop: this.commands.stop.snapshot() };
+    const closed = !!this.sessionId && this.terminal.has(this.sessionId.toLowerCase());
+    const fresh = this.currentVersion !== null && BigInt(this.currentVersion) >= BigInt(this.floor);
+    const unknown = commands.study.pending && commands.study.outcome === null;
+    const sendingStudy = this.busy.study || commands.study.phase === "sending";
+    const sendingStop = this.busy.stop || commands.stop.phase === "sending";
+    const current = this.active("stop") && fresh && !closed
+      && !this.refreshing && !unknown && !sendingStudy && !sendingStop ? this.current : null;
+    const studyReady = this.ready(commands.study) && !this.busy.study;
+    const stopReady = this.ready(commands.stop) && !this.busy.stop;
+    const foreignHistory = [...this.receiptSessions].some(id => !this.terminal.has(id)
+      && (!this.sessionId || !sameId(id, this.sessionId)));
+    // A confirmed addressed session is authoritative for continuing study. A fully settled historical
+    // receipt cannot override it; a foreign receipt still awaiting resolution or
+    // durable cleanup does. Without a seed, recovery must never elect a session
+    // from the order in which historical receipts finish.
+    const foreignReceipt = this.sessionId === null
+      ? foreignHistory
+      : Object.values(commands).some(command => command.pending && command.sessionId !== null
+        && !sameId(command.sessionId, this.sessionId!) && !this.terminal.has(command.sessionId.toLowerCase()));
+    const right = this.stopRight;
+    const canStop = this.active("stop") && stopReady && !closed && !!right
+      && BigInt(right.version) >= BigInt(this.floor) && !!this.sessionId && sameId(right.sessionId, this.sessionId);
+    const assignment = current?.status === "active" ? current.assignment : null;
+    if (!current || assignment?.status !== "prefetched" || !this.active("study") || !studyReady || !stopReady) this.ticket = null;
+    else this.ticket ??= Object.freeze({}) as OralPresentationTicket;
+    let phase: OralDocumentSnapshot["phase"];
+    if (!live) phase = "disposed";
+    else if (closed) phase = "closed";
+    else if (sendingStop) phase = "stopping";
+    else if (this.shownPending) phase = "visible_unconfirmed";
+    else if (unknown || foreignReceipt) phase = "unknown";
+    else if (!this.recovered || this.refreshing) phase = "loading";
+    else if (current?.status === "summary") phase = "summary";
+    else if (assignment) phase = assignment.status === "prefetched" ? "prefetched" : assignment.revealed ? "revealed" : "question";
+    else phase = this.sessionId ? "stale" : "idle";
+    return { phase, sessionId: live ? this.sessionId : null, current: structuredClone(current), stateVersion: this.floor,
+      terminalSessionIds: [...this.terminal], commands,
+      problem: live ? commands.study.problem ?? commands.stop.problem ?? this.problem ?? (foreignReceipt ? "unconfirmed_session" : null) : null,
+      presentationTicket: live ? this.ticket : null,
+      canStart: this.active("study") && this.recovered && !this.refreshing && studyReady && stopReady
+        && !foreignHistory && (!this.sessionId || closed),
+      canReveal: this.active("study") && studyReady && stopReady && !foreignReceipt && assignment?.status === "presented"
+        && !assignment.revealed && sameId(current!.capabilities.reveal_target, assignment.id),
+      canGrade: this.active("study") && studyReady && stopReady && !foreignReceipt && assignment?.status === "presented"
+        && assignment.revealed && sameId(current!.capabilities.grade_target, assignment.id),
+      canStop: canStop && !!right?.stop, canSummaryHome: canStop && !!right?.home,
+      canRetry: { study: this.active("study") && commands.study.canRetry, stop: this.active("stop") && commands.stop.canRetry } };
+  }
+  private emit(): void {
+    if (!this.live()) return;
+    const snapshot = this.snapshot();
+    if (this.live()) this.options.onUpdate(snapshot);
+  }
+  setActivity(activity: { enabled: boolean; visible: boolean }): void {
+    if (!this.live()) return;
+    if (!activity.visible) this.foregroundBlocked = true;
+    if (!activity.visible || this.enabled !== activity.enabled) {
+      this.activityEpoch++; this.ticket = null; this.shownPending = false;
+    }
+    this.enabled = activity.enabled; this.visible = activity.visible; this.emit();
+  }
+  /** Resolves both durable lanes, then reads only the explicitly confirmed session. Never POSTs. */
+  refresh(): Promise<void> {
+    if (!this.live()) return Promise.resolve();
+    if (this.refreshing) return this.refreshing;
+    this.ticket = null;
+    const task = Promise.resolve().then(async () => {
+      if (!this.live()) return;
+      await Promise.all([this.commands.study.refresh(), this.commands.stop.refresh()]);
+      if (!this.live()) return;
+      this.recovered = true;
+      if (this.sessionId && !this.terminal.has(this.sessionId.toLowerCase())) await this.readCurrent();
+    }).finally(() => {
+      if (this.refreshing === task) this.refreshing = null;
+      this.emit();
+    });
+    this.refreshing = task; this.emit();
+    return task;
+  }
+  private async readCurrent(): Promise<void> {
+    const sessionId = this.sessionId;
+    if (!sessionId || !this.live() || this.terminal.has(sessionId.toLowerCase())) return;
+    try {
+      const api = createOralApi(this.options.transport);
+      const read = await this.exchange(({ token, proof, clientInstanceId, documentId }) => {
+        return api.read(token, proof, { session_id: sessionId, client_instance_id: clientInstanceId, document_id: documentId });
+      });
+      if (!this.live() || this.sessionId !== sessionId || this.terminal.has(sessionId.toLowerCase())) return;
+      this.observe(read);
+    } catch (error) {
+      if (!this.live()) return;
+      this.current = null; this.ticket = null;
+      this.problem = error instanceof ApiError && error.code ? error.code : "network";
+    }
+  }
+  private async begin(lane: OralCommandLane, transition: OralTransition): Promise<void> {
+    if (!this.active(lane) || this.busy[lane]) return;
+    this.busy[lane] = true; this.sendEpoch[lane] = this.activityEpoch; this.ticket = null;
+    try {
+      await this.commands[lane].begin(transition);
+      if (!this.live()) return;
+      this.ingest(lane, this.commands[lane].snapshot());
+      this.shownPending = false;
+      const command = this.commands[lane].snapshot();
+      // A command fact never licenses reuse of its former question.
+      if (command.outcome !== null && command.outcome !== "not_applied"
+        && this.sessionId && !this.terminal.has(this.sessionId.toLowerCase())
+        && (command.outcome === "rejected" || !this.current || this.currentVersion === null
+          || BigInt(this.currentVersion) < BigInt(this.minimum()))) {
+        this.current = null; this.emit();
+        if (this.live()) await this.readCurrent();
+      }
+    } finally {
+      this.busy[lane] = false;
+      this.emit();
+    }
+  }
+  async start(bucket: "words" | "phrases"): Promise<void> {
+    if (bucket !== "words" && bucket !== "phrases") throw new Error("oral bucket required");
+    const epoch = this.activityEpoch;
+    if (!this.active("study")) return;
+    await this.refresh();
+    if (!this.active("study") || epoch !== this.activityEpoch || !this.snapshot().canStart) return;
+    const sessionId = this.options.newId();
+    if (!uuid(sessionId)) throw new Error("invalid oral session ID");
+    this.sessionId = sessionId; this.current = null; this.currentVersion = null; this.stopRight = null;
+    await this.begin("study", { kind: "session.start", session_id: sessionId, payload: { mode: "oral", bucket } });
+  }
+  shown(ticket: OralPresentationTicket): Promise<void> {
+    const snapshot = this.snapshot(), assignment = snapshot.current?.assignment;
+    if (!ticket || ticket !== snapshot.presentationTicket || !this.active("study") || !assignment
+      || assignment.status !== "prefetched" || !snapshot.sessionId) return Promise.resolve();
+    this.ticket = null; this.shownPending = true;
+    const task = this.begin("study", { kind: "assignment.present", session_id: snapshot.sessionId,
+      assignment_id: assignment.id, payload: {} });
+    this.emit(); return task;
+  }
+  reveal(): Promise<void> {
+    const snapshot = this.snapshot();
+    return snapshot.canReveal ? this.begin("study", { kind: "oral.reveal", session_id: snapshot.sessionId!,
+      assignment_id: snapshot.current!.assignment!.id, payload: {} }) : Promise.resolve();
+  }
+  grade(correct: boolean): Promise<void> {
+    if (typeof correct !== "boolean") throw new Error("oral grade must be boolean");
+    const snapshot = this.snapshot();
+    return snapshot.canGrade ? this.begin("study", { kind: "oral.grade", session_id: snapshot.sessionId!,
+      assignment_id: snapshot.current!.assignment!.id, payload: { correct } }) : Promise.resolve();
+  }
+  stop(reason: "stop" | "summary_home"): Promise<void> {
+    if (reason !== "stop" && reason !== "summary_home") throw new Error("oral stop reason required");
+    const snapshot = this.snapshot();
+    return (reason === "stop" ? snapshot.canStop : snapshot.canSummaryHome)
+      ? this.begin("stop", { kind: "session.stop", session_id: snapshot.sessionId!, payload: { reason } }) : Promise.resolve();
+  }
+  async retry(lane: OralCommandLane): Promise<void> {
+    if (lane !== "study" && lane !== "stop") throw new Error("invalid oral lane");
+    if (!this.snapshot().canRetry[lane] || this.busy[lane]) return;
+    const intent = this.commands[lane].snapshot().pendingIntent;
+    this.busy[lane] = true; this.sendEpoch[lane] = this.activityEpoch; this.ticket = null;
+    try {
+      await this.commands[lane].retry();
+      if (!this.live()) return;
+      const command = this.commands[lane].snapshot();
+      this.ingest(lane, command);
+      // A manual retry of the retained start is an explicit choice of that exact
+      // session. Passive recovery never elects a session from receipt order.
+      if (intent?.kind === "session.start" && command.outcome === "accepted" && !this.sessionId
+        && !this.terminal.has(intent.session_id.toLowerCase())
+        && ![...this.receiptSessions].some(id => !this.terminal.has(id) && !sameId(id, intent.session_id))) {
+        this.sessionId = intent.session_id;
+        if (command.current && "session_id" in command.current && command.stateVersion) {
+          this.observe({ current: command.current, state_version: command.stateVersion });
+        }
+      }
+      if (this.sessionId && !this.terminal.has(this.sessionId.toLowerCase())) await this.readCurrent();
+    } finally { this.busy[lane] = false; this.emit(); }
+  }
+  dispose(): void {
+    this.disposed = true; this.activityEpoch++; this.ticket = null; this.current = null; this.stopRight = null;
+    this.commands.study.dispose(); this.commands.stop.dispose();
+  }
+}

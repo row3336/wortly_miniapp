@@ -1,0 +1,62 @@
+import type { Language } from "./language";
+
+const messages = {
+  uk: {
+    loading: "Відкриваємо Wortly",
+    loadingDetail: "Зачекай трохи.",
+    pending: "Заявку надіслано",
+    pendingDetail: "Коли доступ буде схвалено, відкрий Wortly знову через бота.",
+    rejected: "Доступ поки не надано",
+    rejectedDetail: "Ти можеш подати заявку ще раз.",
+    reapply: "Подати заявку ще раз",
+    unavailable: "Не вдалося відкрити Wortly",
+    unavailableDetail: "Спробуй відкрити застосунок пізніше.",
+    retry: "Спробувати ще раз",
+    busy: "Wortly вже відкрито",
+    busyDetail: "Повернися до іншого відкритого вікна або пристрою.",
+    opened: "Вхід підтверджено",
+    openedDetail: "Продовження поки недоступне.",
+    expired: "Потрібно знову підтвердити вхід",
+    expiredDetail: "Закрий застосунок і знову натисни кнопку Wortly в боті.",
+  },
+  en: {
+    loading: "Opening Wortly",
+    loadingDetail: "Please wait a moment.",
+    pending: "Request sent",
+    pendingDetail: "Once access is approved, open Wortly again from the bot.",
+    rejected: "Access is not available yet",
+    rejectedDetail: "You can apply again.",
+    reapply: "Apply again",
+    unavailable: "Wortly could not open",
+    unavailableDetail: "Please try opening the app later.",
+    retry: "Try again",
+    busy: "Wortly is already open",
+    busyDetail: "Return to the other open window or device.",
+    opened: "Sign-in confirmed",
+    openedDetail: "You cannot continue yet.",
+    expired: "Please confirm sign-in again",
+    expiredDetail: "Close the app and tap the Wortly button in the bot again.",
+  },
+  ru: {
+    loading: "Открываем Wortly",
+    loadingDetail: "Подожди немного.",
+    pending: "Заявка отправлена",
+    pendingDetail: "Когда доступ одобрят, открой Wortly снова через бота.",
+    rejected: "Доступ пока не предоставлен",
+    rejectedDetail: "Ты можешь подать заявку ещё раз.",
+    reapply: "Подать заявку ещё раз",
+    unavailable: "Не удалось открыть Wortly",
+    unavailableDetail: "Попробуй открыть приложение позже.",
+    retry: "Попробовать ещё раз",
+    busy: "Wortly уже открыт",
+    busyDetail: "Вернись в другое открытое окно или на другое устройство.",
+    opened: "Вход подтверждён",
+    openedDetail: "Продолжить пока нельзя.",
+    expired: "Нужно снова подтвердить вход",
+    expiredDetail: "Закрой приложение и снова нажми кнопку Wortly в боте.",
+  },
+} as const;
+
+export function t(language: Language) {
+  return messages[language];
+}

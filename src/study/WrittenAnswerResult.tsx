@@ -1,0 +1,82 @@
+import type { MatchedSpan, WrittenResult } from "../api/generated";
+import type { Language } from "../i18n/language";
+import { ConjunctionHint } from "./ConjunctionHint";
+import "./writtenAnswer.css";
+
+export type WrittenAnswerResultProps = {
+  result: WrittenResult;
+  language: Language;
+  pending: "changing" | "unknown" | null;
+  grades: readonly (3 | 4 | 5)[];
+  canCorrect: boolean;
+  canNext: boolean;
+  timer: { key: string; durationMs: number } | null;
+  onGrade(grade: 3 | 4 | 5): void;
+  onCorrect(): void;
+  onNext(): void;
+};
+const copy = {
+  ru: { correct: "Верно", wrong: "Есть ошибка", corrected: "Ответ исправлен", changing: "Сохраняем изменение", unknown: "Проверяем изменение",
+    input: "Твой ответ", forgot: "Забыл…", right: "Правильно", others: "Другие допустимые ответы", unavailable: "Разбор ответа больше недоступен",
+    fix: "Исправить ответ", next: "Далее", grades: ["Трудно", "Нормально", "Легко"] },
+  uk: { correct: "Правильно", wrong: "Є помилка", corrected: "Відповідь виправлено", changing: "Зберігаємо зміну", unknown: "Перевіряємо зміну",
+    input: "Твоя відповідь", forgot: "Не пам’ятаю…", right: "Правильно", others: "Інші допустимі відповіді", unavailable: "Розбір відповіді більше недоступний",
+    fix: "Виправити відповідь", next: "Далі", grades: ["Важко", "Нормально", "Легко"] },
+  en: { correct: "Correct", wrong: "There is a mistake", corrected: "Answer corrected", changing: "Saving the change", unknown: "Checking the change",
+    input: "Your answer", forgot: "I forgot…", right: "Correct answer", others: "Other accepted answers", unavailable: "Answer details are no longer available",
+    fix: "Correct answer", next: "Next", grades: ["Hard", "Normal", "Easy"] },
+} as const;
+
+function HighlightedText({ text, errors }: { text: string; errors: readonly MatchedSpan[] | null | undefined }) {
+  if (!errors?.length) return <>{text}</>;
+  const points = Array.from(text);
+  let offset = 0;
+  const fragments = errors.map((span, index) => {
+    const before = points.slice(offset, span.start).join(""); offset = span.end;
+    return <span key={index}>{before}<span className="written-error">{points.slice(span.start, span.end).join("")}</span></span>;
+  });
+  return <>{fragments}{points.slice(offset).join("")}</>;
+}
+
+/** Render only server-confirmed detail and capabilities; animation never runs a command. */
+export function WrittenAnswerResult(props: WrittenAnswerResultProps) {
+  const t = copy[props.language], detail = props.result.detail, check = detail?.initial_check;
+  const changed = !!check && !check.correct && props.result.correct;
+  const status = props.pending ? t[props.pending] : changed ? t.corrected : props.result.correct ? t.correct : t.wrong;
+  const blocked = props.pending !== null;
+  return <section className="written-result" aria-label={status} aria-busy={blocked}>
+    {detail ? <>
+      <ConjunctionHint hint={detail.conjunction_hint} language={props.language} />
+      <div className="written-result-input">
+        <p className="written-parts">{t.input}</p>
+        <p className="written-result-text" lang={detail.input.kind === "text" ? "de" : props.language}>
+          {detail.input.kind === "text" ? <HighlightedText text={detail.input.text} errors={check?.input_errors} /> : t.forgot}
+        </p>
+      </div>
+      <p className="written-result-status" role="status">
+        {!blocked && <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          {props.result.correct ? <path d="m5 12 4 4 10-10" /> : <path d="m7 7 10 10M17 7 7 17" />}
+        </svg>}{status}
+      </p>
+      <div className="written-correct-answer">
+        <p className="written-parts">{t.right}</p>
+        <p className="written-result-text" lang="de"><HighlightedText text={check!.correct_answer} errors={check?.answer_errors} /></p>
+      </div>
+      {check!.other_answers.length > 0 && <div className="written-alternatives">
+        <p className="written-parts">{t.others}</p>
+        <ul lang="de">{check!.other_answers.map((answer, index) => <li key={index}>{answer}</li>)}</ul>
+      </div>}
+    </> : <><p role="status">{status}</p><p>{t.unavailable}</p></>}
+    {props.timer && !blocked && <div className="written-timer" aria-hidden="true">
+      <span key={props.timer.key} style={{ animationDuration: `${props.timer.durationMs}ms` }} />
+    </div>}
+    {props.grades.length > 0 && <div className="written-grades">
+      {props.grades.map(grade => <button type="button" key={grade} disabled={blocked}
+        onClick={() => { if (!blocked) props.onGrade(grade); }}>{t.grades[grade - 3]}</button>)}
+    </div>}
+    <div className="written-result-actions">
+      {props.canCorrect && <button type="button" disabled={blocked} onClick={() => { if (!blocked) props.onCorrect(); }}>{t.fix}</button>}
+      <button type="button" disabled={blocked || !props.canNext} onClick={() => { if (!blocked && props.canNext) props.onNext(); }}>{t.next}</button>
+    </div>
+  </section>;
+}

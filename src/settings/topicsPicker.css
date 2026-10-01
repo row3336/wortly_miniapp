@@ -1,0 +1,22 @@
+.topics-picker { display: grid; gap: 12px; min-width: 0; }
+.topics-picker h3, .topics-picker p { margin: 0; }
+.topics-picker h3 { font-size: 18px; line-height: 1.35; }
+.topics-search { display: grid; gap: 8px; font-size: 14px; }
+.topics-search input { width: 100%; min-width: 0; min-height: 44px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; font-size: 16px; }
+.topics-selection { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.topics-selection p { font-size: 14px; font-variant-numeric: tabular-nums; }
+.topics-all, .topics-text-button { min-height: 44px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; }
+.topics-text-button { justify-self: start; border-color: transparent; text-decoration: underline; text-underline-offset: 3px; }
+.topics-picker button:disabled { opacity: .55; cursor: default; }
+.topics-picker button:enabled:active, .topics-row:has(input:enabled):active { background: var(--bg); }
+.topics-hint { font-size: 14px; color: var(--muted); }
+.topics-error { color: var(--error); }
+.topics-scroll { min-width: 0; max-height: min(52dvh, 32rem); overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.topics-row { display: flex; align-items: flex-start; gap: 12px; min-height: 44px; padding: 14px 12px; overflow-wrap: anywhere; cursor: pointer; }
+.topics-row + .topics-row { border-top: 1px solid var(--line); }
+.topics-row:has(input:disabled) { cursor: default; }
+.topics-row input { width: 20px; height: 20px; margin: 2px 0 0; flex: 0 0 auto; accent-color: var(--text); }
+.topics-details { display: grid; gap: 6px; min-width: 0; }
+.topics-description { white-space: pre-wrap; font-size: 14px; line-height: 1.5; color: var(--muted); }
+.topics-empty { padding: 16px 12px; color: var(--muted); }
+.topics-picker input:focus-visible, .topics-picker button:focus-visible, .topics-scroll:focus-visible { outline: 2px solid var(--text); outline-offset: 3px; }

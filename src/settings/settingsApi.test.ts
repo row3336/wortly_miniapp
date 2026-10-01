@@ -1,0 +1,261 @@
+import { settingsResponse as current } from "./settingsRead.test-support";
+import { describe, expect, it, vi } from "vitest";
+import type { Profile, SavedCommandFact, SettingCommand, SettingsResponse } from "../api/generated";
+import { allowedSettingValue, createSettingsApi, validSettingIntent, type SettingIntent } from "./settingsApi";
+
+const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+const subject = id(4);
+const big = "9007199254740995";
+const time = "2026-09-30T00:00:00.123456Z";
+
+function intent(): SettingIntent {
+  return { command_id: id(1), kind: "setting.save", expected_field_version: big,
+    payload: { key: "strict_case", value: true } };
+}
+function command(original = intent()): SettingCommand {
+  return { ...original, client_instance_id: id(2), document_id: id(3) };
+}
+function fact(): SavedCommandFact {
+  return { id: id(1), kind: "setting.save", status: "applied", applied_at: time, target_id: subject,
+    action_id: null, result_id: null, context_id: null, object_version: "9007199254740996" };
+}
+function profile(): Profile {
+  return { profile_id: subject, access: { status: "admitted", version: "1", reason: null }, role: "user",
+    ui_language: "ru", dictionary_language: "uk", time_zone: "UTC", state_version: big };
+}
+function reply() { return { command: fact(), current: current(), state_version: big }; }
+function response(body: unknown, status = 200) { return new Response(JSON.stringify(body), { status }); }
+function setup(body: unknown, status = 200) {
+  const fetcher = vi.fn<typeof fetch>(async () => response(body, status));
+  return { fetcher, api: createSettingsApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 20000 }) };
+}
+
+describe("Settings current and constraints", () => {
+  it("reads nullable settings without supplying defaults or rounding versions", async () => {
+    const { api, fetcher } = setup(current());
+    expect(await api.get("synthetic")).toEqual(current());
+    expect(fetcher).toHaveBeenCalledExactlyOnceWith("/api/v1/settings", expect.objectContaining({
+      method: "GET", body: undefined, headers: { Authorization: "Bearer synthetic" }, cache: "no-store",
+    }));
+  });
+
+  it("accepts optional null metadata as returned by command status and keeps needs_setup as a server fact", async () => {
+    const data = current(); data.needs_setup = false;
+    for (const rule of Object.values(data.constraints)) Object.assign(rule, { modes: rule.modes ?? null,
+      values: rule.values ?? null, minimum: rule.minimum ?? null, maximum: rule.maximum ?? null,
+      item_minimum: rule.item_minimum ?? null, item_maximum: rule.item_maximum ?? null, nonempty: rule.nonempty ?? null });
+    await expect(setup(data).api.get("synthetic")).resolves.toEqual(data);
+  });
+
+  it("does not display a successful projection carrying a contradictory error", async () => {
+    await expect(setup({ ...current(), error: { code: "WRITE_UNAVAILABLE" } }).api.get("synthetic"))
+      .rejects.toMatchObject({ kind: "invalid_response" });
+  });
+
+  const bad: Array<[string, (data: SettingsResponse) => void]> = [
+    ["missing field", x => { Reflect.deleteProperty(x.settings, "retry_count"); }],
+    ["missing value", x => { Reflect.deleteProperty(x.settings.retry_count, "value"); }],
+    ["numeric version", x => { Object.assign(x.settings.strict_case, { version: 2 }); }],
+    ["oversize version", x => { x.state_version = "9223372036854775808"; }],
+    ["padded version", x => { x.settings.retry_count.version = "01"; }],
+    ["zero version", x => { x.settings.time_zone.version = "0"; }],
+    ["boolean number", x => { Object.assign(x.settings.retry_count, { value: true }); }],
+    ["fraction", x => { x.settings.retry_count.value = 1.5; }],
+    ["unsafe integer", x => { x.settings.retry_count.value = Number.MAX_SAFE_INTEGER + 1; }],
+    ["numeric boolean", x => { Object.assign(x.settings.strict_case, { value: 1 }); }],
+    ["null language", x => { Object.assign(x.settings.ui_language, { value: null }); }],
+    ["unknown language", x => { Object.assign(x.settings.dictionary_language, { value: "de" }); }],
+    ["unknown transition", x => { Object.assign(x.settings.transition_mode, { value: "fast" }); }],
+    ["string time zone", x => { Object.assign(x.settings.time_zone, { value: ["UTC"] }); }],
+    ["wrong list item", x => { Object.assign(x.settings.learning_intervals_seconds, { value: [30, "60"] }); }],
+    ["invalid material mode", x => { Object.assign(x.settings.material, { value: { mode: "both" } }); }],
+    ["mixed material", x => { Object.assign(x.settings.material, { value: { mode: "level", selected_level: "A1", topic_ids: [id(8)] } }); }],
+    ["duplicate topics", x => { x.settings.material.value = { mode: "topics", topic_ids: [id(8), id(8)] }; }],
+    ["bad topic ID", x => { x.settings.material.value = { mode: "topics", topic_ids: ["topic"] }; }],
+    ["missing constraint", x => { Reflect.deleteProperty(x.constraints, "retry_count"); }],
+    ["wrong constraint type", x => { x.constraints.strict_case.type = "integer"; }],
+    ["missing maximum", x => { Reflect.deleteProperty(x.constraints.retry_count, "maximum"); }],
+    ["fractional bound", x => { x.constraints.retry_count.minimum = 1.5; }],
+    ["reversed bounds", x => { x.constraints.learning_ready_percent.minimum = 101; }],
+    ["missing list maximum", x => { Reflect.deleteProperty(x.constraints.learning_intervals_seconds, "item_maximum"); }],
+    ["nonboolean list rule", x => { Object.assign(x.constraints.learning_intervals_seconds, { nonempty: 1 }); }],
+    ["empty enum", x => { x.constraints.ui_language.values = []; }],
+    ["duplicate enum", x => { x.constraints.ui_language.values = ["ru", "ru"]; }],
+    ["unsupported enum", x => { x.constraints.ui_language.values = ["de"]; }],
+    ["bad topic rule", x => { x.constraints.material.modes!.topics.topic_ids = "any"; }],
+    ["bad level rule", x => { x.constraints.material.modes!.level.selected_level = ["A0"]; }],
+    ["missing setup", x => { Reflect.deleteProperty(x, "needs_setup"); }],
+  ];
+  it.each(bad)("rejects malformed current: %s", async (_name, corrupt) => {
+    const data = current(); corrupt(data);
+    await expect(setup(data).api.get("synthetic")).rejects.toMatchObject({ kind: "invalid_response" });
+  });
+
+  it("validates new numbers using API bounds and retains an older now-invalid displayed value", async () => {
+    const data = current(); data.settings.retry_count.value = 3;
+    data.constraints.retry_count = { type: "integer", minimum: 7, maximum: 9 };
+    await expect(setup(data).api.get("synthetic")).resolves.toEqual(data);
+    for (const value of [7, 8, 9]) expect(allowedSettingValue(data, "retry_count", value)).toBe(true);
+    for (const value of [3, 6, 10, 7.5, "7", true, null]) expect(allowedSettingValue(data, "retry_count", value)).toBe(false);
+    expect(data.settings.retry_count.value).toBe(3);
+  });
+
+  it("keeps ordered intervals and duplicate durations without sorting or clamping", () => {
+    const data = current(); data.constraints.learning_intervals_seconds = {
+      type: "ordered_integer_list", nonempty: true, item_minimum: 10, item_maximum: 120 };
+    const value = [120, 30, 120];
+    expect(allowedSettingValue(data, "learning_intervals_seconds", value)).toBe(true);
+    expect(value).toEqual([120, 30, 120]);
+    for (const invalid of [[], [9], [121], [30, false], [30, 40.5]]) {
+      expect(allowedSettingValue(data, "learning_intervals_seconds", invalid)).toBe(false);
+    }
+  });
+
+  it("uses the advertised enum subset without losing material exclusivity", () => {
+    const data = current(); data.constraints.ui_language.values = ["ru"];
+    data.constraints.material.modes!.level.selected_level = ["B1"];
+    expect(allowedSettingValue(data, "ui_language", "en")).toBe(false);
+    expect(allowedSettingValue(data, "ui_language", "ru")).toBe(true);
+    expect(allowedSettingValue(data, "material", { mode: "level", selected_level: "A1" })).toBe(false);
+    expect(allowedSettingValue(data, "material", { mode: "level", selected_level: "B1" })).toBe(true);
+    expect(allowedSettingValue(data, "material", { mode: "topics", topic_ids: [id(9)] })).toBe(true);
+    expect(allowedSettingValue(data, "material", { mode: "topics", topic_ids: [] })).toBe(false);
+  });
+});
+
+describe("Settings command exchange", () => {
+  const values: SettingCommand["payload"][] = [
+    { key: "ui_language", value: "ru" }, { key: "dictionary_language", value: "uk" },
+    { key: "retry_gap", value: 1 }, { key: "retry_count", value: 2 }, { key: "learning_group_size", value: 10 },
+    { key: "learning_poll_seconds", value: 10 }, { key: "learning_reminder_pause_seconds", value: 60 },
+    { key: "learning_ready_percent", value: 80 }, { key: "learning_intervals_seconds", value: [120, 30, 120] },
+    { key: "strict_case", value: false }, { key: "learning_mix", value: true },
+    { key: "include_preterite", value: true }, { key: "include_comparative", value: false },
+    { key: "transition_mode", value: "accelerated" }, { key: "material", value: { mode: "level", selected_level: "A1" } },
+    { key: "material", value: { mode: "topics", topic_ids: [id(8), id(7)] } },
+  ];
+  it.each(values)("sends an exact $key value %#", async payload => {
+    const request = command(); request.payload = payload;
+    const { api, fetcher } = setup(reply());
+    await expect(api.save("synthetic", "synthetic-proof", subject, request)).resolves.toMatchObject({ outcome: "accepted" });
+    const [url, init] = fetcher.mock.calls[0];
+    expect(url).toBe("/api/v1/commands");
+    expect(init?.headers).toEqual({ Authorization: "Bearer synthetic", "X-Origin-Proof": "synthetic-proof", "Content-Type": "application/json" });
+    expect(JSON.parse(init!.body as string)).toEqual(request); expect(fetcher).toHaveBeenCalledOnce();
+    expect(allowedSettingValue(current(), payload.key, payload.value)).toBe(true);
+  });
+
+  it("snapshots nested values and the original address before awaiting a reply", async () => {
+    let finish!: (result: Response) => void;
+    const fetcher = vi.fn<typeof fetch>(() => new Promise(resolve => { finish = resolve; }));
+    const api = createSettingsApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 20000 });
+    const topics = { mode: "topics" as const, topic_ids: [id(8)] };
+    const request = command(); request.payload = { key: "material", value: topics };
+    const original = structuredClone(request);
+    const waiting = api.save("synthetic", "proof", subject, request);
+    request.command_id = id(99); request.expected_field_version = "1";
+    topics.topic_ids.push(id(9));
+    finish(response(reply()));
+    await expect(waiting).resolves.toMatchObject({ outcome: "accepted", command: { id: id(1) } });
+    expect(JSON.parse(fetcher.mock.calls[0][1]!.body as string)).toEqual(original);
+  });
+
+  it("keeps an old accepted fact separate from a subsequently changed value and version", async () => {
+    const body = reply(); body.command.status = "already_applied";
+    body.current.settings.strict_case = { value: false, version: "9007199254740997" };
+    await expect(setup(body).api.save("synthetic", "proof", subject, command())).resolves.toMatchObject({
+      outcome: "accepted", command: { object_version: "9007199254740996" },
+      current: { settings: { strict_case: { value: false, version: "9007199254740997" } } },
+    });
+  });
+
+  it("never automatically resends a lost response or changes its original envelope", async () => {
+    const { api, fetcher } = setup(reply());
+    fetcher.mockRejectedValueOnce(new Error("lost-after-commit"));
+    await expect(api.save("synthetic", "proof", subject, command())).rejects.toMatchObject({ kind: "network" });
+    expect(fetcher).toHaveBeenCalledOnce();
+    await api.save("synthetic", "proof", subject, command());
+    expect(fetcher.mock.calls[0][1]?.body).toBe(fetcher.mock.calls[1][1]?.body);
+  });
+
+  it.each([403, 409, 422])("recognizes only addressed business rejections (%s)", async status => {
+    const body = { ...reply(), command: { id: id(1), status: "rejected" }, error: { code: "VERSION_CONFLICT" } };
+    await expect(setup(body, status).api.save("synthetic", "proof", subject, command()))
+      .resolves.toMatchObject({ outcome: "rejected", error: { code: "VERSION_CONFLICT" } });
+    body.error.code = "COMMAND_PAYLOAD_MISMATCH";
+    await expect(setup(body, status).api.save("synthetic", "proof", subject, command())).resolves.toMatchObject({ outcome: "mismatch" });
+    body.command.id = id(99);
+    await expect(setup(body, status).api.save("synthetic", "proof", subject, command())).rejects.toMatchObject({ kind: "http", status });
+  });
+
+  it.each([401, 403, 409, 422, 500, 503])("does not invent a known outcome from plain HTTP %s", async status => {
+    await expect(setup({ error: { code: "WRITE_UNAVAILABLE" } }, status).api.save("synthetic", "proof", subject, command()))
+      .rejects.toMatchObject({ kind: "http", status });
+  });
+
+  it.each([
+    { id: id(99) }, { kind: "learning.select" }, { target_id: id(99) }, { target_id: null },
+    { object_version: big }, { object_version: "9007199254740997" }, { object_version: 3 },
+    { object_version: null }, { action_id: id(9) }, { result_id: id(9) }, { context_id: id(9) },
+    { applied_at: "2026-02-30T00:00:00Z" }, { applied_at: "2026-09-30T00:00:00+02:00" }, { status: "rejected" },
+  ])("refuses unrelated or malformed accepted facts %#", async corrupt => {
+    const body = reply(); Object.assign(body.command, corrupt);
+    await expect(setup(body).api.save("synthetic", "proof", subject, command())).rejects.toMatchObject({ kind: "invalid_response" });
+  });
+
+  it("does not send extra semantic fields or invalid addresses/field types", async () => {
+    const { api, fetcher } = setup(reply());
+    const candidates = [Object.assign(command(), { extra: true }),
+      { ...command(), document_id: "bad" }, { ...command(), command_id: "../another-endpoint" },
+      { ...command(), expected_field_version: "9223372036854775807" },
+      { ...command(), payload: Object.assign({ key: "strict_case", value: true }, { extra: true }) },
+      { ...command(), payload: { key: "retry_count", value: true } },
+      { ...command(), payload: { key: "time_zone", value: "UTC" } },
+      { ...command(), payload: { key: "material", value: { mode: "topics", topic_ids: [id(8), id(8)] } } },
+    ];
+    for (const request of candidates) await expect(api.save("synthetic", "proof", subject, request as SettingCommand)).rejects.toThrow();
+    await expect(api.save("synthetic", "", subject, command())).rejects.toThrow();
+    await expect(api.save("", "proof", subject, command())).rejects.toThrow();
+    await expect(api.status("synthetic", "bad", intent())).rejects.toThrow();
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(validSettingIntent({ ...intent(), extra: true })).toBe(false);
+  });
+
+  it.each(["learning_intervals_seconds", "material"] as const)("does not serialize a missing %s array element as null", async key => {
+    const original = intent();
+    original.payload = key === "material" ? { key, value: { mode: "topics", topic_ids: new Array<string>(1) } }
+      : { key, value: new Array<number>(1) };
+    expect(validSettingIntent(original)).toBe(false);
+    expect(allowedSettingValue(current(), key, original.payload.value)).toBe(false);
+    const { api, fetcher } = setup(reply());
+    await expect(api.save("synthetic", "proof", subject, command(original))).rejects.toThrow();
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+});
+
+describe("Settings recovery status", () => {
+  it("not_found keeps the same profile and never posts a new command", async () => {
+    const { api, fetcher } = setup({ command: { id: id(1), status: "not_found" }, current: profile(), state_version: big });
+    await expect(api.status("synthetic", subject, intent())).resolves.toMatchObject({ outcome: "not_found", current: profile() });
+    expect(fetcher).toHaveBeenCalledExactlyOnceWith(`/api/v1/commands/${id(1)}`, expect.objectContaining({ method: "GET", body: undefined }));
+  });
+
+  it.each([current(), { status: "unavailable" }])("accepted history does not grant current access %#", async projection => {
+    const body = { command: { ...fact(), status: "already_applied" }, current: projection, state_version: big };
+    await expect(setup(body).api.status("synthetic", subject, intent())).resolves.toMatchObject({ outcome: "accepted", current: projection });
+  });
+
+  it.each([
+    { command: fact(), current: current() },
+    { command: { ...fact(), status: "already_applied", target_id: id(99) }, current: current() },
+    { command: { ...fact(), status: "already_applied", object_version: big }, current: current() },
+    { command: { ...fact(), status: "already_applied" }, current: profile() },
+    { command: { id: id(99), status: "not_found" }, current: profile() },
+    { command: { id: id(1), status: "not_found" }, current: { ...profile(), profile_id: id(99) } },
+    { command: { id: id(1), status: "not_found" }, current: current() },
+    { command: { ...fact(), status: "already_applied" }, current: { status: "unavailable", settings: {} } },
+  ])("rejects conflicting status addresses and branches %#", async body => {
+    await expect(setup({ ...body, state_version: big }).api.status("synthetic", subject, intent()))
+      .rejects.toMatchObject({ kind: "invalid_response" });
+  });
+});

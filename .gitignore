@@ -1,0 +1,16 @@
+# Локальное окружение, кэш и секреты
+.venv/
+.cache/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo

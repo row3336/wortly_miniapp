@@ -1,0 +1,11 @@
+.reference-conjugations { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 14px; min-width: 0; }
+.reference-conjugations table { width: 100%; min-width: 0; table-layout: fixed; border-collapse: collapse; font-size: 15px; line-height: 1.5; color: var(--text); }
+.reference-conjugations caption { text-align: left; font-size: 14px; color: var(--muted); padding-bottom: 8px; }
+.reference-conjugations th { width: 3em; color: var(--muted); font-weight: 400; }
+.reference-conjugations th, .reference-conjugations td { vertical-align: top; text-align: left; padding: 0 4px 6px 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.reference-conjugations td { padding-right: 0; }
+.reference-missing { color: var(--muted); font-style: italic; }
+@media (max-width: 359px) {
+  .reference-conjugations { gap: 10px; }
+  .reference-conjugations table { font-size: 14px; }
+}

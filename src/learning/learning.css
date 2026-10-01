@@ -1,0 +1,13 @@
+.learning-screen { width: 100%; max-width: 600px; min-width: 0; margin: 0 auto; padding: 24px 16px max(24px, env(safe-area-inset-bottom)); display: grid; gap: 24px; color: var(--text); overflow-wrap: anywhere; }
+.learning-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; }
+.learning-header h1 { font-size: 18px; margin: 0; }
+.learning-screen > p { margin: 0; }
+.learning-header button, .learning-preview-actions button, .learning-recovery button, .learning-previous { min-height: 48px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; color: var(--text); background: var(--surface); font: inherit; }
+.learning-preview-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.learning-recovery { display: flex; flex-wrap: wrap; gap: 12px; }
+.learning-screen button:disabled { opacity: .5; cursor: default; }
+.learning-screen button:focus-visible { outline: 2px solid var(--text); outline-offset: 3px; }
+.learning-captured { display: grid; gap: 12px; }
+.learning-captured p { white-space: pre-wrap; margin: 0; }
+.learning-screen-summary { max-width: none; min-height: 100dvh; padding: 0; gap: 0; }
+.learning-summary { min-height: 100dvh; border: 0; padding: 24px 16px; background: transparent; color: var(--text); font: inherit; font-size: 24px; line-height: 1.4; text-align: center; }

@@ -1,0 +1,39 @@
+import type { LearningPreviewCommand, LearningStartPayload, PresentCommand,
+  SessionStartCommand, SessionStopCommand } from "../api/generated";
+import { exactKeys, oneOf, record, uuid } from "../api/wireValidation";
+
+type WithoutOrigin<T> = T extends unknown ? Omit<T, "client_instance_id" | "document_id"> : never;
+export type LearningSessionIntent = WithoutOrigin<
+  (Omit<SessionStartCommand, "payload"> & { payload: LearningStartPayload })
+  | LearningPreviewCommand | PresentCommand | SessionStopCommand>;
+export type LearningSessionCommand = LearningSessionIntent & {
+  client_instance_id: string; document_id: string;
+};
+
+/** Durable intent never owns a document, an access token or an origin proof. */
+export function validLearningSessionIntent(value: unknown): value is LearningSessionIntent {
+  if (!record(value) || !uuid(value.command_id) || !uuid(value.session_id) || !record(value.payload)) return false;
+  const keys = ["session_id", "command_id", "kind", "payload"];
+  let valid = false;
+  switch (value.kind) {
+    case "session.start": valid = exactKeys(value.payload, ["mode"]) && value.payload.mode === "learning"; break;
+    case "session.stop": valid = exactKeys(value.payload, ["reason"]) && oneOf(value.payload.reason, ["stop", "summary_home"]); break;
+    case "assignment.present": keys.push("assignment_id"); valid = uuid(value.assignment_id) && exactKeys(value.payload, []); break;
+    case "learning.preview_next": case "learning.known":
+      keys.push("preview_id"); valid = uuid(value.preview_id) && exactKeys(value.payload, []); break;
+  }
+  return valid && exactKeys(value, keys);
+}
+
+/** Stable field order gives the shared slot an exact comparison across callers. */
+export function copyLearningSessionIntent(value: LearningSessionIntent): LearningSessionIntent {
+  if (!validLearningSessionIntent(value)) throw new Error("invalid Learning intent");
+  const address = { command_id: value.command_id, session_id: value.session_id };
+  switch (value.kind) {
+    case "session.start": return { ...address, kind: value.kind, payload: { mode: "learning" } };
+    case "session.stop": return { ...address, kind: value.kind, payload: { reason: value.payload.reason } };
+    case "assignment.present": return { ...address, kind: value.kind, assignment_id: value.assignment_id, payload: {} };
+    case "learning.preview_next": case "learning.known":
+      return { ...address, kind: value.kind, preview_id: value.preview_id, payload: {} };
+  }
+}

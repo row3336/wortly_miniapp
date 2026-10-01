@@ -1,0 +1,18 @@
+.reference-card { display: grid; gap: 20px; min-width: 0; color: var(--text); overflow-wrap: anywhere; }
+.reference-card p, .reference-card h2, .reference-card h3, .reference-card dl, .reference-card dd { margin: 0; }
+.reference-card-meta { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; color: var(--muted); font-size: .875rem; }
+.reference-word { display: grid; gap: 8px; }
+.reference-form[data-article="der"] { color: var(--article-der); }
+.reference-form[data-article="die"] { color: var(--article-die); }
+.reference-form[data-article="das"] { color: var(--article-das); }
+.reference-word h2 { font-size: clamp(1.5rem, 5vw, 2rem); line-height: 1.45; font-weight: 600; }
+.reference-main-forms { display: inline-flex; flex-wrap: wrap; column-gap: .25em; }
+.reference-main-forms > span, .reference-compound { display: inline-block; max-width: 100%; }
+.reference-missing-forms { display: block; font-size: 1rem; font-weight: 400; }
+.reference-fallback-lemma { display: block; }
+.reference-plural { font-size: 1.25rem; line-height: 1.45; }
+.reference-taxonomy { display: grid; gap: 8px; }
+.reference-taxonomy > div { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.reference-taxonomy dt, .reference-personal, .reference-association h3 { color: var(--muted); font-size: .875rem; font-weight: 400; }
+.reference-translation, .reference-association { display: grid; gap: 6px; line-height: 1.5; }
+.reference-card p, .reference-card dd { white-space: pre-wrap; }
