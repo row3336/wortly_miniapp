@@ -1,0 +1,142 @@
+import { useEffect, useRef } from "react";
+import type { Language } from "../i18n/language";
+import { WrittenAnswerInput } from "../study/WrittenAnswerInput";
+import { WrittenAnswerResult } from "../study/WrittenAnswerResult";
+import type { WrittenActions } from "./useWrittenDocument";
+import type { WrittenViewSnapshot } from "./writtenViewController";
+import { WrittenSummary } from "./WrittenSummary";
+import "./written.css";
+
+export type WrittenScreenProps = {
+  state: WrittenViewSnapshot;
+  language: Language;
+  submitOnEnter: boolean;
+  actions: WrittenActions;
+  /** Navigation only: leaves an already closed session of this owner for Today. */
+  onToday(): void;
+};
+const copy = {
+  ru: { words: "Слова: перевод на немецкий", phrases: "Фразы: перевод на немецкий", exit: "Выйти", loading: "Загружаем занятие…",
+    saving: "Сохраняем ответ…", present: "Подтверждаем показ задания…", unknown: "Проверяем, сохранилось ли действие.",
+    stop: "Завершаем занятие…", closed: "Занятие завершено.", unavailable: "Занятие недоступно в этом окне.", stale: "Не удалось обновить занятие.",
+    check: "Проверить состояние", retry: "Повторить отправку", retryStop: "Повторить завершение", previous: "Предыдущий ответ",
+    captured: "Отправленный ответ", forgot: "Забыл…", today: "На Сегодня", summary: "Итог занятия",
+    local: "Не удалось обновить данные на этом устройстве.", blocked: "Действие нельзя повторить. Проверь состояние занятия.",
+    changed: "Задание изменилось. Обнови занятие.", noMaterial: "Сейчас нет доступных слов для этого занятия.", noPhrases: "Пока нет доступного материала",
+    busy: "Занятие открыто на другом устройстве", setup: "Для занятия нужно подтвердить настройки и текущую словарную пару." },
+  uk: { words: "Слова: переклад німецькою", phrases: "Фрази: переклад німецькою", exit: "Вийти", loading: "Завантажуємо заняття…",
+    saving: "Зберігаємо відповідь…", present: "Підтверджуємо показ завдання…", unknown: "Перевіряємо, чи збереглася дія.",
+    stop: "Завершуємо заняття…", closed: "Заняття завершено.", unavailable: "Заняття недоступне в цьому вікні.", stale: "Не вдалося оновити заняття.",
+    check: "Перевірити стан", retry: "Повторити надсилання", retryStop: "Повторити завершення", previous: "Попередня відповідь",
+    captured: "Надіслана відповідь", forgot: "Не пам’ятаю…", today: "На Сьогодні", summary: "Підсумок заняття",
+    local: "Не вдалося оновити дані на цьому пристрої.", blocked: "Дію не можна повторити. Перевір стан заняття.",
+    changed: "Завдання змінилося. Онови заняття.", noMaterial: "Зараз немає доступних слів для цього заняття.", noPhrases: "Поки немає доступного матеріалу",
+    busy: "Заняття відкрито на іншому пристрої", setup: "Для заняття потрібно підтвердити налаштування та поточну словникову пару." },
+  en: { words: "Words: translate into German", phrases: "Phrases: translate into German", exit: "Exit", loading: "Loading your session…",
+    saving: "Saving your answer…", present: "Confirming the displayed question…", unknown: "Checking whether the action was saved.",
+    stop: "Ending the session…", closed: "The session has ended.", unavailable: "This session is unavailable in this window.", stale: "Could not refresh the session.",
+    check: "Check status", retry: "Retry sending", retryStop: "Retry ending the session", previous: "Previous answer",
+    captured: "Submitted answer", forgot: "I forgot…", today: "Return to Today", summary: "Session summary",
+    local: "Could not update data on this device.", blocked: "This action cannot be retried. Check session status.",
+    changed: "The question has changed. Refresh the session.", noMaterial: "There are no words available for this session right now.", noPhrases: "No material is available yet",
+    busy: "A session is open on another device", setup: "Confirm session settings and the current dictionary pair to study." },
+} as const;
+
+/** Connects the local display to the owner's exact capabilities; command identity and outcome are never invented here. */
+export function WrittenScreen({ state, language, submitOnEnter, actions, onToday }: WrittenScreenProps) {
+  const t = copy[language], composing = useRef(false), root = useRef<HTMLElement>(null);
+  const primary = state.commands.primary, stop = state.commands.stop;
+  const grading = primary.pendingIntent?.kind === "result.grade";
+  const resultVisible = ["result_correct", "result_wrong", "previous_result", "changing_result"].includes(state.phase)
+    || state.phase === "unknown" && grading;
+  const result = resultVisible ? state.answer?.result : null;
+  const pendingResult = state.phase === "changing_result" ? "changing" : state.phase === "unknown" && grading ? "unknown" : null;
+  const unknownAnswer = state.phase === "unknown" && primary.pendingIntent?.kind === "answer.submit";
+  const closed = state.phase === "closed" ? state.closed : null;
+  const ownStop = closed?.reason === "stop";
+  const problemCode = state.problem, phrases = state.bucket === "phrases";
+  const problem = problemCode === "NO_MATERIAL" ? phrases ? t.noPhrases : t.noMaterial : problemCode === "SESSION_BUSY" ? t.busy
+    : problemCode === "SETUP_REQUIRED" ? t.setup : problemCode === "ASSIGNMENT_STALE" ? t.changed
+    : problemCode === "SESSION_CLOSED" ? t.closed : problemCode === "storage" ? t.local
+    : problemCode === "mismatch" || problemCode === "invalid_pending" || problemCode === "pending_changed" ? t.blocked
+    : problemCode ? t.stale : null;
+  const unresolved = primary.pending && primary.outcome === null || stop.pending && stop.outcome === null;
+  // An ordinary request in flight shows only its indicator; checking and retry belong to an unknown outcome (TA табл. 5.1).
+  const unknownLane = [primary, stop].some(lane => lane.pending && lane.outcome === null && lane.phase !== "sending");
+  const isClosed = state.phase === "closed" || state.phase === "disposed";
+  const summaryFailed = ownStop && closed?.summaryRead === "failed";
+  const showRecovery = !isClosed && (unknownLane || !!problem && state.phase !== "idle" || state.phase === "stale") || summaryFailed;
+  const checking = [primary, stop].some(lane => ["sending", "checking", "loading"].includes(lane.phase));
+  const status = state.phase === "submitting" ? t.saving : state.phase === "visible_unconfirmed" ? t.present
+    : state.phase === "unknown" ? t.unknown : undefined;
+  const pendingForgot = primary.pending && primary.outcome === null && primary.pendingIntent?.kind === "answer.submit"
+    && "forgot" in primary.pendingIntent.payload;
+  const canNext = state.canNext && !pendingResult;
+  useEffect(() => {
+    const keydown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.key !== "Enter" || !submitOnEnter || !result || !canNext) return;
+      // Enter of an IME composition, a held key or a repeated event never advances (TA §2).
+      if (event.repeat || composing.current || event.isComposing || event.keyCode === 229) return;
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      if (target !== document.body && !root.current?.contains(target)) return;
+      // A focused control owns Enter; bubbling must not bypass its own action.
+      if (target.closest('button, a, input, textarea, select, [contenteditable="true"], [role="dialog"]')) return;
+      event.preventDefault(); void actions.next();
+    };
+    document.addEventListener("keydown", keydown);
+    return () => document.removeEventListener("keydown", keydown);
+  }, [submitOnEnter, result, canNext, actions]);
+
+  // Waiting for the summary of the own Stop looks like the application start, never like a zero result.
+  if (ownStop && (closed.summaryRead === "pending" || closed.summaryRead === "reading")) return <main className="app-shell" lang={language} aria-busy="true">
+    <div role="status" aria-label={t.summary}>
+      <svg className="wortly-loader" viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="12" cy="12" r="11" fill="var(--line)" />
+        <circle cx="12" cy="12" r="8" fill="none" stroke="var(--muted)" strokeWidth="2" />
+        <circle className="wortly-loader-arc" cx="12" cy="12" r="8" fill="none" stroke="var(--text)" strokeWidth="3" pathLength="100" />
+      </svg>
+      <p>{t.loading}</p>
+    </div>
+  </main>;
+
+  const summary = state.phase === "summary" ? state.summary : ownStop && closed.summaryRead === "known" ? closed.summary : null;
+  return <main ref={root} className="written-screen" lang={language} onCompositionStart={() => { composing.current = true; }}
+    onCompositionEnd={() => { composing.current = false; }}>
+    {!summary && <header className="written-header">
+      <h1>{phrases ? t.phrases : t.words}</h1>
+      {!isClosed && state.phase !== "idle" && <button type="button" disabled={!state.canStop}
+        onClick={() => { if (state.canStop) void actions.stop("stop"); }}>{t.exit}</button>}
+    </header>}
+    {state.question && <WrittenAnswerInput assignment={state.question} language={language}
+      value={pendingForgot ? "" : unknownAnswer && state.submittedText !== null ? state.submittedText : state.draft}
+      readOnly={!state.canEditDraft} canSubmit={state.canSubmit} canForget={state.canForget} submitOnEnter={submitOnEnter}
+      status={pendingForgot ? `${t.forgot} ${status ?? ""}` : status}
+      onChange={value => actions.setDraft(value)} onSubmit={() => { void actions.submit(); }}
+      onForget={() => { void actions.submit({ forgot: true }); }} />}
+    {unknownAnswer && !state.question && <section aria-label={t.captured} className="written-captured">
+      <p className="written-parts">{t.captured}</p><p lang={state.submittedText === null ? language : "de"}>{state.submittedText ?? t.forgot}</p>
+      <p role="status">{t.unknown}</p>
+    </section>}
+    {result && <WrittenAnswerResult result={result} language={language} pending={pendingResult}
+      grades={state.grades} canCorrect={false} canNext={canNext} timer={state.timer}
+      onGrade={grade => { void actions.grade(grade); }} onCorrect={() => undefined} onNext={() => { void actions.next(); }} />}
+    {state.phase === "previous_result" && primary.pendingIntent?.kind === "assignment.present" && primary.outcome === null
+      && <p role="status">{t.present}</p>}
+    {state.canPrevious && <button type="button" className="written-previous" onClick={() => actions.previousResult()}>{t.previous}</button>}
+    {summary && <WrittenSummary summary={summary} outcome={state.phase === "summary" ? "completed" : "interrupted"} language={language}
+      canToday={state.phase === "summary" ? state.canSummaryHome : true}
+      onToday={() => { if (state.phase === "summary") void actions.stop("summary_home"); else onToday(); }} />}
+    {["loading", "stopping", "disposed"].includes(state.phase) && <p role="status">
+      {state.phase === "loading" ? t.loading : state.phase === "stopping" ? t.stop : t.unavailable}</p>}
+    {state.phase === "closed" && !summary && <p role="status">{t.closed}</p>}
+    {state.phase === "unknown" && !state.question && !unknownAnswer && !result && <p role="status">{t.unknown}</p>}
+    {problem && !isClosed && <p role="status">{problem}</p>}
+    {showRecovery && <div className="written-recovery">
+      <button type="button" disabled={checking} onClick={() => { if (!checking) void actions.refresh(); }}>{t.check}</button>
+      {state.canRetryPrimary && <button type="button" onClick={() => { void actions.retry("primary"); }}>{t.retry}</button>}
+      {stop.canRetry && <button type="button" onClick={() => { void actions.retry("stop"); }}>{t.retryStop}</button>}
+    </div>}
+    {(state.phase === "idle" && !unresolved || summaryFailed) && <button type="button" className="written-today" onClick={onToday}>{t.today}</button>}
+  </main>;
+}

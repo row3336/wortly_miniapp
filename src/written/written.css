@@ -1,0 +1,17 @@
+.written-screen { width: 100%; max-width: 600px; min-width: 0; margin: 0 auto; padding: 24px 16px max(24px, env(safe-area-inset-bottom)); display: grid; gap: 24px; color: var(--text); overflow-wrap: anywhere; }
+.written-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; }
+.written-header h1 { font-size: 18px; margin: 0; }
+.written-screen > p { margin: 0; }
+.written-header button, .written-recovery button, .written-previous, .written-today, .written-summary button { min-height: 48px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; color: var(--text); background: var(--surface); font: inherit; }
+.written-recovery { display: flex; flex-wrap: wrap; gap: 12px; }
+.written-screen button:disabled { opacity: .5; cursor: default; }
+.written-screen button:focus-visible { outline: 2px solid var(--text); outline-offset: 3px; }
+.written-captured { display: grid; gap: 12px; }
+.written-captured p { white-space: pre-wrap; margin: 0; }
+.written-summary { display: grid; gap: 16px; }
+.written-summary h2 { font-size: 24px; line-height: 1.3; margin: 0; }
+.written-summary p { margin: 0; }
+.written-summary dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 0; }
+.written-summary dl div { display: grid; gap: 4px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; }
+.written-summary dt { font-size: 14px; color: var(--muted); }
+.written-summary dd { margin: 0; font-size: 24px; font-weight: 700; }

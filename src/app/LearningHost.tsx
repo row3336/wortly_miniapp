@@ -6,6 +6,7 @@ import { useLearningDocument } from "../learning/useLearningDocument";
 import type { AsyncStorage } from "../platform/storage";
 import { bindBackButton } from "../platform/telegram";
 import type { SettingsDocument } from "../settings/useSettingsDocument";
+import type { TodayScreenProps } from "../today/TodayScreen";
 import type { OpenedAccess } from "./openedAccess";
 import { TodayHost } from "./TodayHost";
 
@@ -27,6 +28,8 @@ export type LearningHostProps = {
   /** One automatic notification per confirmed closure, or explicit idle/closed navigation to Today. */
   onToday(): void | Promise<void>;
   onSettings(): void;
+  /** Ordinary quiz rows of the Today screen this host renders; their owners live elsewhere in the document. */
+  quizzes?: Pick<TodayScreenProps, "onStartQuiz" | "canStartQuiz">;
 };
 
 const copy = {
@@ -164,6 +167,7 @@ export function LearningHost(props: LearningHostProps) {
     }
     return <TodayHost access={props.access} transport={props.transport} language={props.language}
       onOpenLearning={requestStart} enabledDestinations={["settings"]}
+      onStartQuiz={props.quizzes?.onStartQuiz} canStartQuiz={props.quizzes?.canStartQuiz}
       onNavigate={destination => { if (destination === "settings") openSettings(); }} />;
   }
   return <>

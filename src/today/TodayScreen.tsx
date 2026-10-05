@@ -15,6 +15,8 @@ export type TodayScreenProps = {
   notice?: ReactNode;
   /** The host owns command_id and must reconcile its outcome before remounting after a rejected start. */
   onStartQuiz?: (quiz: OrdinaryQuiz) => void | Promise<void>;
+  /** Per-row availability of onStartQuiz; without it every ready row with a handler is available. */
+  canStartQuiz?: (quiz: OrdinaryQuiz) => boolean;
   onOpenLearning?: () => void | Promise<void>;
   onStartConjugation?: () => void | Promise<void>;
   onOpenConjugations?: () => void;
@@ -169,7 +171,8 @@ export function TodayScreen(props: TodayScreenProps) {
           <p className="today-small today-count-heading">{t.readyReviews}</p>
           <div className="today-counts">
             {quizRows.map((row) => row.count > 0 ? <button type="button" className="today-quiz-row" key={row.key}
-              disabled={starting || !props.onStartQuiz} onClick={() => { void once(() => props.onStartQuiz?.({ material: row.material, direction: row.direction })); }}>
+              disabled={starting || !props.onStartQuiz || props.canStartQuiz?.({ material: row.material, direction: row.direction }) === false}
+              onClick={() => { void once(() => props.onStartQuiz?.({ material: row.material, direction: row.direction })); }}>
               <span>{row.title}</span><strong>{row.count}</strong>
             </button> : <div className="today-quiz-row today-quiz-inert" key={row.key}>
               <span>{row.title}</span><strong>{row.count}</strong>

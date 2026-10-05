@@ -12,7 +12,8 @@ import type { SettingsPendingStore } from "../settings/settingsPending";
 import { renderLearningPreviewExamples } from "../study/LearningPreviewExamples";
 import type { SessionResumeState } from "../study/sessionResumeController";
 import { useSessionResumeDocument } from "../study/useSessionResumeDocument";
-import { TodayScreen } from "../today/TodayScreen";
+import { TodayScreen, type OrdinaryQuiz } from "../today/TodayScreen";
+import { useWrittenHost } from "../written/useWrittenHost";
 import { EntryScreen } from "./EntryScreen";
 import { LearningHost } from "./LearningHost";
 import type { OpenedAccess } from "./openedAccess";
@@ -52,7 +53,7 @@ function classify(state: SessionResumeState): ModeRead {
 
 /** Keyed by the opened document, never by the identity of a foreground access handle. */
 export function ApplicationDocument(props: Props) {
-  const [route, setRoute] = useState<"today" | "settings" | "learning" | "oral">("today");
+  const [route, setRoute] = useState<"today" | "settings" | "learning" | "oral" | "written">("today");
   const [settingsOpened, setSettingsOpened] = useState(false);
   const [floor, setFloor] = useState<SettingsObservation | null>(null);
   const [gate, setGate] = useState<"ready" | "loading" | "failed">("ready");
@@ -171,7 +172,7 @@ export function ApplicationDocument(props: Props) {
   };
 
   // hostRoute "settings" means hidden, not navigation: the Host renders nothing and keeps its owner mounted.
-  let hostRoute: "today" | "learning" | "settings" = route === "oral" ? "settings" : route;
+  let hostRoute: "today" | "learning" | "settings" = route === "oral" || route === "written" ? "settings" : route;
   let screen: ReactNode = null, todayShown = false;
   if (selected === null) screen = readScreen();
   else if (route === "today") {
@@ -189,17 +190,27 @@ export function ApplicationDocument(props: Props) {
     initialSessionId: oralSeed, seedPending: route === "oral" && readAfter && (read.kind === "pending" || read.kind === "oral"),
     route: route === "oral" ? "oral" : todayShown ? "today" : "hidden",
     onOral: () => setRoute("oral"), onToday: today });
-  if (todayShown && oral.blocksToday) { hostRoute = "settings"; screen = loading; }
+  // The written owner also lives for the whole document; L1→De rows of Today start it (tz_app М09).
+  const written = useWrittenHost({ access: props.access, transport: props.transport, storage: props.storage, newId: props.newId,
+    language: props.language, settings, minimumStateVersion: floor?.version,
+    route: route === "written" ? "written" : todayShown ? "today" : "hidden",
+    onWritten: () => setRoute("written"), onToday: today });
+  if (todayShown && (oral.blocksToday || written.blocksToday)) { hostRoute = "settings"; screen = loading; }
+  const quizzes = {
+    onStartQuiz: (quiz: OrdinaryQuiz) => { if (quiz.direction === "l1-de") written.requestStart(quiz.material); },
+    canStartQuiz: (quiz: OrdinaryQuiz) => quiz.direction === "l1-de" && written.canRequestStart,
+  };
   return <>
     {selected !== null && <LearningHost access={props.access} transport={props.transport} storage={props.storage}
       newId={props.newId} language={props.language} settings={settings}
       minimumStateVersion={highest(floor?.version, selected.version)} initialSessionId={seed}
-      route={hostRoute} submitOnEnter renderPreview={renderPreview}
+      route={hostRoute} submitOnEnter renderPreview={renderPreview} quizzes={quizzes}
       onLearning={() => { hostClaimed.current = true; setRoute("learning"); }}
       onToday={() => { hostClaimed.current = false; seedReleased.current = true; today(); }}
       onSettings={() => { setSettingsOpened(true); setRoute("settings"); }} />}
     {screen}
     {oral.screen}
+    {written.screen}
     {settingsOpened && <div hidden={route !== "settings"}>
       <SettingsHost access={props.access} transport={props.transport} document={settings}
         language={props.language} active={route === "settings"} onToday={today} />
