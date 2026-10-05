@@ -34,6 +34,11 @@ function opened(version = "9007199254740994"): OpenedClient {
   };
 }
 
+function decided(status: "pending" | "rejected", accessVersion: string, version: string): Profile {
+  return { ...profile(status, version),
+    access: { status, version: accessVersion, reason: status === "rejected" ? "Second review" : null } };
+}
+
 function memoryStorage(): AsyncStorage & { values: Map<string, string>; set: ReturnType<typeof vi.fn> } {
   const values = new Map<string, string>();
   return {
@@ -70,6 +75,25 @@ function fixture(status: "admitted" | "pending" | "rejected" = "admitted", onSta
     onUpdate: ({ state }) => { states.push(state.kind); onState?.(state.kind); },
   });
   return { controller, api, storage, states, lock, timeZone };
+}
+
+/** A new document of the same Mini App: shared server and storage, its own controller. */
+function relaunch(api: EntryApi, storage: AsyncStorage, ids: string[]) {
+  const states: string[] = [];
+  const controller = new EntryController({
+    api, storage, lock: { acquire: vi.fn(async () => ({ release: vi.fn() })) },
+    initData: "signed", savedLanguage: "ru", browserLanguage: "ru", clientVersion: "0.0.0", contractVersion: "1",
+    timeZone: () => "Europe/Berlin", newId: () => ids.shift()!, onUpdate: ({ state }) => states.push(state.kind),
+  });
+  return { controller, states };
+}
+
+function appliedReapply(current: Profile): EntryApi["reapply"] {
+  return async (_token, request) => ({
+    command: { id: request.command_id, status: "applied", applied_at: "2026-09-29T00:00:00Z", target_id: null,
+      object_version: current.access.version },
+    current,
+  });
 }
 
 describe("entry controller", () => {
@@ -287,6 +311,33 @@ describe("entry controller", () => {
     expect(states.at(-1)).toBe("unavailable");
   });
 
+  it.each([401, 403, 500])("an entry HTTP %s is shown as an expired sign-in only for 401", async status => {
+    const f = fixture();
+    vi.mocked(f.api.auth).mockRejectedValueOnce(new EntryApiError("http", status));
+    await f.controller.start();
+    expect(f.states.at(-1)).toBe(status === 401 ? "expired" : "unavailable");
+    expect(f.api.register).not.toHaveBeenCalled();
+  });
+
+  it.each(["register", "open"] as const)("an HTTP 401 on %s during entry is an expired sign-in, not a retry", async step => {
+    const f = fixture();
+    vi.mocked(f.api[step]).mockRejectedValueOnce(new EntryApiError("http", 401));
+    await f.controller.start();
+    expect(f.states.filter(kind => kind === "expired")).toHaveLength(1);
+    expect(f.states.at(-1)).toBe("expired");
+    await f.controller.foreground();
+    expect(f.api.auth).toHaveBeenCalledOnce();
+    expect(f.controller.getOpenedAccess()).toBeNull();
+  });
+
+  it.each([401, 403])("a reapply HTTP %s leaves the refusal screen without promising a new request", async status => {
+    const f = fixture("rejected"); await f.controller.start();
+    vi.mocked(f.api.reapply).mockRejectedValueOnce(new EntryApiError("http", status));
+    await f.controller.reapply();
+    expect(f.states.slice(-2)).toEqual(["reapplying", status === 401 ? "expired" : "unavailable"]);
+    expect(f.states).not.toContain("pending");
+  });
+
   it("does not register pending or rejected users", async () => {
     for (const status of ["pending", "rejected"] as const) {
       const { controller, api, states } = fixture(status);
@@ -332,6 +383,50 @@ describe("entry controller", () => {
     await second.reapply();
     expect(vi.mocked(first.api.reapply).mock.calls[1][1]).toEqual(prior);
     expect(states.at(-1)).toBe("pending");
+  });
+
+  it("sends one new reapply command when a newer refusal has settled the saved one", async () => {
+    const first = fixture("rejected"); await first.controller.start();
+    vi.mocked(first.api.reapply).mockRejectedValueOnce(new EntryApiError("network"));
+    await first.controller.reapply();
+    const lost = vi.mocked(first.api.reapply).mock.calls[0][1];
+    first.controller.dispose();
+    // The lost command was applied, and the owner has refused again: access is now at version 5.
+    vi.mocked(first.api.auth).mockResolvedValueOnce({ ...auth("rejected"), profile: decided("rejected", "5", "9007199254740995") });
+    vi.mocked(first.api.reapply).mockImplementationOnce(appliedReapply(decided("pending", "6", "9007199254740996")));
+    const fresh = "99999999-9999-4999-8999-999999999999";
+    const second = relaunch(first.api, first.storage, [fresh]);
+    await second.controller.start();
+    expect(second.states.at(-1)).toBe("rejected");
+    await second.controller.reapply();
+    expect(first.api.reapply).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(first.api.reapply).mock.calls[1][1]).toEqual({ command_id: fresh, expected_access_version: "5" });
+    expect(fresh).not.toBe(lost.command_id);
+    expect(second.states.at(-1)).toBe("pending");
+    expect(first.storage.values.has(`wortly.reapply:${profileId}`)).toBe(false);
+  });
+
+  it("forgets a settled reapply in pending, so a later refusal is answered by one new command", async () => {
+    const first = fixture("rejected"); await first.controller.start();
+    vi.mocked(first.api.reapply).mockRejectedValueOnce(new EntryApiError("network"));
+    await first.controller.reapply();
+    const lost = vi.mocked(first.api.reapply).mock.calls[0][1];
+    first.controller.dispose();
+    vi.mocked(first.api.auth).mockResolvedValueOnce({ ...auth("pending"), profile: decided("pending", "4", "9007199254740994") });
+    const waiting = relaunch(first.api, first.storage, []);
+    await waiting.controller.start();
+    expect(waiting.states.at(-1)).toBe("pending");
+    expect(first.storage.values.has(`wortly.reapply:${profileId}`)).toBe(false);
+    waiting.controller.dispose();
+    vi.mocked(first.api.auth).mockResolvedValueOnce({ ...auth("rejected"), profile: decided("rejected", "5", "9007199254740995") });
+    vi.mocked(first.api.reapply).mockImplementationOnce(appliedReapply(decided("pending", "6", "9007199254740996")));
+    const fresh = "99999999-9999-4999-8999-999999999999";
+    const refused = relaunch(first.api, first.storage, [fresh]);
+    await refused.controller.start(); await refused.controller.reapply();
+    expect(first.api.reapply).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(first.api.reapply).mock.calls[1][1]).toEqual({ command_id: fresh, expected_access_version: "5" });
+    expect(fresh).not.toBe(lost.command_id);
+    expect(refused.states.at(-1)).toBe("pending");
   });
 
   it("refreshes access after a confirmed version conflict before allowing a new intent", async () => {
@@ -512,7 +607,7 @@ describe("entry controller", () => {
     vi.mocked(api.open).mockRejectedValue(new EntryApiError("http", 401));
     await controller.start();
     await controller.reapply();
-    expect(states.at(-1)).toBe("unavailable");
+    expect(states.at(-1)).toBe("expired");
     expect(release).toHaveBeenCalledTimes(1);
     await controller.retry();
     expect(api.auth).toHaveBeenCalledTimes(2);
@@ -580,18 +675,24 @@ describe("entry controller", () => {
     expect(vi.mocked(api.open).mock.calls[0][1]).toBe("saved-proof");
   });
 
-  it("does not let an old auth response overwrite a newer pending result", async () => {
-    const { controller, api, states } = fixture();
+  it("does not let an old auth response of a closed document overwrite the newer document's result", async () => {
+    const { controller, api, storage, lock, states } = fixture();
     let resolveOld!: (response: AuthResponse) => void;
     vi.mocked(api.auth).mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve; }))
       .mockResolvedValueOnce(auth("pending"));
     const old = controller.start();
-    const fresh = controller.restartAuthentication();
-    await fresh;
+    await vi.waitFor(() => expect(api.auth).toHaveBeenCalledOnce());
+    controller.dispose(); const closedStates = states.length;
+    const fresh = relaunch(api, storage, []);
+    await fresh.controller.start();
+    expect(fresh.states.at(-1)).toBe("pending");
     resolveOld(auth("admitted"));
     await old;
-    expect(states.at(-1)).toBe("pending");
+    expect(states).toHaveLength(closedStates);
+    expect(fresh.states.at(-1)).toBe("pending");
+    expect(lock.acquire).not.toHaveBeenCalled();
     expect(api.register).not.toHaveBeenCalled();
+    expect(storage.values.has(`wortly.installation:${profileId}`)).toBe(false);
   });
 
   it("does not display an opened client from an older state version", async () => {

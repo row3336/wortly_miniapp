@@ -172,6 +172,37 @@ describe("Entry remote confirmation integration", () => {
       .not.toBe(vi.mocked(f.remoteApi.stop).mock.calls[0][2].command_id);
   });
 
+  it("a request kept during a refresh asks nothing when the refresh finds the other session ended", async () => {
+    const f = fixture(); await f.controller.start();
+    const original = vi.mocked(f.api.open).getMockImplementation()!;
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    vi.mocked(f.api.open).mockImplementationOnce(async (...args) => { await gate; return original(...args); });
+    const refresh = f.controller.foreground();
+    await vi.waitFor(() => expect(f.api.open).toHaveBeenCalledTimes(2));
+    f.controller.requestRemoteStop();
+    f.state.busy = false; f.state.version = "3"; release(); await refresh;
+    // A send would store its intent first, so let all pending work settle before checking.
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(f.latest()).toEqual({ kind: "opened" });
+    expect(f.updates.map(update => update.state.kind)).not.toContain("remote_confirm");
+    expect(f.remoteApi.stop).not.toHaveBeenCalled();
+  });
+
+  it("a request kept during a refresh does nothing after the document is closed", async () => {
+    const f = fixture(); await f.controller.start();
+    let finish!: (value: Awaited<ReturnType<EntryApi["open"]>>) => void;
+    vi.mocked(f.api.open).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const refresh = f.controller.foreground();
+    f.controller.requestRemoteStop();
+    await vi.waitFor(() => expect(f.api.open).toHaveBeenCalledTimes(2));
+    f.controller.dispose(); const length = f.updates.length;
+    finish({ status: "SESSION_BUSY", profile: profile("3"), compatibility: { compatible: true, contract_version: "1" },
+      session: { status: "busy", stop_remote_target: id(50) } });
+    await refresh; await Promise.resolve();
+    expect(f.updates).toHaveLength(length);
+  });
+
   it("deduplicates repeated confirm and check clicks while sending", async () => {
     const f = fixture(); await f.controller.start();
     let finish!: (reply: RemoteStopReply) => void;

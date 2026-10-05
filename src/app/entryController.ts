@@ -18,6 +18,11 @@ import { createBusyAccess, type BusyAccess } from "./busyAccess";
 
 export type EntrySnapshot = { state: EntryState; profile?: Profile };
 
+/** HTTP 401 means this sign-in no longer works: retrying with the same signed data cannot help. */
+function failure(error: unknown): EntryState {
+  return { kind: error instanceof EntryApiError && error.kind === "http" && error.status === 401 ? "expired" : "unavailable" };
+}
+
 export type EntryControllerOptions = {
   api: EntryApi;
   today?: TodayApi;
@@ -51,6 +56,7 @@ export class EntryController {
   private running: Promise<void> | null = null;
   private foregroundRunning = false;
   private queuedForeground: Promise<void> | null = null;
+  private queuedRemoteRequest: Promise<void> | null = null;
   private openedAccess: OpenedAccess | null = null;
   private busyAccess: BusyAccess | null = null;
   private busySequence = 0;
@@ -78,7 +84,7 @@ export class EntryController {
         onDenied: error => {
           this.generation += 1;
           this.resetInvalidSession(error);
-          this.emit({ kind: error.status === 401 ? "expired" : "unavailable" });
+          this.emit(failure(error));
         },
       });
       this.busyAccess = access;
@@ -147,7 +153,7 @@ export class EntryController {
     const task = this.open(this.session.access_token, generation, "foreground").catch((error: unknown) => {
       if (!this.current(generation)) return;
       this.resetInvalidSession(error);
-      this.emit({ kind: error instanceof EntryApiError && error.status === 401 ? "expired" : "unavailable" });
+      this.emit(failure(error));
     }).finally(() => {
       if (this.running === task) {
         this.running = null;
@@ -159,14 +165,6 @@ export class EntryController {
     return task;
   }
 
-  /** Only auth reads may be superseded; registration/open writes stay serialized. */
-  restartAuthentication(): Promise<void> {
-    if (this.session) return this.retry();
-    this.generation += 1;
-    this.running = null;
-    return this.run(true);
-  }
-
   private run(authenticate: boolean): Promise<void> {
     this.remote?.dispose();
     this.remote = null;
@@ -174,7 +172,7 @@ export class EntryController {
     const task = this.execute(generation, authenticate).catch((error: unknown) => {
       if (!this.current(generation)) return;
       this.resetInvalidSession(error);
-      this.emit({ kind: "unavailable" });
+      this.emit(failure(error));
     }).finally(() => {
       if (this.running === task) this.running = null;
     });
@@ -214,7 +212,12 @@ export class EntryController {
     if (!session || !session.compatibility.compatible) { this.emit({ kind: "unavailable" }); return; }
     const profile = session.profile;
     if (!this.acceptProfile(profile)) throw new EntryApiError("invalid_response");
-    if (profile.access.status === "pending") { this.emit({ kind: "pending" }, profile); return; }
+    if (profile.access.status === "pending") {
+      await this.dropSettledReapplyIntent(profile.profile_id);
+      if (!this.current(generation)) return;
+      this.emit({ kind: "pending" }, profile);
+      return;
+    }
     if (profile.access.status === "rejected") {
       this.reapplyIntent ??= await readReapplyIntent(this.options.storage, profile.profile_id);
       if (!this.current(generation)) return;
@@ -261,6 +264,17 @@ export class EntryController {
       // A late registration may have replaced a proof before this open reached the server.
       await this.register(session.access_token, generation);
       if (this.current(generation)) await this.open(session.access_token, generation);
+    }
+  }
+
+  /** Pending access means any earlier reapply was settled: its saved ID must not be resent later. */
+  private async dropSettledReapplyIntent(profileId: string): Promise<void> {
+    this.reapplyIntent = null;
+    try {
+      await clearReapplyIntent(this.options.storage, profileId);
+    } catch {
+      // reapply() also refuses an intent saved for another access version, so a failed cleanup
+      // must not hide the confirmed pending state.
     }
   }
 
@@ -346,7 +360,7 @@ export class EntryController {
       onDenied: error => {
         this.generation += 1; // A pending foreground reply must not restore revoked access.
         this.resetInvalidSession(error);
-        this.emit({ kind: error.status === 401 ? "expired" : "unavailable" });
+        this.emit(failure(error));
       },
     });
     this.openedAccess = access;
@@ -396,7 +410,17 @@ export class EntryController {
   }
 
   requestRemoteStop(): void {
-    if (this.running || !this.remote || this.state.kind !== "busy" || !this.state.remoteTarget) return;
+    if (this.state.kind !== "busy" || !this.state.remoteTarget) return;
+    if (this.running) {
+      // The busy screen and its button stay visible while a refresh settles occupancy. Keep the tap,
+      // as foreground() keeps an event during startup, and ask once the current task has finished.
+      this.queuedRemoteRequest ??= this.running.then(() => {
+        this.queuedRemoteRequest = null;
+        this.requestRemoteStop();
+      });
+      return;
+    }
+    if (!this.remote) return;
     this.emit({ kind: "remote_confirm", targetId: this.state.remoteTarget }, this.session?.profile);
   }
 
@@ -419,7 +443,7 @@ export class EntryController {
     }).catch((error: unknown) => {
       if (!this.current(generation)) return;
       this.resetInvalidSession(error);
-      this.emit({ kind: error instanceof EntryApiError && error.status === 401 ? "expired" : "unavailable" });
+      this.emit(failure(error));
     }).finally(() => { if (this.running === task) this.running = null; });
     this.running = task;
     return task;
@@ -452,13 +476,15 @@ export class EntryController {
     let confirmed = false;
     const task = (async () => {
       let intent = this.reapplyIntent;
-      if (!intent) {
+      // An unknown outcome repeats its ID only while access is still at the version it was sent for.
+      // After a newer decision that ID can only return the old fact, so the tap needs a new command.
+      if (!intent || intent.expectedAccessVersion !== session.profile.access.version) {
         intent = {
           profileId: session.profile.profile_id,
           commandId: this.options.newId(),
           expectedAccessVersion: session.profile.access.version,
         };
-        await writeReapplyIntent(this.options.storage, intent);
+        await writeReapplyIntent(this.options.storage, intent); // Replaces a stale intent under the same key.
         if (!this.current(generation)) return;
         this.reapplyIntent = intent;
       }
@@ -501,13 +527,13 @@ export class EntryController {
         if (this.current(generation)) this.emit({ kind: "unavailable" });
         return;
       }
-      if (confirmed) { this.emit({ kind: "unavailable" }); return; }
+      if (confirmed) { this.emit(failure(error)); return; }
       if (error instanceof EntryApiError && error.kind === "invalid_response") {
         this.emit({ kind: "unavailable" });
         return;
       }
       if (error instanceof EntryApiError && error.kind === "http" && (error.status === 401 || error.status === 403)) {
-        this.emit({ kind: "unavailable" });
+        this.emit(failure(error));
       } else {
         this.emit({ kind: "rejected", reason });
       }
