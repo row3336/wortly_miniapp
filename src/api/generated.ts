@@ -398,7 +398,7 @@ export type WrittenAction = { "action_id": string; "kind": "answer.submit"; "ver
 
 export type WrittenAnswerDetail = { "input": (WrittenTextInput | WrittenForgotInput); "initial_check": InitialAnswerCheck; "variants": Array<CompleteAnswerVariant>; "conjunction_hint": (ConjunctionHint | null); "examples": (CardExamples | null); };
 
-export type WrittenCapabilities = { "answer_target": (string | null); "grades": (WrittenGradeCapability | null); "correct_target": null; "undo_target": null; "stop": boolean; "summary_home": boolean; };
+export type WrittenCapabilities = { "answer_target": (string | null); "grades": (WrittenGradeCapability | null); "correct_target": (LearningResultTarget | null); "undo_target": null; "stop": boolean; "summary_home": boolean; };
 
 export type WrittenCommandResponse = { "action": (WrittenAction | null); "result": (WrittenResult | null); "step": (WrittenStep | UnavailableSession | UnavailableCurrent); "capabilities": WrittenCapabilities; "command": (SavedCommandFact | RejectedCommandFact); "state_version": string; "error"?: (ErrorDetail | null); };
 
