@@ -9,6 +9,22 @@ afterEach(() => { owners.splice(0).forEach(owner => owner.dispose()); vi.useReal
 function harness(mode: "normal" | "accelerated" = "normal", sessionId: string | null = id(3)) {
   const f = learningViewFixture(mode, sessionId); owners.push(f.view); return f;
 }
+type Fixture = ReturnType<typeof harness>;
+/** A revision that never reached the server: after the return its receipt is not found, then the explicit retry is rejected. */
+async function lostRevisionRejectedAfterReturn(f: Fixture, revise: () => Promise<void>, kind: "result.grade" | "result.correct") {
+  const before = f.view.snapshot();
+  f.fetcher.mockRejectedValueOnce(new Error("lost before the server")); await revise();
+  expect(f.view.snapshot()).toMatchObject({ phase: "unknown", commands: { primary: { kind } } });
+  const sent = f.posts().at(-1)!;
+  f.view.suspend(); await vi.advanceTimersByTimeAsync(10000); f.replace();
+  f.fetcher.mockResolvedValueOnce(response(missing(sent, before.commands.stateVersion)));
+  await f.view.resume();
+  expect(f.view.snapshot()).toMatchObject({ phase: "unknown", canRetryPrimary: true, timer: null });
+  f.fetcher.mockImplementationOnce(async (_url, init) => response({ ...before.answer, step: before.current,
+    state_version: before.commands.stateVersion, command: { id: JSON.parse(String(init?.body)).command_id, status: "rejected" },
+    error: { code: "VERSION_CONFLICT" } }, 409));
+  await f.view.retry();
+}
 
 describe("Learning question, result and presentation lifecycle", () => {
   it("retries Stop with its original ID while the answer request is still pending", async () => {
@@ -41,14 +57,133 @@ describe("Learning question, result and presentation lifecycle", () => {
     f.replace(); await f.view.resume(); expect(f.view.snapshot().canAdvancePreview).toBe(true);
     await f.view.advancePreview(); expect(f.view.snapshot().phase).toBe("question");
   });
-  it("hidden correction keeps the result and starts its normal timer only after recovery", async () => {
-    const f = harness(); f.wrong(); await f.view.refresh(); f.view.setDraft("wrong"); await f.view.submit();
+  it("hidden correction keeps the result; after return it waits for «Далее» without a timer", async () => {
+    vi.useFakeTimers(); const f = harness(); f.wrong(); await f.view.refresh(); f.view.setDraft("wrong"); await f.view.submit();
     const gate = deferred<Response>(); f.fetcher.mockReturnValueOnce(gate.promise); const correcting = f.view.correct();
     await vi.waitFor(() => expect(f.posts()).toHaveLength(2)); const reply = await f.handler(...f.fetcher.mock.calls.at(-1)!);
     f.view.suspend(); gate.resolve(reply); await correcting;
     expect(f.view.snapshot()).toMatchObject({ phase: "result_correct", timer: null });
-    f.replace(); await f.view.resume(); expect(f.view.snapshot().timer?.durationMs).toBe(3000);
+    f.replace(); await f.view.resume();
+    expect(f.view.snapshot()).toMatchObject({ phase: "result_correct", timer: null, canNext: true });
+    await vi.advanceTimersByTimeAsync(10000);
     expect(f.posts().map(post => post.kind)).toEqual(["answer.submit", "result.correct"]);
+  });
+  it.each([{ mode: "normal", wrong: false }, { mode: "accelerated", wrong: false }, { mode: "accelerated", wrong: true },
+    { mode: "normal", wrong: true }] as const)(
+    "$mode mode, wrong answer $wrong: after background the result waits for «Далее»; no card turns in the background or on return (Т90)",
+    async ({ mode, wrong }) => {
+      vi.useFakeTimers(); const spy = vi.spyOn(globalThis, "setTimeout");
+      const f = harness(mode); if (wrong) f.wrong();
+      await f.view.refresh(); f.view.setDraft("Haus"); await f.view.submit();
+      const phase = wrong ? "result_wrong" : "result_correct", duration = mode === "accelerated" ? 2000 : wrong ? null : 3000;
+      expect(f.view.snapshot().timer?.durationMs ?? null).toBe(duration);
+      const stale = duration === null ? null : spy.mock.calls.find(call => call[1] === duration)![0] as () => void;
+      f.view.suspend(); expect(f.view.snapshot().timer).toBeNull();
+      await vi.advanceTimersByTimeAsync(10000); expect(f.posts().map(post => post.kind)).toEqual(["answer.submit"]);
+      f.replace(); await f.view.resume();
+      expect(f.view.snapshot()).toMatchObject({ phase, timer: null, canNext: true });
+      // The callback of the timer cancelled by the background must not switch the card, nor may the clock.
+      stale?.(); await vi.advanceTimersByTimeAsync(10000);
+      expect(f.posts().map(post => post.kind)).toEqual(["answer.submit"]);
+      expect(f.view.snapshot()).toMatchObject({ phase, timer: null, canNext: true });
+      await f.view.next();
+      expect(f.posts().map(post => post.kind)).toEqual(["answer.submit", "assignment.present"]);
+      expect(f.view.snapshot()).toMatchObject({ phase: "question", question: { id: id(7) }, timer: null });
+      spy.mockRestore();
+    });
+  it("a result accepted while hidden also waits for «Далее» after return", async () => {
+    vi.useFakeTimers(); const f = harness(); await f.view.refresh(); f.view.setDraft("Haus");
+    const gate = deferred<Response>(); f.fetcher.mockReturnValueOnce(gate.promise); const sending = f.view.submit();
+    await vi.waitFor(() => expect(f.posts()).toHaveLength(1)); const reply = await f.handler(...f.fetcher.mock.calls.at(-1)!);
+    f.view.suspend(); gate.resolve(reply); await sending; await vi.advanceTimersByTimeAsync(10000);
+    expect(f.view.snapshot()).toMatchObject({ phase: "result_correct", timer: null });
+    f.replace(); await f.view.resume();
+    expect(f.view.snapshot()).toMatchObject({ phase: "result_correct", timer: null, canNext: true });
+    await vi.advanceTimersByTimeAsync(10000); expect(f.posts().map(post => post.kind)).toEqual(["answer.submit"]);
+  });
+  it("an explicit grade chosen after return advances right after its commit, without a timer", async () => {
+    vi.useFakeTimers(); const f = harness(); await f.view.refresh(); f.view.setDraft("Haus"); await f.view.submit();
+    f.view.suspend(); f.replace(); await f.view.resume();
+    expect(f.view.snapshot()).toMatchObject({ phase: "result_correct", timer: null, grades: [3, 4, 5] });
+    await f.view.grade(5);
+    expect(f.posts().map(post => post.kind)).toEqual(["answer.submit", "result.grade", "assignment.present"]);
+    expect(f.view.snapshot()).toMatchObject({ phase: "question", question: { id: id(7) }, answer: { result: { grade: 5 } }, timer: null });
+  });
+  it("«Далее» after return ends the wait: the next answer gets its normal timer again", async () => {
+    vi.useFakeTimers(); const f = harness(); await f.view.refresh(); f.view.setDraft("Haus"); await f.view.submit();
+    f.view.suspend(); f.replace(); await f.view.resume(); await f.view.next();
+    f.view.setDraft("Haus"); await f.view.submit();
+    expect(f.view.snapshot()).toMatchObject({ phase: "result_correct", timer: { durationMs: 3000 } });
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(f.posts().map(post => post.kind)).toEqual(["answer.submit", "assignment.present", "answer.submit", "assignment.present"]);
+  });
+  it("«Исправить ответ» pressed after return starts no timer: the result waits, «Далее» then works", async () => {
+    vi.useFakeTimers(); const f = harness(); f.wrong(); await f.view.refresh(); f.view.setDraft("x"); await f.view.submit();
+    f.view.suspend(); f.replace(); await f.view.resume();
+    expect(f.view.snapshot()).toMatchObject({ phase: "result_wrong", timer: null, canCorrect: true });
+    await f.view.correct();
+    expect(f.view.snapshot()).toMatchObject({ phase: "result_correct", timer: null, canNext: true });
+    await vi.advanceTimersByTimeAsync(10000); expect(f.posts().map(post => post.kind)).toEqual(["answer.submit", "result.correct"]);
+    await f.view.next(); expect(f.posts().map(post => post.kind)).toEqual(["answer.submit", "result.correct", "assignment.present"]);
+  });
+  it("a correction acknowledged only after the return has begun also starts no timer", async () => {
+    vi.useFakeTimers(); const f = harness(); f.wrong(); await f.view.refresh(); f.view.setDraft("x"); await f.view.submit();
+    const gate = deferred<Response>(); f.fetcher.mockReturnValueOnce(gate.promise); const correcting = f.view.correct();
+    await vi.waitFor(() => expect(f.posts()).toHaveLength(2)); const reply = await f.handler(...f.fetcher.mock.calls.at(-1)!);
+    f.view.suspend(); f.replace(); const resuming = f.view.resume(); gate.resolve(reply); await correcting; await resuming;
+    expect(f.view.snapshot()).toMatchObject({ phase: "result_correct", timer: null, canNext: true });
+    await vi.advanceTimersByTimeAsync(10000); expect(f.posts().map(post => post.kind)).toEqual(["answer.submit", "result.correct"]);
+    await f.view.next(); expect(f.posts().map(post => post.kind)).toEqual(["answer.submit", "result.correct", "assignment.present"]);
+  });
+  it("background on a question, not a result: the answer given after return is timed normally", async () => {
+    vi.useFakeTimers(); const f = harness(); await f.view.refresh(); f.view.setDraft("Haus");
+    f.view.suspend(); f.replace(); await f.view.resume();
+    expect(f.view.snapshot()).toMatchObject({ phase: "question", draft: "Haus" });
+    await f.view.submit(); expect(f.view.snapshot()).toMatchObject({ phase: "result_correct", timer: { durationMs: 3000 } });
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(f.posts().map(post => post.kind)).toEqual(["answer.submit", "assignment.present"]);
+  });
+  it("a correction whose reply was lost keeps the old result on screen: after background and return it waits for «Далее»", async () => {
+    vi.useFakeTimers(); const f = harness(); f.wrong(); await f.view.refresh(); f.view.setDraft("x"); await f.view.submit();
+    f.fetcher.mockImplementationOnce(async (...call) => { await f.handler(...call); throw new Error("lost reply"); });
+    await f.view.correct();
+    expect(f.view.snapshot()).toMatchObject({ phase: "unknown", answer: { result: { grade: 2 } }, commands: { primary: { kind: "result.correct" } } });
+    f.view.suspend(); await vi.advanceTimersByTimeAsync(10000); f.replace(); await f.view.resume();
+    expect(f.view.snapshot()).toMatchObject({ phase: "result_correct", timer: null, canNext: true });
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(f.posts().map(post => post.kind)).toEqual(["answer.submit", "result.correct"]);
+    await f.view.next(); expect(f.posts().map(post => post.kind)).toEqual(["answer.submit", "result.correct", "assignment.present"]);
+  });
+  it("a grade lost before the server, settled as rejected only after the return, leaves the old result waiting for «Далее»", async () => {
+    vi.useFakeTimers(); const f = harness(); await f.view.refresh(); f.view.setDraft("Haus"); await f.view.submit();
+    await lostRevisionRejectedAfterReturn(f, () => f.view.grade(5), "result.grade");
+    expect(f.view.snapshot()).toMatchObject({ phase: "result_correct", answer: { result: { grade: 4 } }, problem: "VERSION_CONFLICT", canNext: true, timer: null });
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(f.posts().map(post => post.kind)).toEqual(["answer.submit", "result.grade", "result.grade"]);
+    expect(f.view.snapshot().timer).toBeNull();
+    await f.view.next(); expect(f.posts().map(post => post.kind)).toEqual(["answer.submit", "result.grade", "result.grade", "assignment.present"]);
+  });
+  it("a correction lost before the server, settled as rejected only after the return, leaves the old result waiting for «Далее»", async () => {
+    vi.useFakeTimers(); const f = harness(); f.wrong(); await f.view.refresh(); f.view.setDraft("x"); await f.view.submit();
+    await lostRevisionRejectedAfterReturn(f, () => f.view.correct(), "result.correct");
+    expect(f.view.snapshot()).toMatchObject({ phase: "result_wrong", answer: { result: { grade: 2 } }, problem: "VERSION_CONFLICT", canNext: true, timer: null });
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(f.posts().map(post => post.kind)).toEqual(["answer.submit", "result.correct", "result.correct"]);
+    await f.view.next();
+    expect(f.posts().map(post => post.kind)).toEqual(["answer.submit", "result.correct", "result.correct", "assignment.present"]);
+    expect(f.view.snapshot()).toMatchObject({ phase: "question", question: { id: id(7) } });
+  });
+  // OPEN QUESTION TO THE OWNER (QA-09): pins today's behavior, not a decided requirement. An answer whose reply was lost shows its
+  // result for the first time after return and gets the normal timer; the same result delivered in the background waits
+  // (see "a result accepted while hidden also waits…"). The timer comes from acceptResult() clearing waitNext on answer.submit.
+  it("OPEN QUESTION: an answer whose reply was lost before background shows its first-seen result with the normal timer after return", async () => {
+    vi.useFakeTimers(); const f = harness(); await f.view.refresh(); f.view.setDraft("Haus");
+    f.fetcher.mockImplementationOnce(async (...call) => { await f.handler(...call); throw new Error("lost reply"); });
+    await f.view.submit(); expect(f.view.snapshot().phase).toBe("unknown");
+    f.view.suspend(); f.replace(); await f.view.resume();
+    expect(f.view.snapshot()).toMatchObject({ phase: "result_correct", timer: { durationMs: 3000 }, canNext: true });
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(f.posts().map(post => post.kind)).toEqual(["answer.submit", "assignment.present"]);
   });
   it("recovered grade intent survives hidden receipt checking without replaying its command", async () => {
     const f = harness(); await f.view.refresh(); f.view.setDraft("Haus"); await f.view.submit();

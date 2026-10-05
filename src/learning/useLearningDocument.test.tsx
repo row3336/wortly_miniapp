@@ -117,7 +117,7 @@ describe("React owner for an opened Learning document", () => {
     act(() => result.current.actions.setDraft("keep")); rerender({ ...options, enabled: false });
     expect(checked).toBe(true); expect(result.current.state?.draft).toBe("keep"); expect(f.posts()).toEqual([]);
   });
-  it.each(["route", "settings"])("%s suspension cancels the timer and uses the next confirmed mode on return", async reason => {
+  it.each(["route", "settings"])("%s suspension cancels the timer; on return the result waits for «Далее», the next result uses the newly confirmed mode", async reason => {
     const { f, options, result, rerender } = setup();
     await waitFor(() => expect(result.current.state?.phase).toBe("question")); vi.useFakeTimers();
     act(() => result.current.actions.setDraft("Haus")); await act(() => result.current.actions.submit());
@@ -127,9 +127,16 @@ describe("React owner for an opened Learning document", () => {
     await act(() => result.current.actions.next()); await act(() => result.current.actions.grade(5));
     await act(() => vi.advanceTimersByTimeAsync(5000)); expect(f.posts().map(post => post.kind)).toEqual(["answer.submit"]);
     await act(async () => { rerender({ ...options, transitionMode: "accelerated" }); });
+    expect(result.current.state).toMatchObject({ phase: "result_correct", timer: null, canNext: true });
+    await act(() => vi.advanceTimersByTimeAsync(5000));
+    expect(f.posts().map(post => post.kind)).toEqual(["answer.submit"]);
+    await act(() => result.current.actions.next());
+    expect(f.posts().map(post => post.kind)).toEqual(["answer.submit", "assignment.present"]);
+    // The wait ends with «Далее»: the next result is timed in the newly confirmed (accelerated) mode.
+    act(() => result.current.actions.setDraft("Haus")); await act(() => result.current.actions.submit());
     expect(result.current.state?.timer?.durationMs).toBe(2000);
     await act(() => vi.advanceTimersByTimeAsync(2000));
-    expect(f.posts().map(post => post.kind)).toEqual(["answer.submit", "assignment.present"]);
+    expect(f.posts().map(post => post.kind)).toEqual(["answer.submit", "assignment.present", "answer.submit", "assignment.present"]);
   });
   it("an answer accepted while settings are unconfirmed cannot advance until confirmation and a fresh read", async () => {
     const { f, options, result, rerender } = setup();
@@ -141,8 +148,14 @@ describe("React owner for an opened Learning document", () => {
     await act(async () => { gate.resolve(response); await sending; });
     expect(result.current.state).toMatchObject({ phase: "result_correct", timer: null, canNext: false, grades: [] });
     expect(f.values.has(primaryKey)).toBe(false); expect(f.posts()).toHaveLength(1);
-    rerender(options); await waitFor(() => expect(result.current.state?.timer?.durationMs).toBe(3000));
-    expect(f.posts()).toHaveLength(1);
+    rerender(options); await waitFor(() => expect(result.current.state?.canNext).toBe(true));
+    expect(result.current.state).toMatchObject({ phase: "result_correct", timer: null }); expect(f.posts()).toHaveLength(1);
+    // The wait ends with «Далее»: the next result gets the confirmed mode's timer.
+    vi.useFakeTimers(); await act(() => result.current.actions.next());
+    act(() => result.current.actions.setDraft("Haus")); await act(() => result.current.actions.submit());
+    expect(result.current.state?.timer?.durationMs).toBe(3000);
+    await act(() => vi.advanceTimersByTimeAsync(3000));
+    expect(f.posts().map(post => post.kind)).toEqual(["answer.submit", "assignment.present", "answer.submit", "assignment.present"]);
   });
   it("repeated route changes invalidate a still-pending activation without losing the draft", async () => {
     const { f, options, result, rerender } = setup();
@@ -318,8 +331,10 @@ describe("React owner for an opened Learning document", () => {
     const reads = f.fetcher.mock.calls.length; show("visible");
     await act(() => result.current.actions.next()); expect(f.fetcher).toHaveBeenCalledTimes(reads);
     f.replace(); await act(async () => { rerender({ ...options, access: f.access() }); });
-    expect(result.current.state?.timer?.durationMs).toBe(3000);
-    await act(() => vi.advanceTimersByTimeAsync(3000));
+    expect(result.current.state).toMatchObject({ phase: "result_correct", timer: null, canNext: true });
+    await act(() => vi.advanceTimersByTimeAsync(10000));
+    expect(f.posts().map(post => post.kind)).toEqual(["answer.submit"]);
+    await act(() => result.current.actions.next());
     expect(f.posts().map(post => post.kind)).toEqual(["answer.submit", "assignment.present"]);
   });
   it("a hidden mount reads a prefetched question but presents it only after foreground open", async () => {
@@ -420,7 +435,8 @@ describe("React owner for an opened Learning document", () => {
     await act(() => vi.advanceTimersByTimeAsync(5000));
     expect(result.current.state).toMatchObject({ phase: "result_correct", timer: null }); expect(f.posts()).toHaveLength(1);
     show("visible"); f.replace(); await act(async () => { rerender({ ...options, access: f.access() }); });
-    expect(result.current.state?.timer?.durationMs).toBe(3000); expect(f.posts()).toHaveLength(1);
+    expect(result.current.state).toMatchObject({ phase: "result_correct", timer: null, canNext: true });
+    await act(() => vi.advanceTimersByTimeAsync(5000)); expect(f.posts()).toHaveLength(1);
   });
   it("a grade acknowledged in the background advances once immediately after foreground recovery", async () => {
     const show = visibility(); const { f, options, result, rerender } = setup();

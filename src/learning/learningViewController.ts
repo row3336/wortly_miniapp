@@ -54,6 +54,8 @@ export class LearningViewController {
   private problem: string | null = null;
   private lastResolved: string | null = null;
   private previous = false;
+  /** After background the result waits for «Далее»: no timer is armed again on return (К05-152, DC 2.19). */
+  private waitNext = false;
   private generation = 0;
   private timer: LearningViewSnapshot["timer"] = null;
   private timerHandle: ReturnType<typeof setTimeout> | null = null;
@@ -162,7 +164,7 @@ export class LearningViewController {
   }
   private armTimer(): void {
     this.cancelTimer();
-    if (!["result_correct", "result_wrong"].includes(this.phase) || !this.answer?.result || !this.snapshot().canNext) return;
+    if (this.waitNext || !this.is("result_correct", "result_wrong") || !this.answer?.result || !this.snapshot().canNext) return;
     const mode = this.options.transitionMode();
     if (mode === null) return;
     if (mode === "normal" && this.answer.result.grade === 2) return;
@@ -185,7 +187,7 @@ export class LearningViewController {
     kind: LearningTransition["kind"]): void {
     if (!read.result) return;
     this.setAnswer(read);
-    if (kind === "answer.submit") { this.draft = ""; this.previous = false; }
+    if (kind === "answer.submit") { this.draft = ""; this.previous = false; this.waitNext = false; }
     this.phase = this.previous ? "previous_result" : read.result.grade === 2 ? "result_wrong" : "result_correct";
     if (kind === "result.grade" && !this.previous) this.pendingGradeAdvance = `${read.result.result_id}:${read.result.version}`;
   }
@@ -241,8 +243,12 @@ export class LearningViewController {
     this.operation = task;
     return task;
   }
-  /** Background is not Stop. Keep the draft and receipt, but never present unseen work. */
+  /** Background is not Stop. Keep the draft and receipt, never present unseen work, and let the result wait. */
   suspend(): void {
+    // pendingGradeAdvance is kept: an explicit grade acknowledged around the background still advances once on return (К05-047).
+    // A revision with an unknown outcome keeps the old result on screen: it waits too. A lost answer.submit does not (no result seen yet).
+    const kind = this.commands.snapshot().primary.pendingIntent?.kind;
+    if (this.is("result_correct", "result_wrong", "changing_result") || this.is("unknown") && (kind === "result.correct" || kind === "result.grade")) this.waitNext = true;
     this.active = false; this.activationGeneration++; this.cancelTimer(); this.emit();
   }
   /** Foreground callers must first supply a fresh open handle; route/config callers retain that boundary. */
@@ -350,7 +356,7 @@ export class LearningViewController {
   }
   private async showQuestion(): Promise<void> {
     if (!this.live() || !this.interactive() || !this.current?.assignment || !this.sessionId) return;
-    this.cancelTimer(); this.previous = false; this.pendingGradeAdvance = null;
+    this.cancelTimer(); this.previous = false; this.pendingGradeAdvance = null; this.waitNext = false;
     const assignment = this.current.assignment, state = this.commands.snapshot();
     const pending = state.primary.pendingIntent;
     const ownPresent = pending?.kind === "assignment.present" && sameId(pending.assignment_id, assignment.id);
@@ -379,7 +385,7 @@ export class LearningViewController {
   start(): Promise<void> {
     if (!this.live() || !this.interactive() || !this.commands.snapshot().canBegin || !this.is("idle", "closed")) return Promise.resolve();
     this.sessionId = this.options.newId(); this.current = null; this.currentVersion = null;
-    this.question = null; this.answer = null; this.answerVersion = null; this.draft = ""; this.draftAssignmentId = null; this.previous = false; this.pendingGradeAdvance = null;
+    this.question = null; this.answer = null; this.answerVersion = null; this.draft = ""; this.draftAssignmentId = null; this.previous = false; this.pendingGradeAdvance = null; this.waitNext = false;
     return this.run(async () => {
       this.phase = "loading"; this.problem = null;
       await this.commands.begin({ kind: "session.start", session_id: this.sessionId!, payload: { mode: "learning" } });
