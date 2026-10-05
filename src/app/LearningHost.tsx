@@ -1,9 +1,10 @@
-import { useEffect, useReducer, useRef } from "react";
+import { useEffect, useLayoutEffect, useReducer, useRef } from "react";
 import type { HttpOptions } from "../api/http";
 import type { Language } from "../i18n/language";
 import { LearningScreen, type LearningScreenProps } from "../learning/LearningScreen";
 import { useLearningDocument } from "../learning/useLearningDocument";
 import type { AsyncStorage } from "../platform/storage";
+import { bindBackButton } from "../platform/telegram";
 import type { SettingsDocument } from "../settings/useSettingsDocument";
 import type { OpenedAccess } from "./openedAccess";
 import { TodayHost } from "./TodayHost";
@@ -129,6 +130,29 @@ export function LearningHost(props: LearningHostProps) {
     repaint();
   };
   const openSettings = () => { bound.requested = null; props.onSettings(); };
+
+  // Native Back runs the visible Learning exit/return control (tz_app:86). While an already sent stop
+  // is awaited it stays visible and does nothing: no second stop; waiting and retry stay on screen (К10-151).
+  const stopLane = state?.commands.stop;
+  const todayShown = state !== null && (state.phase === "idle" && state.sessionId === null || state.phase === "closed")
+    && !state.commands.primary.pending && !state.commands.stop.pending && state.commands.canBegin && !bound.starting;
+  let back: (() => void) | null = null;
+  if (props.route === "learning" && state) {
+    const closed = state.phase === "closed" || state.phase === "disposed";
+    const awaitingStop = state.phase !== "disposed" && stopLane !== undefined && (state.phase === "stopping"
+      || stopLane.pending || ["sending", "checking", "loading"].includes(stopLane.phase));
+    if (!closed && state.canStop) {
+      const reason = state.phase === "summary" ? "summary_home" : "stop";
+      back = () => { void actions.stop(reason); };
+    } else if (todayShown) back = () => { void latest.current.onToday(); };
+    else if (awaitingStop) back = () => {};
+  }
+  const backHandler = useRef<() => void>(() => {});
+  // Only a committed screen supplies the handler; binding follows presence alone, never canStop churn.
+  useLayoutEffect(() => { if (back) backHandler.current = back; });
+  const hasBack = back !== null;
+  useEffect(() => hasBack ? bindBackButton(window, () => backHandler.current()) : undefined, [hasBack]);
+
   const t = copy[props.language];
   if (props.route === "settings") return null;
   if (props.route === "today") {

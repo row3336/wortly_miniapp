@@ -90,7 +90,8 @@ afterEach(() => { cleanup(); localStorage.clear(); vi.restoreAllMocks(); vi.unst
 describe("remote stop through the actual App and HTTP client", () => {
   it("shows aggregates in one main landmark and disables all learning on the second device", async () => {
     const f = fixture(); render(<App />);
-    await screen.findByRole("heading", { name: "В базе" });
+    await screen.findByText("В базе");
+    expect(screen.getByRole("heading", { name: "В базе" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Занятие на другом устройстве", level: 2 })).toBeTruthy();
     expect(screen.getAllByRole("main")).toHaveLength(1);
     for (const name of [/Новая группа слов/, /Слова: перевод на немецкий/, /Тест спряжений/, /Открыть спряжения/]) {

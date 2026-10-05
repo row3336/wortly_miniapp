@@ -38,7 +38,8 @@ function session(assignmentId = id(4), presented = true): ConjugationSessionProj
 function closed(): ConjugationSessionProjection {
   return { ...session(), status: "closed", close_reason: "stop", assignment: null,
     summary: { completed_cycle_ids: [], partial: [{ cycle_id: id(9), answered_groups: ["ich"] }],
-      results: [{ result_id: id(6), version: "1" }], completed: 1, correct: 1, wrong: 0 },
+      results: [{ result_id: id(6), version: "1" }], completed: 1, correct: 1, wrong: 0,
+      blocks: [{ cycle_id: id(9), base_verb_id: id(8), base_lemma: "kommen", tense: "present", answered_groups: ["ich"], effect: "incomplete", grade: null }] },
     capabilities: { answer_target: null, correct_target: null, grades: null, undo_target: null, stop: false, summary_home: false } };
 }
 function result(version = "1", grade: 2 | 3 | 4 | 5 = 4): ConjugationResultReadResponse {

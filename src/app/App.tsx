@@ -4,7 +4,7 @@ import type { Language } from "../i18n/language";
 import { createEntryApi } from "../api/entryApi";
 import { browserStorage } from "../platform/storage";
 import type { AsyncStorage } from "../platform/storage";
-import { notifyAcceptedMilestone, signedInitData, syncPlatform, telegramLanguage } from "../platform/telegram";
+import { bindBackButton, notifyAcceptedMilestone, signedInitData, syncPlatform, telegramLanguage } from "../platform/telegram";
 import { browserDocumentLock } from "./documentLock";
 import { EntryController } from "./entryController";
 import { EntryScreen } from "./EntryScreen";
@@ -19,7 +19,12 @@ import { SettingsPendingStore } from "../settings/settingsPending";
 import { RemoteStopPendingStore } from "../study/remoteStopPending";
 import { createRemoteSessionApi } from "../study/remoteSessionApi";
 import type { SettingsObservation } from "../settings/useSettingsDocument";
+import { OralSessionPendingStore, OralStopPendingStore } from "../oral/oralPending";
+import type { OralStores } from "./OralHost";
 import packageJson from "../../package.json";
+
+/** The single identity source for entry and study commands. */
+const newId = () => window.crypto.randomUUID();
 
 export function App() {
   const [language, setLanguage] = useState<Language | null>(null);
@@ -29,6 +34,8 @@ export function App() {
   const [busyAccess, setBusyAccess] = useState<BusyAccess | null>(null);
   const [transport, setTransport] = useState<HttpOptions | null>(null);
   const [pendingStore, setPendingStore] = useState<SettingsPendingStore | null>(null);
+  const [storage, setStorage] = useState<AsyncStorage | null>(null);
+  const [oralStores, setOralStores] = useState<OralStores | null>(null);
   const openedRef = useRef<OpenedAccess | null>(null);
   const storageRef = useRef<AsyncStorage | null>(null);
   const observedLanguage = useRef<{ profileId: string; version: string } | null>(null);
@@ -73,6 +80,9 @@ export function App() {
     storageRef.current = readyStorage;
     observedLanguage.current = null;
     setPendingStore(new SettingsPendingStore(readyStorage));
+    // One pair per storage, shared by every oral owner of this App.
+    setOralStores({ study: new OralSessionPendingStore(readyStorage), stop: new OralStopPendingStore(readyStorage) });
+    setStorage(readyStorage);
     void readSavedLanguage(readyStorage).then((saved) => {
       if (!active) return;
       try {
@@ -102,7 +112,7 @@ export function App() {
           clientVersion: import.meta.env.VITE_WORTLY_CLIENT_VERSION || packageJson.version,
           contractVersion: import.meta.env.VITE_WORTLY_CONTRACT_VERSION || "1",
           timeZone: () => Intl.DateTimeFormat().resolvedOptions().timeZone || null,
-          newId: () => window.crypto.randomUUID(),
+          newId,
           onUpdate(snapshot) {
             if (!active) return;
             setEntryState(snapshot.state);
@@ -150,6 +160,10 @@ export function App() {
     };
   }, [controller]);
 
+  // The remote-stop confirmation is a modal step: native Back closes it like «Отмена» (tz_app:86).
+  const remoteConfirm = language !== null && entryState.kind === "remote_confirm" ? controller : null;
+  useEffect(() => remoteConfirm ? bindBackButton(window, () => remoteConfirm.cancelRemoteStop()) : undefined, [remoteConfirm]);
+
   if (language === null) {
     return (
       <EntryScreen
@@ -158,9 +172,9 @@ export function App() {
       />
     );
   }
-  if (entryState.kind === "opened" && access && transport && pendingStore) {
+  if (entryState.kind === "opened" && access && transport && pendingStore && storage && oralStores) {
     return <ApplicationDocument key={access.key} access={access} transport={transport} pendingStore={pendingStore}
-      language={language} foreground={foreground} onCurrent={observeSettings} />;
+      storage={storage} oralStores={oralStores} newId={newId} language={language} foreground={foreground} onCurrent={observeSettings} />;
   }
   if (entryState.kind === "busy" && busyAccess && transport && controller) {
     return <BusyTodayHost access={busyAccess} transport={transport} language={language}

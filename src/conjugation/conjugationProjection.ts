@@ -47,6 +47,29 @@ function assignment(value: unknown, pair: string): boolean {
     && spec.part_count === 1 && typeof spec.case_sensitive === "boolean";
 }
 
+/** Null means a closed summary frozen before blocks existed; otherwise exactly one block per summary cycle. */
+function validSummaryBlocks(value: unknown, closed: boolean, cycles: Set<string>, partialGroups: Map<string, unknown[]>): boolean {
+  if (value === null) return closed;
+  if (!Array.isArray(value) || value.length !== cycles.size) return false;
+  const seen = new Set<string>();
+  return value.every(block => {
+    if (!record(block) || !exactKeys(block, ["cycle_id", "base_verb_id", "base_lemma", "tense", "answered_groups", "effect", "grade"])
+      || !uuid(block.cycle_id) || !uuid(block.base_verb_id) || typeof block.base_lemma !== "string" || block.base_lemma === ""
+      || !oneOf(block.tense, tenses) || !oneOf(block.effect, ["incomplete", "error", "success"])
+      || !Array.isArray(block.answered_groups) || !block.answered_groups.every(group => oneOf(group, groups))
+      || new Set(block.answered_groups).size !== block.answered_groups.length) return false;
+    const id = block.cycle_id.toLowerCase(), answered = block.answered_groups, partial = partialGroups.get(id);
+    if (seen.has(id) || !cycles.has(id)) return false;
+    seen.add(id);
+    // Groups are compared as a set: the server keeps its SQL order.
+    if (partial === undefined ? answered.length !== 6
+      : answered.length !== partial.length || !answered.every(group => partial.includes(group))) return false;
+    if (block.effect === "success") return answered.length === 6 && [3, 4, 5].includes(block.grade as number);
+    if (block.effect === "error") return answered.length > 0 && block.grade === 2;
+    return answered.length < 6 && block.grade === null;
+  });
+}
+
 /** Session counts refer to this fixed form queue, while block groups may include earlier sessions. */
 export function validConjugationCurrent(value: unknown, sessionId: string): value is ConjugationSessionProjection | UnavailableSession {
   if (!record(value) || !sameId(value.session_id, sessionId)) return false;
@@ -71,19 +94,21 @@ export function validConjugationCurrent(value: unknown, sessionId: string): valu
   if (value.assignment !== null || caps.answer_target !== null
     || (value.status === "closed" ? !oneOf(value.close_reason, closeReasons) : value.close_reason !== null)
     || value.status === "summary" && progress.completed !== progress.total
-    || !record(value.summary) || !exactKeys(value.summary, ["completed_cycle_ids", "partial", "results", "completed", "correct", "wrong"])) return false;
+    || !record(value.summary) || !exactKeys(value.summary, ["completed_cycle_ids", "partial", "results", "completed", "correct", "wrong", "blocks"])) return false;
   const summary = value.summary;
   if (summary.completed !== progress.completed || summary.correct !== progress.correct || summary.wrong !== progress.wrong
     || !uniqueIds(summary.completed_cycle_ids) || !Array.isArray(summary.partial) || !Array.isArray(summary.results)
     || summary.results.length !== progress.completed) return false;
   const cycles = new Set(summary.completed_cycle_ids.map(id => id.toLowerCase()));
+  const partialGroups = new Map<string, unknown[]>();
   if (!summary.partial.every(block => {
     if (!record(block) || !exactKeys(block, ["cycle_id", "answered_groups"]) || !uuid(block.cycle_id)
       || cycles.has(block.cycle_id.toLowerCase()) || !Array.isArray(block.answered_groups)
       || block.answered_groups.length > 5 || !block.answered_groups.every(group => oneOf(group, groups))
       || new Set(block.answered_groups).size !== block.answered_groups.length) return false;
-    cycles.add(block.cycle_id.toLowerCase()); return true;
+    cycles.add(block.cycle_id.toLowerCase()); partialGroups.set(block.cycle_id.toLowerCase(), block.answered_groups); return true;
   })) return false;
+  if (!validSummaryBlocks(summary.blocks, value.status === "closed", cycles, partialGroups)) return false;
   const results = new Set<string>();
   return summary.results.every(result => {
     if (!record(result) || !exactKeys(result, ["result_id", "version"]) || !uuid(result.result_id)

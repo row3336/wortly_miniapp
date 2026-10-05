@@ -40,7 +40,10 @@ function summary(closed = false): ConjugationSessionProjection {
   value.assignment = null; value.progress = { total: 3, completed: closed ? 1 : 3, correct: closed ? 1 : 2, wrong: closed ? 0 : 1 };
   value.summary = { completed_cycle_ids: closed ? [] : [id(9)], partial: closed ? [{ cycle_id: id(9), answered_groups: ["ich", "du", "wir", "ihr"] }] : [],
     results: Array.from({ length: value.progress.completed }, (_, n) => ({ result_id: id(6 + n), version: "1" })),
-    completed: value.progress.completed, correct: value.progress.correct, wrong: value.progress.wrong };
+    completed: value.progress.completed, correct: value.progress.correct, wrong: value.progress.wrong,
+    blocks: [{ cycle_id: id(9), base_verb_id: id(8), base_lemma: "kommen", tense: "present",
+      answered_groups: closed ? ["ich", "du", "wir", "ihr"] : ["du", "er_sie_es", "ich", "ihr", "sie_sie", "wir"],
+      effect: closed ? "incomplete" : "error", grade: closed ? null : 2 }] };
   value.capabilities = { answer_target: null, correct_target: null, grades: null, undo_target: null, stop: !closed, summary_home: !closed };
   return value;
 }

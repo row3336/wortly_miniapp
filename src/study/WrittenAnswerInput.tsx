@@ -1,5 +1,5 @@
-import { useId, useLayoutEffect, useRef } from "react";
-import type { PublicAssignment } from "../api/generated";
+import { useId, useLayoutEffect, useRef, type ReactNode } from "react";
+import type { PublicAnswerSpec, PublicAssignment } from "../api/generated";
 import type { Language } from "../i18n/language";
 import { estimateAnswerParts } from "./answerParts";
 import { ConjunctionHint } from "./ConjunctionHint";
@@ -18,6 +18,11 @@ export type WrittenAnswerInputProps = {
   onSubmit(): void;
   onForget(): void;
 };
+/** A question without a text prompt: the owner renders its own heading over the same answer shape. */
+export type WrittenAnswerQuestion = {
+  assignment: Readonly<{ id: string; answer_spec: Pick<PublicAnswerSpec, "kind" | "labels" | "part_count">; prompt: null }>;
+  heading: ReactNode;
+};
 const copy = {
   ru: { answer: "Твой ответ", submit: "Проверить", forgot: "Забыл…", symbols: "Немецкие символы", parts: "Формы ответа",
     filled: "Заполнено частей (примерно)", of: "из" },
@@ -28,8 +33,8 @@ const copy = {
 } as const;
 
 /** One controlled field. The owner captures the command; this view never saves or judges an answer. */
-export function WrittenAnswerInput(props: WrittenAnswerInputProps) {
-  const t = copy[props.language], name = useId();
+export function WrittenAnswerInput(props: WrittenAnswerInputProps | (Omit<WrittenAnswerInputProps, "assignment"> & WrittenAnswerQuestion)) {
+  const t = copy[props.language], name = useId(), prompt = props.assignment.prompt;
   const field = useRef<HTMLTextAreaElement>(null), composing = useRef(false);
   const cursor = useRef<{ assignmentId: string; value: string; offset: number } | null>(null);
   const lastAssignment = useRef(props.assignment.id);
@@ -57,9 +62,11 @@ export function WrittenAnswerInput(props: WrittenAnswerInputProps) {
     input.focus({ preventScroll: true });
   };
   return <section className="written-answer" aria-labelledby={`${name}-question`}>
-    <h2 id={`${name}-question`} className="written-question" lang={props.assignment.prompt.language}>{props.assignment.prompt.text}</h2>
-    {props.assignment.prompt.hint && <p className="written-hint">{props.assignment.prompt.hint}</p>}
-    <ConjunctionHint hint={props.assignment.prompt.conjunction_hint} language={props.language} />
+    <h2 id={`${name}-question`} className="written-question" lang={prompt?.language}>
+      {prompt === null ? "heading" in props && props.heading : prompt.text}
+    </h2>
+    {prompt?.hint && <p className="written-hint">{prompt.hint}</p>}
+    {prompt && <ConjunctionHint hint={prompt.conjunction_hint} language={props.language} />}
     <div className="written-answer-parts">
       <p id={`${name}-parts`} className="written-parts" aria-label={t.parts} lang="de">
         {props.assignment.answer_spec.labels.join(" / ")}

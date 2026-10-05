@@ -11,6 +11,14 @@ type AccessCredentials = Parameters<Parameters<OpenedAccess["run"]>[0]>[0];
 declare const presentationBrand: unique symbol;
 /** Only reference equality authenticates a ticket; its contents are intentionally opaque. */
 export type OralPresentationTicket = Readonly<{ [presentationBrand]: true }>;
+/** Server facts of this owner's own closed session. summaryRead describes their acquisition only; it is data, never a right. */
+export type OralClosed = {
+  sessionId: string;
+  reason: OralSessionProjection["close_reason"];
+  summary: OralSessionProjection["summary"];
+  progress: OralSessionProjection["progress"] | null;
+  summaryRead: "pending" | "reading" | "failed" | "known";
+};
 export type OralDocumentSnapshot = {
   phase: "loading" | "idle" | "prefetched" | "visible_unconfirmed" | "question" | "revealed"
     | "unknown" | "summary" | "stopping" | "closed" | "stale" | "disposed";
@@ -23,6 +31,7 @@ export type OralDocumentSnapshot = {
   presentationTicket: OralPresentationTicket | null;
   canStart: boolean; canReveal: boolean; canGrade: boolean; canStop: boolean; canSummaryHome: boolean;
   canRetry: Record<OralCommandLane, boolean>;
+  closed: OralClosed | null;
 };
 export type OralDocumentOptions = {
   access: OpenedAccess;
@@ -30,7 +39,7 @@ export type OralDocumentOptions = {
   studyStore: OralSessionPendingStore;
   stopStore: OralStopPendingStore;
   newId(): string;
-  /** Only a shared resume read that confirmed mode=oral may supply this seed. */
+  /** Only a shared resume read that confirmed mode=oral may supply an active seed; the React adapter may re-supply this identity's own terminal session id, which is never revived. */
   initialSessionId: string | null;
   minimumStateVersion?(): string | null;
   terminalSessionIds?: readonly string[];
@@ -58,6 +67,7 @@ export class OralDocumentController {
   private activityEpoch = 0;
   private recovered = false;
   private refreshing: Promise<void> | null = null;
+  private queuedCheck: Promise<void> | null = null;
   private sessionId: string | null;
   private floor: string;
   private current: OralSessionProjection | null = null;
@@ -66,6 +76,7 @@ export class OralDocumentController {
   private ticket: OralPresentationTicket | null = null;
   private shownPending = false;
   private stopRight: { sessionId: string; version: string; stop: boolean; home: boolean } | null = null;
+  private closedFacts: OralClosed | null = null;
 
   constructor(options: OralDocumentOptions) {
     if (options.initialSessionId !== null && !uuid(options.initialSessionId)
@@ -142,12 +153,30 @@ export class OralDocumentController {
       this.current = null; this.ticket = null; this.shownPending = false; this.stopRight = null;
     }
   }
+  /** Facts of this owner's own terminal session: only from a server closed projection of that id and pair,
+   * or a boundary's reason; never from an active projection. The first known value wins. Grants nothing.
+   * Returns whether the projection supplied the facts. */
+  private recordClosed(sessionId: string, reason: OralClosed["reason"], projection: OralSessionProjection | null): boolean {
+    if (!this.sessionId || !sameId(sessionId, this.sessionId) || !this.terminal.has(sessionId.toLowerCase())) return false;
+    if (!this.closedFacts || !sameId(this.closedFacts.sessionId, sessionId)) {
+      this.closedFacts = { sessionId: this.sessionId, reason: null, summary: null, progress: null, summaryRead: "pending" };
+    }
+    const facts = this.closedFacts;
+    if (projection && (projection.status !== "closed" || !sameId(projection.session_id, sessionId)
+      || projection.pair !== `${this.options.access.profile.dictionary_language}-de`)) return false;
+    facts.reason ??= reason;
+    if (!projection || facts.summaryRead === "known") return false;
+    facts.summary = structuredClone(projection.summary); facts.progress = structuredClone(projection.progress);
+    facts.summaryRead = "known";
+    return true;
+  }
   private observe(read: OralRead): void {
     const floor = this.minimum();
     if (BigInt(read.state_version) < BigInt(floor)) { this.problem = "stale_response"; return; }
     this.raise(read.state_version);
     const current = read.current;
     if (current.status === "closed") this.markClosed(current.session_id);
+    if (current.status === "closed") this.recordClosed(current.session_id, current.close_reason, current);
     if (!this.sessionId || !sameId(current.session_id, this.sessionId)) return;
     this.ticket = null; this.shownPending = false;
     if (!('pair' in current) || current.pair !== `${this.options.access.profile.dictionary_language}-de`) {
@@ -170,7 +199,10 @@ export class OralDocumentController {
       this.current = null; this.currentVersion = null; this.ticket = null;
     }
     if (snapshot.closedSession) this.markClosed(snapshot.closedSession.session_id);
+    // The boundary proves closure and its reason, not the summary.
+    if (snapshot.closedSession) this.recordClosed(snapshot.closedSession.session_id, snapshot.closedSession.close_reason, null);
     if (snapshot.outcome === "accepted" && snapshot.resolved?.kind === "session.stop") this.markClosed(snapshot.resolved.sessionId);
+    if (snapshot.outcome === "accepted" && snapshot.resolved?.kind === "session.stop") this.recordClosed(snapshot.resolved.sessionId, null, null);
     if (snapshot.current && "session_id" in snapshot.current && snapshot.stateVersion) {
       this.observe({ current: snapshot.current, state_version: snapshot.stateVersion });
     }
@@ -228,7 +260,12 @@ export class OralDocumentController {
       canGrade: this.active("study") && studyReady && stopReady && !foreignReceipt && assignment?.status === "presented"
         && assignment.revealed && sameId(current!.capabilities.grade_target, assignment.id),
       canStop: canStop && !!right?.stop, canSummaryHome: canStop && !!right?.home,
-      canRetry: { study: this.active("study") && commands.study.canRetry, stop: this.active("stop") && commands.stop.canRetry } };
+      canRetry: { study: this.active("study") && commands.study.canRetry, stop: this.active("stop") && commands.stop.canRetry },
+      closed: live && closed ? this.closedSnapshot(this.sessionId!) : null };
+  }
+  private closedSnapshot(sessionId: string): OralClosed {
+    const facts = this.closedFacts && sameId(this.closedFacts.sessionId, sessionId) ? this.closedFacts : null;
+    return facts ? structuredClone(facts) : { sessionId, reason: null, summary: null, progress: null, summaryRead: "pending" };
   }
   private emit(): void {
     if (!this.live()) return;
@@ -254,12 +291,24 @@ export class OralDocumentController {
       if (!this.live()) return;
       this.recovered = true;
       if (this.sessionId && !this.terminal.has(this.sessionId.toLowerCase())) await this.readCurrent();
+      if (this.live() && this.sessionId && this.terminal.has(this.sessionId.toLowerCase())) await this.readClosed();
     }).finally(() => {
       if (this.refreshing === task) this.refreshing = null;
       this.emit();
     });
     this.refreshing = task; this.emit();
     return task;
+  }
+  /** Explicit status check. An in-flight refresh may already be past its lane checks, so this
+   * queues one subsequent refresh; repeated requests coalesce into it. Never POSTs. */
+  recheck(): Promise<void> {
+    if (!this.live()) return Promise.resolve();
+    if (!this.refreshing) return this.refresh();
+    if (!this.queuedCheck) {
+      const next = () => { this.queuedCheck = null; return this.refresh(); };
+      this.queuedCheck = this.refreshing.then(next, next);
+    }
+    return this.queuedCheck;
   }
   private async readCurrent(): Promise<void> {
     const sessionId = this.sessionId;
@@ -276,6 +325,33 @@ export class OralDocumentController {
       this.current = null; this.ticket = null;
       this.problem = error instanceof ApiError && error.code ? error.code : "network";
     }
+  }
+  /** The only read of this owner's terminal session: while its summary is not known, one addressed GET per
+   * refresh. Data only: never observe(), floor, problem, current or rights; a failure waits for a later refresh. */
+  private async readClosed(): Promise<void> {
+    const sessionId = this.sessionId;
+    if (!sessionId || !this.live() || !this.terminal.has(sessionId.toLowerCase())) return;
+    if (!this.closedFacts || !sameId(this.closedFacts.sessionId, sessionId)) {
+      this.closedFacts = { sessionId, reason: null, summary: null, progress: null, summaryRead: "pending" };
+    }
+    const facts = this.closedFacts;
+    if (facts.summaryRead === "known") return;
+    facts.summaryRead = "reading"; this.emit();
+    let read: OralRead;
+    try {
+      const api = createOralApi(this.options.transport);
+      read = await this.exchange(({ token, proof, clientInstanceId, documentId }) => {
+        return api.read(token, proof, { session_id: sessionId, client_instance_id: clientInstanceId, document_id: documentId });
+      });
+    } catch {
+      if (this.live() && this.closedFacts === facts && facts.summaryRead === "reading") facts.summaryRead = "failed";
+      return;
+    }
+    if (!this.live() || this.sessionId !== sessionId || this.closedFacts !== facts || facts.summaryRead !== "reading") return;
+    const current = read.current;
+    const kept = current.status === "closed" && BigInt(read.state_version) >= BigInt(this.minimum())
+      && this.recordClosed(sessionId, current.close_reason, current);
+    if (!kept) facts.summaryRead = "failed";
   }
   private async begin(lane: OralCommandLane, transition: OralTransition): Promise<void> {
     if (!this.active(lane) || this.busy[lane]) return;
@@ -308,6 +384,7 @@ export class OralDocumentController {
     const sessionId = this.options.newId();
     if (!uuid(sessionId)) throw new Error("invalid oral session ID");
     this.sessionId = sessionId; this.current = null; this.currentVersion = null; this.stopRight = null;
+    this.closedFacts = null;
     await this.begin("study", { kind: "session.start", session_id: sessionId, payload: { mode: "oral", bucket } });
   }
   shown(ticket: OralPresentationTicket): Promise<void> {
@@ -361,6 +438,7 @@ export class OralDocumentController {
   }
   dispose(): void {
     this.disposed = true; this.activityEpoch++; this.ticket = null; this.current = null; this.stopRight = null;
+    this.closedFacts = null;
     this.commands.study.dispose(); this.commands.stop.dispose();
   }
 }

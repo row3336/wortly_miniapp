@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenedClient, Profile, TodayResponse } from "../api/generated";
+import type { OpenedClient, Profile, SessionResponse, TodayResponse } from "../api/generated";
 import { App } from "./App";
 import { settingsResponse } from "../settings/settingsRead.test-support";
 
@@ -15,10 +15,20 @@ const today = (): TodayResponse => ({ state_version: "11", pair: "uk-de", local_
     new_group_size: 2, manual_eligible: 0, automatic_eligible: 2 },
   conjugation: { ready: 1, openable: 1, next_due_date: null }, next_repeat_date: null });
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status });
+const sessionId = "22222222-2222-4222-8222-222222222222";
+// The persisted server mode of a reported session: Written has no study route in this App yet.
+// Valid for the accepted decoder (sessionProjection.ts): an active step carries its assignment, summary/closed none.
+const written = (status: "active" | "summary" | "closed" = "active"): SessionResponse => ({ state_version: "11", current: {
+  session_id: sessionId, mode: "written", status, pair: "uk-de", direction: "l1-de", local_date: "2026-09-30", bucket: "words",
+  close_reason: status === "closed" ? "stop" : null, progress: { completed: status === "active" ? 0 : 2, total: 2 },
+  assignment: status !== "active" ? null : { id: "33333333-3333-4333-8333-333333333333", card_id: "44444444-4444-4444-8444-444444444444",
+    status: "presented", kind: "original", prompt: { text: "дім", language: "uk", translations: ["дім"], personal_translation_version: null,
+      hint: null, hint_version: null, conjunction_hint: null }, answer_spec: { kind: "word", labels: ["word"], part_count: 1, case_sensitive: true } } } });
 
-function fixture(options: { profile?: Profile; session?: OpenedClient["session"]; busy?: boolean } = {}) {
+function fixture(options: { profile?: Profile; session?: OpenedClient["session"]; busy?: boolean; settingsVersion?: string } = {}) {
   const user = options.profile ?? profile();
   const todayReply = vi.fn(async () => json(today()));
+  const sessionReply = vi.fn(async (_path: string) => json(written()));
   const haptic = vi.fn();
   const openReply = vi.fn(async (body: { client_instance_id: string; document_id: string }) => json(options.busy
     ? { status: "SESSION_BUSY", profile: user, compatibility: { compatible: true, contract_version: "1" }, session: { status: "busy" } }
@@ -34,7 +44,7 @@ function fixture(options: { profile?: Profile; session?: OpenedClient["session"]
       status: "registered", origin_proof: "synthetic-proof", proof_version: "1", activated: false });
     if (path.endsWith("/client/open")) return openReply(body);
     if (path.endsWith("/settings")) {
-      const data = settingsResponse(); data.state_version = user.state_version;
+      const data = settingsResponse(); data.state_version = options.settingsVersion ?? user.state_version;
       for (const field of Object.values(data.settings)) field.version = "1";
       data.settings.ui_language.value = user.ui_language; data.settings.dictionary_language.value = user.dictionary_language;
       return json(data);
@@ -43,12 +53,14 @@ function fixture(options: { profile?: Profile; session?: OpenedClient["session"]
       expect(init?.headers).toEqual({ Authorization: "Bearer synthetic-token" });
       return todayReply();
     }
+    if (path.includes(`/sessions/${sessionId}?`)) return sessionReply(path);
     throw new Error("Unexpected synthetic endpoint");
   });
   vi.stubGlobal("fetch", fetcher);
   vi.stubGlobal("Telegram", { WebApp: { initData: "synthetic-init-data", initDataUnsafe: { user: { language_code: "en" } },
     colorScheme: "light", HapticFeedback: { notificationOccurred: haptic } } });
-  return { fetcher, todayReply, openReply, haptic };
+  const posts = () => fetcher.mock.calls.filter(call => call[1]?.method === "POST" && !/\/(auth\/telegram|client\/(register|open))$/.test(String(call[0])));
+  return { fetcher, todayReply, openReply, sessionReply, haptic, posts };
 }
 
 beforeEach(() => {
@@ -65,8 +77,9 @@ describe("ordinary Entry to Today integration", () => {
     await screen.findByRole("heading", { name: "Сегодня", level: 1 });
     await screen.findByText("Активная пара: Украинский ↔ Немецкий");
     expect(document.documentElement.lang).toBe("ru");
+    // Today is drawn by the Learning host after its storage-only pending check, so Settings is requested first.
     expect(f.fetcher.mock.calls.map(call => String(call[0]))).toEqual([
-      "/api/v1/auth/telegram", "/api/v1/client/register", "/api/v1/client/open", "/api/v1/today", "/api/v1/settings",
+      "/api/v1/auth/telegram", "/api/v1/client/register", "/api/v1/client/open", "/api/v1/settings", "/api/v1/today",
     ]);
     expect(f.haptic).toHaveBeenCalledExactlyOnceWith("success");
     expect(document.body.textContent).not.toMatch(/synthetic-token|synthetic-proof|synthetic-init-data/);
@@ -88,8 +101,11 @@ describe("ordinary Entry to Today integration", () => {
   it("does not invoke fake navigation or mutate when a route has no handler yet", async () => {
     const f = fixture(); render(<App />);
     await screen.findByText("В базе");
+    // Learning has a real handler now; its Start is an explicit tap covered in App.learning.test.tsx.
+    const learning = screen.getByRole("button", { name: /Новая группа слов/ });
+    expect(learning.hasAttribute("disabled")).toBe(false);
     const buttons = screen.getAllByRole("button");
-    for (const button of buttons.filter(item => item.textContent !== "Настройки")) {
+    for (const button of buttons.filter(item => item.textContent !== "Настройки" && item !== learning)) {
       expect(button.hasAttribute("disabled")).toBe(true); fireEvent.click(button);
     }
     expect(screen.getByRole("button", { name: "Настройки" }).hasAttribute("disabled")).toBe(false);
@@ -191,8 +207,9 @@ describe("ordinary Entry to Today integration", () => {
     complete(json({ status: "opened", ...request, profile: profile(),
       compatibility: { compatible: true, contract_version: "1" }, proof_version: "1", document_epoch: "1", session: null }));
     await waitFor(() => expect(f.todayReply).toHaveBeenCalledTimes(2));
+    // Initial Today follows Settings (the Learning host's storage-only check, as at the first test); the foreground order is unchanged.
     expect(f.fetcher.mock.calls.map(call => String(call[0]))).toEqual([
-      "/api/v1/auth/telegram", "/api/v1/client/register", "/api/v1/client/open", "/api/v1/today", "/api/v1/settings",
+      "/api/v1/auth/telegram", "/api/v1/client/register", "/api/v1/client/open", "/api/v1/settings", "/api/v1/today",
       "/api/v1/client/open", "/api/v1/today", "/api/v1/settings",
     ]);
     expect(f.haptic).toHaveBeenCalledOnce();
@@ -242,6 +259,56 @@ describe("ordinary Entry to Today integration", () => {
     fireEvent(window, new Event("pageshow")); await screen.findByText("Вход подтверждён");
     expect(f.todayReply).toHaveBeenCalledOnce();
     expect(screen.queryByText("В базе")).toBeNull(); expect(f.haptic).toHaveBeenCalledOnce();
+  });
+
+  it("a later session whose mode cannot be read offers retry, never Today or a Start", async () => {
+    const f = fixture(); render(<App />); await screen.findByText("В базе");
+    const reported = async (body: { client_instance_id: string; document_id: string }) => json({ status: "opened", ...body,
+      profile: { ...profile(), state_version: "11" }, compatibility: { compatible: true, contract_version: "1" },
+      proof_version: "1", document_epoch: "1", session: { id: sessionId, phase: "active" } });
+    f.openReply.mockImplementationOnce(reported).mockImplementationOnce(reported);
+    f.sessionReply.mockImplementationOnce(async () => json({ current: { session_id: sessionId, status: "unavailable" }, state_version: "11" }));
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    fireEvent(window, new Event("pageshow"));
+    await screen.findByText("Не удалось загрузить план");
+    expect(screen.queryByText("В базе")).toBeNull(); expect(screen.queryByText("Проверяем сохранённое занятие…")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Повторить" }));
+    await screen.findByText("Вход подтверждён");
+    expect(f.openReply).toHaveBeenCalledTimes(3); expect(f.sessionReply).toHaveBeenCalledTimes(2);
+    expect(f.todayReply).toHaveBeenCalledOnce(); expect(f.posts()).toEqual([]);
+  });
+
+  it("a later closed session is synchronized once and then shows the fresh Today", async () => {
+    const f = fixture(); render(<App />); await screen.findByText("В базе");
+    const opened = (session: OpenedClient["session"]) => async (body: { client_instance_id: string; document_id: string }) => json({
+      status: "opened", ...body, profile: { ...profile(), state_version: "11" }, compatibility: { compatible: true, contract_version: "1" },
+      proof_version: "1", document_epoch: "1", session });
+    f.openReply.mockImplementationOnce(opened({ id: sessionId, phase: "active" })).mockImplementationOnce(opened(null));
+    f.sessionReply.mockImplementationOnce(async () => json(written("closed")));
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    fireEvent(window, new Event("pageshow"));
+    await waitFor(() => expect(f.todayReply).toHaveBeenCalledTimes(2));
+    await screen.findByText("В базе");
+    expect(f.openReply).toHaveBeenCalledTimes(3); expect(f.sessionReply).toHaveBeenCalledOnce(); expect(f.posts()).toEqual([]);
+  });
+
+  it("keeps the Learning host hidden while a newer settings floor waits for its open", async () => {
+    const f = fixture({ settingsVersion: "12" }); let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    f.openReply.mockImplementation(async body => {
+      if (f.openReply.mock.calls.length > 1) await held;
+      return json({ status: "opened", ...body, profile: { ...profile(), state_version: f.openReply.mock.calls.length > 1 ? "12" : "10" },
+        compatibility: { compatible: true, contract_version: "1" }, proof_version: "1", document_epoch: "1", session: null });
+    });
+    render(<App />);
+    await waitFor(() => expect(f.openReply).toHaveBeenCalledTimes(2));
+    await screen.findByText("Загружаем план на сегодня");
+    const todayCalls = f.todayReply.mock.calls.length;
+    expect(screen.queryByText("Проверяем сохранённое занятие…")).toBeNull(); expect(screen.queryByText("В базе")).toBeNull();
+    release();
+    await screen.findByText("В базе");
+    expect(f.todayReply).toHaveBeenCalledTimes(todayCalls + 1);
+    expect(f.openReply).toHaveBeenCalledTimes(2); expect(f.posts()).toEqual([]);
   });
 
   it("a broken optional haptic API cannot prevent a confirmed entry", async () => {

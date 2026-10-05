@@ -1,7 +1,10 @@
 import { settingsResponse as current } from "./settingsRead.test-support";
 import { describe, expect, it, vi } from "vitest";
-import type { Profile, SavedCommandFact, SettingCommand, SettingsResponse } from "../api/generated";
-import { allowedSettingValue, createSettingsApi, validSettingIntent, type SettingIntent } from "./settingsApi";
+import type { Profile, SavedCommandFact, SettingsResponse } from "../api/generated";
+import {
+  allowedSettingValue, createSettingsApi, validSettingIntent, type EditableSettingCommand, type EditableSettingPayload,
+  type SettingIntent,
+} from "./settingsApi";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const subject = id(4);
@@ -12,7 +15,7 @@ function intent(): SettingIntent {
   return { command_id: id(1), kind: "setting.save", expected_field_version: big,
     payload: { key: "strict_case", value: true } };
 }
-function command(original = intent()): SettingCommand {
+function command(original = intent()): EditableSettingCommand {
   return { ...original, client_instance_id: id(2), document_id: id(3) };
 }
 function fact(): SavedCommandFact {
@@ -47,6 +50,13 @@ describe("Settings current and constraints", () => {
     await expect(setup(data).api.get("synthetic")).resolves.toEqual(data);
   });
 
+  it("decodes both review error modes exactly as stored (K04-102)", async () => {
+    for (const mode of ["strict", "soft"] as const) {
+      const data = current(); data.settings.review_error_mode = { value: mode, version: "7" };
+      await expect(setup(data).api.get("synthetic")).resolves.toEqual(data);
+    }
+  });
+
   it("does not display a successful projection carrying a contradictory error", async () => {
     await expect(setup({ ...current(), error: { code: "WRITE_UNAVAILABLE" } }).api.get("synthetic"))
       .rejects.toMatchObject({ kind: "invalid_response" });
@@ -66,6 +76,15 @@ describe("Settings current and constraints", () => {
     ["null language", x => { Object.assign(x.settings.ui_language, { value: null }); }],
     ["unknown language", x => { Object.assign(x.settings.dictionary_language, { value: "de" }); }],
     ["unknown transition", x => { Object.assign(x.settings.transition_mode, { value: "fast" }); }],
+    ["missing review mode", x => { Reflect.deleteProperty(x.settings, "review_error_mode"); }],
+    ["null review mode", x => { Object.assign(x.settings.review_error_mode, { value: null }); }],
+    ["unknown review mode", x => { Object.assign(x.settings.review_error_mode, { value: "lenient" }); }],
+    ["capitalized review mode", x => { Object.assign(x.settings.review_error_mode, { value: "Strict" }); }],
+    ["boolean review mode", x => { Object.assign(x.settings.review_error_mode, { value: true }); }],
+    ["numeric review version", x => { Object.assign(x.settings.review_error_mode, { version: 1 }); }],
+    ["missing review constraint", x => { Reflect.deleteProperty(x.constraints, "review_error_mode"); }],
+    ["wrong review constraint", x => { x.constraints.review_error_mode.type = "boolean"; }],
+    ["unknown review choice", x => { x.constraints.review_error_mode.values = ["strict", "lenient"]; }],
     ["string time zone", x => { Object.assign(x.settings.time_zone, { value: ["UTC"] }); }],
     ["wrong list item", x => { Object.assign(x.settings.learning_intervals_seconds, { value: [30, "60"] }); }],
     ["invalid material mode", x => { Object.assign(x.settings.material, { value: { mode: "both" } }); }],
@@ -124,7 +143,7 @@ describe("Settings current and constraints", () => {
 });
 
 describe("Settings command exchange", () => {
-  const values: SettingCommand["payload"][] = [
+  const values: EditableSettingPayload[] = [
     { key: "ui_language", value: "ru" }, { key: "dictionary_language", value: "uk" },
     { key: "retry_gap", value: 1 }, { key: "retry_count", value: 2 }, { key: "learning_group_size", value: 10 },
     { key: "learning_poll_seconds", value: 10 }, { key: "learning_reminder_pause_seconds", value: 60 },
@@ -211,14 +230,18 @@ describe("Settings command exchange", () => {
       { ...command(), payload: Object.assign({ key: "strict_case", value: true }, { extra: true }) },
       { ...command(), payload: { key: "retry_count", value: true } },
       { ...command(), payload: { key: "time_zone", value: "UTC" } },
+      // Read-only in this client: refused at runtime even if a caller bypasses the type.
+      { ...command(), payload: { key: "review_error_mode", value: "soft" } },
       { ...command(), payload: { key: "material", value: { mode: "topics", topic_ids: [id(8), id(8)] } } },
     ];
-    for (const request of candidates) await expect(api.save("synthetic", "proof", subject, request as SettingCommand)).rejects.toThrow();
+    for (const request of candidates) await expect(api.save("synthetic", "proof", subject, request as EditableSettingCommand)).rejects.toThrow();
     await expect(api.save("synthetic", "", subject, command())).rejects.toThrow();
     await expect(api.save("", "proof", subject, command())).rejects.toThrow();
     await expect(api.status("synthetic", "bad", intent())).rejects.toThrow();
     expect(fetcher).not.toHaveBeenCalled();
     expect(validSettingIntent({ ...intent(), extra: true })).toBe(false);
+    // review_error_mode is read-only in this client until its editor exists.
+    expect(validSettingIntent({ ...intent(), payload: { key: "review_error_mode", value: "soft" } })).toBe(false);
   });
 
   it.each(["learning_intervals_seconds", "material"] as const)("does not serialize a missing %s array element as null", async key => {

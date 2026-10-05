@@ -400,3 +400,219 @@ describe("oral document: floor, source and detached snapshots", () => {
     expect(f.posted).toEqual([]); expect(f.values.has(key())).toBe(true);
   });
 });
+
+describe("oral document: explicit check during an in-flight refresh", () => {
+  /** Holds the listed non-command GETs (1-based); a release may substitute the reply, e.g. a genuine 401/403. */
+  function hold(f: ReturnType<typeof fixture>, ...held: number[]) {
+    const gates = new Map(held.map(n => [n, deferred<Response | null>()] as const)); let reads = 0;
+    f.fetcher.mockImplementation(async (url, init) => {
+      const reply = f.handler(url, init);
+      if (init?.method === "POST" || String(url).includes("/commands/")) return reply;
+      const gate = gates.get(++reads), substitute = gate ? await gate.promise : null;
+      return substitute ?? reply;
+    });
+    return { reads: () => reads, release: (n: number, reply: Response | null = null) => gates.get(n)!.resolve(reply) };
+  }
+  const checks = (f: ReturnType<typeof fixture>) => f.gets.filter(url => url.includes("/commands/")).length;
+  const unknownStudy = () => { const f = fixture({ saved: [intents[2]], step: "presented" }); f.accepted.clear(); return f; };
+
+  it("repeated checks queue one later status GET; lifecycle refresh still joins", async () => {
+    const f = unknownStudy(), held = hold(f, 2);
+    const lifecycle = f.controller.refresh(); await vi.waitFor(() => expect(held.reads()).toBe(2));
+    expect(f.controller.snapshot().canRetry.study).toBe(true); expect(checks(f)).toBe(1);
+    const first = f.controller.recheck(), second = f.controller.recheck();
+    expect(second).toBe(first); expect(f.controller.refresh()).toBe(lifecycle); expect(checks(f)).toBe(1);
+    held.release(2); await lifecycle; await first;
+    expect(checks(f)).toBe(2); expect(f.posted).toEqual([]);
+    expect(f.controller.snapshot()).toMatchObject({ commands: { study: { pending: true, canRetry: true } } });
+  });
+
+  it("a check during the queued follow-up read starts a second episode with its own later status GET", async () => {
+    const f = unknownStudy(), held = hold(f, 2, 4);
+    const lifecycle = f.controller.refresh(); await vi.waitFor(() => expect(held.reads()).toBe(2));
+    const first = f.controller.recheck(); held.release(2); await lifecycle;
+    await vi.waitFor(() => expect(held.reads()).toBe(4)); expect(checks(f)).toBe(2);
+    const second = f.controller.recheck();
+    expect(second).not.toBe(first); expect(f.controller.recheck()).toBe(second); expect(checks(f)).toBe(2);
+    held.release(4); await first; await second;
+    expect(checks(f)).toBe(3); expect(f.posted).toEqual([]);
+  });
+
+  it.each(["dispose", "revoke"] as const)("%s before the queued check sends nothing further", async end => {
+    const f = unknownStudy(), held = hold(f, 2);
+    const lifecycle = f.controller.refresh(); await vi.waitFor(() => expect(held.reads()).toBe(2));
+    const queued = f.controller.recheck(), calls = f.fetcher.mock.calls.length;
+    if (end === "dispose") f.controller.dispose(); else f.revoke();
+    held.release(2); await lifecycle; await queued;
+    expect(f.fetcher).toHaveBeenCalledTimes(calls); expect(f.posted).toEqual([]); expect(f.denied).not.toHaveBeenCalled();
+  });
+
+  it.each([401, 403])("genuine %s on the held read denies once and the queued check sends nothing", async status => {
+    const f = unknownStudy(), held = hold(f, 2);
+    const lifecycle = f.controller.refresh(); await vi.waitFor(() => expect(held.reads()).toBe(2));
+    const queued = f.controller.recheck(), calls = f.fetcher.mock.calls.length;
+    held.release(2, response({ error: { code: "ACCESS_DENIED" } }, status)); await lifecycle; await queued;
+    expect(f.denied).toHaveBeenCalledOnce(); expect(f.options.access.isLive()).toBe(false);
+    expect(f.fetcher).toHaveBeenCalledTimes(calls); expect(checks(f)).toBe(1); expect(f.posted).toEqual([]);
+    expect(f.controller.snapshot()).toMatchObject({ phase: "disposed", current: null });
+  });
+});
+
+describe("oral document: own closed projection (L1)", () => {
+  type Progress = OralSessionProjection["progress"];
+  const partial: Progress = { completed: 2, total: 5, correct: 1, wrong: 1 };
+  function closed(progress: Progress, reason: NonNullable<OralSessionProjection["close_reason"]> = "stop",
+    session = id(3), pair: OralSessionProjection["pair"] = "ru-de"): OralSessionProjection {
+    return { ...projection("closed", session), pair, close_reason: reason, progress,
+      summary: { completed: progress.completed, correct: progress.correct, wrong: progress.wrong,
+        ratio: progress.completed ? { numerator: progress.correct, denominator: progress.completed } : null } };
+  }
+  /** Chosen replies for matching requests; everything else is answered by the fixture model. */
+  function route(f: ReturnType<typeof fixture>, pick: (url: string, init?: RequestInit) => Response | null | Promise<Response | null>) {
+    f.fetcher.mockImplementation(async (url, init) => (await pick(String(url), init)) ?? f.handler(url, init));
+  }
+  const sessionGets = (f: ReturnType<typeof fixture>) => f.fetcher.mock.calls
+    .filter(([url, init]) => init?.method !== "POST" && String(url).includes(`/sessions/${id(3)}?`)).length;
+  const stopReply = (f: ReturnType<typeof fixture>, current: unknown) => (_url: string, init?: RequestInit) => {
+    if (init?.method !== "POST") return null;
+    const command = JSON.parse(String(init.body)); f.posted.push(command);
+    return response({ command: fact(command), current, state_version: "20" });
+  };
+  /** A replacement owner of the same seed whose terminal id was retained by the hook. */
+  const retained = (f: ReturnType<typeof fixture>) => {
+    f.controller.dispose(); return new OralDocumentController({ ...f.options, terminalSessionIds: [id(3)] });
+  };
+
+  it("L1-1 own Stop keeps the server's closed facts without an extra read", async () => {
+    const f = fixture({ step: "presented" }); await f.controller.refresh(); await f.controller.reveal();
+    const facts = closed(partial); route(f, stopReply(f, facts));
+    const before = sessionGets(f); await f.controller.stop("stop");
+    expect(f.controller.snapshot()).toMatchObject({ phase: "closed", current: null,
+      closed: { sessionId: id(3), reason: "stop", summary: facts.summary, progress: partial, summaryRead: "known" } });
+    expect(sessionGets(f)).toBe(before); expect(f.posted.map(v => v.kind)).toEqual(["oral.reveal", "session.stop"]);
+  });
+  it("L1-2 a closure boundary without a summary costs exactly one addressed read", async () => {
+    const f = fixture({ saved: [intents[3]], step: "revealed" }), facts = closed(partial, "midnight");
+    route(f, url => url.includes("/commands/") ? response({ command: { id: id(4), status: "not_found" }, current: profile("8"),
+      state_version: "8", closed_session: { session_id: id(3), status: "closed", close_reason: "midnight" } })
+      : url.includes(`/sessions/${id(3)}?`) ? response({ current: facts, state_version: "9" }) : null);
+    await f.controller.refresh();
+    expect(sessionGets(f)).toBe(1); expect(f.posted).toEqual([]);
+    expect(f.controller.snapshot()).toMatchObject({ phase: "closed",
+      closed: { reason: "midnight", summary: facts.summary, progress: partial, summaryRead: "known" } });
+  });
+  it("L1-2b a failed read after a stop-lane boundary never builds facts from the active question", async () => {
+    const f = fixture({ step: "revealed" }), question = { ...projection("revealed"), progress: partial };
+    let closedNow = false;
+    route(f, (url, init) => {
+      if (init?.method === "POST") { f.posted.push(JSON.parse(String(init.body))); throw new TypeError("network"); }
+      if (url.includes("/commands/")) return closedNow ? response({ command: { id: new URL(url, "https://model.invalid").pathname.split("/").at(-1),
+        status: "not_found" }, current: profile("10"), state_version: "10",
+        closed_session: { session_id: id(3), status: "closed", close_reason: "midnight" } }) : null;
+      if (url.includes(`/sessions/${id(3)}?`)) return closedNow ? response({ error: { code: "INTERNAL_ERROR" } }, 500)
+        : response({ current: question, state_version: "9" });
+      return null;
+    });
+    await f.controller.refresh(); expect(f.controller.snapshot()).toMatchObject({ phase: "revealed", current: { progress: partial } });
+    await f.controller.stop("stop"); expect(f.controller.snapshot().commands.stop).toMatchObject({ pending: true, outcome: null });
+    closedNow = true; await f.controller.refresh();
+    expect(f.controller.snapshot()).toMatchObject({ phase: "closed", current: null, problem: null,
+      closed: { sessionId: id(3), reason: "midnight", summary: null, progress: null, summaryRead: "failed" } });
+    expect(sessionGets(f)).toBe(2); expect(f.posted).toHaveLength(1);
+  });
+  it("L1-3 a late closed projection of the same session keeps the known facts and costs no read", async () => {
+    const f = fixture({ step: "revealed" }); await f.controller.refresh();
+    f.fetcher.mockImplementationOnce(async (...args) => { await f.handler(...args); throw new Error("lost"); });
+    await f.controller.grade(true); expect(f.controller.snapshot().commands.study).toMatchObject({ pending: true, outcome: null });
+    await f.controller.stop("stop");
+    const known = f.controller.snapshot().closed; expect(known).toMatchObject({ reason: "stop", summaryRead: "known" });
+    const before = sessionGets(f); await f.controller.refresh();
+    expect(f.controller.snapshot()).toMatchObject({ phase: "closed", current: null, canReveal: false, canGrade: false, closed: known,
+      commands: { study: { pending: false, outcome: "accepted" } } });
+    expect(sessionGets(f)).toBe(before); expect(f.posted.map(v => v.kind)).toEqual(["oral.grade", "session.stop"]);
+  });
+  it("L1-4a a foreign closed session never becomes the own facts", async () => {
+    const f = fixture({ saved: [{ ...intents[4], session_id: id(90) }], step: "revealed" }); await f.controller.refresh();
+    expect(f.controller.snapshot()).toMatchObject({ phase: "revealed", terminalSessionIds: [id(90)], closed: null });
+    const facts = closed(partial); route(f, stopReply(f, facts)); await f.controller.stop("stop");
+    expect(f.controller.snapshot().closed).toEqual({ sessionId: id(3), reason: "stop", summary: facts.summary, progress: partial,
+      summaryRead: "known" });
+  });
+  it("L1-4b an own closed projection of another dictionary pair is never kept", async () => {
+    const f = fixture(), other = closed(partial, "pair_changed", id(3), "en-de");
+    route(f, url => url.includes(`/sessions/${id(3)}?`) ? response({ current: other, state_version: "9" }) : null);
+    await f.controller.refresh();
+    expect(f.controller.snapshot()).toMatchObject({ phase: "closed", problem: "pair_changed",
+      closed: { sessionId: id(3), summary: null, progress: null, summaryRead: "failed" } });
+    expect(sessionGets(f)).toBe(2);
+  });
+  it("L1-5 a replaced owner of a retained terminal session reads its facts once and never raises stateVersion", async () => {
+    const f = fixture(); f.set("closed", "77"); const next = retained(f);
+    await next.refresh(); expect(sessionGets(f)).toBe(1);
+    expect(next.snapshot()).toMatchObject({ phase: "closed", stateVersion: "1",
+      closed: { sessionId: id(3), reason: "stop", summary: { completed: 1, correct: 1, wrong: 0 }, summaryRead: "known" } });
+    await next.refresh(); expect(sessionGets(f)).toBe(1); next.dispose();
+  });
+  it("L1-6 a failing read is repeated only by later refreshes, never by itself", async () => {
+    const f = fixture(), next = retained(f);
+    route(f, url => url.includes(`/sessions/${id(3)}?`) ? response({ error: { code: "INTERNAL_ERROR" } }, 500) : null);
+    await next.refresh(); await next.refresh(); expect(sessionGets(f)).toBe(2);
+    expect(next.snapshot()).toMatchObject({ phase: "closed", problem: null, closed: { summary: null, progress: null, summaryRead: "failed" } });
+    const calls = f.fetcher.mock.calls.length; await new Promise(done => setTimeout(done, 20));
+    expect(f.fetcher.mock.calls.length).toBe(calls); expect(f.posted).toEqual([]); next.dispose();
+  });
+  it("L1-7 a genuine 401 on the read denies once and exposes nothing", async () => {
+    const f = fixture(), next = retained(f);
+    route(f, url => url.includes(`/sessions/${id(3)}?`) ? response({ error: { code: "ACCESS_DENIED" } }, 401) : null);
+    await next.refresh();
+    expect(f.denied).toHaveBeenCalledOnce(); expect(next.snapshot()).toMatchObject({ phase: "disposed", closed: null });
+  });
+  it("L1-8 Stop before any answer keeps the server's zero summary as given", async () => {
+    const f = fixture(); await f.controller.refresh();
+    const zero = closed({ completed: 0, total: 3, correct: 0, wrong: 0 }); route(f, stopReply(f, zero));
+    await f.controller.stop("stop");
+    expect(f.controller.snapshot().closed).toEqual({ sessionId: id(3), reason: "stop",
+      summary: { completed: 0, correct: 0, wrong: 0, ratio: null }, progress: { completed: 0, total: 3, correct: 0, wrong: 0 },
+      summaryRead: "known" });
+  });
+  it("L1-10 Start after a closed session with an unknown summary reads it once before the single POST", async () => {
+    const f = fixture(), next = retained(f);
+    route(f, url => url.includes(`/sessions/${id(3)}?`) ? response({ error: { code: "INTERNAL_ERROR" } }, 500) : null);
+    await next.start("words");
+    const order = f.fetcher.mock.calls.map(([url, init]) => init?.method === "POST" ? "POST"
+      : String(url).includes(`/sessions/${id(3)}?`) ? "read" : "other").filter(kind => kind !== "other");
+    expect(order).toEqual(["read", "POST"]);
+    expect(f.posted).toHaveLength(1); expect(f.posted[0]).toMatchObject({ kind: "session.start", payload: { mode: "oral", bucket: "words" } });
+    expect(next.snapshot()).toMatchObject({ sessionId: id(100), closed: null }); next.dispose();
+  });
+  it.each(["dispose", "revoke"] as const)("L1-11 %s during the in-flight read leaves no update, fetch or denial", async end => {
+    const f = fixture(); f.set("closed", "9"); const next = retained(f), gate = deferred<void>();
+    route(f, async (url, init) => {
+      if (!url.includes(`/sessions/${id(3)}?`)) return null;
+      const reply = await f.handler(url, init); await gate.promise; return reply;
+    });
+    const work = next.refresh(); await vi.waitFor(() => expect(sessionGets(f)).toBe(1));
+    expect(next.snapshot().closed).toMatchObject({ summaryRead: "reading" });
+    const calls = f.fetcher.mock.calls.length, updates = f.updates.mock.calls.length;
+    if (end === "dispose") next.dispose(); else f.revoke();
+    gate.resolve(); await work;
+    expect(f.fetcher.mock.calls.length).toBe(calls); expect(f.updates.mock.calls.length).toBe(updates);
+    expect(f.denied).not.toHaveBeenCalled(); expect(f.posted).toEqual([]);
+  });
+  it("L1-12 a closed read below the floor is not kept and changes neither problem nor stateVersion", async () => {
+    const f = fixture({ minimum: () => "50" }); f.set("closed", "9"); const next = retained(f);
+    await next.refresh(); expect(sessionGets(f)).toBe(1);
+    expect(next.snapshot()).toMatchObject({ phase: "closed", problem: null, stateVersion: "50",
+      closed: { summary: null, progress: null, summaryRead: "failed" } }); next.dispose();
+  });
+  it("L1-13 an accepted Stop without a usable projection waits for the next refresh, then reads once", async () => {
+    const f = fixture({ step: "revealed" }); await f.controller.refresh();
+    route(f, stopReply(f, { session_id: id(3), status: "unavailable" }));
+    const before = sessionGets(f); await f.controller.stop("stop");
+    expect(f.controller.snapshot()).toMatchObject({ phase: "closed", problem: "unavailable",
+      closed: { sessionId: id(3), reason: null, summary: null, progress: null, summaryRead: "pending" } });
+    expect(sessionGets(f)).toBe(before);
+    f.set("closed", "21"); await f.controller.refresh(); expect(sessionGets(f)).toBe(before + 1);
+    expect(f.controller.snapshot()).toMatchObject({ closed: { reason: "stop", summaryRead: "known", summary: { completed: 1 } } });
+  });
+});

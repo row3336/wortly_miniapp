@@ -47,6 +47,8 @@ function count(value: unknown): value is number {
 }
 
 function positive(value: unknown): value is number { return count(value) && value > 0; }
+// The server's stored Learning debt; an absent value is invalid, not zero.
+function recoveryRemaining(value: unknown): value is number { return count(value) && value <= 3; }
 function pair(value: unknown): boolean { return value === "ru-de" || value === "uk-de" || value === "en-de"; }
 function eventTime(value: unknown): boolean {
   if (typeof value !== "string"
@@ -85,7 +87,7 @@ function validGroup(value: unknown): boolean {
   if (value === null) return true;
   if (!record(value) || !uuid(value.group_id) || !oneOf(value.status, ["assembling", "active"])
     || !eventTime(value.created_at) || !orderedCards(value.members, "introduction_order", row =>
-      count(row.stage) && nullableTime(row.due_at)
+      count(row.stage) && nullableTime(row.due_at) && recoveryRemaining(row.recovery_remaining)
       && oneOf(row.status, ["pending", "active", "completed", "skipped"])
       && version(row.version) && typeof row.available === "boolean"
       && typeof row.needs_preview === "boolean" && typeof row.ready === "boolean")) return false;

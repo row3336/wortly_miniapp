@@ -1,6 +1,6 @@
 import { StrictMode } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { OpenedClient, Profile, SavedCommandFact, SettingCommand, SettingsResponse, TodayResponse, Topic } from "../api/generated";
 import { App } from "./App";
 
@@ -18,6 +18,7 @@ function current(state = "10"): SettingsResponse {
     learning_ready_percent: { value: null, version: "1" }, learning_mix: { value: null, version: "1" },
     strict_case: { value: true, version: "1" }, include_preterite: { value: false, version: "1" },
     include_comparative: { value: null, version: "1" }, transition_mode: { value: null, version: "1" },
+    review_error_mode: { value: "strict", version: "1" },
     material: { value: null, version: "1" },
   }, constraints: {
     ui_language: { type: "enum", values: ["ru", "uk", "en"] },
@@ -31,6 +32,7 @@ function current(state = "10"): SettingsResponse {
     learning_intervals_seconds: { type: "ordered_integer_list", nonempty: true, item_minimum: 1, item_maximum: 2147483647 },
     learning_mix: { type: "boolean" }, strict_case: { type: "boolean" }, include_preterite: { type: "boolean" },
     include_comparative: { type: "boolean" }, transition_mode: { type: "enum", values: ["normal", "accelerated"] },
+    review_error_mode: { type: "enum", values: ["strict", "soft"] },
     material: { type: "exclusive_choice", modes: { level: { selected_level: ["A1", "A2", "B1", "B2", "C1", "C2"] },
       topics: { topic_ids: "nonempty_existing_uuid_list" } } },
   } };
@@ -75,6 +77,7 @@ function fixture() {
     ? { command: { ...facts.get(commandId)!, status: "already_applied" }, current: projection(), state_version: data.state_version }
     : { command: { id: commandId, status: "not_found" }, current: profile, state_version: profile.state_version }));
   const fetcher = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+    bindDeadline(init?.signal);
     const path = String(url), body = init?.body ? JSON.parse(init.body as string) : null;
     if (path.endsWith("/auth/telegram")) return json({ access_token: "synthetic-token", expires_at: "2026-10-01T00:00:00Z",
       profile, compatibility: { compatible: true, contract_version: "1" } });
@@ -90,6 +93,10 @@ function fixture() {
       return commandReply(body);
     }
     if (path.includes("/commands/")) return statusReply(path.split("/").at(-1)!);
+    // The persisted mode of the reported session: a valid Written summary (no Learning resume).
+    if (state.session && path.includes(`/sessions/${state.session.id}?`)) return json({ current: { session_id: state.session.id,
+      mode: "written", status: "summary", pair: `${profile.dictionary_language}-de`, direction: "l1-de", local_date: "2026-09-30",
+      bucket: "words", close_reason: null, progress: { completed: 2, total: 2 }, assignment: null }, state_version: data.state_version });
     throw new Error("Unexpected synthetic endpoint");
   });
   vi.stubGlobal("fetch", fetcher);
@@ -110,26 +117,89 @@ async function refresh() {
   await waitFor(() => expect(screen.getByRole("button", { name: "Обновить настройки" }).hasAttribute("disabled")).toBe(false));
 }
 async function foreground() { await act(async () => { window.dispatchEvent(new Event("pageshow")); }); }
+// Role queries scoped to the page that is actually shown: same roles, accessible names and visibility rules, but searched
+// only inside the current Settings page (re-resolved on every call, no element is kept across navigation).
+function settingsPage() {
+  const page = screen.getByRole("main");
+  within(page).getByRole("heading", { level: 1, name: "Настройки" });
+  return within(page);
+}
+function settingsSection(name: string) { return within(settingsPage().getByRole("region", { name })); }
+function settingsHeader() {
+  const header = settingsPage().getByRole("heading", { level: 1, name: "Настройки" }).closest("header");
+  expect(header).not.toBeNull();
+  return within(header!);
+}
+function todayNav() { return within(screen.getByRole("navigation", { name: "Основная навигация" })); }
+// The transport deadline (api/http.ts) is the only product timer on this path. Hold it: a reply is late only relative to
+// the navigation and foreground the test performs, never relative to how much CPU this worker gets. http.ts arms the
+// deadline and then synchronously calls fetch, so the fixture binds each request signal to the deadline armed for it.
+const transportTimeoutMs = 1000;
+const heldDeadlines = new Set<unknown>(), deadlineOf = new WeakMap<AbortSignal, unknown>(), heldHandleCalls: string[] = [];
+let armedDeadline: unknown;
+// A held deadline never runs; Node timer methods called on it are recorded (expected: none) instead of throwing.
+function heldHandle(): object {
+  const handle: Record<string | symbol, () => unknown> = {};
+  const record = (method: string, result: () => unknown) => () => { heldHandleCalls.push(method); return result(); };
+  for (const method of ["ref", "unref", "refresh", "close"]) handle[method] = record(method, () => handle);
+  handle.hasRef = record("hasRef", () => true);
+  handle[Symbol.toPrimitive] = record("toPrimitive", () => NaN);
+  return Object.freeze(handle);
+}
+function holdTransportDeadlines() {
+  const realSetTimeout = globalThis.setTimeout, realClearTimeout = globalThis.clearTimeout;
+  vi.spyOn(globalThis, "setTimeout").mockImplementation(((handler: TimerHandler, ms?: number, ...rest: unknown[]) => {
+    if (ms !== transportTimeoutMs || !/\/src\/api\/http\.ts:\d+/.test(new Error().stack ?? "")) return realSetTimeout(handler, ms, ...rest);
+    const handle = heldHandle(); heldDeadlines.add(handle); armedDeadline = handle; return handle;
+  }) as unknown as typeof setTimeout);
+  vi.spyOn(globalThis, "clearTimeout").mockImplementation(((handle?: unknown) => {
+    if (!heldDeadlines.delete(handle)) realClearTimeout(handle as number | undefined);
+  }) as typeof clearTimeout);
+}
+function bindDeadline(signal: AbortSignal | null | undefined) {
+  if (signal) deadlineOf.set(signal, armedDeadline);
+  armedDeadline = undefined;
+}
+// The held request itself is not aborted and its own deadline is still held.
+function expectDeadlineHeld(f: ReturnType<typeof fixture>, path: string, nth: number) {
+  const signal = f.fetcher.mock.calls.filter(([url]) => String(url).endsWith(path))[nth]?.[1]?.signal;
+  expect(signal?.aborted).toBe(false);
+  expect(heldDeadlines.has(signal ? deadlineOf.get(signal) : undefined)).toBe(true);
+}
 beforeEach(() => {
   localStorage.clear();
   vi.stubEnv("VITE_WORTLY_TIMEOUT_MS", "1000"); vi.stubEnv("VITE_WORTLY_MAX_RESPONSE_BYTES", "20000");
   vi.stubEnv("VITE_WORTLY_API_BASE_URL", "");
+  holdTransportDeadlines();
 });
 afterEach(() => { cleanup(); localStorage.clear(); vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
+afterEach(() => {
+  // Diagnostic only: a request the test never answered keeps its deadline held.
+  if (heldDeadlines.size) console.info(`transport deadlines still held at test end: ${heldDeadlines.size}`);
+  const calls = [...heldHandleCalls];
+  heldDeadlines.clear(); heldHandleCalls.length = 0; armedDeadline = undefined;
+  expect(calls).toEqual([]);
+});
 
 describe("Settings in the real App document", () => {
   it("a stale settings GET after foreground cannot restore old editing rights", async () => {
     const f = fixture(); f.data.settings.material.value = { mode: "topics", topic_ids: [id(8)] };
-    render(<App />); await settings();
-    const field = group("Новых слов в группе").getByRole("textbox");
+    render(<App />);
+    fireEvent.click(await waitFor(() => todayNav().getByRole("button", { name: "Настройки" })));
+    await waitFor(() => settingsSection("Языки").getByRole("group", { name: "Язык интерфейса" }));
+    await waitFor(() => expect(settingsHeader().getByRole("button", { name: "Обновить настройки" }).hasAttribute("disabled")).toBe(false));
+    const learning = () => within(settingsSection("Обучение").getByRole("group", { name: "Новых слов в группе" }));
+    const field = learning().getByRole("textbox");
     const search = screen.getByRole("searchbox"); fireEvent.change(search, { target: { value: "ku" } });
     fireEvent.change(field, { target: { value: "17" } }); f.profile.state_version = "11";
     await foreground(); await waitFor(() => expect(f.settingsReply).toHaveBeenCalledTimes(2));
     await screen.findByText("Не удалось получить актуальные настройки. Обнови их.");
-    expect(group("Новых слов в группе").getByRole("textbox")).toBe(field); expect(field.hasAttribute("disabled")).toBe(true);
+    expect(learning().getByRole("textbox")).toBe(field); expect(field.hasAttribute("disabled")).toBe(true);
     expect(screen.getByRole("searchbox")).toBe(search); expect((search as HTMLInputElement).value).toBe("ku");
-    expect(f.commandReply).not.toHaveBeenCalled(); f.data.state_version = "11"; await refresh();
-    expect((group("Новых слов в группе").getByRole("textbox") as HTMLInputElement).value).toBe("17");
+    expect(f.commandReply).not.toHaveBeenCalled(); f.data.state_version = "11";
+    fireEvent.click(settingsHeader().getByRole("button", { name: "Обновить настройки" }));
+    await waitFor(() => expect(settingsHeader().getByRole("button", { name: "Обновить настройки" }).hasAttribute("disabled")).toBe(false));
+    expect((learning().getByRole("textbox") as HTMLInputElement).value).toBe("17");
     expect(f.commandReply).not.toHaveBeenCalled();
   });
   it("opens actual settings once, enabling only implemented destinations", async () => {
@@ -163,6 +233,7 @@ describe("Settings in the real App document", () => {
     save("Язык интерфейса"); save("Язык интерфейса");
     await waitFor(() => expect(f.commandReply).toHaveBeenCalledOnce());
     expect(document.documentElement.lang).toBe("ru");
+    expectDeadlineHeld(f, "/commands", 0);
     pending.resolve(json(f.apply(f.commandReply.mock.calls[0][0])));
     await screen.findByRole("heading", { name: "Settings", level: 1 });
     await waitFor(() => expect(localStorage.getItem("wortly.uiLanguage")).toBe("en"));
@@ -178,6 +249,7 @@ describe("Settings in the real App document", () => {
     expect(f.todayReply).toHaveBeenCalledOnce(); expect(screen.queryByText("Активная пара: Украинский ↔ Немецкий")).toBeNull();
     await waitFor(() => expect(f.openReply).toHaveBeenCalledTimes(2));
     const body = f.openReply.mock.calls[1][0];
+    expectDeadlineHeld(f, "/client/open", 1);
     pending.resolve(json({ status: "opened", profile: f.profile, compatibility: { compatible: true, contract_version: "1" },
       ...body, proof_version: "1", document_epoch: "1", session: null }));
     await screen.findByText("Активная пара: Английский ↔ Немецкий");
@@ -232,6 +304,7 @@ describe("Settings in the real App document", () => {
     f.topicsReply.mockImplementationOnce(() => pending.promise);
     render(<App />); await settings(); await foreground();
     await waitFor(() => expect(f.topicsReply).toHaveBeenCalledTimes(2));
+    expectDeadlineHeld(f, "/settings/topics", 0);
     await act(async () => { pending.resolve(json({ error: { code: "DENIED" } }, 401)); });
     expect(screen.getByRole("heading", { name: "Настройки", level: 1 })).toBeDefined();
     change("Язык словаря", "en"); save("Язык словаря"); await screen.findByText("Сохранено");
@@ -261,6 +334,7 @@ describe("Settings in the real App document", () => {
     await waitFor(() => expect(f.commandReply).toHaveBeenCalledOnce());
     fireEvent.click(screen.getByRole("button", { name: "Сегодня" }));
     await screen.findByText("Активная пара: Украинский ↔ Немецкий");
+    expectDeadlineHeld(f, "/commands", 0);
     await act(async () => { pending.resolve(json(f.apply(f.commandReply.mock.calls[0][0]))); });
     await screen.findByText("Активная пара: Английский ↔ Немецкий");
     expect(f.statusReply).toHaveBeenCalledOnce(); expect(f.commandReply).toHaveBeenCalledOnce();
@@ -271,16 +345,31 @@ describe("Settings in the real App document", () => {
     const delayed = deferred<Response>(), stale = structuredClone(f.profile);
     f.openReply.mockImplementationOnce(() => delayed.promise);
     await foreground(); await waitFor(() => expect(f.openReply).toHaveBeenCalledTimes(2));
-    change("Язык интерфейса", "en"); save("Язык интерфейса");
+    // The second open is held, and so is its transport deadline: only the test decides when it answers.
+    const language = () => within(settingsSection("Языки").getByRole("group", { name: "Язык интерфейса" }));
+    // From the save on, passively record every <html lang> change and every persisted language write. Mutation records
+    // are queued one per change with its old value, so a batched en -> ru -> en is still seen in full.
+    const langChanges: MutationRecord[] = [], langObserver = new MutationObserver(records => { langChanges.push(...records); });
+    langObserver.observe(document.documentElement, { attributeFilter: ["lang"], attributeOldValue: true });
+    onTestFinished(() => langObserver.disconnect());
+    const writes = vi.spyOn(Storage.prototype, "setItem");
+    fireEvent.change(language().getByRole("combobox"), { target: { value: "en" } });
+    fireEvent.click(language().getByRole("button", { name: "Сохранить" }));
     await screen.findByRole("heading", { name: "Settings", level: 1 });
-    fireEvent.click(screen.getByRole("button", { name: "Today" }));
+    fireEvent.click(within(screen.getByRole("navigation", { name: "Main navigation" })).getByRole("button", { name: "Today" }));
     await screen.findByText("Loading today's plan");
+    expectDeadlineHeld(f, "/client/open", 1);
     await act(async () => { delayed.resolve(json({ status: "opened", profile: stale,
       compatibility: { compatible: true, contract_version: "1" }, ...f.openReply.mock.calls[1][0],
       proof_version: "1", document_epoch: "1", session: null })); });
     await screen.findByText("Active pair: Ukrainian ↔ German");
     expect(document.documentElement.lang).toBe("en"); expect(localStorage.getItem("wortly.uiLanguage")).toBe("en");
     expect(f.openReply).toHaveBeenCalledTimes(3); expect(f.commandReply).toHaveBeenCalledOnce();
+    // The language moves from ru to en once and is never shown or stored as ru again, not even transiently.
+    langChanges.push(...langObserver.takeRecords());
+    const distinct = (values: (string | null)[]) => values.filter((value, i) => i === 0 || value !== values[i - 1]);
+    expect(distinct([...langChanges.map(change => change.oldValue), document.documentElement.lang])).toEqual(["ru", "en"]);
+    expect(distinct(writes.mock.calls.filter(([key]) => key === "wortly.uiLanguage").map(([, value]) => value))).toEqual(["en"]);
   });
   it("stops after two stale foreground replies, hides the old pair and allows manual retry", async () => {
     const f = fixture(); render(<App />); await settings(); const stale = structuredClone(f.profile);

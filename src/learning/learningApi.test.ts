@@ -16,7 +16,7 @@ function current(): LearningCurrentResponse {
     manual_selection: [{ card_id: id(4), position: 3, version: bigVersion, eligible: true }],
     group: { group_id: id(6), status: "assembling", created_at: time,
       introduction: { position: 0, version: "1", next_card_id: id(7) },
-      members: [{ card_id: id(7), introduction_order: 1, stage: 0, due_at: null,
+      members: [{ card_id: id(7), introduction_order: 1, stage: 0, due_at: null, recovery_remaining: 0,
         status: "pending", version: "1", available: true, needs_preview: true, ready: false }] } };
 }
 function fact(): SavedCommandFact {
@@ -41,6 +41,14 @@ describe("Learning read adapter", () => {
     expect(fetcher).toHaveBeenCalledWith("/api/v1/learning/current", expect.objectContaining({
       method: "GET", headers: { Authorization: "Bearer synthetic" }, body: undefined,
     }));
+  });
+
+  it.each([0, 1, 2, 3])("keeps the stored recovery debt %i exactly", async remaining => {
+    const data = current();
+    Object.assign(data.group!, { status: "active", introduction: null });
+    Object.assign(data.group!.members[0], { status: "active", stage: 2, due_at: time,
+      recovery_remaining: remaining, needs_preview: false, ready: true });
+    await expect(setup(data).api.get("synthetic")).resolves.toEqual(data);
   });
 
   it("accepts no group and a legacy group without a saved introduction", async () => {
@@ -70,6 +78,13 @@ describe("Learning read adapter", () => {
     ["negative cursor", data => { data.group!.introduction!.position = -1; }],
     ["unsafe cursor", data => { data.group!.introduction!.position = Number.MAX_SAFE_INTEGER + 1; }],
     ["negative stage", data => { data.group!.members[0].stage = -1; }],
+    ["missing recovery debt", data => { Reflect.deleteProperty(data.group!.members[0], "recovery_remaining"); }],
+    ["null recovery debt", data => { Object.assign(data.group!.members[0], { recovery_remaining: null }); }],
+    ["recovery debt above three", data => { data.group!.members[0].recovery_remaining = 4; }],
+    ["negative recovery debt", data => { data.group!.members[0].recovery_remaining = -1; }],
+    ["fractional recovery debt", data => { data.group!.members[0].recovery_remaining = 1.5; }],
+    ["string recovery debt", data => { Object.assign(data.group!.members[0], { recovery_remaining: "2" }); }],
+    ["boolean recovery debt", data => { Object.assign(data.group!.members[0], { recovery_remaining: true }); }],
     ["bad member status", data => { Object.assign(data.group!.members[0], { status: ["pending"] }); }],
     ["nonboolean capability", data => { Object.assign(data.group!.members[0], { ready: 1 }); }],
     ["missing member capability", data => { Reflect.deleteProperty(data.group!.members[0], "needs_preview"); }],

@@ -3,6 +3,10 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { current } from "../learning/learningFixtures.test-support";
 import { WrittenAnswerInput, type WrittenAnswerInputProps } from "./WrittenAnswerInput";
+import type { ConjugationAssignment } from "../api/generated";
+import { conjugationQuestion, conjugationWrittenQuestion } from "../conjugation/conjugationQuestion";
+import { ConjugationQuestionHeading } from "../conjugation/ConjugationQuestionHeading";
+import type { WrittenAnswerQuestion } from "./WrittenAnswerInput";
 
 afterEach(cleanup);
 function props(patch: Partial<WrittenAnswerInputProps> = {}): WrittenAnswerInputProps {
@@ -140,6 +144,82 @@ describe("one written answer field", () => {
   });
   it("sending leaves the same focused field read-only and cannot mutate its captured text", () => {
     const p = props({ value: "captured" }); const { rerender, container } = render(<WrittenAnswerInput {...p} />);
+    const input = field(); input.focus();
+    rerender(<WrittenAnswerInput {...p} readOnly status="Сохраняем ответ" />);
+    expect(field()).toBe(input); expect(document.activeElement).toBe(input); expect(input.readOnly).toBe(true);
+    fireEvent.change(input, { target: { value: "replacement" } }); fireEvent.submit(container.querySelector("form")!);
+    fireEvent.click(screen.getByRole("button", { name: "ä" })); fireEvent.click(screen.getByRole("button", { name: "Забыл…" }));
+    expect(p.onChange).not.toHaveBeenCalled(); expect(p.onSubmit).not.toHaveBeenCalled(); expect(p.onForget).not.toHaveBeenCalled();
+  });
+});
+
+type ConjugationInputProps = Omit<WrittenAnswerInputProps, "assignment"> & WrittenAnswerQuestion;
+const uuid = (n: number) => `6c0e2a4b-8d1f-4b3a-9c5e-${String(n).padStart(12, "0")}`;
+function verb(n: number, text: string, tense: "present" | "preterite" = "present"): ConjugationAssignment {
+  return { id: uuid(n), card_id: uuid(n + 1), status: "presented", kind: "conjugation", cycle_id: uuid(n + 2),
+    slot_id: { cycle_id: uuid(n + 2), pronoun_group: "du" }, base_verb_id: uuid(n + 1), display_verb_id: uuid(n + 3),
+    tense, pronoun_group: "du", prompt: { verb: text, translation: "переводить", language: "ru", pronoun: "du", tense },
+    answer_spec: { kind: "forms", labels: ["du"], part_count: 1, case_sensitive: false } };
+}
+function conjugation(patch: Partial<Omit<ConjugationInputProps, "assignment" | "heading">> = {}, source = verb(10, "übersetzen")): ConjugationInputProps {
+  const question = conjugationQuestion(source);
+  return { assignment: conjugationWrittenQuestion(question),
+    heading: <ConjugationQuestionHeading question={question} />, value: "", language: "ru",
+    readOnly: false, canSubmit: true, canForget: true, submitOnEnter: true, onChange: vi.fn(), onSubmit: vi.fn(), onForget: vi.fn(), ...patch };
+}
+
+describe("a conjugation question in the same written answer field", () => {
+  it("shows the typed heading as the question and the pronoun as the only answer part", () => {
+    const p = conjugation(); const { container, rerender } = render(<WrittenAnswerInput {...p} />);
+    const heading = screen.getByRole("heading", { level: 2 });
+    expect(heading.textContent).toBe("Präsens: übersetzen — переводить"); expect(heading.hasAttribute("lang")).toBe(false);
+    expect(screen.getByRole("region", { name: heading.textContent! })).toBeTruthy();
+    expect(screen.getByText("du").lang).toBe("de");
+    expect(container.querySelector(".written-hint, .written-conjunction")).toBeNull();
+    expect(screen.getByText("Заполнено частей (примерно): 0 из 1")).toBeTruthy();
+    fireEvent.change(field(), { target: { value: "übersetzt" } }); expect(p.onChange).toHaveBeenCalledWith("übersetzt");
+    rerender(<WrittenAnswerInput {...p} value="übersetzt" />);
+    expect(screen.getByText("Заполнено частей (примерно): 1 из 1")).toBeTruthy();
+    expect(document.body.innerHTML).not.toMatch(/6c0e2a4b-/);
+    expect(p.onSubmit).not.toHaveBeenCalled();
+  });
+  it.each([
+    ["ru", "Твой ответ", "Проверить", "Забыл…"],
+    ["uk", "Твоя відповідь", "Перевірити", "Не пам’ятаю…"],
+    ["en", "Your answer", "Check", "I forgot…"],
+  ] as const)("%s keeps the interface labels local around the German question", (language, answer, check, forgot) => {
+    const p = conjugation({ language, value: "übersetzt" }); render(<WrittenAnswerInput {...p} />);
+    expect(screen.getByRole("textbox", { name: answer })).toBe(field()); expect(field().lang).toBe("de");
+    fireEvent.click(screen.getByRole("button", { name: check })); fireEvent.click(screen.getByRole("button", { name: forgot }));
+    expect(p.onSubmit).toHaveBeenCalledOnce(); expect(p.onForget).toHaveBeenCalledOnce(); expect(field().value).toBe("übersetzt");
+  });
+  it("does not send whitespace, while Enter and the button delegate the unchanged form", () => {
+    const blank = conjugation({ value: " \n " }); const { container, unmount } = render(<WrittenAnswerInput {...blank} />);
+    fireEvent.keyDown(field(), { key: "Enter" }); fireEvent.submit(container.querySelector("form")!);
+    expect(blank.onSubmit).not.toHaveBeenCalled(); unmount();
+    const p = conjugation({ value: "übersetzt" }); render(<WrittenAnswerInput {...p} />);
+    fireEvent.keyDown(field(), { key: "Enter" }); fireEvent.click(screen.getByRole("button", { name: "Проверить" }));
+    expect(p.onSubmit).toHaveBeenCalledTimes(2); expect(p.onChange).not.toHaveBeenCalled(); expect(field().value).toBe("übersetzt");
+  });
+  it("IME composition cannot submit, forget or insert a symbol before it finishes", () => {
+    const p = conjugation({ value: "übersetzt" }); const { container } = render(<WrittenAnswerInput {...p} />);
+    fireEvent.compositionStart(field()); fireEvent.keyDown(field(), { key: "Enter" });
+    fireEvent.submit(container.querySelector("form")!); fireEvent.click(screen.getByRole("button", { name: "Забыл…" }));
+    fireEvent.click(screen.getByRole("button", { name: "ü" }));
+    expect(p.onSubmit).not.toHaveBeenCalled(); expect(p.onForget).not.toHaveBeenCalled(); expect(p.onChange).not.toHaveBeenCalled();
+    fireEvent.compositionEnd(field()); fireEvent.keyDown(field(), { key: "Enter", isComposing: true });
+    fireEvent.keyDown(field(), { key: "Enter", keyCode: 229 }); expect(p.onSubmit).not.toHaveBeenCalled();
+    fireEvent.keyDown(field(), { key: "Enter" }); expect(p.onSubmit).toHaveBeenCalledOnce();
+  });
+  it("holding Enter cannot answer the next conjugation question, which replaces the heading in the same field", () => {
+    const p = conjugation({ value: "übersetzt" }); const { rerender } = render(<WrittenAnswerInput {...p} />);
+    const input = field(); fireEvent.keyDown(input, { key: "Enter" });
+    rerender(<WrittenAnswerInput {...conjugation({ value: "gingst", onSubmit: p.onSubmit }, verb(20, "gehen", "preterite"))} />);
+    expect(screen.getByRole("heading").textContent).toBe("Präteritum: gehen — переводить"); expect(field()).toBe(input);
+    fireEvent.keyDown(field(), { key: "Enter", repeat: true }); expect(p.onSubmit).toHaveBeenCalledOnce();
+  });
+  it("sending keeps the same conjugation field read-only and its captured text unchanged", () => {
+    const p = conjugation({ value: "übersetzt" }); const { rerender, container } = render(<WrittenAnswerInput {...p} />);
     const input = field(); input.focus();
     rerender(<WrittenAnswerInput {...p} readOnly status="Сохраняем ответ" />);
     expect(field()).toBe(input); expect(document.activeElement).toBe(input); expect(input.readOnly).toBe(true);

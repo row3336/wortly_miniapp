@@ -5,8 +5,15 @@ import type {
 import { validProfile } from "../api/entryApi";
 import { ApiError, createJsonTransport, errorCode, httpError, type HttpOptions } from "../api/http";
 
-export type SettingKey = SettingCommand["payload"]["key"];
-export type SettingIntent = Pick<SettingCommand, "command_id" | "kind" | "expected_field_version" | "payload">;
+// Keys this client edits. review_error_mode is decoded strictly but has no
+// editor here yet; its control and explanation belong to a later UI package.
+export type SettingKey = Exclude<SettingCommand["payload"]["key"], "review_error_mode">;
+export type EditableSettingPayload = SettingCommand["payload"] & { key: SettingKey };
+export type SettingIntent = Pick<SettingCommand, "command_id" | "kind" | "expected_field_version"> & {
+  payload: EditableSettingPayload;
+};
+/** The wire command this client sends; it never carries a read-only key. */
+export type EditableSettingCommand = Omit<SettingCommand, "payload"> & { payload: EditableSettingPayload };
 type Current = { current: SettingsProjection; state_version: string };
 export type SettingSaveReply = Current & (
   | { outcome: "accepted"; command: SavedCommandFact }
@@ -19,7 +26,7 @@ export type SettingStatusReply = { state_version: string } & (
 
 export interface SettingsApi {
   get(token: string): Promise<SettingsResponse>;
-  save(token: string, proof: string, profileId: string, command: SettingCommand): Promise<SettingSaveReply>;
+  save(token: string, proof: string, profileId: string, command: EditableSettingCommand): Promise<SettingSaveReply>;
   status(token: string, profileId: string, intent: SettingIntent): Promise<SettingStatusReply>;
 }
 
@@ -29,6 +36,8 @@ const booleans = ["learning_mix", "strict_case", "include_preterite", "include_c
 const languages = ["ru", "uk", "en"];
 const levels = ["A1", "A2", "B1", "B2", "C1", "C2"];
 const transitions = ["normal", "accelerated"];
+// K04-101/K04-102: always present, strict initially; never null.
+const reviewModes = ["strict", "soft"];
 const keys: SettingKey[] = ["ui_language", "dictionary_language", ...integers, ...booleans,
   "learning_intervals_seconds", "transition_mode", "material"];
 
@@ -108,8 +117,11 @@ function constraint(key: SettingKey, value: unknown): boolean {
 
 export function validSettingsCurrent(value: unknown): value is SettingsProjection {
   if (!record(value) || typeof value.needs_setup !== "boolean" || !record(value.settings)
-    || !exact(value.settings, [...keys, "time_zone"]) || !record(value.constraints)
-    || !exact(value.constraints, keys)) return false;
+    || !exact(value.settings, [...keys, "review_error_mode", "time_zone"]) || !record(value.constraints)
+    || !exact(value.constraints, [...keys, "review_error_mode"])) return false;
+  const review = value.settings.review_error_mode, reviewRule = value.constraints.review_error_mode;
+  if (!record(review) || !version(review.version) || !oneOf(review.value, reviewModes)
+    || !record(reviewRule) || reviewRule.type !== "enum" || !choices(reviewRule.values, reviewModes)) return false;
   for (const key of keys) {
     const setting = value.settings[key];
     if (!record(setting) || !version(setting.version) || !Object.hasOwn(setting, "value")

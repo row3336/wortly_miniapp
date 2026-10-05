@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import type { Language } from "../i18n/language";
 import type { OralDocumentSnapshot } from "./oralDocumentController";
 import type { OralDocumentActions } from "./useOralDocument";
@@ -10,6 +10,8 @@ export type OralScreenProps = {
   language: Language;
   /** The host sets this only for the currently displayed route. */
   active: boolean;
+  /** Leaves the summary of this owner's own Stop for Today; navigation belongs to the host. */
+  onToday(): void;
 };
 
 const copy = {
@@ -49,7 +51,7 @@ const copy = {
 } as const;
 
 /** A detached renderer: accepted state and command identity belong exclusively to the owner. */
-export function OralScreen({ state, actions, language, active }: OralScreenProps) {
+export function OralScreen({ state, actions, language, active, onToday }: OralScreenProps) {
   const t = copy[language], promptElement = useRef<HTMLParagraphElement>(null);
   const assignment = state?.current?.status === "active" ? state.current.assignment : null;
   const ticket = state?.presentationTicket ?? null;
@@ -69,7 +71,23 @@ export function OralScreen({ state, actions, language, active }: OralScreenProps
   const lanes = state ? [state.commands.study, state.commands.stop] : [];
   const saving = state?.commands.study.phase === "sending";
   const phase = state?.phase ?? "loading";
-  const status = !active ? t.inactive : phase === "disposed" ? t.disposed : phase === "closed" ? t.closed
+  // Server facts of this owner's own Stop, or of a closure whose reason is not known yet; any other reason
+  // keeps the plain closed line.
+  const closed = active && phase === "closed" && state?.closed
+    && (state.closed.reason === "stop" || state.closed.reason === null) ? state.closed : null;
+  const waiting = closed?.summaryRead === "pending" || closed?.summaryRead === "reading";
+  const readFailed = closed?.summaryRead === "failed";
+  const closedSummary = closed?.summaryRead === "known" && closed.reason === "stop" ? closed : null;
+  const unread = closed?.summaryRead === "pending" ? closed.sessionId.toLowerCase() : null;
+  const requested = useRef(new Set<string>());
+  useEffect(() => {
+    // One GET status check per closed session; after a failure only the explicit check retries.
+    if (!unread || requested.current.has(unread)) return;
+    requested.current.add(unread);
+    void actions.refresh();
+  }, [unread, actions]);
+
+  const status = !active ? t.inactive : phase === "disposed" ? t.disposed : phase === "closed" ? readFailed ? t.stale : t.closed
     : phase === "stopping" ? t.stopping : phase === "visible_unconfirmed" ? t.present : saving ? t.saving : phase === "loading" ? t.loading
     : phase === "idle" ? t.idle : phase === "unknown" ? t.unknown : phase === "stale" ? t.stale
     : phase === "prefetched" ? t.present
@@ -77,14 +95,26 @@ export function OralScreen({ state, actions, language, active }: OralScreenProps
   const localProblem = state?.problem === "storage" || lanes.some(lane => lane.problem === "storage");
   const blocked = lanes.some(lane => lane.problem === "mismatch" || lane.problem === "invalid_pending" || lane.problem === "pending_changed");
   const problem = localProblem ? t.cleanup : blocked ? t.blocked : state?.problem ? t.stale : null;
-  const summary = state?.current?.status === "summary" ? state.current.summary : null;
-  const progress = state?.current?.progress;
+  const summary = state?.current?.status === "summary" ? state.current.summary : closedSummary?.summary ?? null;
+  const progress = closedSummary ? closedSummary.progress : state?.current?.progress;
   const remaining = progress ? progress.total - progress.completed : null;
   const usable = active && !!state && phase !== "disposed";
   const refreshBusy = lanes.some(lane => lane.phase === "loading" || lane.phase === "checking");
   const showRecovery = usable && (phase === "unknown" || phase === "stale" || phase === "closed"
     || !!problem || lanes.some(lane => lane.pending) || state!.canRetry.study || state!.canRetry.stop);
   const allowed = (capability: boolean | undefined) => usable && capability === true;
+  const toToday = closedSummary !== null || allowed(state?.canSummaryHome);
+
+  // Waiting for the summary of the own Stop looks like the application start, never like a zero result.
+  if (waiting) return <main className="app-shell" lang={language} aria-busy="true">
+    <div role="status" aria-label={t.summary}>
+      <svg className="wortly-loader" viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="12" cy="12" r="11" fill="var(--line)" />
+        <circle cx="12" cy="12" r="8" fill="none" stroke="var(--muted)" strokeWidth="2" />
+        <circle className="wortly-loader-arc" cx="12" cy="12" r="8" fill="none" stroke="var(--text)" strokeWidth="3" pathLength="100" />
+      </svg>
+    </div>
+  </main>;
 
   return <main className="oral-screen" lang={language} aria-label={t.title}>
     <header className="oral-header"><h1>{t.title}</h1>
@@ -115,8 +145,8 @@ export function OralScreen({ state, actions, language, active }: OralScreenProps
       <h2>{t.summary}</h2>
       <dl><div><dt>{t.completed}</dt><dd>{summary.completed}</dd></div><div><dt>{t.right}</dt><dd>{summary.correct}</dd></div>
         <div><dt>{t.errors}</dt><dd>{summary.wrong}</dd></div>{remaining !== null && <div><dt>{t.remaining}</dt><dd>{remaining}</dd></div>}</dl>
-      <button type="button" disabled={!allowed(state?.canSummaryHome)}
-        onClick={() => { if (allowed(state?.canSummaryHome)) void actions.stop("summary_home"); }}>{t.today}</button>
+      <button type="button" disabled={!toToday}
+        onClick={() => { if (closedSummary) onToday(); else if (allowed(state?.canSummaryHome)) void actions.stop("summary_home"); }}>{t.today}</button>
     </section>}
     {problem && <p role="status">{problem}</p>}
     {showRecovery && <section className="oral-recovery" aria-label={t.recovery}>

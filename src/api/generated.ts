@@ -4,6 +4,8 @@ export type Access = { "status": "admitted" | "pending" | "rejected"; "version":
 
 export type AccessCommandResponse = { "command": CommandFact; "current": Profile; };
 
+export type ActionUndoCommand = { "command_id": string; "kind": "action.undo"; "client_instance_id": string; "document_id": string; "context_id": string; "action_id": string; "expected_action_version": string; "payload": EmptyPayload; };
+
 export type AnswerSubmitCommand = { "command_id": string; "client_instance_id": string; "document_id": string; "session_id": string; "kind": "answer.submit"; "assignment_id": string; "payload": (TextAnswerPayload | ForgotAnswerPayload); };
 
 export type AuthRequest = { "client_version": string; "contract_version": string; "init_data": string; "saved_language"?: ("uk" | "en" | "ru" | null); "browser_language"?: (string | null); };
@@ -16,11 +18,19 @@ export type BusyClient = { "status": "SESSION_BUSY"; "profile": Profile; "sessio
 
 export type BusySession = { "status": "busy"; "stop_remote_target"?: (string | null); };
 
+export type CardContextCloseCommand = { "command_id": string; "kind": "context.close"; "client_instance_id": string; "document_id": string; "context_id": string; "payload": EmptyPayload; };
+
+export type CardContextOpenCommand = { "command_id": string; "kind": "context.open"; "client_instance_id": string; "document_id": string; "payload": CardContextOpenPayload; };
+
+export type CardContextOpenPayload = { "card_id": string; "source": DictionaryContextSource; };
+
 export type CardExample = { "id": string; "text": string; "role": ("general" | "wechsel_location" | "wechsel_direction" | null); "highlighted_parts": Array<JsonValue>; };
 
 export type CardExamples = { "common": Array<CardExample>; "personal": (PersonalCardText | null); };
 
 export type CardTranslations = { "common": Array<string>; "personal": (PersonalCardText | null); };
+
+export type ClosedDictionaryContext = { "status": "closed"; "context": DictionaryContextReference; };
 
 export type ClosedSessionBoundary = { "session_id": string; "status": "closed"; "close_reason": "midnight" | "pair_changed" | "timezone_date_changed" | "stop" | "remote_stop" | "summary_home"; };
 
@@ -68,7 +78,9 @@ export type ConjugationSlot = { "cycle_id": string; "pronoun_group": "ich" | "du
 
 export type ConjugationStartPayload = { "mode": "conjugation"; };
 
-export type ConjugationSummary = { "completed_cycle_ids": Array<string>; "partial": Array<ConjugationPartialBlock>; "results": Array<ConjugationSummaryResult>; "completed": number; "correct": number; "wrong": number; };
+export type ConjugationSummary = { "completed_cycle_ids": Array<string>; "partial": Array<ConjugationPartialBlock>; "results": Array<ConjugationSummaryResult>; "completed": number; "correct": number; "wrong": number; "blocks": (Array<ConjugationSummaryBlock> | null); };
+
+export type ConjugationSummaryBlock = { "cycle_id": string; "base_verb_id": string; "base_lemma": string; "tense": "present" | "preterite"; "answered_groups": Array<"ich" | "du" | "er_sie_es" | "wir" | "ihr" | "sie_sie">; "effect": "incomplete" | "error" | "success"; "grade": (2 | 3 | 4 | 5 | null); };
 
 export type ConjugationSummaryResult = { "result_id": string; "version": string; };
 
@@ -90,9 +102,31 @@ export type DictionaryCardView = { "status": "available"; "content": DictionaryC
 
 export type DictionaryCardViewResponse = { "state_version": string; "current": (DictionaryCardView | UnavailableCurrent); };
 
+export type DictionaryContextCapabilities = { "interval_increase": (DictionaryIntervalCapability | null); "undo_target": (DictionaryUndoTarget | null); };
+
+export type DictionaryContextCommandResponse = { "command": (SavedCommandFact | RejectedCommandFact); "current": (OpenDictionaryContext | ClosedDictionaryContext | UnavailableCurrent); "state_version": string; "error"?: (ErrorDetail | null); };
+
+export type DictionaryContextInterval = { "local_date": string; "expected_pair": "ru-de" | "uk-de" | "en-de"; "directions": Array<DictionaryIntervalDirection>; };
+
+export type DictionaryContextReference = { "id": string; "kind": "dictionary"; "card_id": string; };
+
+export type DictionaryContextResponse = { "current": (OpenDictionaryContext | ClosedDictionaryContext | UnavailableCurrent); "state_version": string; };
+
+export type DictionaryContextSource = { "kind": "dictionary"; };
+
+export type DictionaryContextStatusResponse = { "command": StoredCommandFact; "current": (OpenDictionaryContext | ClosedDictionaryContext | UnavailableCurrent); "state_version": string; "verified_intent_hash"?: (string | null); };
+
 export type DictionaryExclusion = { "excluded": boolean; "version": (string | null); };
 
+export type DictionaryIntervalCapability = { "directions": Array<"l1-de" | "de-l1">; };
+
+export type DictionaryIntervalChoice = { "option_id": number; "interval_days": number; "next_due_date": string; };
+
+export type DictionaryIntervalDirection = { "direction": "l1-de" | "de-l1"; "applicable": boolean; "current_schedule": (DictionaryIntervalSchedule | null); "expected_progress_version": (string | null); "options": Array<DictionaryIntervalChoice>; };
+
 export type DictionaryIntervalOption = { "step_id": number; "interval_days": number; "next_due_date": string; };
+
+export type DictionaryIntervalSchedule = { "interval_days": number; "next_due_date": string; "persisted": boolean; };
 
 export type DictionaryLearningFacts = { "ever_selected": boolean; "finished_or_skipped": boolean; "current": (DictionaryLearningMember | null); };
 
@@ -106,11 +140,15 @@ export type DictionaryReviewSchedule = { "interval_days": number; "next_due_date
 
 export type DictionarySearchItem = { "card_id": string; "revision": string; "lemma": string; "type": "noun" | "verb" | "phrase" | "adjective" | "pronoun" | "adverb" | "preposition" | "conjunction" | "particle"; "cefr": ("A1" | "A2" | "B1" | "B2" | "C1" | "C2" | null); "translation": CardTranslations; "match_kind": "exact" | "prefix" | "substring"; };
 
-export type DictionarySearchResponse = { "state_version": string; "query": string; "pair": "ru-de" | "uk-de" | "en-de"; "include_phrases": boolean; "items": Array<DictionarySearchItem>; "next_cursor": (string | null); };
+export type DictionarySearchResponse = { "state_version": string; "query": string; "pair": "ru-de" | "uk-de" | "en-de"; "mode": "words" | "phrases"; "items": Array<DictionarySearchItem>; "next_cursor": (string | null); "similar": (Array<DictionarySimilarItem> | null); };
+
+export type DictionarySimilarItem = { "card_id": string; "revision": string; "lemma": string; "type": "noun" | "verb" | "phrase" | "adjective" | "pronoun" | "adverb" | "preposition" | "conjunction" | "particle"; "cefr": ("A1" | "A2" | "B1" | "B2" | "C1" | "C2" | null); "translation": CardTranslations; };
 
 export type DictionaryStudyDirection = { "direction": "l1-de" | "de-l1"; "introduced": boolean; "progress_present": boolean; "progress_version": (string | null); "schedule": (DictionaryReviewSchedule | null); "interval_preview": (Array<DictionaryIntervalOption> | null); };
 
 export type DictionaryStudyFacts = { "common_translation_present": boolean; "exclusion": DictionaryExclusion; "manual": DictionaryManualSelection; "learning": DictionaryLearningFacts; "non_learning_history": boolean; };
+
+export type DictionaryUndoTarget = { "action_id": string; "kind": "interval.increase"; "version": string; "context_id": string; };
 
 export type DirectionCounts = { "l1-de": ReadyCount; "de-l1": ReadyCount; };
 
@@ -120,11 +158,19 @@ export type ErrorDetail = { "code": string; };
 
 export type ErrorResponse = { "error": ErrorDetail; };
 
+export type ExpectedProgressVersion = { "direction": "l1-de" | "de-l1"; "version": (string | null); };
+
 export type ForgotAnswerPayload = { "forgot": true; };
 
 export type GrammarTerm = { "id": string; "name": string; };
 
 export type InitialAnswerCheck = { "correct": boolean; "variant_index": (number | null); "correct_answer": string; "other_answers": Array<string>; "matched_spans": Array<MatchedSpan>; "input_errors"?: (Array<MatchedSpan> | null); "answer_errors"?: (Array<MatchedSpan> | null); "span_unit": "unicode_code_point"; "span_bounds": "start_inclusive_end_exclusive"; };
+
+export type IntervalIncreaseCommand = { "command_id": string; "kind": "interval.increase"; "client_instance_id": string; "document_id": string; "context_id": string; "expected_progress_versions": Array<ExpectedProgressVersion>; "payload": IntervalIncreasePayload; };
+
+export type IntervalIncreasePayload = { "card_id": string; "expected_pair": "ru-de" | "uk-de" | "en-de"; "expected_local_date": string; "selections": Array<IntervalSelection>; };
+
+export type IntervalSelection = { "direction": "l1-de" | "de-l1"; "option_id": number; "interval_days": number; "next_due_date": string; };
 
 export type JsonValue = unknown;
 
@@ -148,7 +194,7 @@ export type LearningGroup = { "group_id": string; "status": "assembling" | "acti
 
 export type LearningIntroduction = { "position": number; "version": string; "next_card_id": (string | null); };
 
-export type LearningMember = { "card_id": string; "introduction_order": number; "stage": number; "due_at": (string | null); "status": "pending" | "active" | "completed" | "skipped"; "version": string; "available": boolean; "needs_preview": boolean; "ready": boolean; };
+export type LearningMember = { "card_id": string; "introduction_order": number; "stage": number; "due_at": (string | null); "recovery_remaining": number; "status": "pending" | "active" | "completed" | "skipped"; "version": string; "available": boolean; "needs_preview": boolean; "ready": boolean; };
 
 export type LearningPreviewAddress = { "id": string; "card_id": string; "position": number; "total": number; "content": LearningPreviewContent; };
 
@@ -185,6 +231,8 @@ export type ModeCommandResponse = { "command": CommandFact; "current": ModeState
 export type ModePayload = { "mode": "manual" | "automatic"; "expected_version": string; };
 
 export type ModeState = { "mode": "manual" | "automatic"; "version": string; };
+
+export type OpenDictionaryContext = { "status": "open"; "context": DictionaryContextReference; "view": (DictionaryCardView | UnavailableCurrent); "interval": (DictionaryContextInterval | null); "capabilities": DictionaryContextCapabilities; };
 
 export type OpenRequest = { "client_version": string; "contract_version": string; "client_instance_id": string; "document_id": string; "time_zone": string; "event": "open" | "foreground"; };
 
@@ -294,7 +342,9 @@ export type SettingCommand = { "command_id": string; "kind": "setting.save"; "cl
 
 export type SettingConstraint = { "type": "enum" | "integer" | "boolean" | "ordered_integer_list" | "exclusive_choice"; "values"?: (Array<string> | null); "minimum"?: (number | null); "maximum"?: (number | null); "nonempty"?: (boolean | null); "item_minimum"?: (number | null); "item_maximum"?: (number | null); "modes"?: ({ [key: string]: { [key: string]: (Array<string> | string); }; } | null); };
 
-export type SettingPayload = { "key": "ui_language" | "dictionary_language" | "retry_gap" | "retry_count" | "learning_group_size" | "learning_intervals_seconds" | "learning_poll_seconds" | "learning_reminder_pause_seconds" | "learning_ready_percent" | "learning_mix" | "strict_case" | "include_preterite" | "include_comparative" | "transition_mode" | "material"; "value": (string | number | boolean | Array<number> | (LevelMaterial | TopicsMaterial)); };
+export type SettingPayload = { "key": "ui_language" | "dictionary_language" | "retry_gap" | "retry_count" | "learning_group_size" | "learning_intervals_seconds" | "learning_poll_seconds" | "learning_reminder_pause_seconds" | "learning_ready_percent" | "learning_mix" | "strict_case" | "include_preterite" | "include_comparative" | "transition_mode" | "review_error_mode" | "material"; "value": (string | number | boolean | Array<number> | (LevelMaterial | TopicsMaterial)); };
+
+export type SettingValue_Literal__strict____soft___ = { "value": "strict" | "soft"; "version": string; };
 
 export type SettingValue_Literal__uk____en____ru___ = { "value": "uk" | "en" | "ru"; "version": string; };
 
@@ -316,7 +366,7 @@ export type SettingsProjection = { "settings": SettingsValues; "needs_setup": bo
 
 export type SettingsResponse = { "settings": SettingsValues; "needs_setup": boolean; "constraints": { [key: string]: SettingConstraint; }; "state_version": string; };
 
-export type SettingsValues = { "ui_language": SettingValue_Literal__uk____en____ru___; "dictionary_language": SettingValue_Literal__uk____en____ru___; "time_zone": SettingValue_Union_Annotated_str__Strict_strict_True____NoneType__; "retry_gap": SettingValue_Union_Annotated_int__Strict_strict_True____NoneType__; "retry_count": SettingValue_Union_Annotated_int__Strict_strict_True____NoneType__; "learning_group_size": SettingValue_Union_Annotated_int__Strict_strict_True____NoneType__; "learning_intervals_seconds": SettingValue_Union_list_Annotated_int__Strict_strict_True_____NoneType__; "learning_poll_seconds": SettingValue_Union_Annotated_int__Strict_strict_True____NoneType__; "learning_reminder_pause_seconds": SettingValue_Union_Annotated_int__Strict_strict_True____NoneType__; "learning_ready_percent": SettingValue_Union_Annotated_int__Strict_strict_True____NoneType__; "learning_mix": SettingValue_Union_Annotated_bool__Strict_strict_True____NoneType__; "strict_case": SettingValue_Union_Annotated_bool__Strict_strict_True____NoneType__; "include_preterite": SettingValue_Union_Annotated_bool__Strict_strict_True____NoneType__; "include_comparative": SettingValue_Union_Annotated_bool__Strict_strict_True____NoneType__; "transition_mode": SettingValue_Union_Literal__normal____accelerated____NoneType__; "material": SettingValue_Union_Annotated_Union_LevelMaterial__TopicsMaterial___FieldInfo_annotation_NoneType__required_True__discriminator__mode_____NoneType__; };
+export type SettingsValues = { "ui_language": SettingValue_Literal__uk____en____ru___; "dictionary_language": SettingValue_Literal__uk____en____ru___; "time_zone": SettingValue_Union_Annotated_str__Strict_strict_True____NoneType__; "retry_gap": SettingValue_Union_Annotated_int__Strict_strict_True____NoneType__; "retry_count": SettingValue_Union_Annotated_int__Strict_strict_True____NoneType__; "learning_group_size": SettingValue_Union_Annotated_int__Strict_strict_True____NoneType__; "learning_intervals_seconds": SettingValue_Union_list_Annotated_int__Strict_strict_True_____NoneType__; "learning_poll_seconds": SettingValue_Union_Annotated_int__Strict_strict_True____NoneType__; "learning_reminder_pause_seconds": SettingValue_Union_Annotated_int__Strict_strict_True____NoneType__; "learning_ready_percent": SettingValue_Union_Annotated_int__Strict_strict_True____NoneType__; "learning_mix": SettingValue_Union_Annotated_bool__Strict_strict_True____NoneType__; "strict_case": SettingValue_Union_Annotated_bool__Strict_strict_True____NoneType__; "include_preterite": SettingValue_Union_Annotated_bool__Strict_strict_True____NoneType__; "include_comparative": SettingValue_Union_Annotated_bool__Strict_strict_True____NoneType__; "transition_mode": SettingValue_Union_Literal__normal____accelerated____NoneType__; "review_error_mode": SettingValue_Literal__strict____soft___; "material": SettingValue_Union_Annotated_Union_LevelMaterial__TopicsMaterial___FieldInfo_annotation_NoneType__required_True__discriminator__mode_____NoneType__; };
 
 export type StatisticsBase = { "total": number; "words": number; "phrases": number; "by_type": StatisticsTypeCounts; };
 

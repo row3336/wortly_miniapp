@@ -12,7 +12,7 @@ export type OralDocumentActions = {
   stop(reason: "stop" | "summary_home"): Promise<void>; retry(lane: OralCommandLane): Promise<void>;
 };
 type Identity = Pick<OralDocumentHookOptions, "transport" | "studyStore" | "stopStore"> & { key: string };
-type Retained = { identity: Identity; floor: string; terminal: Set<string> };
+type Retained = { identity: Identity; floor: string; terminal: Set<string>; closed: string | null };
 type Owner = { identity: Identity; access: OpenedAccess; seed: string | null; controller: OralDocumentController; waiting: boolean };
 function identity(options: OralDocumentHookOptions): Identity {
   const { access, transport, studyStore, stopStore } = options;
@@ -23,7 +23,9 @@ function same(left: Identity, right: Identity): boolean {
   return left.key === right.key && left.transport === right.transport && left.studyStore === right.studyStore && left.stopStore === right.stopStore;
 }
 
-/** React Adapter owns document lifetime only; the future renderer owns actual visible commit. */
+/** React Adapter owns document lifetime only; the future renderer owns actual visible commit.
+ * For the same identity it also re-supplies this identity's own confirmed terminal session address;
+ * an active seed comes only from the composition after mode=oral. */
 export function useOralDocument(options: OralDocumentHookOptions): { state: OralDocumentSnapshot | null; actions: OralDocumentActions } {
   const latest = useRef(options); latest.current = options;
   const owner = useRef<Owner | null>(null), retained = useRef<Retained | null>(null);
@@ -33,6 +35,8 @@ export function useOralDocument(options: OralDocumentHookOptions): { state: Oral
     if (!retained.current || !same(retained.current.identity, id)) return;
     if (BigInt(snapshot.stateVersion) > BigInt(retained.current.floor)) retained.current.floor = snapshot.stateVersion;
     snapshot.terminalSessionIds.forEach(item => retained.current!.terminal.add(item));
+    // Only the latest own session counts, and only while terminal; a null session (disposed) leaves the address.
+    if (snapshot.sessionId !== null) retained.current.closed = snapshot.phase === "closed" ? snapshot.sessionId : null;
   };
   const lookup = () => {
     const bound = owner.current, current = latest.current;
@@ -44,11 +48,16 @@ export function useOralDocument(options: OralDocumentHookOptions): { state: Oral
     const current = latest.current, id = identity(current);
     if (!current.access.isLive() || current.access.profile.access.status !== "admitted") return;
     if (!retained.current || !same(retained.current.identity, id)) {
-      retained.current = { identity: id, floor: minimum(), terminal: new Set() };
+      retained.current = { identity: id, floor: minimum(), terminal: new Set(), closed: null };
     }
     if (BigInt(minimum()) > BigInt(retained.current.floor)) retained.current.floor = minimum();
+    // A possibly active props seed wins; otherwise this identity's own terminal session keeps its address.
+    const saved = retained.current, terminal = (value: string) => saved.terminal.has(value.toLowerCase());
+    const seed = current.initialSessionId;
+    const effective = seed !== null && !terminal(seed) ? seed
+      : saved.closed !== null && terminal(saved.closed) ? saved.closed : seed;
     let active = true;
-    const controller = new OralDocumentController({ ...current, isLive: () => active && find.current() === bound,
+    const controller = new OralDocumentController({ ...current, initialSessionId: effective, isLive: () => active && find.current() === bound,
       activity: () => ({ enabled: latest.current.enabled !== false,
         visible: !bound.waiting && document.visibilityState === "visible" }),
       minimumStateVersion: () => {
@@ -92,7 +101,7 @@ export function useOralDocument(options: OralDocumentHookOptions): { state: Oral
       const bound = find.current();
       return bound ? action(bound.controller) : Promise.resolve();
     };
-    return { refresh: () => perform(controller => controller.refresh()), start: bucket => perform(controller => controller.start(bucket)),
+    return { refresh: () => perform(controller => controller.recheck()), start: bucket => perform(controller => controller.start(bucket)),
       shown: ticket => perform(controller => controller.shown(ticket)), reveal: () => perform(controller => controller.reveal()),
       grade: correct => perform(controller => controller.grade(correct)), stop: reason => perform(controller => controller.stop(reason)),
       retry: lane => perform(controller => controller.retry(lane)) };

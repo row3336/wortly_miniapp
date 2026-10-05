@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AsyncStorage } from "../platform/storage";
-import type { SettingCommand } from "../api/generated";
 import { ManualPendingStore, type ManualPending } from "../learning/manualPending";
+import type { SettingIntent } from "./settingsApi";
 import { SettingsPendingStore, type SettingsPending } from "./settingsPending";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -21,7 +21,7 @@ function setup(raw: string | null = null) {
 }
 
 describe("temporary settings intent storage", () => {
-  const payloads: SettingCommand["payload"][] = [
+  const payloads: SettingIntent["payload"][] = [
     { key: "strict_case", value: false }, { key: "retry_count", value: 3 },
     { key: "learning_intervals_seconds", value: [120, 30, 120] },
     { key: "ui_language", value: "uk" }, { key: "transition_mode", value: "accelerated" },

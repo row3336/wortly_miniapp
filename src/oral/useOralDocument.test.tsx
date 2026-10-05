@@ -260,3 +260,131 @@ describe("oral React Adapter: visibility and lifetime", () => {
     await waitFor(() => expect(ui.result.current.state?.canReveal).toBe(true)); expect(f.posts).toEqual([]); expect(f.values.has(studyKey)).toBe(false);
   });
 });
+
+describe("oral React Adapter: own closed address across same-identity access replacement (L2)", () => {
+  type Doc = ReturnType<typeof useOralDocument>;
+  const stopKey = "wortly.pending.oral_stop";
+  /** Test-only server model: the shared fixture always serves session id(3), so every POST, addressed GET and status
+   * reply is answered for the session it names. An optional local route answers first. */
+  function addressed(f: ReturnType<typeof fixture>, route?: (url: string) => Promise<Response | null>) {
+    f.fetcher.mockImplementation(async (url, init) => {
+      const local = route ? await route(String(url)) : null;
+      if (local) return local;
+      const target = new URL(String(url), "https://model.invalid");
+      const session = init?.method === "POST" ? (JSON.parse(String(init.body)) as OralCommand).session_id
+        : target.pathname.includes("/commands/") ? target.searchParams.get("session_id") : target.pathname.split("/").at(-1);
+      const body = await (await f.handler(url, init)).json() as Record<string, unknown>;
+      const current = body.current;
+      return response(session && typeof current === "object" && current !== null && "session_id" in current
+        ? { ...body, current: { ...current, session_id: session } } : body);
+    });
+  }
+  const reads = (f: ReturnType<typeof fixture>, session: string) => f.fetcher.mock.calls
+    .filter(([url, init]) => init?.method !== "POST" && String(url).includes(`/sessions/${session}?`)).length;
+  async function closeOwn(doc: () => Doc, session: string) {
+    await act(() => doc().actions.start("words"));
+    await waitFor(() => expect(doc().state).toMatchObject({ sessionId: session, canStop: true }));
+    await act(() => doc().actions.stop("stop"));
+    await waitFor(() => expect(doc().state).toMatchObject({ phase: "closed", sessionId: session }));
+  }
+
+  it("L2-1 a seed-null own closed session keeps its address after same-identity replacement; facts are read once", async () => {
+    const f = fixture(); addressed(f); const options = { ...f.options, initialSessionId: null };
+    const ui = renderHook(useOralDocument, { initialProps: options });
+    await waitFor(() => expect(ui.result.current.state?.canStart).toBe(true));
+    await closeOwn(() => ui.result.current, id(100));
+    const posts = f.posts.length, before = reads(f, id(100));
+    ui.rerender({ ...options, access: f.replace({}, "fresh-synthetic-token") });
+    await waitFor(() => expect(ui.result.current.state?.sessionId).toBe(id(100)));
+    await waitFor(() => expect(ui.result.current.state?.closed?.summaryRead).toBe("known"));
+    expect(ui.result.current.state).toMatchObject({ phase: "closed", canStart: true, closed: { sessionId: id(100), reason: "stop" } });
+    expect(reads(f, id(100))).toBe(before + 1); expect(f.posts).toHaveLength(posts);
+  });
+  it("L2-2 a later own active session clears the retained closed address", async () => {
+    const f = fixture(); addressed(f); const options = { ...f.options, initialSessionId: null };
+    const ui = renderHook(useOralDocument, { initialProps: options });
+    await waitFor(() => expect(ui.result.current.state?.canStart).toBe(true));
+    await closeOwn(() => ui.result.current, id(100));
+    await act(() => ui.result.current.actions.start("words"));
+    await waitFor(() => expect(ui.result.current.state).toMatchObject({ sessionId: id(103), phase: "prefetched" }));
+    const before = [reads(f, id(100)), reads(f, id(103))];
+    ui.rerender({ ...options, access: f.replace({}, "fresh-synthetic-token") });
+    await waitFor(() => expect(ui.result.current.state?.phase).toBe("idle"));
+    expect(ui.result.current.state?.sessionId).toBeNull(); expect([reads(f, id(100)), reads(f, id(103))]).toEqual(before);
+  });
+  it("L2-3 an own active session is never carried by the adapter", async () => {
+    const f = fixture(); addressed(f); const options = { ...f.options, initialSessionId: null };
+    const ui = renderHook(useOralDocument, { initialProps: options });
+    await waitFor(() => expect(ui.result.current.state?.canStart).toBe(true));
+    await act(() => ui.result.current.actions.start("words"));
+    await waitFor(() => expect(ui.result.current.state).toMatchObject({ sessionId: id(100), phase: "prefetched" }));
+    const posts = f.posts.length, before = reads(f, id(100));
+    ui.rerender({ ...options, access: f.replace({}, "fresh-synthetic-token") });
+    await waitFor(() => expect(ui.result.current.state?.phase).toBe("idle"));
+    expect(ui.result.current.state?.sessionId).toBeNull(); expect(reads(f, id(100))).toBe(before); expect(f.posts).toHaveLength(posts);
+  });
+  it.each<[string, Partial<OpenedClient>]>([
+    ["document", { document_id: id(90) }],
+    ["dictionary pair", { profile: { profile_id: id(50), role: "user", ui_language: "ru", dictionary_language: "en", time_zone: "UTC",
+      state_version: "1", access: { status: "admitted", version: "1", reason: null } } }],
+  ])("L2-4 an identity change (%s) drops the retained closed address", async (_label, patch) => {
+    const f = fixture(); addressed(f); const options = { ...f.options, initialSessionId: null };
+    const ui = renderHook(useOralDocument, { initialProps: options });
+    await waitFor(() => expect(ui.result.current.state?.canStart).toBe(true));
+    await closeOwn(() => ui.result.current, id(100));
+    const before = reads(f, id(100));
+    ui.rerender({ ...options, access: f.replace(patch, "fresh-synthetic-token") });
+    await waitFor(() => expect(ui.result.current.state?.phase).toBe("idle"));
+    expect(ui.result.current.state?.sessionId).toBeNull(); expect(reads(f, id(100))).toBe(before);
+  });
+  it("L2-5 a confirmed non-terminal props seed wins over the retained closed address", async () => {
+    const f = fixture(); addressed(f); const options: OralDocumentHookOptions = { ...f.options, initialSessionId: null };
+    const ui = renderHook(useOralDocument, { initialProps: options });
+    await waitFor(() => expect(ui.result.current.state?.canStart).toBe(true));
+    await closeOwn(() => ui.result.current, id(100));
+    f.set("prefetched"); const before = reads(f, id(100));
+    ui.rerender({ ...options, initialSessionId: id(3), access: f.replace({}, "fresh-synthetic-token") });
+    await waitFor(() => expect(ui.result.current.state).toMatchObject({ sessionId: id(3), phase: "prefetched" }));
+    expect(reads(f, id(100))).toBe(before);
+  });
+  it("L2-6 a newer own closed session beats a stale terminal props seed", async () => {
+    const f = fixture(); addressed(f); const ui = renderHook(useOralDocument, { initialProps: f.options });
+    await waitFor(() => expect(ui.result.current.state?.canStop).toBe(true));
+    await act(() => ui.result.current.actions.stop("stop"));
+    await waitFor(() => expect(ui.result.current.state).toMatchObject({ phase: "closed", sessionId: id(3) }));
+    await closeOwn(() => ui.result.current, id(101));
+    const before = reads(f, id(3));
+    ui.rerender({ ...f.options, access: f.replace({}, "fresh-synthetic-token") });
+    await waitFor(() => expect(ui.result.current.state?.sessionId).toBe(id(101)));
+    await waitFor(() => expect(ui.result.current.state?.closed?.summaryRead).toBe("known"));
+    expect(reads(f, id(3))).toBe(before);
+  });
+  it("L2-7 (uncounted guard) a revoked access exposes no closed address", async () => {
+    const f = fixture(); addressed(f); const options = { ...f.options, initialSessionId: null };
+    const ui = renderHook(useOralDocument, { initialProps: options });
+    await waitFor(() => expect(ui.result.current.state?.canStart).toBe(true));
+    await closeOwn(() => ui.result.current, id(100));
+    const calls = f.fetcher.mock.calls.length; f.revoke(); ui.rerender({ ...options });
+    expect(ui.result.current.state).toMatchObject({ phase: "disposed", closed: null }); expect(f.fetcher.mock.calls.length).toBe(calls);
+  });
+  it("L2-8 (uncounted guard) a remount starts without a retained address", async () => {
+    const f = fixture(); addressed(f); const options = { ...f.options, initialSessionId: null };
+    const ui = renderHook(useOralDocument, { initialProps: options });
+    await waitFor(() => expect(ui.result.current.state?.canStart).toBe(true));
+    await closeOwn(() => ui.result.current, id(100)); ui.unmount();
+    const next = renderHook(useOralDocument, { initialProps: { ...options, access: f.replace({}, "fresh-synthetic-token") } });
+    await waitFor(() => expect(next.result.current.state?.phase).toBe("idle")); expect(next.result.current.state?.sessionId).toBeNull();
+  });
+  it("L2-9 a foreign closed receipt is never adopted as the own address", async () => {
+    const f = fixture(), foreign: OralIntent = { kind: "session.stop", command_id: id(5), session_id: id(90), payload: { reason: "stop" } };
+    f.values.set(stopKey, JSON.stringify({ schemaVersion: 1, profileId: id(50), clientInstanceId: id(1), pair: "ru-de", intent: foreign }));
+    addressed(f, async url => url.includes(`/commands/${id(5)}?`) ? response({ command: fact(foreign, "already_applied"),
+      verified_intent_hash: await oralIntentHash(foreign), current: { status: "unavailable" }, state_version: "8" }) : null);
+    const options = { ...f.options, initialSessionId: null };
+    const ui = renderHook(useOralDocument, { initialProps: options });
+    await waitFor(() => expect(ui.result.current.state).toMatchObject({ phase: "idle", terminalSessionIds: [id(90)] }));
+    ui.rerender({ ...options, access: f.replace({}, "fresh-synthetic-token") });
+    await waitFor(() => expect(ui.result.current.state?.phase).toBe("idle"));
+    expect(ui.result.current.state?.sessionId).toBeNull(); expect(reads(f, id(90))).toBe(0);
+  });
+});
