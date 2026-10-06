@@ -18,7 +18,7 @@ export type SettingsScreenProps = {
 };
 const groups: Array<{ name: "languages" | "learning" | "checking" | "additional"; fields: SettingKey[] }> = [
   { name: "languages", fields: ["ui_language", "dictionary_language"] },
-  { name: "learning", fields: ["material", "learning_group_size", "transition_mode"] },
+  { name: "learning", fields: ["material", "learning_group_size", "learning_content", "review_error_mode", "transition_mode"] },
   { name: "checking", fields: ["strict_case", "include_preterite", "include_comparative"] },
   { name: "additional", fields: ["learning_intervals_seconds", "learning_mix", "retry_gap", "retry_count",
     "learning_poll_seconds", "learning_reminder_pause_seconds", "learning_ready_percent"] },
@@ -39,6 +39,8 @@ function displayValue(value: unknown, key: SettingKey, language: Language, topic
   }
   if (key === "ui_language" || key === "dictionary_language") return languageNames[String(value)] ?? t.notSet;
   if (key === "transition_mode") return value === "accelerated" ? t.accelerated : t.normal;
+  if (key === "review_error_mode") return t.reviewModes[String(value)] ?? String(value);
+  if (key === "learning_content") return t.learningContents[String(value)] ?? String(value);
   return Array.isArray(value) ? value.join(", ") : String(value);
 }
 
@@ -65,26 +67,37 @@ function SettingField({ setting, ...props }: SettingsScreenProps & { setting: Se
   const busy = ["loading", "checking", "sending"].includes(snapshot.phase);
   const outcome = snapshot.outcome?.key === setting ? snapshot.outcome : null;
   const help = bounds(rule, language);
+  const hint = t.hints[setting];
+  // Fixed two or three way switches are shown as radios; the options still come from the server constraint.
+  const radioChoice = rule.type === "enum" && (setting === "review_error_mode" || setting === "learning_content");
   const change = (next: unknown) => actions.edit(setting, next);
   const inputProps = { id: `${id}-input`, disabled: !snapshot.canEdit,
-    "aria-labelledby": `${id}-title`, "aria-describedby": `${id}-help ${id}-error`, "aria-invalid": draft?.valid === false };
+    "aria-labelledby": `${id}-title`, "aria-describedby": `${hint ? `${id}-hint ` : ""}${id}-help ${id}-error`, "aria-invalid": draft?.valid === false };
 
   return <section className="settings-field" role="group" aria-labelledby={`${id}-title`}>
     <h3 id={`${id}-title`}>{title}</h3>
     {rule.type === "integer" && <input {...inputProps} type="text" inputMode="numeric"
       value={typeof value === "number" || typeof value === "string" ? value : ""}
       onChange={event => change(event.target.value)} />}
-    {rule.type === "enum" && <select {...inputProps} value={typeof value === "string" ? value : ""}
+    {rule.type === "enum" && !radioChoice && <select {...inputProps} value={typeof value === "string" ? value : ""}
       onChange={event => change(event.target.value)}>
       <option value="" disabled>{t.choose}</option>
       {typeof value === "string" && value && !choices.includes(value)
         && <option value={value} disabled>{displayValue(value, setting, language)}</option>}
       {choices.map(item => <option key={item} value={item}>{displayValue(item, setting, language)}</option>)}
     </select>}
+    {radioChoice && <div className="settings-options">
+      {[...(typeof value === "string" && value && !choices.includes(value) ? [value] : []), ...choices].map(item => <label key={item}>
+        <input type="radio" name={`${id}-choice`} value={item} checked={value === item}
+          disabled={!snapshot.canEdit || !choices.includes(item)} onChange={() => change(item)}
+          aria-describedby={`${hint ? `${id}-hint ` : ""}${id}-help ${id}-error`} />
+        {displayValue(item, setting, language)}
+      </label>)}
+    </div>}
     {rule.type === "boolean" && <div className="settings-options">
       {[true, false].map(choice => <label key={String(choice)}>
         <input type="radio" name={`${id}-boolean`} checked={value === choice} disabled={!snapshot.canEdit}
-          onChange={() => change(choice)} aria-describedby={`${id}-help ${id}-error`} />
+          onChange={() => change(choice)} aria-describedby={`${hint ? `${id}-hint ` : ""}${id}-help ${id}-error`} />
         {choice ? t.on : t.off}
       </label>)}
     </div>}
@@ -105,6 +118,7 @@ function SettingField({ setting, ...props }: SettingsScreenProps & { setting: Se
     </div>}
     {rule.type === "exclusive_choice" && <MaterialEditor input={value} constraint={rule} catalog={catalog}
       language={language} disabled={!snapshot.canEdit} id={id} onChange={change} onReload={onReloadTopics} />}
+    {hint && <p id={`${id}-hint`} className="settings-help">{hint}</p>}
     <p id={`${id}-help`} className="settings-help">{help}{current.value === null && !draft ? ` ${t.notSet}` : ""}</p>
     <div id={`${id}-error`} className="settings-error" aria-live="polite">
       {draft?.error === "invalid" && <p>{t.invalid}</p>}

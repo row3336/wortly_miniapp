@@ -1,8 +1,8 @@
 import { settingsResponse as current } from "./settingsRead.test-support";
 import { describe, expect, it, vi } from "vitest";
-import type { Profile, SavedCommandFact, SettingsResponse } from "../api/generated";
+import type { Profile, SavedCommandFact, SettingCommand, SettingsResponse } from "../api/generated";
 import {
-  allowedSettingValue, createSettingsApi, validSettingIntent, type EditableSettingCommand, type EditableSettingPayload,
+  allowedSettingValue, createSettingsApi, validSettingIntent,
   type SettingIntent,
 } from "./settingsApi";
 
@@ -15,7 +15,7 @@ function intent(): SettingIntent {
   return { command_id: id(1), kind: "setting.save", expected_field_version: big,
     payload: { key: "strict_case", value: true } };
 }
-function command(original = intent()): EditableSettingCommand {
+function command(original = intent()): SettingCommand {
   return { ...original, client_instance_id: id(2), document_id: id(3) };
 }
 function fact(): SavedCommandFact {
@@ -211,7 +211,7 @@ describe("Settings current and constraints", () => {
 });
 
 describe("Settings command exchange", () => {
-  const values: EditableSettingPayload[] = [
+  const values: SettingCommand["payload"][] = [
     { key: "ui_language", value: "ru" }, { key: "dictionary_language", value: "uk" },
     { key: "retry_gap", value: 1 }, { key: "retry_count", value: 2 }, { key: "learning_group_size", value: 10 },
     { key: "learning_poll_seconds", value: 10 }, { key: "learning_reminder_pause_seconds", value: 60 },
@@ -220,6 +220,9 @@ describe("Settings command exchange", () => {
     { key: "include_preterite", value: true }, { key: "include_comparative", value: false },
     { key: "transition_mode", value: "accelerated" }, { key: "material", value: { mode: "level", selected_level: "A1" } },
     { key: "material", value: { mode: "topics", topic_ids: [id(8), id(7)] } },
+    { key: "review_error_mode", value: "soft" }, { key: "review_error_mode", value: "strict" },
+    { key: "learning_content", value: "words" }, { key: "learning_content", value: "phrases" },
+    { key: "learning_content", value: "mixed" },
   ];
   it.each(values)("sends an exact $key value %#", async payload => {
     const request = command(); request.payload = payload;
@@ -298,26 +301,47 @@ describe("Settings command exchange", () => {
       { ...command(), payload: Object.assign({ key: "strict_case", value: true }, { extra: true }) },
       { ...command(), payload: { key: "retry_count", value: true } },
       { ...command(), payload: { key: "time_zone", value: "UTC" } },
-      // Read-only in this client: refused at runtime even if a caller bypasses the type.
-      { ...command(), payload: { key: "review_error_mode", value: "soft" } },
-      { ...command(), payload: { key: "learning_content", value: "phrases" } },
+      // Both new keys are editable now, but only with a value from their own enum.
+      { ...command(), payload: { key: "review_error_mode", value: "lenient" } },
+      { ...command(), payload: { key: "review_error_mode", value: "Soft" } },
+      { ...command(), payload: { key: "review_error_mode", value: true } },
+      { ...command(), payload: { key: "learning_content", value: "verbs" } },
+      { ...command(), payload: { key: "learning_content", value: ["words"] } },
+      { ...command(), payload: { key: "learning_content", value: null } },
       { ...command(), payload: { key: "material", value: { mode: "topics", topic_ids: [id(8), id(8)] } } },
     ];
-    for (const request of candidates) await expect(api.save("synthetic", "proof", subject, request as EditableSettingCommand)).rejects.toThrow();
+    for (const request of candidates) await expect(api.save("synthetic", "proof", subject, request as SettingCommand)).rejects.toThrow();
     await expect(api.save("synthetic", "", subject, command())).rejects.toThrow();
     await expect(api.save("", "proof", subject, command())).rejects.toThrow();
     await expect(api.status("synthetic", "bad", intent())).rejects.toThrow();
     expect(fetcher).not.toHaveBeenCalled();
     expect(validSettingIntent({ ...intent(), extra: true })).toBe(false);
-    // review_error_mode is read-only in this client until its editor exists.
-    expect(validSettingIntent({ ...intent(), payload: { key: "review_error_mode", value: "soft" } })).toBe(false);
-    // Likewise learning_content: decoded strictly, not editable without its screen.
+    // review_error_mode and learning_content became editable (M-SET): each accepts exactly its enum values.
+    for (const value of ["strict", "soft"]) {
+      expect(validSettingIntent({ ...intent(), payload: { key: "review_error_mode", value } })).toBe(true);
+    }
     for (const value of ["words", "phrases", "mixed"]) {
+      expect(validSettingIntent({ ...intent(), payload: { key: "learning_content", value } })).toBe(true);
+    }
+    for (const value of ["lenient", "Strict", "words", true, null]) {
+      expect(validSettingIntent({ ...intent(), payload: { key: "review_error_mode", value } })).toBe(false);
+    }
+    for (const value of ["verbs", "Words", "soft", false, ["words"], null]) {
       expect(validSettingIntent({ ...intent(), payload: { key: "learning_content", value } })).toBe(false);
     }
-    // @ts-expect-error learning_content is not an editable key of this client
-    const notEditable: EditableSettingPayload = { key: "learning_content", value: "phrases" };
-    expect(notEditable.key).toBe("learning_content");
+  });
+
+  it("validates new review mode and learning content against the server's current choices without replacing them", () => {
+    const data = current();
+    expect(allowedSettingValue(data, "review_error_mode", "soft")).toBe(true);
+    expect(allowedSettingValue(data, "review_error_mode", "lenient")).toBe(false);
+    expect(allowedSettingValue(data, "review_error_mode", "Soft")).toBe(false);
+    for (const value of ["words", "phrases", "mixed"]) expect(allowedSettingValue(data, "learning_content", value)).toBe(true);
+    expect(allowedSettingValue(data, "learning_content", "verbs")).toBe(false);
+    expect(allowedSettingValue(data, "learning_content", "soft")).toBe(false);
+    // A value of the right shape that the server's current constraint no longer offers is not allowed either.
+    data.constraints.learning_content.values = ["words", "phrases"];
+    expect(allowedSettingValue(data, "learning_content", "mixed")).toBe(false);
   });
 
   it.each(["learning_intervals_seconds", "material"] as const)("does not serialize a missing %s array element as null", async key => {

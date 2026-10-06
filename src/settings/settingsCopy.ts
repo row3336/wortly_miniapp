@@ -14,10 +14,14 @@ type Copy = {
   bounds: (minimum: number, maximum: number) => string;
   addInterval: string; removeInterval: string; interval: string; intervalsHint: string;
   normal: string; accelerated: string;
+  reviewModes: Record<string, string>; learningContents: Record<string, string>;
+  hints: Partial<Record<SettingKey, string>>;
   fields: Record<SettingKey, string>;
   problems: Record<NonNullable<SettingsSnapshot["problem"]>["reason"], string>;
 };
 
+// Working copy for G05: the owner fixes final wording. Hints follow TA:126 (Mix), TA:160 and K04-102 (strict mode),
+// K04-105 (Learning content); modes and contents are labelled by the server's enum values.
 export const settingsCopy: Record<Language, Copy> = {
   ru: {
     title: "Настройки", today: "Сегодня", dictionary: "Словарь", navigation: "Основная навигация",
@@ -37,6 +41,13 @@ export const settingsCopy: Record<Language, Copy> = {
     addInterval: "Добавить интервал", removeInterval: "Удалить интервал", interval: "Интервал",
     intervalsHint: "Интервалы указаны в секундах. Порядок сохраняется; уже назначенные сроки не меняются.",
     normal: "Обычный", accelerated: "Ускоренный",
+    reviewModes: { strict: "Строгий", soft: "Мягкий" },
+    learningContents: { words: "Слова", phrases: "Фразы", mixed: "Слова + фразы" },
+    hints: {
+      review_error_mode: "Строгий: после ошибки интервалы начинаются заново, повтор завтра. Мягкий: по прежней формуле бота. Это не проверка регистра. Режим действует со следующего занятия для письменных слов, фраз и в оцениваемых спряжениях; уже назначенные даты не меняются. Устные повторы всегда мягкие, Learning идёт по своему правилу. Строгий режим можно выбрать, если слова забываются на длинных интервалах; выбор остаётся за тобой.",
+      learning_content: "Состав влияет на следующий автоматический набор, а не на текущую группу. Изученное остаётся в повторах.",
+      learning_mix: "Выключено: темы идут по порядку. Включено: выбранные темы смешиваются. Это не меняет выбор слов или фраз и уже начатую группу.",
+    },
     fields: {
       ui_language: "Язык интерфейса", dictionary_language: "Язык словаря", material: "Учебный материал",
       learning_group_size: "Новых слов в группе", transition_mode: "Режим перехода",
@@ -45,6 +56,7 @@ export const settingsCopy: Record<Language, Copy> = {
       learning_intervals_seconds: "Интервалы Learning, секунды", retry_gap: "Карточек между повторами ошибки",
       retry_count: "Повторов после ошибки", learning_poll_seconds: "Проверять готовность Learning каждые, секунды",
       learning_reminder_pause_seconds: "Пауза между напоминаниями, секунды", learning_ready_percent: "Готовность Learning для напоминания, %",
+      review_error_mode: "Строгий режим повторов", learning_content: "Состав Learning",
     },
     problems: {
       network: "Не удалось обновить настройки. Попробуй ещё раз.", storage: "Не удалось завершить сохранение на этом устройстве. Обнови настройки.",
@@ -79,6 +91,13 @@ export const settingsCopy: Record<Language, Copy> = {
     addInterval: "Додати інтервал", removeInterval: "Видалити інтервал", interval: "Інтервал",
     intervalsHint: "Інтервали вказано в секундах. Порядок зберігається; уже призначені строки не змінюються.",
     normal: "Звичайний", accelerated: "Прискорений",
+    reviewModes: { strict: "Суворий", soft: "М’який" },
+    learningContents: { words: "Слова", phrases: "Фрази", mixed: "Слова + фрази" },
+    hints: {
+      review_error_mode: "Суворий: після помилки інтервали починаються заново, повтор завтра. М’який: за колишньою формулою бота. Це не перевірка регістру. Режим діє з наступного заняття для письмових слів, фраз і в оцінюваних дієвідмінах; уже призначені дати не змінюються. Усні повторення завжди м’які, Learning іде за власним правилом. Суворий режим можна вибрати, якщо слова забуваються на довгих інтервалах; вибір залишається за тобою.",
+      learning_content: "Склад впливає на наступний автоматичний набір, а не на поточну групу. Вивчене залишається в повтореннях.",
+      learning_mix: "Вимкнено: теми йдуть по порядку. Увімкнено: вибрані теми змішуються. Це не змінює вибір слів чи фраз і вже розпочату групу.",
+    },
     fields: {
       ui_language: "Мова інтерфейсу", dictionary_language: "Мова словника", material: "Навчальний матеріал",
       learning_group_size: "Нових слів у групі", transition_mode: "Режим переходу",
@@ -87,6 +106,7 @@ export const settingsCopy: Record<Language, Copy> = {
       learning_intervals_seconds: "Інтервали Learning, секунди", retry_gap: "Карток між повтореннями помилки",
       retry_count: "Повторень після помилки", learning_poll_seconds: "Перевіряти готовність Learning кожні, секунди",
       learning_reminder_pause_seconds: "Пауза між нагадуваннями, секунди", learning_ready_percent: "Готовність Learning для нагадування, %",
+      review_error_mode: "Суворий режим повторень", learning_content: "Склад Learning",
     },
     problems: {
       network: "Не вдалося оновити налаштування. Спробуй ще раз.", storage: "Не вдалося завершити збереження на цьому пристрої. Онови налаштування.",
@@ -121,6 +141,13 @@ export const settingsCopy: Record<Language, Copy> = {
     addInterval: "Add interval", removeInterval: "Remove interval", interval: "Interval",
     intervalsHint: "Intervals are in seconds. Their order is kept; existing scheduled times do not change.",
     normal: "Normal", accelerated: "Accelerated",
+    reviewModes: { strict: "Strict", soft: "Soft" },
+    learningContents: { words: "Words", phrases: "Phrases", mixed: "Words + phrases" },
+    hints: {
+      review_error_mode: "Strict: after a mistake the intervals start over, with a review tomorrow. Soft: the bot's earlier formula. This is not the letter-case check. The mode applies from the next session to written words, phrases and graded conjugations; dates already set do not change. Spoken reviews are always soft; Learning follows its own rule. You can choose strict if words are forgotten at long intervals; the choice is yours.",
+      learning_content: "The content affects the next automatic set, not the current group. Learned items stay in reviews.",
+      learning_mix: "Off: topics go in order. On: the selected topics are mixed. This does not change the choice of words or phrases or a group already started.",
+    },
     fields: {
       ui_language: "Interface language", dictionary_language: "Dictionary language", material: "Learning material",
       learning_group_size: "New words per group", transition_mode: "Transition mode",
@@ -129,6 +156,7 @@ export const settingsCopy: Record<Language, Copy> = {
       learning_intervals_seconds: "Learning intervals, seconds", retry_gap: "Cards between error retries",
       retry_count: "Retries after an error", learning_poll_seconds: "Check Learning readiness every, seconds",
       learning_reminder_pause_seconds: "Pause between reminders, seconds", learning_ready_percent: "Learning readiness for reminders, %",
+      review_error_mode: "Strict review mode", learning_content: "Learning content",
     },
     problems: {
       network: "Could not refresh settings. Try again.", storage: "Could not finish saving on this device. Refresh settings.",

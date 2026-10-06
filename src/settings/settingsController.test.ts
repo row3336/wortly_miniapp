@@ -570,3 +570,55 @@ describe("settings access and document lifetime", () => {
     expect(f.controller.snapshot()).toMatchObject({ phase: "disposed", outcome: null });
   });
 });
+
+describe("review error mode and learning content (M-SET)", () => {
+  const cases = [["review_error_mode", "soft"], ["learning_content", "phrases"], ["learning_content", "mixed"]] as const;
+  async function ready() { const f = fixture(); await f.controller.refresh(); return f; }
+
+  it.each(cases)("sends %s=%s through setting.save and reports success only after the commit", async (key, value) => {
+    const f = await ready(); const sending = gate<SettingSaveReply>();
+    f.api.save.mockImplementationOnce(async () => {
+      expect(f.controller.snapshot()).toMatchObject({ phase: "sending", outcome: null });
+      return sending.promise;
+    });
+    f.controller.edit(key, value);
+    expect(f.api.save).not.toHaveBeenCalled(); // choosing alone is not a commit
+    const saving = f.controller.save(key);
+    await vi.waitFor(() => expect(f.api.save).toHaveBeenCalledOnce());
+    const request = f.api.save.mock.calls[0][3];
+    expect(request).toMatchObject({ kind: "setting.save", expected_field_version: "1", payload: { key, value } });
+    expect(f.controller.snapshot().outcome).toBeNull();
+    sending.resolve(accepted({ command_id: id(100), kind: "setting.save", expected_field_version: "1", payload: { key, value } }));
+    await saving;
+    expect(f.controller.snapshot()).toMatchObject({ outcome: { key, status: "accepted" }, drafts: {} });
+    expect(f.controller.snapshot().data?.settings[key]).toEqual({ value, version: "2" });
+  });
+
+  it.each([["review_error_mode", "lenient"], ["review_error_mode", "Soft"], ["review_error_mode", true],
+    ["learning_content", "verbs"], ["learning_content", "soft"], ["learning_content", ""]] as const)(
+    "keeps invalid %s=%j editable and neither sends nor replaces it", async (key, input) => {
+      const f = await ready(); f.controller.edit(key, input); await f.controller.save(key);
+      expect(f.controller.snapshot().drafts[key]).toMatchObject({ input, valid: false, error: "invalid", canSave: false });
+      expect(f.controller.snapshot().data?.settings[key].value).toBe(key === "learning_content" ? "words" : "strict");
+      expect(f.api.save).not.toHaveBeenCalled(); expect(f.newId).not.toHaveBeenCalled();
+    });
+
+  it("rejects a choice the server's current constraint no longer offers", async () => {
+    const f = await ready(); f.controller.edit("learning_content", "mixed");
+    const changed = current(next); changed.constraints.learning_content.values = ["words", "phrases"];
+    f.api.get.mockResolvedValueOnce(changed); await f.controller.refresh();
+    expect(f.controller.snapshot().drafts.learning_content).toMatchObject({ input: "mixed", valid: false, error: "invalid" });
+    await f.controller.save("learning_content"); expect(f.api.save).not.toHaveBeenCalled();
+  });
+
+  it("reports a version conflict for review_error_mode and saves mine only on explicit choice", async () => {
+    const f = await ready(); f.controller.edit("review_error_mode", "soft");
+    const changed = current(next); changed.settings.review_error_mode = { value: "strict", version: "5" };
+    f.api.get.mockResolvedValueOnce(changed); await f.controller.refresh();
+    expect(f.controller.snapshot().drafts.review_error_mode).toMatchObject({ input: "soft", conflict: true, error: "conflict",
+      canSave: false, canKeepMine: true });
+    await f.controller.save("review_error_mode"); expect(f.api.save).not.toHaveBeenCalled();
+    await f.controller.keepMine("review_error_mode");
+    expect(f.api.save.mock.calls[0][3]).toMatchObject({ expected_field_version: "5", payload: { key: "review_error_mode", value: "soft" } });
+  });
+});

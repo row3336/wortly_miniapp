@@ -1,7 +1,8 @@
 import { StrictMode, useLayoutEffect, type PropsWithChildren } from "react";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { EditableSettingCommand, SettingIntent } from "./settingsApi";
+import type { SettingCommand } from "../api/generated";
+import type { SettingIntent } from "./settingsApi";
 import { deferred, fixture, id, profile, response } from "../learning/learningFixtures.test-support";
 import { SettingsPendingStore, type SettingsPending } from "./settingsPending";
 import { settingsResponse } from "./settingsRead.test-support";
@@ -39,7 +40,7 @@ function setup(saved?: "accepted" | "missing" | "invalid", strict = false, befor
     return fact ? accepted(fact, "already_applied") : response({ command: { id: commandId, status: "not_found" },
       current: profile(data.state_version), state_version: data.state_version });
   });
-  const post = vi.fn(async (command: EditableSettingCommand) => { apply(command); return accepted(command, "applied"); });
+  const post = vi.fn(async (command: SettingCommand) => { apply(command); return accepted(command, "applied"); });
   f.fetcher.mockImplementation(async (url, init) => {
     const path = String(url);
     if (path.endsWith("/settings")) return get();

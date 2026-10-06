@@ -68,3 +68,33 @@ describe("Settings host uses the shared confirmed version", () => {
     expect(get).toHaveBeenCalledOnce(); expect(group().getByRole("textbox").hasAttribute("disabled")).toBe(false);
   });
 });
+
+describe("Settings host saves review mode and learning content (M-SET)", () => {
+  it.each([["Строгий режим повторов", "Мягкий", "review_error_mode", "soft"],
+    ["Состав Learning", "Фразы", "learning_content", "phrases"]] as const)(
+    "%s: %s goes through setting.save and shows success only after the committed reply", async (title, option, key, value) => {
+      const { f, data } = setup(); await ready();
+      const reply = deferred<Response>(); const posts: Array<Record<string, unknown>> = [];
+      const original = f.fetcher.getMockImplementation()!;
+      f.fetcher.mockImplementation(async (url, init) => {
+        if (!String(url).endsWith("/commands")) return original(url, init);
+        const command = JSON.parse(String(init?.body)) as { command_id: string; expected_field_version: string };
+        posts.push(command);
+        const { state_version, ...current } = structuredClone(data);
+        Object.assign(current.settings[key], { value, version: "2" });
+        return reply.promise.then(() => response({ command: { id: command.command_id, kind: "setting.save", status: "applied",
+          applied_at: "2026-09-30T00:00:00Z", target_id: f.access().profile.profile_id, action_id: null, result_id: null,
+          context_id: null, object_version: "2" }, current, state_version: "2" }));
+      });
+      const box = () => within(screen.getByRole("group", { name: title }));
+      fireEvent.click(box().getByRole("radio", { name: option }));
+      expect(posts).toEqual([]); // choosing is not saving
+      fireEvent.click(box().getByRole("button", { name: "Сохранить" }));
+      await waitFor(() => expect(posts).toHaveLength(1));
+      expect(posts[0]).toMatchObject({ kind: "setting.save", expected_field_version: "1", payload: { key, value } });
+      expect(box().queryByText("Сохранено")).toBeNull();
+      await act(async () => reply.resolve(response({})));
+      await waitFor(() => expect(box().getByText("Сохранено")).toBeDefined());
+      expect((box().getByRole("radio", { name: option }) as HTMLInputElement).checked).toBe(true);
+    });
+});

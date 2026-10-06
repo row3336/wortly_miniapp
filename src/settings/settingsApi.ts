@@ -5,17 +5,11 @@ import type {
 import { validProfile } from "../api/entryApi";
 import { ApiError, createJsonTransport, errorCode, httpError, type HttpOptions } from "../api/http";
 
-// Keys this client edits. review_error_mode and learning_content are decoded
-// strictly but have no editor here yet; their controls and explanations belong
-// to a later UI package.
-type ReadOnlySettingKey = "review_error_mode" | "learning_content";
-export type SettingKey = Exclude<SettingCommand["payload"]["key"], ReadOnlySettingKey>;
-export type EditableSettingPayload = SettingCommand["payload"] & { key: SettingKey };
+// Every key of the wire command is editable here, including review_error_mode and learning_content.
+export type SettingKey = SettingCommand["payload"]["key"];
 export type SettingIntent = Pick<SettingCommand, "command_id" | "kind" | "expected_field_version"> & {
-  payload: EditableSettingPayload;
+  payload: SettingCommand["payload"];
 };
-/** The wire command this client sends; it never carries a read-only key. */
-export type EditableSettingCommand = Omit<SettingCommand, "payload"> & { payload: EditableSettingPayload };
 type Current = { current: SettingsProjection; state_version: string };
 export type SettingSaveReply = Current & (
   | { outcome: "accepted"; command: SavedCommandFact }
@@ -28,7 +22,7 @@ export type SettingStatusReply = { state_version: string } & (
 
 export interface SettingsApi {
   get(token: string): Promise<SettingsResponse>;
-  save(token: string, proof: string, profileId: string, command: EditableSettingCommand): Promise<SettingSaveReply>;
+  save(token: string, proof: string, profileId: string, command: SettingCommand): Promise<SettingSaveReply>;
   status(token: string, profileId: string, intent: SettingIntent): Promise<SettingStatusReply>;
 }
 
@@ -40,13 +34,15 @@ const levels = ["A1", "A2", "B1", "B2", "C1", "C2"];
 const transitions = ["normal", "accelerated"];
 // Always present and never null. K04-102: review_error_mode is strict initially;
 // K04-105: learning_content is words initially and independent of learning_mix.
-const readOnlyChoices: Record<ReadOnlySettingKey, readonly string[]> = {
+const requiredChoices = {
   review_error_mode: ["strict", "soft"],
   learning_content: ["words", "phrases", "mixed"],
-};
-const readOnlyKeys = Object.keys(readOnlyChoices) as ReadOnlySettingKey[];
+} as const satisfies Partial<Record<SettingKey, readonly string[]>>;
+type RequiredChoiceKey = keyof typeof requiredChoices;
+const requiredKeys = Object.keys(requiredChoices) as RequiredChoiceKey[];
+function requiredChoice(key: string): key is RequiredChoiceKey { return Object.hasOwn(requiredChoices, key); }
 const keys: SettingKey[] = ["ui_language", "dictionary_language", ...integers, ...booleans,
-  "learning_intervals_seconds", "transition_mode", "material"];
+  "learning_intervals_seconds", "transition_mode", "material", ...requiredKeys];
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -95,6 +91,7 @@ function valueShape(key: string, value: unknown): boolean {
   if (oneOf(key, integers)) return integer(value);
   if (oneOf(key, booleans)) return typeof value === "boolean";
   if (key === "transition_mode") return oneOf(value, transitions);
+  if (requiredChoice(key)) return oneOf(value, requiredChoices[key]);
   if (key === "learning_intervals_seconds") return listOf(value, integer);
   return key === "material" && material(value);
 }
@@ -111,6 +108,7 @@ function constraint(key: SettingKey, value: unknown): boolean {
   if (key === "ui_language" || key === "dictionary_language" || key === "transition_mode") {
     return value.type === "enum" && choices(value.values, key === "transition_mode" ? transitions : languages);
   }
+  if (requiredChoice(key)) return value.type === "enum" && choices(value.values, requiredChoices[key]);
   if (oneOf(key, integers)) return value.type === "integer" && bounds(value.minimum, value.maximum);
   if (oneOf(key, booleans)) return value.type === "boolean";
   if (key === "learning_intervals_seconds") return value.type === "ordered_integer_list"
@@ -124,18 +122,14 @@ function constraint(key: SettingKey, value: unknown): boolean {
 
 export function validSettingsCurrent(value: unknown): value is SettingsProjection {
   if (!record(value) || typeof value.needs_setup !== "boolean" || !record(value.settings)
-    || !exact(value.settings, [...keys, ...readOnlyKeys, "time_zone"]) || !record(value.constraints)
-    || !exact(value.constraints, [...keys, ...readOnlyKeys])) return false;
-  for (const key of readOnlyKeys) {
-    const setting = value.settings[key], rule = value.constraints[key];
-    if (!record(setting) || !version(setting.version) || !oneOf(setting.value, readOnlyChoices[key])
-      || !record(rule) || rule.type !== "enum" || !choices(rule.values, readOnlyChoices[key])) return false;
-  }
+    || !exact(value.settings, [...keys, "time_zone"]) || !record(value.constraints)
+    || !exact(value.constraints, keys)) return false;
   for (const key of keys) {
     const setting = value.settings[key];
     if (!record(setting) || !version(setting.version) || !Object.hasOwn(setting, "value")
       || !constraint(key, value.constraints[key])) return false;
-    if (setting.value === null && key !== "ui_language" && key !== "dictionary_language") continue;
+    // Language and required-choice settings are never null; every other setting may be unset.
+    if (setting.value === null && key !== "ui_language" && key !== "dictionary_language" && !requiredChoice(key)) continue;
     if (!valueShape(key, setting.value)) return false;
   }
   const zone = value.settings.time_zone;

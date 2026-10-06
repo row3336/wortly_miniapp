@@ -74,7 +74,7 @@ describe("settings screen fields", () => {
     const f = fixture(), { container } = render(<SettingsScreen {...f} />);
     expect(screen.getByRole("heading", { level: 1, name: "Настройки" })).toBeDefined();
     expect(container.querySelector("details")?.open).toBe(false);
-    expect(container.querySelectorAll(".settings-field")).toHaveLength(15);
+    expect(container.querySelectorAll(".settings-field")).toHaveLength(17);
     expect((field("Язык интерфейса").getByRole("combobox") as HTMLSelectElement).value).toBe("ru");
     expect((field("Язык словаря").getByRole("combobox") as HTMLSelectElement).value).toBe("uk");
     expect([...container.querySelectorAll<HTMLButtonElement>(".settings-field button")].filter(button => button.textContent === "Сохранить")
@@ -298,4 +298,118 @@ describe("settings language and navigation", () => {
       fireEvent.click(screen.getByRole("button", { name: today })); expect(f.onToday).toHaveBeenCalledOnce();
       expect(f.actions.save).not.toHaveBeenCalled();
     });
+});
+
+describe("review error mode, learning content and Mix explanation (M-SET)", () => {
+  const labels = {
+    ru: { strict: "Строгий режим повторов", content: "Состав Learning", mix: "Перемешивать темы новых слов",
+      modes: ["Строгий", "Мягкий"], contents: ["Слова", "Фразы", "Слова + фразы"], strictHint: /не проверка регистра/, mixHint: /темы идут по порядку/, contentHint: /следующий автоматический набор/ },
+    uk: { strict: "Суворий режим повторень", content: "Склад Learning", mix: "Перемішувати теми нових слів",
+      modes: ["Суворий", "М’який"], contents: ["Слова", "Фрази", "Слова + фрази"], strictHint: /не перевірка регістру/, mixHint: /теми йдуть по порядку/, contentHint: /наступний автоматичний набір/ },
+    en: { strict: "Strict review mode", content: "Learning content", mix: "Mix topics for new words",
+      modes: ["Strict", "Soft"], contents: ["Words", "Phrases", "Words + phrases"], strictHint: /not the letter-case check/, mixHint: /topics go in order/, contentHint: /next automatic set/ },
+  } as const;
+
+  it("shows both settings in the main learning group with the saved choice and the server's options", () => {
+    const f = fixture(), { container } = render(<SettingsScreen {...f} />);
+    const mode = field("Строгий режим повторов"), content = field("Состав Learning");
+    expect((mode.getAllByRole("radio") as HTMLInputElement[]).map(r => [r.value, r.checked])).toEqual([["strict", true], ["soft", false]]);
+    expect((content.getAllByRole("radio") as HTMLInputElement[]).map(r => [r.value, r.checked]))
+      .toEqual([["words", true], ["phrases", false], ["mixed", false]]);
+    expect(container.querySelector("details")?.contains(mode.getAllByRole("radio")[0])).toBe(false);
+    expect(container.querySelector("details")?.contains(content.getAllByRole("radio")[0])).toBe(false);
+    // The strict mode is a separate field from the letter-case check.
+    expect(field("Проверять регистр букв")).toBeDefined();
+  });
+
+  it("builds the options from the server constraint, not from a fixed list", () => {
+    const f = fixture(); f.snapshot.data!.constraints.learning_content.values = ["words", "mixed"];
+    render(<SettingsScreen {...f} />);
+    expect((field("Состав Learning").getAllByRole("radio") as HTMLInputElement[]).map(r => r.value)).toEqual(["words", "mixed"]);
+  });
+
+  it("choosing edits only the draft of that key and never saves by itself", () => {
+    const f = fixture(); render(<SettingsScreen {...f} />);
+    fireEvent.click(field("Строгий режим повторов").getByRole("radio", { name: "Мягкий" }));
+    expect(f.actions.edit).toHaveBeenLastCalledWith("review_error_mode", "soft");
+    fireEvent.click(field("Состав Learning").getByRole("radio", { name: "Слова + фразы" }));
+    expect(f.actions.edit).toHaveBeenLastCalledWith("learning_content", "mixed");
+    expect(f.actions.edit).toHaveBeenCalledTimes(2); expect(f.actions.save).not.toHaveBeenCalled();
+  });
+
+  it.each([["Строгий режим повторов", "review_error_mode", "soft"], ["Состав Learning", "learning_content", "phrases"]] as const)(
+    "%s saves only on the explicit button, by its own key", (title, key, value) => {
+      const f = fixture(); f.snapshot.drafts[key] = draft(value, { original: key === "review_error_mode" ? "strict" : "words", fieldVersion: "1" });
+      render(<SettingsScreen {...f} />);
+      expect((field(title).getAllByRole("radio") as HTMLInputElement[]).find(r => r.checked)?.value).toBe(value);
+      expect(f.actions.save).not.toHaveBeenCalled();
+      fireEvent.click(field(title).getByRole("button", { name: "Сохранить" }));
+      expect(f.actions.save).toHaveBeenCalledExactlyOnceWith(key);
+      expect(screen.queryByText("Сохранено")).toBeNull();
+    });
+
+  it("keeps an invalid value visible with an error and does not substitute another option", () => {
+    const f = fixture(); f.snapshot.drafts.learning_content = draft("verbs", { valid: false, error: "invalid", canSave: false });
+    render(<SettingsScreen {...f} />);
+    const content = field("Состав Learning");
+    const radios = content.getAllByRole("radio") as HTMLInputElement[];
+    expect(radios.map(r => [r.value, r.checked])).toEqual([["verbs", true], ["words", false], ["phrases", false], ["mixed", false]]);
+    expect(content.getByText("Проверь значение и допустимые варианты.")).toBeDefined();
+    expect((content.getByRole("button", { name: "Сохранить" }) as HTMLButtonElement).disabled).toBe(true);
+    // The server's real options stay selectable so the user can correct the input.
+    expect(radios.filter(r => !r.disabled).map(r => r.value)).toEqual(["words", "phrases", "mixed"]);
+    expect(f.actions.edit).not.toHaveBeenCalled();
+  });
+
+  it("keeps the stored value visible after the allowed choices narrow, without selecting another", () => {
+    const f = fixture(); f.snapshot.data!.settings.learning_content.value = "mixed";
+    f.snapshot.data!.constraints.learning_content.values = ["words", "phrases"];
+    render(<SettingsScreen {...f} />);
+    const radios = field("Состав Learning").getAllByRole("radio") as HTMLInputElement[];
+    expect(radios.find(r => r.checked)?.value).toBe("mixed"); expect(radios.find(r => r.checked)?.disabled).toBe(true);
+    expect(f.actions.edit).not.toHaveBeenCalled();
+  });
+
+  it("offers both explicit conflict decisions for review mode and keeps the user's choice", () => {
+    const f = fixture(); f.snapshot.data!.settings.review_error_mode = { value: "strict", version: "5" };
+    f.snapshot.drafts.review_error_mode = draft("soft", { original: "strict", fieldVersion: "1", conflict: true, error: "conflict",
+      canSave: false, canKeepMine: true });
+    render(<SettingsScreen {...f} />); const mode = field("Строгий режим повторов");
+    expect((mode.getAllByRole("radio") as HTMLInputElement[]).find(r => r.checked)?.value).toBe("soft");
+    expect(mode.getByText("Сейчас сохранено: Строгий")).toBeDefined();
+    expect(mode.queryByRole("button", { name: "Сохранить" })).toBeNull();
+    fireEvent.click(mode.getByRole("button", { name: "Принять сохранённое" }));
+    fireEvent.click(mode.getByRole("button", { name: "Сохранить моё значение" }));
+    expect(f.actions.acceptCurrent).toHaveBeenCalledExactlyOnceWith("review_error_mode");
+    expect(f.actions.keepMine).toHaveBeenCalledExactlyOnceWith("review_error_mode");
+  });
+
+  it("disables the choices while editing is not allowed and shows accepted status only after commit", () => {
+    const f = fixture(); f.snapshot.canEdit = false; f.snapshot.outcome = { commandId: id(3), key: "review_error_mode", status: "accepted" };
+    render(<SettingsScreen {...f} />);
+    expect((field("Строгий режим повторов").getAllByRole("radio") as HTMLInputElement[]).every(r => r.disabled)).toBe(true);
+    expect(field("Строгий режим повторов").getByText("Сохранено")).toBeDefined();
+    expect(field("Состав Learning").queryByText("Сохранено")).toBeNull();
+  });
+
+  it.each(["ru", "uk", "en"] as const)("explains strict mode and Mix and labels the choices in %s", language => {
+    const f = fixture(); f.language = language; const l = labels[language];
+    const { container } = render(<SettingsScreen {...f} />); openAdditional(container);
+    const mode = field(l.strict), content = field(l.content), mix = field(l.mix);
+    for (const name of l.modes) expect(mode.getByRole("radio", { name })).toBeDefined();
+    for (const name of l.contents) expect(content.getByRole("radio", { name })).toBeDefined();
+    expect(mode.getByText(l.strictHint)).toBeDefined();
+    expect(mix.getByText(l.mixHint)).toBeDefined();
+    expect(content.getByText(l.contentHint)).toBeDefined();
+  });
+
+  it("links the explanations to their controls", () => {
+    const f = fixture(), { container } = render(<SettingsScreen {...f} />); openAdditional(container);
+    const radio = field("Строгий режим повторов").getAllByRole("radio")[0];
+    const hint = document.getElementById(radio.getAttribute("aria-describedby")!.split(" ")[0]);
+    expect(hint?.textContent).toMatch(/не проверка регистра/);
+    const mixRadio = field("Перемешивать темы новых слов").getAllByRole("radio")[0];
+    expect(document.getElementById(mixRadio.getAttribute("aria-describedby")!.split(" ")[0])?.textContent)
+      .toMatch(/темы идут по порядку/);
+  });
 });
