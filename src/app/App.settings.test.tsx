@@ -19,6 +19,7 @@ function current(state = "10"): SettingsResponse {
     strict_case: { value: true, version: "1" }, include_preterite: { value: false, version: "1" },
     include_comparative: { value: null, version: "1" }, transition_mode: { value: null, version: "1" },
     review_error_mode: { value: "strict", version: "1" },
+    learning_content: { value: "words", version: "1" },
     material: { value: null, version: "1" },
   }, constraints: {
     ui_language: { type: "enum", values: ["ru", "uk", "en"] },
@@ -33,6 +34,7 @@ function current(state = "10"): SettingsResponse {
     learning_mix: { type: "boolean" }, strict_case: { type: "boolean" }, include_preterite: { type: "boolean" },
     include_comparative: { type: "boolean" }, transition_mode: { type: "enum", values: ["normal", "accelerated"] },
     review_error_mode: { type: "enum", values: ["strict", "soft"] },
+    learning_content: { type: "enum", values: ["words", "phrases", "mixed"] },
     material: { type: "exclusive_choice", modes: { level: { selected_level: ["A1", "A2", "B1", "B2", "C1", "C2"] },
       topics: { topic_ids: "nonempty_existing_uuid_list" } } },
   } };

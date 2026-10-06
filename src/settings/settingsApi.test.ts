@@ -57,6 +57,55 @@ describe("Settings current and constraints", () => {
     }
   });
 
+  it("decodes every learning content exactly as stored, apart from learning_mix (K04-105)", async () => {
+    for (const content of ["words", "phrases", "mixed"] as const) {
+      const data = current(); data.settings.learning_content = { value: content, version: "7" };
+      data.settings.learning_mix = { value: content === "mixed", version: "2" };
+      await expect(setup(data).api.get("synthetic")).resolves.toEqual(data);
+    }
+  });
+
+  // Recorded 2026-10-06 from the core application (GET /api/v1/settings, a new
+  // profile with the time zone opened as UTC), key order as served: not a hand-made shape.
+  const coreNewProfile = '{"constraints":{"dictionary_language":{"type":"enum","values":["ru","uk","en"]},'
+    + '"include_comparative":{"type":"boolean"},"include_preterite":{"type":"boolean"},'
+    + '"learning_content":{"type":"enum","values":["words","phrases","mixed"]},'
+    + '"learning_group_size":{"maximum":2147483647,"minimum":1,"type":"integer"},'
+    + '"learning_intervals_seconds":{"item_maximum":2147483647,"item_minimum":1,"nonempty":true,"type":"ordered_integer_list"},'
+    + '"learning_mix":{"type":"boolean"},"learning_poll_seconds":{"maximum":2147483647,"minimum":10,"type":"integer"},'
+    + '"learning_ready_percent":{"maximum":100,"minimum":1,"type":"integer"},'
+    + '"learning_reminder_pause_seconds":{"maximum":2147483647,"minimum":60,"type":"integer"},'
+    + '"material":{"modes":{"level":{"selected_level":["A1","A2","B1","B2","C1","C2"]},'
+    + '"topics":{"topic_ids":"nonempty_existing_uuid_list"}},"type":"exclusive_choice"},'
+    + '"retry_count":{"maximum":2147483647,"minimum":1,"type":"integer"},'
+    + '"retry_gap":{"maximum":2147483647,"minimum":1,"type":"integer"},'
+    + '"review_error_mode":{"type":"enum","values":["strict","soft"]},"strict_case":{"type":"boolean"},'
+    + '"transition_mode":{"type":"enum","values":["normal","accelerated"]},'
+    + '"ui_language":{"type":"enum","values":["ru","uk","en"]}},"needs_setup":true,"settings":{'
+    + '"dictionary_language":{"value":"ru","version":"1"},"include_comparative":{"value":false,"version":"1"},'
+    + '"include_preterite":{"value":false,"version":"1"},"learning_content":{"value":"words","version":"1"},'
+    + '"learning_group_size":{"value":null,"version":"1"},"learning_intervals_seconds":{"value":null,"version":"1"},'
+    + '"learning_mix":{"value":null,"version":"1"},"learning_poll_seconds":{"value":null,"version":"1"},'
+    + '"learning_ready_percent":{"value":null,"version":"1"},"learning_reminder_pause_seconds":{"value":null,"version":"1"},'
+    + '"material":{"value":null,"version":"1"},"retry_count":{"value":null,"version":"1"},'
+    + '"retry_gap":{"value":null,"version":"1"},"review_error_mode":{"value":"strict","version":"1"},'
+    + '"strict_case":{"value":true,"version":"1"},"time_zone":{"value":"UTC","version":"1"},'
+    + '"transition_mode":{"value":null,"version":"1"},"ui_language":{"value":"ru","version":"1"}},"state_version":"3"}';
+
+  it("opens the recorded core reply of a new profile with learning content words and its version", async () => {
+    const recorded = JSON.parse(coreNewProfile) as SettingsResponse;
+    // The exact recorded text is served, not a re-serialized object.
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(coreNewProfile, { status: 200 }));
+    const read = await createSettingsApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 20000 }).get("synthetic");
+    expect(read).toEqual(recorded);
+    expect(read.settings.learning_content).toEqual({ value: "words", version: "1" });
+    expect(read.constraints.learning_content).toEqual({ type: "enum", values: ["words", "phrases", "mixed"] });
+    // The same reply carried by a saved command and by a command status.
+    const saved = await setup({ command: fact(), current: recorded, state_version: big })
+      .api.save("synthetic", "proof", subject, command());
+    expect(saved).toMatchObject({ outcome: "accepted", current: { settings: { learning_content: { value: "words" } } } });
+  });
+
   it("does not display a successful projection carrying a contradictory error", async () => {
     await expect(setup({ ...current(), error: { code: "WRITE_UNAVAILABLE" } }).api.get("synthetic"))
       .rejects.toMatchObject({ kind: "invalid_response" });
@@ -85,6 +134,21 @@ describe("Settings current and constraints", () => {
     ["missing review constraint", x => { Reflect.deleteProperty(x.constraints, "review_error_mode"); }],
     ["wrong review constraint", x => { x.constraints.review_error_mode.type = "boolean"; }],
     ["unknown review choice", x => { x.constraints.review_error_mode.values = ["strict", "lenient"]; }],
+    ["missing learning content", x => { Reflect.deleteProperty(x.settings, "learning_content"); }],
+    ["null learning content", x => { Object.assign(x.settings.learning_content, { value: null }); }],
+    ["unknown learning content", x => { Object.assign(x.settings.learning_content, { value: "verbs" }); }],
+    ["singular learning content", x => { Object.assign(x.settings.learning_content, { value: "phrase" }); }],
+    ["capitalized learning content", x => { Object.assign(x.settings.learning_content, { value: "Words" }); }],
+    ["boolean learning content", x => { Object.assign(x.settings.learning_content, { value: true }); }],
+    ["list learning content", x => { Object.assign(x.settings.learning_content, { value: ["words"] }); }],
+    ["numeric learning version", x => { Object.assign(x.settings.learning_content, { version: 1 }); }],
+    ["zero learning version", x => { Object.assign(x.settings.learning_content, { version: "0" }); }],
+    ["missing learning constraint", x => { Reflect.deleteProperty(x.constraints, "learning_content"); }],
+    ["wrong learning constraint", x => { x.constraints.learning_content.type = "boolean"; }],
+    ["unknown learning choice", x => { x.constraints.learning_content.values = ["words", "verbs"]; }],
+    ["empty learning choices", x => { x.constraints.learning_content.values = []; }],
+    ["unknown extra setting", x => { Object.assign(x.settings, { learning_contents: { value: "words", version: "1" } }); }],
+    ["unknown extra constraint", x => { Object.assign(x.constraints, { learning_contents: { type: "boolean" } }); }],
     ["string time zone", x => { Object.assign(x.settings.time_zone, { value: ["UTC"] }); }],
     ["wrong list item", x => { Object.assign(x.settings.learning_intervals_seconds, { value: [30, "60"] }); }],
     ["invalid material mode", x => { Object.assign(x.settings.material, { value: { mode: "both" } }); }],
@@ -232,6 +296,7 @@ describe("Settings command exchange", () => {
       { ...command(), payload: { key: "time_zone", value: "UTC" } },
       // Read-only in this client: refused at runtime even if a caller bypasses the type.
       { ...command(), payload: { key: "review_error_mode", value: "soft" } },
+      { ...command(), payload: { key: "learning_content", value: "phrases" } },
       { ...command(), payload: { key: "material", value: { mode: "topics", topic_ids: [id(8), id(8)] } } },
     ];
     for (const request of candidates) await expect(api.save("synthetic", "proof", subject, request as EditableSettingCommand)).rejects.toThrow();
@@ -242,6 +307,13 @@ describe("Settings command exchange", () => {
     expect(validSettingIntent({ ...intent(), extra: true })).toBe(false);
     // review_error_mode is read-only in this client until its editor exists.
     expect(validSettingIntent({ ...intent(), payload: { key: "review_error_mode", value: "soft" } })).toBe(false);
+    // Likewise learning_content: decoded strictly, not editable without its screen.
+    for (const value of ["words", "phrases", "mixed"]) {
+      expect(validSettingIntent({ ...intent(), payload: { key: "learning_content", value } })).toBe(false);
+    }
+    // @ts-expect-error learning_content is not an editable key of this client
+    const notEditable: EditableSettingPayload = { key: "learning_content", value: "phrases" };
+    expect(notEditable.key).toBe("learning_content");
   });
 
   it.each(["learning_intervals_seconds", "material"] as const)("does not serialize a missing %s array element as null", async key => {

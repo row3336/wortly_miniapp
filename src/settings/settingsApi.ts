@@ -5,9 +5,11 @@ import type {
 import { validProfile } from "../api/entryApi";
 import { ApiError, createJsonTransport, errorCode, httpError, type HttpOptions } from "../api/http";
 
-// Keys this client edits. review_error_mode is decoded strictly but has no
-// editor here yet; its control and explanation belong to a later UI package.
-export type SettingKey = Exclude<SettingCommand["payload"]["key"], "review_error_mode">;
+// Keys this client edits. review_error_mode and learning_content are decoded
+// strictly but have no editor here yet; their controls and explanations belong
+// to a later UI package.
+type ReadOnlySettingKey = "review_error_mode" | "learning_content";
+export type SettingKey = Exclude<SettingCommand["payload"]["key"], ReadOnlySettingKey>;
 export type EditableSettingPayload = SettingCommand["payload"] & { key: SettingKey };
 export type SettingIntent = Pick<SettingCommand, "command_id" | "kind" | "expected_field_version"> & {
   payload: EditableSettingPayload;
@@ -36,8 +38,13 @@ const booleans = ["learning_mix", "strict_case", "include_preterite", "include_c
 const languages = ["ru", "uk", "en"];
 const levels = ["A1", "A2", "B1", "B2", "C1", "C2"];
 const transitions = ["normal", "accelerated"];
-// K04-101/K04-102: always present, strict initially; never null.
-const reviewModes = ["strict", "soft"];
+// Always present and never null. K04-102: review_error_mode is strict initially;
+// K04-105: learning_content is words initially and independent of learning_mix.
+const readOnlyChoices: Record<ReadOnlySettingKey, readonly string[]> = {
+  review_error_mode: ["strict", "soft"],
+  learning_content: ["words", "phrases", "mixed"],
+};
+const readOnlyKeys = Object.keys(readOnlyChoices) as ReadOnlySettingKey[];
 const keys: SettingKey[] = ["ui_language", "dictionary_language", ...integers, ...booleans,
   "learning_intervals_seconds", "transition_mode", "material"];
 
@@ -92,7 +99,7 @@ function valueShape(key: string, value: unknown): boolean {
   return key === "material" && material(value);
 }
 
-function choices(value: unknown, supported: string[]): boolean {
+function choices(value: unknown, supported: readonly string[]): boolean {
   return listOf(value, (item): item is string => oneOf(item, supported)) && value.length > 0
     && new Set(value).size === value.length;
 }
@@ -117,11 +124,13 @@ function constraint(key: SettingKey, value: unknown): boolean {
 
 export function validSettingsCurrent(value: unknown): value is SettingsProjection {
   if (!record(value) || typeof value.needs_setup !== "boolean" || !record(value.settings)
-    || !exact(value.settings, [...keys, "review_error_mode", "time_zone"]) || !record(value.constraints)
-    || !exact(value.constraints, [...keys, "review_error_mode"])) return false;
-  const review = value.settings.review_error_mode, reviewRule = value.constraints.review_error_mode;
-  if (!record(review) || !version(review.version) || !oneOf(review.value, reviewModes)
-    || !record(reviewRule) || reviewRule.type !== "enum" || !choices(reviewRule.values, reviewModes)) return false;
+    || !exact(value.settings, [...keys, ...readOnlyKeys, "time_zone"]) || !record(value.constraints)
+    || !exact(value.constraints, [...keys, ...readOnlyKeys])) return false;
+  for (const key of readOnlyKeys) {
+    const setting = value.settings[key], rule = value.constraints[key];
+    if (!record(setting) || !version(setting.version) || !oneOf(setting.value, readOnlyChoices[key])
+      || !record(rule) || rule.type !== "enum" || !choices(rule.values, readOnlyChoices[key])) return false;
+  }
   for (const key of keys) {
     const setting = value.settings[key];
     if (!record(setting) || !version(setting.version) || !Object.hasOwn(setting, "value")
