@@ -2,10 +2,13 @@ import { StrictMode } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { OpenedClient, Profile, SavedCommandFact, SettingCommand, SettingsResponse, TodayResponse, Topic } from "../api/generated";
+import { settingsRefusalText } from "../written/writtenApp.test-support";
 import { App } from "./App";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const profileId = id(1);
+// Test hook: holds the resumed session read, so the loading frame of the written owner can be observed.
+let sessionReads = 0; let sessionHook: ((n: number) => Promise<void>) | null = null;
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status });
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(r => { resolve = r; }); return { promise, resolve }; }
 function current(state = "10"): SettingsResponse {
@@ -95,6 +98,7 @@ function fixture() {
       return commandReply(body);
     }
     if (path.includes("/commands/")) return statusReply(path.split("/").at(-1)!);
+    if (state.session && path.includes(`/sessions/${state.session.id}?`)) { sessionReads++; await sessionHook?.(sessionReads); }
     // The persisted mode of the reported session: a valid Written summary (it resumes on the written route, never in Learning).
     if (state.session && path.includes(`/sessions/${state.session.id}?`)) return json({ current: { session_id: state.session.id,
       mode: "written", status: "summary", pair: `${profile.dictionary_language}-de`, direction: "l1-de", local_date: "2026-09-30",
@@ -451,5 +455,36 @@ describe("Settings in the real App document", () => {
     await screen.findByRole("region", { name: "Итог занятия" });
     expect(screen.queryByRole("heading", { name: "Настройки", level: 1 })).toBeNull();
     expect(f.todayReply).toHaveBeenCalledOnce();
+  });
+  it("never flashes the written settings refusal while the settings are re-read on return from Settings", async () => {
+    const f = fixture(); render(<App />); await settings();
+    f.state.session = { id: id(30), phase: "active" };
+    const texts: string[] = [];
+    const observer = new MutationObserver(() => { texts.push(document.body.textContent ?? ""); });
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+    onTestFinished(() => observer.disconnect());
+    fireEvent.click(screen.getByRole("button", { name: "Сегодня" }));
+    await screen.findByRole("region", { name: "Итог занятия" }, { timeout: 4000 });
+    observer.disconnect();
+    expect(texts.length).toBeGreaterThan(0);
+    // Positive control: the refusal text is the one the written host really renders (see useWrittenHost.test.tsx).
+    expect(settingsRefusalText).toContain("подтвердить настройки");
+    expect(texts.filter(text => text.includes(settingsRefusalText))).toEqual([]);
+  });
+
+  it("shows a loading status, not the refusal, while the owner reads the resumed session", async () => {
+    const f = fixture(); render(<App />); await settings();
+    f.state.session = { id: id(30), phase: "active" };
+    const gate = deferred<void>();
+    sessionReads = 0;
+    sessionHook = async n => { if (n >= 2) await gate.promise; };
+    onTestFinished(() => { sessionHook = null; gate.resolve(); });
+    fireEvent.click(screen.getByRole("button", { name: "Сегодня" }));
+    await waitFor(() => expect(sessionReads).toBeGreaterThanOrEqual(2));
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 150)); });
+    expect(document.body.textContent).not.toContain(settingsRefusalText);
+    expect(document.body.textContent).toContain("Загружаем занятие…");
+    gate.resolve();
+    await screen.findByRole("region", { name: "Итог занятия" }, { timeout: 4000 });
   });
 });

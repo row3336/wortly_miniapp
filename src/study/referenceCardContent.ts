@@ -56,13 +56,20 @@ function json(value: unknown): boolean {
   return true;
 }
 
+/** One example per wechsel role is a storage invariant (examples_one_wechsel_role_idx); a duplicate is a corrupted
+ * snapshot and is rejected here, so the display code never meets it. */
+function singleWechselRoles(common: readonly { role: unknown }[]): boolean {
+  return ["wechsel_location", "wechsel_direction"].every(role => common.filter(example => example.role === role).length <= 1);
+}
+
 /** Frozen candidates shared by preview and answered detail. This does not select what to display. */
 export function validCardExamples(value: unknown): value is CardExamples {
   return record(value) && exactKeys(value, ["common", "personal"]) && personal(value.personal)
     && Array.isArray(value.common) && value.common.every(example => record(example)
       && exactKeys(example, ["id", "text", "role", "highlighted_parts"]) && uuid(example.id) && typeof example.text === "string"
       && (example.role === null || oneOf(example.role, ["general", "wechsel_location", "wechsel_direction"]))
-      && Array.isArray(example.highlighted_parts) && json(example.highlighted_parts));
+      && Array.isArray(example.highlighted_parts) && json(example.highlighted_parts))
+    && singleWechselRoles(value.common);
 }
 
 /** Public reference content only. Common and personal examples stay distinct; no display policy here. */

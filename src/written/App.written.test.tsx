@@ -1,7 +1,7 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { App } from "../app/App";
-import { app, answer, compatibility, field, loseReply, pairText, requests, row, startWords, useWrittenAppEnvironment } from "./writtenApp.test-support";
+import { app, answer, settingsRefusalText, compatibility, field, loseReply, pairText, requests, row, startWords, useWrittenAppEnvironment } from "./writtenApp.test-support";
 import { deferred, id, profile, response } from "./writtenFixtures.test-support";
 
 useWrittenAppEnvironment();
@@ -180,11 +180,41 @@ describe("Written quiz through the actual App document", () => {
     await screen.findByRole("heading", { name: "Занятие на другом устройстве" });
     expect(a.kinds()).toEqual(["session.start"]);
     fireEvent.click(screen.getByRole("button", { name: "Завершить занятие на другом устройстве" }));
+    // The question is a real pause: a stop sent right after the request would already be in the log here, and Cancel posts nothing.
+    await screen.findByRole("heading", { name: "Завершить занятие?" });
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 100)); });
+    expect(a.kinds()).toEqual(["session.start"]);
+    fireEvent.click(screen.getByRole("button", { name: "Отмена" }));
+    await screen.findByRole("heading", { name: "Занятие на другом устройстве" });
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 100)); });
+    expect(a.kinds()).toEqual(["session.start"]);
+    fireEvent.click(screen.getByRole("button", { name: "Завершить занятие на другом устройстве" }));
+    await screen.findByRole("heading", { name: "Завершить занятие?" });
     fireEvent.click(screen.getByRole("button", { name: "Завершить занятие" }));
     await screen.findByText(pairText);
     await waitFor(() => expect(screen.queryByRole("heading", { name: "Занятие на другом устройстве" })).toBeNull());
     expect(a.posts().map(post => [post.kind, post.session_id, post.payload]))
       .toEqual([["session.start", expect.any(String), { mode: "written", bucket: "words" }], ["session.stop_remote", other, { confirmed: true }]]);
     expect(screen.queryByRole("textbox")).toBeNull();
+  });
+
+  it("a prefetched question that waits for an unset transition mode keeps the refusal with its buttons, not an endless loading", async () => {
+    const a = app({ active: true, cards: [6, 7] });
+    a.server.state.assignment = "prefetched";
+    const base = a.fetcher.getMockImplementation()!;
+    a.fetcher.mockImplementation(async (url, init) => {
+      const res = await base(url, init);
+      if (new URL(String(url), "http://localhost").pathname.endsWith("/settings") && (init?.method ?? "GET") === "GET") {
+        const body = await res.clone().json();
+        body.settings.transition_mode.value = null;
+        return response(body);
+      }
+      return res;
+    });
+    render(<App />);
+    await screen.findByText(settingsRefusalText);
+    expect(screen.getByRole("button", { name: "Обновить настройки" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "На Сегодня" })).toBeTruthy();
+    expect(screen.queryByText("Загружаем занятие…")).toBeNull();
   });
 });

@@ -7,6 +7,8 @@ import { id, response, writtenServer, type ServerOptions } from "./writtenFixtur
 // The real App over one synthetic server, shared by the App-level written tests.
 type Fetch = (url: string | URL | Request, init?: RequestInit) => Promise<Response>;
 export const compatibility = { compatible: true, contract_version: "1" };
+/** The written host refusal; shared so a positive control in one test keeps the absence checks of another from going vacuous. */
+export const settingsRefusalText = "Для занятия нужно подтвердить настройки и текущую словарную пару.";
 export const pairText = "Активная пара: Русский ↔ Немецкий";
 
 function today(): TodayResponse {

@@ -138,4 +138,12 @@ describe("Learning preview examples (current CardExamples shape)", () => {
     expect(validCardExamples({ common: threeCommon, personal: undefined })).toBe(false);
     expect(validCardExamples({ common: threeCommon, personal: { value: "Satz." } })).toBe(false);
   });
+
+  it("rejects a duplicate wechsel role as a corrupted snapshot (examples_one_wechsel_role_idx)", () => {
+    const [direction, location] = threeCommon;
+    const again = common(4, "Ich bin im Garten.", "wechsel_location");
+    expect(validCardExamples({ common: [direction, location], personal: null })).toBe(true);
+    expect(validCardExamples({ common: [direction, location, again], personal: null })).toBe(false);
+    expect(validCardExamples({ common: [direction, common(5, "Noch einmal.", "wechsel_direction"), location], personal: null })).toBe(false);
+  });
 });

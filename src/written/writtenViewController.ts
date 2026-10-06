@@ -50,6 +50,8 @@ export type WrittenViewSnapshot = {
   canStop: boolean;
   canSummaryHome: boolean;
   canRetryPrimary: boolean;
+  /** A prefetched question waits for the host to be enabled (confirmed settings); until then the view cannot leave "loading". */
+  waitingForSettings: boolean;
 };
 const closeReason = (value: string | null | undefined): WrittenClosed["reason"] =>
   value === "stop" || value === "summary_home" ? value : value ? "other" : null;
@@ -193,7 +195,8 @@ export class WrittenViewController {
       grades: canRevise ? [...this.answer?.capabilities.grades?.values ?? []] : [],
       canStop: closing && !this.is("summary"), canSummaryHome: closing && this.is("summary"),
       canRetryPrimary: live && interactive && !this.operation && !this.reading && !this.stopping
-        && commands.primary.canRetry && !commands.stop.pending };
+        && commands.primary.canRetry && !commands.stop.pending,
+      waitingForSettings: live && this.is("loading") && this.question?.status === "prefetched" && !this.enabled() };
   }
   private armTimer(): void {
     this.cancelTimer();

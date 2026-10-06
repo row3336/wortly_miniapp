@@ -1,5 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useWrittenDocument } from "./useWrittenDocument";
 import { WrittenScreen } from "./WrittenScreen";
 import { WrittenSummary } from "./WrittenSummary";
@@ -164,6 +164,22 @@ describe("М08 written task screen", () => {
     fireEvent.change(h.field(), { target: { value: "Haus" } }); fireEvent.click(h.button("Проверить"));
     await screen.findByText("Верно");
     expect([...document.querySelectorAll(".german-example")].map(node => node.textContent)).toEqual(["Mein Haus ist klein."]);
+  });
+
+  it("a snapshot with a duplicate wechsel role is rejected as invalid and never crashes the screen", async () => {
+    const example = (n: number, role: "wechsel_location" | "wechsel_direction") =>
+      ({ id: `00000000-0000-4000-8000-00000000050${n}`, text: `Satz ${n}`, role, highlighted_parts: [] });
+    const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    onTestFinished(() => errors.mockRestore());
+    const h = setup({ examples: { common: [example(1, "wechsel_location"), example(2, "wechsel_location"),
+      example(3, "wechsel_direction")], personal: null } });
+    await h.start();
+    fireEvent.change(h.field(), { target: { value: "Haus" } }); fireEvent.click(h.button("Проверить"));
+    await waitFor(() => expect(h.kinds()).toContain("answer.submit"));
+    // The corrupted result is not accepted: no render error; the screen reports a failed update like any other invalid answer.
+    expect(await screen.findByText("Не удалось обновить занятие.")).toBeTruthy();
+    expect(errors.mock.calls.flat().map(String).filter(text => text.includes("duplicate wechsel"))).toEqual([]);
+    expect(screen.queryByText("Верно")).toBeNull();
   });
 
   it("a wrong answer waits for «Далее» in the normal mode", async () => {

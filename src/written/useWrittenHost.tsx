@@ -34,9 +34,9 @@ export type WrittenHost = {
   screen: ReactNode;
 };
 const copy = {
-  ru: { settings: "Для занятия нужно подтвердить настройки и текущую словарную пару.", refresh: "Обновить настройки", today: "На Сегодня" },
-  uk: { settings: "Для заняття потрібно підтвердити налаштування та поточну словникову пару.", refresh: "Оновити налаштування", today: "На Сьогодні" },
-  en: { settings: "Confirm session settings and the current dictionary pair to study.", refresh: "Refresh settings", today: "Return to Today" },
+  ru: { loading: "Загружаем занятие…", settings: "Для занятия нужно подтвердить настройки и текущую словарную пару.", refresh: "Обновить настройки", today: "На Сегодня" },
+  uk: { loading: "Завантажуємо заняття…", settings: "Для заняття потрібно підтвердити налаштування та поточну словникову пару.", refresh: "Оновити налаштування", today: "На Сьогодні" },
+  en: { loading: "Loading your session…", settings: "Confirm session settings and the current dictionary pair to study.", refresh: "Refresh settings", today: "Return to Today" },
 } as const;
 
 type Lifetime = {
@@ -169,11 +169,18 @@ export function useWrittenHost(options: WrittenHostOptions): WrittenHost {
     repaint();
   };
   const t = copy[options.language];
+  // The document owner is created in an effect after the first written render and reads its projection before it is live.
+  // Until then the refusal below would flash on every return from Settings. A prefetched question that waits for
+  // confirmed settings is not loading: it cannot finish without the user, so it keeps the refusal and its buttons.
+  const settling = state === null ? access.isLive() && access.profile.access.status === "admitted"
+    : state.phase === "loading" && !state.waitingForSettings;
   return {
     blocksToday: !bound.recovered || claim !== null,
     canRequestStart: gate,
     requestStart,
-    screen: route !== "written" ? null : !gate && !live ? <section className="written-screen" aria-label={t.settings}>
+    screen: route !== "written" ? null : !gate && !live && settling ? <section className="written-screen" aria-busy="true">
+      <p role="status">{t.loading}</p>
+    </section> : !gate && !live ? <section className="written-screen" aria-label={t.settings}>
       <p role="status">{t.settings}</p>
       <button type="button" onClick={() => { void options.settings.actions.refresh(); }}>{t.refresh}</button>
       <button type="button" onClick={() => { void latest.current.onToday(); }}>{t.today}</button>
