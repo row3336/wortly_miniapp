@@ -10,7 +10,7 @@ const id = "00000000-0000-4000-8000-000000000007";
 function content(kind: LearningPreviewContent["card"]["type"] = "noun"): LearningPreviewContent {
   const value = previewContent(id); value.card.type = kind;
   value.card.lemma = { noun: "Haus", verb: "gehen", adjective: "groß", preposition: "in", conjunction: "weil",
-    pronoun: "ich", adverb: "heute", particle: "doch" }[kind];
+    pronoun: "ich", adverb: "heute", particle: "doch", phrase: "Guten Tag" }[kind];
   value.translations = { common: ["общий перевод", "второй перевод"], personal: null };
   value.association = { value: "моя ассоциация", version: "1" };
   if (kind === "noun") value.grammar = { gender: "neuter", gender_status: "applicable", singular: "Haus", singular_status: "applicable",
@@ -46,7 +46,8 @@ describe("read-only reference card body", () => {
       expect(screen.queryByRole("table")).toBeNull(); expect(screen.queryByRole("button")).toBeNull();
       expect(container.querySelector("b")).toBeNull();
       expect(examples).toHaveBeenCalledWith(value.examples);
-      expect(validLearningPreviewContent(value, id, "ru-de")).toBe(false);
+      // K04-105: the same phrase content is also a valid Learning introduction.
+      expect(validLearningPreviewContent(value, id, "ru-de")).toBe(true);
     });
   it.each([["noun", /das\s+Haus/], ["verb", /gehen.*ging.*ist\s+gegangen/], ["adjective", /groß.*größer.*am größten/]] as const)(
     "%s exposes the actual German forms as the heading's accessible name", (kind, name) => {

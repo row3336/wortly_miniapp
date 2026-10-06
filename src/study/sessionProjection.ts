@@ -22,7 +22,8 @@ function validAssignment(value: unknown, pair: string, mode: "learning" | "writt
     && (prompt.hint === null || typeof prompt.hint === "string")
     && validConjunctionHint(prompt.conjunction_hint)
     && exactKeys(spec, ["kind", "labels", "part_count", "case_sensitive"])
-    && (bucket === "phrases" ? spec.kind === "phrase" : oneOf(spec.kind, ["word", "forms"]))
+    && (mode === "learning" ? oneOf(spec.kind, ["word", "forms", "phrase"])
+      : bucket === "phrases" ? spec.kind === "phrase" : oneOf(spec.kind, ["word", "forms"]))
     && textArray(spec.labels) && count(spec.part_count)
     && spec.part_count > 0 && spec.part_count === spec.labels.length && typeof spec.case_sensitive === "boolean";
 }

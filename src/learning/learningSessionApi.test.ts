@@ -136,12 +136,20 @@ describe("Learning session HTTP adapter", () => {
     const f = fixture({ current, state_version: "3" });
     await expect(f.api.read("token", "proof", origin)).rejects.toMatchObject({ kind: "invalid_response" });
   });
-  it.each(["answers", "wrong_language", "wrong_kind", "wrong_count"])("refuses an unsafe question: %s", async problem => {
+  it.each([["word", ["word"]], ["forms", ["Singular", "Plural"]], ["phrase", ["Satz"]]] as const)(
+    "accepts a Learning %s question, phrases included (K04-105)", async (kind, labels) => {
+      const current = question();
+      current.assignment!.answer_spec = { kind, labels: [...labels], part_count: labels.length, case_sensitive: true };
+      const f = fixture({ current, state_version: "3" });
+      expect((await f.api.read("token", "proof", origin)).current).toEqual(current);
+    });
+  it.each(["answers", "wrong_language", "wrong_kind", "wrong_count", "unknown_spec"])("refuses an unsafe question: %s", async problem => {
     const current = question();
     if (problem === "answers") Object.assign(current.assignment!.answer_spec, { variants: [{ parts: ["Haus"] }] });
     if (problem === "wrong_language") current.assignment!.prompt.language = "en";
     if (problem === "wrong_kind") current.assignment!.kind = "original";
     if (problem === "wrong_count") current.assignment!.answer_spec.part_count = 3;
+    if (problem === "unknown_spec") Object.assign(current.assignment!.answer_spec, { kind: "sentence" });
     const f = fixture({ current, state_version: "3" });
     await expect(f.api.read("token", "proof", origin)).rejects.toMatchObject({ kind: "invalid_response" });
   });

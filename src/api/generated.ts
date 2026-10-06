@@ -290,7 +290,7 @@ export type ReapplyRequest = { "command_id": string; "expected_access_version": 
 
 export type ReferenceAdjective = { "positive": (string | null); "positive_status": "applicable" | "not_applicable" | "unknown"; "comparative": (string | null); "comparative_status": "applicable" | "not_applicable" | "unknown"; "superlative": (string | null); "superlative_status": "applicable" | "not_applicable" | "unknown"; };
 
-export type ReferenceCard = { "id": string; "revision": string; "lemma": string; "type": "noun" | "verb" | "adjective" | "pronoun" | "adverb" | "preposition" | "conjunction" | "particle"; "cefr": ("A1" | "A2" | "B1" | "B2" | "C1" | "C2" | null); };
+export type ReferenceCard = { "id": string; "revision": string; "lemma": string; "type": "noun" | "verb" | "phrase" | "adjective" | "pronoun" | "adverb" | "preposition" | "conjunction" | "particle"; "cefr": ("A1" | "A2" | "B1" | "B2" | "C1" | "C2" | null); };
 
 export type ReferenceConjugation = { "tense": "present" | "preterite"; "forms": Array<ReferenceConjugationForm>; };
 

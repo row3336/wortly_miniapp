@@ -38,12 +38,13 @@ describe("dictionary card read", () => {
       expect(f.fetcher.mock.calls[0][1]!.headers).not.toHaveProperty("X-Origin-Proof");
     });
 
-  it("keeps Learning's narrower type boundary after extracting common validation", () => {
+  it("shares the nine card types with Learning after extracting common validation (K04-105)", () => {
     const current = content();
     expect(validDictionaryCard({ state_version: "1", current }, id(1))).toBe(true);
-    expect(validLearningPreviewContent(current, id(1), "ru-de")).toBe(false);
-    current.card.type = "particle";
     expect(validLearningPreviewContent(current, id(1), "ru-de")).toBe(true);
+    Object.assign(current.card, { type: "idiom" });
+    expect(validDictionaryCard({ state_version: "1", current }, id(1))).toBe(false);
+    expect(validLearningPreviewContent(current, id(1), "ru-de")).toBe(false);
   });
 
   it.each(["ru-de", "uk-de", "en-de"] as const)("takes the current %s pair from the server", async pair => {

@@ -28,7 +28,7 @@ function content(kind: LearningPreviewContent["card"]["type"] = "verb"): Learnin
 }
 
 describe("Learning preview reference data", () => {
-  it.each(["noun", "verb", "adjective", "preposition", "conjunction", "particle", "adverb", "pronoun"] as const)(
+  it.each(["noun", "verb", "adjective", "preposition", "conjunction", "particle", "adverb", "pronoun", "phrase"] as const)(
     "accepts %s reference shape without selecting examples or granting practice", async kind => {
       const value = content(kind), current = { session_id: id(3), mode: "learning", status: "active", pair: "ru-de",
         local_date: "2026-09-30", close_reason: null, group: { id: id(20), status: "assembling", version: "1", total: 1, preview_position: 0 },
@@ -64,7 +64,8 @@ describe("Learning preview reference data", () => {
     ["hidden card field", x => { x.card.answer = "hidden"; }],
     ["numeric revision", x => { x.card.revision = 1; }],
     ["out-of-range revision", x => { x.card.revision = "9223372036854775808"; }],
-    ["unrecognized card type", x => { x.card.type = "phrase"; }],
+    ["unrecognized card type", x => { x.card.type = "idiom"; }],
+    ["phrase with verb grammar", x => { x.card.type = "phrase"; }],
     ["unknown CEFR", x => { x.card.cefr = "C3"; }],
     ["absent grammar field", x => { delete x.grammar.preterite_status; }],
     ["wrong grammar", x => { x.card.type = "noun"; }],
