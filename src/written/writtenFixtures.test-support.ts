@@ -59,16 +59,13 @@ export function writtenServer(options: ServerOptions = {}) {
   function projection(): SessionProjection {
     const counts = progress();
     return { session_id: state.sessionId!, status: state.status, mode: "written", pair: "ru-de", direction: "l1-de",
-      local_date: "2026-10-05", bucket: "words", close_reason: state.closeReason,
-      progress: { completed: counts.completed, total: counts.total }, assignment: current() };
+      local_date: "2026-10-05", bucket: "words", close_reason: state.closeReason, progress: counts, assignment: current(),
+      summary: state.status === "active" ? null : { completed: counts.completed, correct: counts.correct, wrong: counts.wrong,
+        ratio: counts.completed ? { numerator: counts.correct, denominator: counts.completed } : null } };
   }
   function step(): WrittenStep {
-    const counts = progress();
-    return { ...projection(), progress: counts,
-      summary: state.status === "active" ? null : { completed: counts.completed, correct: counts.correct, wrong: counts.wrong,
-        ratio: counts.completed ? { numerator: counts.correct, denominator: counts.completed } : null },
-      practice: { pair: "ru-de", direction: "l1-de", local_date: "2026-10-05", time_zone: "UTC", count: counts.completed },
-      review_progress: null };
+    return { ...projection(), practice: { pair: "ru-de", direction: "l1-de", local_date: "2026-10-05", time_zone: "UTC",
+      count: progress().completed }, review_progress: null };
   }
   function view(resultId: string) {
     const item = results.get(resultId)!, open = state.status !== "closed", latest = open && resultId === state.latest;

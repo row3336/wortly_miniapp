@@ -6,7 +6,9 @@ import { SessionResumeController, type SessionResumeState } from "./sessionResum
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const written = (): SessionProjection => ({ session_id: id(3), mode: "written", status: "summary", pair: "ru-de",
-  direction: "l1-de", local_date: "2026-09-30", bucket: "phrases", close_reason: null, progress: { completed: 1, total: 1 }, assignment: null });
+  direction: "l1-de", local_date: "2026-09-30", bucket: "phrases", close_reason: null,
+  progress: { completed: 1, total: 1, correct: 1, wrong: 0 }, assignment: null,
+  summary: { completed: 1, correct: 1, wrong: 0, ratio: { numerator: 1, denominator: 1 } } });
 const response = (current: unknown = written(), version = "3") => new Response(JSON.stringify({ current, state_version: version }));
 function deferred() { let finish!: (value: Response) => void; const promise = new Promise<Response>(resolve => { finish = resolve; }); return { promise, finish }; }
 function fixture() {

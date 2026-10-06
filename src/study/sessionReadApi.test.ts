@@ -8,7 +8,7 @@ const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")
 const address: SessionAddress = { session_id: id(3), client_instance_id: id(1), document_id: id(2) };
 function written(): SessionProjection {
   return { session_id: id(3), mode: "written", status: "active", pair: "ru-de", direction: "l1-de",
-    local_date: "2026-09-30", bucket: "words", close_reason: null, progress: { completed: 0, total: 2 },
+    local_date: "2026-09-30", bucket: "words", close_reason: null, progress: { completed: 0, total: 2, correct: 0, wrong: 0 }, summary: null,
     assignment: { id: id(6), card_id: id(7), status: "presented", kind: "original",
       prompt: { text: "дом", language: "ru", translations: ["дом"], personal_translation_version: null, hint: null, hint_version: null, conjunction_hint: null },
       answer_spec: { kind: "word", labels: ["word"], part_count: 1, case_sensitive: true } } };
@@ -18,6 +18,14 @@ function fixture(current: unknown = written(), stateVersion: unknown = "3", stat
   const options = { fetcher, timeoutMs: 100, maxResponseBytes: 20000 };
   return { fetcher, api: createSessionReadApi(options), learning: createLearningSessionApi(options) };
 }
+// Counts as the server reports them: progress and summary agree, no ratio while nothing is completed (a Stop before the first answer).
+// A fresh object per call: the rejection cases below edit nested fields and must never share state.
+const numbers = (completed: number, correct: number, wrong: number, total = 2) => ({
+  progress: { completed, total, correct, wrong },
+  summary: { completed, correct, wrong, ratio: completed ? { numerator: correct, denominator: completed } : null } });
+const finished = (x: Record<string, any>, completed = 0, correct = 0, wrong = 0) => {
+  x.status = "summary"; x.assignment = null; Object.assign(x, numbers(completed, correct, wrong));
+};
 const learning = (): SessionResponse["current"] => ({ session_id: id(3), mode: "learning", status: "active", pair: "ru-de",
   local_date: "2026-09-30", close_reason: null, group: { id: id(8), status: "assembling", version: "1", total: 2, preview_position: 0 },
   preview: { id: id(9), card_id: id(7), position: 1, total: 2, content: previewContent(id(7)) }, assignment: null });
@@ -35,9 +43,10 @@ describe("stored-mode session read", () => {
       const current = written(); Object.assign(current.assignment!.prompt, { conjunction_hint: hint });
       await expect(fixture(current).api.read("token", "proof", address)).rejects.toMatchObject({ kind: "invalid_response" });
     });
-  it.each([written(), learning(), { ...written(), status: "summary", assignment: null },
-    { ...written(), status: "summary", bucket: null, progress: { completed: 0, total: 0 }, assignment: null },
-    { ...written(), status: "closed", close_reason: "stop", assignment: null },
+  it.each([written(), learning(), { ...written(), status: "summary", assignment: null, ...numbers(0, 0, 0) },
+    { ...written(), status: "summary", bucket: null, assignment: null, ...numbers(0, 0, 0, 0) },
+    { ...written(), status: "closed", close_reason: "stop", assignment: null, ...numbers(0, 0, 0) },
+    { ...written(), status: "summary", assignment: null, ...numbers(2, 1, 1) },
     { session_id: id(3), status: "not_found" }, { session_id: id(3), status: "unavailable" }])(
     "reads the exact server projection without choosing or starting a mode: %j", async current => {
       const f = fixture(current);
@@ -61,12 +70,16 @@ describe("stored-mode session read", () => {
     }
   });
   it("accepts a drill after all originals have been completed", async () => {
-    const current = written(); current.assignment!.kind = "drill"; current.progress.completed = current.progress.total;
+    const current = written(); current.assignment!.kind = "drill"; current.progress = { completed: 2, total: 2, correct: 1, wrong: 1 };
     expect((await fixture(current).api.read("token", "proof", address)).current).toEqual(current);
   });
   it.each(["ru", "uk", "en"] as const)("keeps the language and public forms prompt for %s", async language => {
     const current = written(); current.pair = `${language}-de`; current.assignment!.prompt.language = language;
     current.assignment!.answer_spec = { kind: "forms", labels: ["Infinitiv", "Partizip II"], part_count: 2, case_sensitive: false };
+    expect((await fixture(current).api.read("token", "proof", address)).current).toEqual(current);
+  });
+  it("still accepts the reduced projection (two-key progress, no summary key) that the written step decoder hands over", async () => {
+    const current: Record<string, any> = written(); current.progress = { completed: 0, total: 2 }; delete current.summary;
     expect((await fixture(current).api.read("token", "proof", address)).current).toEqual(current);
   });
   const unsafe: [string, (value: Record<string, any>) => void][] = [
@@ -78,7 +91,7 @@ describe("stored-mode session read", () => {
     ["invalid date", x => { x.local_date = "2026-02-30"; }],
     ["private queue", x => { x.queue = [id(90)]; }],
     ["negative progress", x => { x.progress.completed = -1; }],
-    ["over-completed", x => { x.progress.completed = 3; }],
+    ["over-completed", x => { x.progress = { completed: 3, total: 2, correct: 3, wrong: 0 }; }],
     ["fractional total", x => { x.progress.total = 2.5; }],
     ["coerced total", x => { x.progress.total = "2"; }],
     ["no originals", x => { x.progress.total = 0; }],
@@ -87,7 +100,25 @@ describe("stored-mode session read", () => {
     ["active closed reason", x => { x.close_reason = "stop"; }],
     ["closed with step", x => { x.status = "closed"; x.close_reason = "stop"; }],
     ["closed without reason", x => { x.status = "closed"; x.assignment = null; }],
-    ["summary with step", x => { x.status = "summary"; }],
+    ["summary with step", x => { x.status = "summary"; Object.assign(x, numbers(0, 0, 0)); }],
+    ["progress without counts", x => { x.progress = { completed: 0, total: 2 }; }],
+    ["counts without summary key", x => { delete x.summary; }],
+    ["negative correct", x => { x.progress.correct = -1; }],
+    ["counts that do not add up", x => { x.progress = { completed: 1, total: 2, correct: 1, wrong: 1 }; }],
+    ["coerced correct", x => { x.progress.correct = "0"; }],
+    ["private progress field", x => { x.progress.percent = 0; }],
+    ["active with summary", x => { x.summary = numbers(0, 0, 0).summary; }],
+    ["summary without numbers", x => { x.status = "summary"; x.assignment = null; }],
+    ["closed without numbers", x => { x.status = "closed"; x.close_reason = "stop"; x.assignment = null; }],
+    ["summary of other completed", x => { finished(x); x.summary.completed = 1; }],
+    ["summary of other correct", x => { finished(x, 2, 1, 1); x.summary.correct = 2; }],
+    ["summary of other wrong", x => { finished(x, 2, 1, 1); x.summary.wrong = 0; }],
+    ["ratio at zero completed", x => { finished(x); x.summary.ratio = { numerator: 0, denominator: 1 }; }],
+    ["no ratio after answers", x => { finished(x, 2, 2, 0); x.summary.ratio = null; }],
+    ["ratio of other numerator", x => { finished(x, 2, 1, 1); x.summary.ratio.numerator = 2; }],
+    ["ratio of other denominator", x => { finished(x, 2, 1, 1); x.summary.ratio.denominator = 1; }],
+    ["private summary field", x => { finished(x); x.summary.percent = 0; }],
+    ["private ratio field", x => { finished(x, 2, 1, 1); x.summary.ratio.percent = 50; }],
     ["question snapshot", x => { x.assignment.snapshot = { answers: ["Haus"] }; }],
     ["invalid assignment ID", x => { x.assignment.id = "bad"; }],
     ["Learning assignment", x => { x.assignment.kind = "learning"; }],

@@ -20,7 +20,9 @@ const sessionId = "22222222-2222-4222-8222-222222222222";
 // Valid for the accepted decoder (sessionProjection.ts): an active step carries its assignment, summary/closed none.
 const written = (status: "active" | "summary" | "closed" = "active"): SessionResponse => ({ state_version: "11", current: {
   session_id: sessionId, mode: "written", status, pair: "uk-de", direction: "l1-de", local_date: "2026-09-30", bucket: "words",
-  close_reason: status === "closed" ? "stop" : null, progress: { completed: status === "active" ? 0 : 2, total: 2 },
+  close_reason: status === "closed" ? "stop" : null,
+  progress: status === "active" ? { completed: 0, total: 2, correct: 0, wrong: 0 } : { completed: 2, total: 2, correct: 1, wrong: 1 },
+  summary: status === "active" ? null : { completed: 2, correct: 1, wrong: 1, ratio: { numerator: 1, denominator: 2 } },
   assignment: status !== "active" ? null : { id: "33333333-3333-4333-8333-333333333333", card_id: "44444444-4444-4444-8444-444444444444",
     status: "presented", kind: "original", prompt: { text: "дім", language: "uk", translations: ["дім"], personal_translation_version: null,
       hint: null, hint_version: null, conjunction_hint: null }, answer_spec: { kind: "word", labels: ["word"], part_count: 1, case_sensitive: true } } } });

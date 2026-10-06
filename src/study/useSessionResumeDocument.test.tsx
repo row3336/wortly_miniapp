@@ -12,7 +12,8 @@ const summary = (pair: LearningSessionProjection["pair"] = "ru-de"): LearningSes
   preview: null, assignment: null });
 const written = (): SessionResponse["current"] => ({ session_id: id(3), mode: "written", status: "summary", pair: "ru-de",
   direction: "l1-de", local_date: "2026-09-30", bucket: "phrases", close_reason: null,
-  progress: { completed: 1, total: 1 }, assignment: null });
+  progress: { completed: 1, total: 1, correct: 1, wrong: 0 }, assignment: null,
+  summary: { completed: 1, correct: 1, wrong: 0, ratio: { numerator: 1, denominator: 1 } } });
 const preview = (): SessionResponse["current"] => ({ session_id: id(3), mode: "learning", status: "active", pair: "ru-de",
   local_date: "2026-09-30", close_reason: null, group: { id: id(8), status: "assembling", version: "1", total: 2, preview_position: 0 },
   preview: { id: id(9), card_id: id(7), position: 1, total: 2, content: previewContent(id(7)) }, assignment: null });

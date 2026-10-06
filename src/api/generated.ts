@@ -318,9 +318,7 @@ export type SavedCommandFact = { "id": string; "kind": string; "status": "applie
 
 export type SessionCommandResponse = { "command": (SavedCommandFact | RejectedCommandFact); "current": (SessionProjection | LearningSessionProjection | OralSessionProjection | ConjugationSessionProjection | UnavailableSession); "state_version": string; "error"?: (ErrorDetail | null); };
 
-export type SessionProgress = { "completed": number; "total": number; };
-
-export type SessionProjection = { "session_id": string; "status": "active" | "summary" | "closed"; "mode": "written"; "pair": "ru-de" | "uk-de" | "en-de"; "direction": "l1-de"; "local_date": string; "bucket": ("words" | "phrases" | null); "close_reason": ("midnight" | "pair_changed" | "timezone_date_changed" | "stop" | "remote_stop" | "summary_home" | null); "progress": SessionProgress; "assignment": (PublicAssignment | null); };
+export type SessionProjection = { "session_id": string; "status": "active" | "summary" | "closed"; "mode": "written"; "pair": "ru-de" | "uk-de" | "en-de"; "direction": "l1-de"; "local_date": string; "bucket": ("words" | "phrases" | null); "close_reason": ("midnight" | "pair_changed" | "timezone_date_changed" | "stop" | "remote_stop" | "summary_home" | null); "progress": WrittenProgress; "assignment": (PublicAssignment | null); "summary": (WrittenSummary | null); };
 
 export type SessionReference = { "id": string; "phase": "active" | "summary"; };
 
