@@ -18,13 +18,13 @@ const today: TodayResponse = { state_version: "2", pair: "ru-de", local_date: "2
 type Access = "admitted" | "pending" | "rejected";
 type Server = {
   access: Access; accessVersion: number; version: number; reason: string | null;
-  busy: boolean; target: string | null; boundDocument: string | null; bindDocuments: boolean;
+  busy: boolean; target: string | null; boundDocument: string | null; epoch: number; bindDocuments: boolean;
   auth: "ok" | 401 | 403 | 500 | "network"; stop: "applied" | "closed"; holdReapply: boolean;
 };
 
 function fixture(language: "ru" | "uk" | "en", initial: Partial<Server> = {}) {
   const server: Server = { access: "admitted", accessVersion: 1, version: 1, reason: null, busy: false, target: null,
-    boundDocument: null, bindDocuments: false, auth: "ok", stop: "applied", holdReapply: false, ...initial };
+    boundDocument: null, epoch: 0, bindDocuments: false, auth: "ok", stop: "applied", holdReapply: false, ...initial };
   const facts = new Set<string>();
   let releaseReapply: (() => void) | null = null;
   const profile = () => ({ profile_id: id(1), role: "user", ui_language: language, dictionary_language: "ru", time_zone: "UTC",
@@ -50,12 +50,19 @@ function fixture(language: "ru" | "uk" | "en", initial: Partial<Server> = {}) {
     if (path.endsWith("/client/register")) return json({ status: "registered", client_instance_id: body.client_instance_id,
       origin_proof: "synthetic-proof", proof_version: "1", activated: false });
     if (path.endsWith("/client/open")) {
-      const conflicting = server.bindDocuments && server.boundDocument !== null && server.boundDocument !== body.document_id;
+      // identity/clients.py after C-REOPEN: another document replaces the bound one only with the held lock or
+      // a confirmation of the current epoch.
+      const replacing = server.bindDocuments && server.boundDocument !== null && server.boundDocument !== body.document_id;
+      const conflicting = replacing && body.holds_document_lock !== true
+        && !(body.confirm_document_replacement === true && body.expected_document_epoch === String(server.epoch));
       if (server.busy || conflicting) return json({ profile: profile(), compatibility: { compatible: true, contract_version: "1" },
-        status: "SESSION_BUSY", session: { status: "busy", ...(conflicting ? {} : { stop_remote_target: server.target }) } });
-      server.boundDocument ??= body.document_id;
+        status: "SESSION_BUSY", session: { status: "busy", ...(conflicting
+          ? { stop_remote_target: null, document_conflict: true, document_epoch: String(server.epoch) }
+          : { stop_remote_target: server.target }) } });
+      if (server.boundDocument === null || replacing) { server.boundDocument = body.document_id; server.epoch += 1; }
       return json({ profile: profile(), compatibility: { compatible: true, contract_version: "1" }, status: "opened",
-        client_instance_id: body.client_instance_id, document_id: body.document_id, document_epoch: "1", proof_version: "1", session: null });
+        client_instance_id: body.client_instance_id, document_id: body.document_id, document_epoch: String(server.epoch),
+        proof_version: "1", session: null });
     }
     if (path.endsWith("/commands")) {
       server.version += 1;
@@ -204,22 +211,38 @@ describe("QA occupancy and remote stop through HTTP (Т03 client part)", () => {
   });
 
   it.each([
-    ["ru", "Wortly уже открыт", "Вернись в другое открытое окно или на другое устройство."],
-    ["uk", "Wortly вже відкрито", "Повернися до іншого відкритого вікна або пристрою."],
-    ["en", "Wortly is already open", "Return to the other open window or device."],
-  ] as const)("current behavior until the relaunch package (M-REOPEN), Н1/Н3 (%s): relaunch of a bound installation is a dead end without any action", async (language, title, detail) => {
+    ["ru", "Wortly уже открыт", "Вернись в другое открытое окно или на другое устройство.",
+      "Wortly не может проверить, закрыто ли другое окно. Если продолжить здесь, там изменения сохраняться не будут.",
+      "Завершить там и продолжить здесь", "Отмена", "Сегодня"],
+    ["uk", "Wortly вже відкрито", "Повернися до іншого відкритого вікна або пристрою.",
+      "Wortly не може перевірити, чи закрите інше вікно. Якщо продовжити тут, там зміни не зберігатимуться.",
+      "Завершити там і продовжити тут", "Скасувати", "Сьогодні"],
+    ["en", "Wortly is already open", "Return to the other open window or device.",
+      "Wortly cannot check whether the other window is closed. If you continue here, changes there will not be saved.",
+      "End there and continue here", "Cancel", "Today"],
+  ] as const)("Н1/Н3 after M-REOPEN (%s): a relaunch without the lock asks; cancel keeps the server, coming back asks again, the confirmation enters", async (language, title, busy, question, confirm, cancel, today) => {
     const f = fixture(language, { bindDocuments: true });
-    const first = render(<App />); await waitFor(() => expect(f.calls("/client/open")).toHaveLength(1));
-    await waitFor(() => expect(f.server.boundDocument).not.toBeNull());
+    const first = render(<App />); await waitFor(() => expect(f.server.boundDocument).not.toBeNull());
     first.unmount();
     render(<App />);
     await screen.findByRole("heading", { name: title });
-    expect(screen.getByText(detail)).toBeTruthy();
+    expect(screen.getByText(question)).toBeTruthy();
+    const bound = f.server.boundDocument;
+    fireEvent.click(screen.getByRole("button", { name: cancel }));
+    await screen.findByText(busy);
     expect(screen.queryByRole("button")).toBeNull();
-    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
-    fireEvent(document, new Event("visibilitychange"));
     await new Promise(resolve => setTimeout(resolve, 20));
     expect(f.calls("/client/open")).toHaveLength(2);
+    expect(f.server).toMatchObject({ boundDocument: bound, epoch: 1 });
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    fireEvent(document, new Event("visibilitychange"));
+    fireEvent.click(await screen.findByRole("button", { name: confirm }));
+    await screen.findByRole("heading", { name: today, level: 1 });
+    const opens = f.calls("/client/open").map(call => JSON.parse(String(call[1]?.body)));
+    expect(opens).toHaveLength(4);
+    expect(opens[2]).toEqual(opens[1]);
+    expect(opens[3]).toEqual({ ...opens[1], confirm_document_replacement: true, expected_document_epoch: "1" });
+    expect(f.server).toMatchObject({ boundDocument: opens[1].document_id, epoch: 2 });
     expect(f.calls("/client/register")).toHaveLength(1);
   });
 });

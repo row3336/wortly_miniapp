@@ -211,9 +211,10 @@ describe("entry controller", () => {
     expect(f.controller.getOpenedAccess()).toBe(before);
     expect(f.states.slice(stateCount)).toEqual([]);
     expect(f.api.open).toHaveBeenCalledTimes(2);
+    // The live document still holds its cross-window lease, so the refresh says so (CT:188).
     expect(vi.mocked(f.api.open).mock.calls[1]).toEqual(["memory-token", "saved-proof", {
       client_instance_id: instanceId, document_id: documentId, time_zone: "Asia/Tokyo",
-      event: "foreground", client_version: "0.0.0", contract_version: "1",
+      event: "foreground", client_version: "0.0.0", contract_version: "1", holds_document_lock: true,
     }]);
     finish(updated); await first;
     const after = f.controller.getOpenedAccess()!;
@@ -703,12 +704,13 @@ describe("entry controller", () => {
     expect(states).not.toContain("opened");
   });
 
-  it("shows another tab as busy before any registration", async () => {
+  it("shows another tab as the other window before any registration", async () => {
     const { controller, api, states, lock } = fixture();
     vi.mocked(lock.acquire).mockResolvedValueOnce("busy");
     await controller.start();
-    expect(states.at(-1)).toBe("busy");
+    expect(states.at(-1)).toBe("other_window");
     expect(api.register).not.toHaveBeenCalled();
+    expect(api.open).not.toHaveBeenCalled();
   });
 
   it("compares large versions without floating-point rounding", () => {

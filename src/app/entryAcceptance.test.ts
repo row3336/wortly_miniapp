@@ -174,36 +174,69 @@ describe("QA revocation (К02-047, Т38)", () => {
   });
 });
 
-describe("QA relaunch of an already opened installation (Н1)", () => {
-  it("every relaunch sends a new document_id with the same installation proof", async () => {
-    const s = accessServer(); s.server.status = "admitted"; const storage = memoryStorage();
+describe("QA relaunch of an already opened installation (Н1, Н3 — after M-REOPEN)", () => {
+  /** identity/clients.py after C-REOPEN: another document of a bound installation replaces it only with the held
+   * lock or a confirmation of the current epoch; otherwise SESSION_BUSY with document_conflict and that epoch. */
+  function bindDocuments(s: ReturnType<typeof accessServer>) {
+    const bound = { document: null as string | null, epoch: 0 };
+    vi.mocked(s.api.open).mockImplementation(async (_token, _proof, request) => {
+      const profile: Profile = { profile_id: PROFILE, role: "user", ui_language: "ru", dictionary_language: "ru", time_zone: null,
+        state_version: "20", access: { status: "admitted", version: "3", reason: null } };
+      const compatibility = { compatible: true, contract_version: "1" };
+      const replacing = bound.document !== null && bound.document !== request.document_id;
+      const confirmed = request.confirm_document_replacement === true
+        && request.expected_document_epoch === String(bound.epoch);
+      if (replacing && !(request.holds_document_lock === true || confirmed)) return { status: "SESSION_BUSY", profile,
+        compatibility, session: { status: "busy", stop_remote_target: null, document_conflict: true, document_epoch: String(bound.epoch) } };
+      if (bound.document !== request.document_id) { bound.document = request.document_id; bound.epoch += 1; }
+      return { status: "opened", client_instance_id: request.client_instance_id, document_id: request.document_id,
+        document_epoch: String(bound.epoch), proof_version: "1", profile, session: null, compatibility };
+    });
+    return bound;
+  }
+  const unsupported = { acquire: vi.fn(async () => "unsupported" as const) };
+
+  it("every relaunch sends a new document_id with the same installation proof; holding the lock it takes the next epoch", async () => {
+    const s = accessServer(); s.server.status = "admitted"; const storage = memoryStorage(); const bound = bindDocuments(s);
     const first = launch(s.api, storage); await first.controller.start(); first.controller.dispose();
     const second = launch(s.api, storage, { newId: () => id(900) }); await second.controller.start();
     const [a, b] = vi.mocked(s.api.open).mock.calls.map(call => call[2]);
     expect(b.client_instance_id).toBe(a.client_instance_id);
     expect(b.document_id).not.toBe(a.document_id);
+    expect(b).toMatchObject({ holds_document_lock: true });
+    expect(b).not.toHaveProperty("confirm_document_replacement");
     expect(s.api.register).toHaveBeenCalledOnce();
+    expect(second.latest()).toEqual({ kind: "opened" });
+    expect(bound).toEqual({ document: b.document_id, epoch: 2 });
   });
 
-  it("current behavior until the relaunch package (M-REOPEN), Н1: with core's document binding the relaunch is busy without a target, and foreground never rechecks", async () => {
-    const s = accessServer(); s.server.status = "admitted"; const storage = memoryStorage();
-    let bound: string | null = null;
-    vi.mocked(s.api.open).mockImplementation(async (_token, _proof, request) => {
-      const profile: Profile = { profile_id: PROFILE, role: "user", ui_language: "ru", dictionary_language: "ru", time_zone: null,
-        state_version: "20", access: { status: "admitted", version: "3", reason: null } };
-      // identity/clients.py:110–128: a different document of a bound installation is SESSION_BUSY without a target.
-      if (bound !== null && bound !== request.document_id) return { status: "SESSION_BUSY", profile,
-        compatibility: { compatible: true, contract_version: "1" }, session: { status: "busy" } };
-      bound = request.document_id;
-      return { status: "opened", client_instance_id: request.client_instance_id, document_id: request.document_id,
-        document_epoch: "1", proof_version: "1", profile, session: null, compatibility: { compatible: true, contract_version: "1" } };
-    });
-    const first = launch(s.api, storage); await first.controller.start();
+  it("Н1: without the lock the relaunch asks before ending the other window — never a dead end without any action", async () => {
+    const s = accessServer(); s.server.status = "admitted"; const storage = memoryStorage(); const bound = bindDocuments(s);
+    const first = launch(s.api, storage, { lock: unsupported }); await first.controller.start();
     expect(first.latest().kind).toBe("opened"); first.controller.dispose();
-    const second = launch(s.api, storage, { newId: () => id(901) }); await second.controller.start();
-    expect(second.latest()).toEqual({ kind: "busy" });
+    const second = launch(s.api, storage, { newId: () => id(901), lock: unsupported }); await second.controller.start();
+    expect(second.latest()).toEqual({ kind: "replace_confirm", epoch: "1" });
+    expect(bound.epoch).toBe(1);
+    await second.controller.confirmDocumentReplacement();
+    expect(second.latest()).toEqual({ kind: "opened" });
+    expect(bound).toEqual({ document: id(901), epoch: 2 });
+    expect(s.api.open).toHaveBeenCalledTimes(3);
+  });
+
+  it("Н3: a window whose lock is held elsewhere checks again when it returns to the foreground", async () => {
+    const s = accessServer(); s.server.status = "admitted"; const storage = memoryStorage(); const bound = bindDocuments(s);
+    const first = launch(s.api, storage); await first.controller.start();
+    let held = true;
+    const lock = { acquire: vi.fn(async () => held ? "busy" as const : { release: vi.fn() }) };
+    const second = launch(s.api, storage, { newId: () => id(902), lock }); await second.controller.start();
+    expect(second.latest()).toEqual({ kind: "other_window" });
     await second.controller.foreground();
-    expect(s.api.open).toHaveBeenCalledTimes(2);
+    expect(second.latest()).toEqual({ kind: "other_window" });
+    expect(lock.acquire).toHaveBeenCalledTimes(2); expect(s.api.open).toHaveBeenCalledOnce();
+    first.controller.dispose(); held = false;
+    await second.controller.foreground();
+    expect(second.latest()).toEqual({ kind: "opened" });
+    expect(bound).toEqual({ document: id(902), epoch: 2 });
   });
 });
 

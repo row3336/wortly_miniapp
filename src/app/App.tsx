@@ -191,6 +191,8 @@ export function App() {
       onRemoteConfirm={controller ? () => { void controller.confirmRemoteStop(); } : undefined}
       onRemoteCheck={controller ? () => { void controller.checkRemoteStop(); } : undefined}
       onRemoteRetry={controller ? () => { void controller.retryRemoteStop(); } : undefined}
+      onReplaceConfirm={controller ? () => { void controller.confirmDocumentReplacement(); } : undefined}
+      onReplaceCancel={controller ? () => controller.cancelDocumentReplacement() : undefined}
     />
   );
 }
