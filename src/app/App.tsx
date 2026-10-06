@@ -4,7 +4,7 @@ import type { Language } from "../i18n/language";
 import { createEntryApi } from "../api/entryApi";
 import { browserStorage } from "../platform/storage";
 import type { AsyncStorage } from "../platform/storage";
-import { bindBackButton, notifyAcceptedMilestone, signedInitData, syncPlatform, telegramLanguage } from "../platform/telegram";
+import { notifyAcceptedMilestone, signedInitData, syncPlatform, telegramLanguage } from "../platform/telegram";
 import { browserDocumentLock } from "./documentLock";
 import { EntryController } from "./entryController";
 import { EntryScreen } from "./EntryScreen";
@@ -15,6 +15,7 @@ import type { BusyAccess } from "./busyAccess";
 import { BusyTodayHost } from "./TodayHost";
 import { createTodayApi } from "../today/todayApi";
 import { ApplicationDocument } from "./ApplicationDocument";
+import { useBackLayer } from "./navigationBack";
 import { SettingsPendingStore } from "../settings/settingsPending";
 import { RemoteStopPendingStore } from "../study/remoteStopPending";
 import { createRemoteSessionApi } from "../study/remoteSessionApi";
@@ -162,7 +163,7 @@ export function App() {
 
   // The remote-stop confirmation is a modal step: native Back closes it like «Отмена» (tz_app:86).
   const remoteConfirm = language !== null && entryState.kind === "remote_confirm" ? controller : null;
-  useEffect(() => remoteConfirm ? bindBackButton(window, () => remoteConfirm.cancelRemoteStop()) : undefined, [remoteConfirm]);
+  useBackLayer("overlay", remoteConfirm ? () => remoteConfirm.cancelRemoteStop() : null);
 
   if (language === null) {
     return (

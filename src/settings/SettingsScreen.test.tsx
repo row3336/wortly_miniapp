@@ -298,6 +298,13 @@ describe("settings language and navigation", () => {
       fireEvent.click(screen.getByRole("button", { name: today })); expect(f.onToday).toHaveBeenCalledOnce();
       expect(f.actions.save).not.toHaveBeenCalled();
     });
+  it("opens the Dictionary from the shared panel when the host provides it (M-NAV)", () => {
+    const f = fixture(), onDictionary = vi.fn(); render(<SettingsScreen {...f} onDictionary={onDictionary} />);
+    const panel = within(screen.getByRole("navigation", { name: "Основная навигация" }));
+    expect((panel.getByRole("button", { name: "Настройки" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(panel.getByRole("button", { name: "Словарь" }));
+    expect(onDictionary).toHaveBeenCalledOnce(); expect(f.onToday).not.toHaveBeenCalled();
+  });
 });
 
 describe("review error mode, learning content and Mix explanation (M-SET)", () => {

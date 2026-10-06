@@ -114,10 +114,12 @@ describe("ordinary Entry to Today integration", () => {
     const learning = screen.getByRole("button", { name: /Новая группа слов/ });
     expect(learning.hasAttribute("disabled")).toBe(false);
     const buttons = screen.getAllByRole("button");
-    for (const button of buttons.filter(item => item.textContent !== "Настройки" && item !== learning)) {
+    // Dictionary and Statistics are navigation-only entry points now (M-NAV); they send nothing either.
+    const routes = ["Настройки", "Словарь", "Статистика"];
+    for (const button of buttons.filter(item => !routes.includes(item.textContent ?? "") && item !== learning)) {
       expect(button.hasAttribute("disabled")).toBe(true); fireEvent.click(button);
     }
-    expect(screen.getByRole("button", { name: "Настройки" }).hasAttribute("disabled")).toBe(false);
+    for (const name of routes) expect(screen.getByRole("button", { name }).hasAttribute("disabled")).toBe(false);
     expect(f.fetcher).toHaveBeenCalledTimes(5);
     expect(screen.queryByText("Не удалось подтвердить запуск занятия")).toBeNull();
   });

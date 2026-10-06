@@ -2,6 +2,9 @@ import { useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { TodayResponse } from "../api/generated";
 import type { Language } from "../i18n/language";
+import { directionLabel } from "../i18n/messages";
+import { BottomNav } from "../app/BottomNav";
+import { tabs } from "../app/navigation";
 import type { TodayState } from "./todayController";
 import "./today.css";
 
@@ -39,7 +42,7 @@ const copy = {
     phrasesTo: "Фразы: перевод на немецкий", phrasesFrom: "Фразы: перевод с немецкого",
     words: "слов", phrases: "фраз", base: "В базе", total: "всего", due: "Ближайший повтор",
     conjugations: "Спряжения", conjugationsReady: "Готово", conjugationsOpenable: "Доступно", conjugationQuiz: "Тест спряжений", conjugationPractice: "Открыть спряжения",
-    dictionary: "Словарь", settings: "Настройки", statistics: "Статистика", nav: "Основная навигация",
+    statistics: "Статистика",
     pair: "Активная пара", refreshing: "Обновляем план", ruPair: "Русский ↔ Немецкий", ukPair: "Украинский ↔ Немецкий", enPair: "Английский ↔ Немецкий",
   },
   uk: {
@@ -56,7 +59,7 @@ const copy = {
     phrasesTo: "Фрази: переклад німецькою", phrasesFrom: "Фрази: переклад з німецької",
     words: "слів", phrases: "фраз", base: "У базі", total: "усього", due: "Найближче повторення",
     conjugations: "Відмінювання", conjugationsReady: "Готово", conjugationsOpenable: "Доступно", conjugationQuiz: "Тест відмінювання", conjugationPractice: "Відкрити відмінювання",
-    dictionary: "Словник", settings: "Налаштування", statistics: "Статистика", nav: "Основна навігація",
+    statistics: "Статистика",
     pair: "Активна пара", refreshing: "Оновлюємо план", ruPair: "Російська ↔ Німецька", ukPair: "Українська ↔ Німецька", enPair: "Англійська ↔ Німецька",
   },
   en: {
@@ -73,7 +76,7 @@ const copy = {
     phrasesTo: "Phrases: translate into German", phrasesFrom: "Phrases: translate from German",
     words: "words", phrases: "phrases", base: "In your collection", total: "total", due: "Next review",
     conjugations: "Conjugations", conjugationsReady: "Ready", conjugationsOpenable: "Available", conjugationQuiz: "Conjugation quiz", conjugationPractice: "Open conjugations",
-    dictionary: "Dictionary", settings: "Settings", statistics: "Statistics", nav: "Main navigation",
+    statistics: "Statistics",
     pair: "Active pair", refreshing: "Refreshing plan", ruPair: "Russian ↔ German", ukPair: "Ukrainian ↔ German", enPair: "English ↔ German",
   },
 } as const;
@@ -96,6 +99,12 @@ function summary(data: TodayResponse, language: Language): string {
     case "no_material": return t.noMaterial;
     case "all_done": return t.allDone;
   }
+}
+
+/** The direction precedes the row title, always with the arrow (И04); the count stays last. */
+function QuizTitle({ direction, title }: { direction: string | null; title: string }) {
+  // The space keeps the spoken name «Рус → Нем Слова…» apart where the block layout gives no separator.
+  return <span>{direction && <><span className="today-direction">{direction}</span>{" "}</>}{title}</span>;
 }
 
 export function TodayScreen(props: TodayScreenProps) {
@@ -173,9 +182,9 @@ export function TodayScreen(props: TodayScreenProps) {
             {quizRows.map((row) => row.count > 0 ? <button type="button" className="today-quiz-row" key={row.key}
               disabled={starting || !props.onStartQuiz || props.canStartQuiz?.({ material: row.material, direction: row.direction }) === false}
               onClick={() => { void once(() => props.onStartQuiz?.({ material: row.material, direction: row.direction })); }}>
-              <span>{row.title}</span><strong>{row.count}</strong>
+              <QuizTitle direction={directionLabel(props.language, data.pair, row.direction)} title={row.title} /><strong>{row.count}</strong>
             </button> : <div className="today-quiz-row today-quiz-inert" key={row.key}>
-              <span>{row.title}</span><strong>{row.count}</strong>
+              <QuizTitle direction={directionLabel(props.language, data.pair, row.direction)} title={row.title} /><strong>{row.count}</strong>
             </div>)}
           </div>
         </section>
@@ -193,11 +202,7 @@ export function TodayScreen(props: TodayScreenProps) {
           {data.conjugation.next_due_date && <p className="today-small">{t.due}: {formatDate(data.conjugation.next_due_date, props.language)}</p>}
         </section>
       </div>
-      <nav className="today-nav" aria-label={t.nav}>
-        <button type="button" aria-current="page" disabled={!canNavigate("today")} onClick={() => props.onNavigate?.("today")}>{t.today}</button>
-        <button type="button" disabled={!canNavigate("dictionary")} onClick={() => props.onNavigate?.("dictionary")}>{t.dictionary}</button>
-        <button type="button" disabled={!canNavigate("settings")} onClick={() => props.onNavigate?.("settings")}>{t.settings}</button>
-      </nav>
+      <BottomNav current="today" language={props.language} onNavigate={props.onNavigate} enabled={tabs.filter(canNavigate)} />
     </> : <section className="today-status" role="status" aria-busy={props.state.kind === "loading"}>
       {props.state.kind === "loading" && <svg className="today-loader" viewBox="0 0 24 24" aria-hidden="true">
         <circle cx="12" cy="12" r="11" fill="var(--line)" />

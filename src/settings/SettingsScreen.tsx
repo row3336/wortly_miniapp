@@ -1,5 +1,6 @@
 import { useId } from "react";
 import type { SettingConstraint, Topic } from "../api/generated";
+import { BottomNav } from "../app/BottomNav";
 import type { Language } from "../i18n/language";
 import type { SettingKey } from "./settingsApi";
 import type { SettingsController, SettingsSnapshot } from "./settingsController";
@@ -15,6 +16,8 @@ export type SettingsScreenProps = {
   actions: Actions;
   onReloadTopics(): void;
   onToday(): void;
+  /** The Dictionary section of the main navigation; without it the panel shows it unavailable. */
+  onDictionary?(): void;
 };
 const groups: Array<{ name: "languages" | "learning" | "checking" | "additional"; fields: SettingKey[] }> = [
   { name: "languages", fields: ["ui_language", "dictionary_language"] },
@@ -147,7 +150,7 @@ function SettingField({ setting, ...props }: SettingsScreenProps & { setting: Se
 
 /** Presentation only: callbacks retain command identity and lifetime in the host/controller. */
 export function SettingsScreen(props: SettingsScreenProps) {
-  const { snapshot, language, actions, onToday } = props;
+  const { snapshot, language, actions, onToday, onDictionary } = props;
   const t = settingsCopy[language];
   const busy = ["loading", "checking", "sending"].includes(snapshot.phase);
   return <main className="settings-screen" lang={language}>
@@ -168,10 +171,7 @@ export function SettingsScreen(props: SettingsScreenProps) {
         <h2 id={`settings-${group.name}`}>{t[group.name]}</h2>
         <div className="settings-group-body">{group.fields.map(setting => <SettingField key={setting} setting={setting} {...props} />)}</div>
       </section>)}
-    <nav className="settings-nav" aria-label={t.navigation}>
-      <button type="button" onClick={onToday}>{t.today}</button>
-      <button type="button" disabled>{t.dictionary}</button>
-      <button type="button" aria-current="page" disabled>{t.title}</button>
-    </nav>
+    <BottomNav current="settings" language={language} enabled={onDictionary ? ["today", "dictionary"] : ["today"]}
+      onNavigate={tab => { if (tab === "today") onToday(); else if (tab === "dictionary") onDictionary?.(); }} />
   </main>;
 }

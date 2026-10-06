@@ -1,12 +1,12 @@
-import { useEffect, useLayoutEffect, useReducer, useRef } from "react";
+import { useEffect, useReducer, useRef } from "react";
 import type { HttpOptions } from "../api/http";
 import type { Language } from "../i18n/language";
 import { LearningScreen, type LearningScreenProps } from "../learning/LearningScreen";
 import { useLearningDocument } from "../learning/useLearningDocument";
 import type { AsyncStorage } from "../platform/storage";
-import { bindBackButton } from "../platform/telegram";
 import type { SettingsDocument } from "../settings/useSettingsDocument";
 import type { TodayScreenProps } from "../today/TodayScreen";
+import { useBackLayer } from "./navigationBack";
 import type { OpenedAccess } from "./openedAccess";
 import { TodayHost } from "./TodayHost";
 
@@ -28,6 +28,8 @@ export type LearningHostProps = {
   /** One automatic notification per confirmed closure, or explicit idle/closed navigation to Today. */
   onToday(): void | Promise<void>;
   onSettings(): void;
+  /** Other sections reachable from Today; without it only Settings is. */
+  onNavigate?(destination: "dictionary" | "statistics"): void;
   /** Ordinary quiz rows of the Today screen this host renders; their owners live elsewhere in the document. */
   quizzes?: Pick<TodayScreenProps, "onStartQuiz" | "canStartQuiz">;
 };
@@ -150,11 +152,7 @@ export function LearningHost(props: LearningHostProps) {
     } else if (todayShown) back = () => { void latest.current.onToday(); };
     else if (awaitingStop) back = () => {};
   }
-  const backHandler = useRef<() => void>(() => {});
-  // Only a committed screen supplies the handler; binding follows presence alone, never canStop churn.
-  useLayoutEffect(() => { if (back) backHandler.current = back; });
-  const hasBack = back !== null;
-  useEffect(() => hasBack ? bindBackButton(window, () => backHandler.current()) : undefined, [hasBack]);
+  useBackLayer("screen", back);
 
   const t = copy[props.language];
   if (props.route === "settings") return null;
@@ -166,9 +164,12 @@ export function LearningHost(props: LearningHostProps) {
       return <p role="status">{t.loading}</p>;
     }
     return <TodayHost access={props.access} transport={props.transport} language={props.language}
-      onOpenLearning={requestStart} enabledDestinations={["settings"]}
+      onOpenLearning={requestStart} enabledDestinations={props.onNavigate ? ["settings", "dictionary", "statistics"] : ["settings"]}
       onStartQuiz={props.quizzes?.onStartQuiz} canStartQuiz={props.quizzes?.canStartQuiz}
-      onNavigate={destination => { if (destination === "settings") openSettings(); }} />;
+      onNavigate={destination => {
+        if (destination === "settings") openSettings();
+        else if (destination !== "today") { bound.requested = null; props.onNavigate?.(destination); }
+      }} />;
   }
   return <>
     {configured && <button type="button" onClick={openSettings}>{t.settings}</button>}

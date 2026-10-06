@@ -132,3 +132,18 @@ describe("Oral host through the actual App document", () => {
     await act(async () => {}); expect(a.posts()).toEqual([]); expect(screen.getByText(pairText)).toBeTruthy();
   });
 });
+
+// M-NAV: the bottom navigation is hidden during the session (К09-040) and returns with Today.
+describe("M-NAV bottom navigation around the oral session", () => {
+  it("N-O1 the oral screen shows no navigation panel; Today after the summary shows it again", async () => {
+    const a = app({ session: true }); render(<App />);
+    await screen.findByText("wenn");
+    expect(screen.queryByRole("navigation", { name: "Основная навигация" })).toBeNull();
+    await a.back.click();
+    await waitFor(() => expect(dd()).toEqual(["0", "0", "0", "2"]));
+    expect(screen.queryByRole("navigation", { name: "Основная навигация" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "На Сегодня" }));
+    await screen.findByText(pairText);
+    expect(screen.getByRole("navigation", { name: "Основная навигация" })).toBeTruthy();
+  });
+});

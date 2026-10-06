@@ -208,7 +208,8 @@ describe("Settings in the real App document", () => {
   it("opens actual settings once, enabling only implemented destinations", async () => {
     const f = fixture(); render(<App />); await settings();
     expect(f.settingsReply).toHaveBeenCalledOnce(); expect(f.topicsReply).toHaveBeenCalledOnce();
-    expect(screen.getByRole("button", { name: "Словарь" }).hasAttribute("disabled")).toBe(true);
+    // M-NAV: the shared panel opens the Dictionary entry point from Settings too.
+    expect(screen.getByRole("button", { name: "Словарь" }).hasAttribute("disabled")).toBe(false);
     expect(f.commandReply).not.toHaveBeenCalled(); expect(f.haptic).toHaveBeenCalledOnce();
   });
   it("retains unsent text, topic query and picker node across Today and foreground", async () => {

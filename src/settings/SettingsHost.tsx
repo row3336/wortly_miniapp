@@ -11,6 +11,7 @@ type Props = {
   access: OpenedAccess; transport: HttpOptions; language: Language; active: boolean;
   document: SettingsDocument;
   onToday(): void;
+  onDictionary?(): void;
 };
 
 /** The editor retains its catalog/search UI; the application owns settings commands. */
@@ -50,7 +51,7 @@ export function SettingsHost(props: Props) {
     lastRead.current = { access: props.access, active: props.active, current: props.document.state.dataCurrent };
   }, [props.access, props.active, props.document.state.dataCurrent]);
 
-  return <SettingsScreen snapshot={props.document.state} catalog={catalog} language={props.language} onToday={props.onToday}
+  return <SettingsScreen snapshot={props.document.state} catalog={catalog} language={props.language} onToday={props.onToday} onDictionary={props.onDictionary}
     onReloadTopics={() => { void load.current?.(); }} actions={{ ...props.document.actions,
       refresh: async () => { await Promise.all([props.document.actions.refresh(), load.current?.()]); },
     }} />;

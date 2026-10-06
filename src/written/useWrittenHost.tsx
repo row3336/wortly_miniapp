@@ -1,8 +1,9 @@
-import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, type ReactNode } from "react";
+import { useEffect, useMemo, useReducer, useRef, type ReactNode } from "react";
 import type { HttpOptions } from "../api/http";
+import { useBackLayer } from "../app/navigationBack";
 import type { OpenedAccess } from "../app/openedAccess";
 import type { Language } from "../i18n/language";
-import { bindBackButton, notifyAcceptedMilestone } from "../platform/telegram";
+import { notifyAcceptedMilestone } from "../platform/telegram";
 import type { AsyncStorage } from "../platform/storage";
 import type { SettingsDocument } from "../settings/useSettingsDocument";
 import { useWrittenDocument, type WrittenActions } from "./useWrittenDocument";
@@ -159,11 +160,7 @@ export function useWrittenHost(options: WrittenHostOptions): WrittenHost {
     else if (awaitingStop) back = () => {};
     else if (ownSummary || state.phase === "idle" && !lanesPending) back = () => { void latest.current.onToday(); };
   }
-  const backHandler = useRef<() => void>(() => {});
-  // Only a committed screen supplies the handler; binding follows presence alone.
-  useLayoutEffect(() => { if (back) backHandler.current = back; });
-  const hasBack = back !== null;
-  useEffect(() => hasBack ? bindBackButton(window, () => backHandler.current()) : undefined, [hasBack]);
+  useBackLayer("screen", back);
 
   const requestStart = (bucket: "words" | "phrases") => {
     if (bucket !== "words" && bucket !== "phrases" || !gate || bound.starting || bound.request || !access.isLive()) return;

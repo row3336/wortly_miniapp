@@ -1,11 +1,10 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState, type ReactNode } from "react";
 import type { LearningPreviewAddress } from "../api/generated";
 import type { HttpOptions } from "../api/http";
 import { sameId } from "../api/wireValidation";
 import type { Language } from "../i18n/language";
 import { LearningPreviewCard } from "../learning/LearningPreviewCard";
 import type { AsyncStorage } from "../platform/storage";
-import { bindBackButton } from "../platform/telegram";
 import { SettingsHost } from "../settings/SettingsHost";
 import { useSettingsDocument, type SettingsObservation } from "../settings/useSettingsDocument";
 import type { SettingsPendingStore } from "../settings/settingsPending";
@@ -16,6 +15,10 @@ import { TodayScreen, type OrdinaryQuiz } from "../today/TodayScreen";
 import { useWrittenHost } from "../written/useWrittenHost";
 import { EntryScreen } from "./EntryScreen";
 import { LearningHost } from "./LearningHost";
+import { backDestination, initialRoute, navigationReducer, tabs, type Tab } from "./navigation";
+import { useBackLayer } from "./navigationBack";
+import { useScreenTransition } from "./navigationMotion";
+import { DictionaryPlaceholder, StatisticsPlaceholder } from "./navigationStubs";
 import type { OpenedAccess } from "./openedAccess";
 import { useOralHost, type OralStores } from "./OralHost";
 
@@ -53,7 +56,11 @@ function classify(state: SessionResumeState): ModeRead {
 
 /** Keyed by the opened document, never by the identity of a foreground access handle. */
 export function ApplicationDocument(props: Props) {
-  const [route, setRoute] = useState<"today" | "settings" | "learning" | "oral" | "written">("today");
+  // The route keeps the screen and its return context only; study progress stays with its owner (TA §1).
+  const [route, navigate] = useReducer(navigationReducer, initialRoute);
+  const at = route.screen;
+  const frame = useRef<HTMLDivElement>(null);
+  useScreenTransition(frame, route);
   const [settingsOpened, setSettingsOpened] = useState(false);
   const [floor, setFloor] = useState<SettingsObservation | null>(null);
   const [gate, setGate] = useState<"ready" | "loading" | "failed">("ready");
@@ -112,11 +119,11 @@ export function ApplicationDocument(props: Props) {
     minimumStateVersion: floor?.version, onCurrent: observe });
   const fits = covers(props.access, floor);
   useEffect(() => {
-    if (route === "today" && !fits && floor && attemptedFloor.current !== floor.version) {
+    if (at === "today" && !fits && floor && attemptedFloor.current !== floor.version) {
       attemptedFloor.current = floor.version;
       void synchronize();
     }
-  }, [route, fits, floor, synchronize]);
+  }, [at, fits, floor, synchronize]);
 
   const session = props.access.session, pair = props.access.profile.dictionary_language;
   // The owner of a new pair never starts from the old pair's session; the current owner keeps its own seed.
@@ -124,7 +131,7 @@ export function ApplicationDocument(props: Props) {
   const oralSeed = oralSelected !== null && oralSelected.pair === pair ? oralSelected.seed : null;
   const writtenSeed = writtenSelected !== null && writtenSelected.pair === pair ? writtenSelected.seed : null;
   // A session reported after selection is read again only on Today or the oral route, and only when no Host adopted it.
-  const readAfter = selected !== null && session !== null && (route === "today" || route === "oral")
+  const readAfter = selected !== null && session !== null && (at === "today" || at === "oral")
     && !(seed !== null && !seedReleased.current && sameId(session.id, seed))
     && !(oralSeed !== null && sameId(session.id, oralSeed)) && !(writtenSeed !== null && sameId(session.id, writtenSeed))
     && !hostClaimed.current;
@@ -143,17 +150,17 @@ export function ApplicationDocument(props: Props) {
     }
     if (selected === null && session === null) { setSelected({ seed: null, pair }); return; }
     if (selected === null && read.kind === "learning") {
-      setSelected({ seed: read.id, pair, version: read.version }); setRoute("learning"); return;
+      setSelected({ seed: read.id, pair, version: read.version }); navigate({ type: "open", screen: "learning" }); return;
     }
     // An active session of this client continues on its own route (tz_app:48); Learning keeps no seed.
     if ((selected === null || readAfter) && read.kind === "oral") {
       if (selected === null) setSelected({ seed: null, pair });
-      setOralSelected({ seed: read.id, pair, version: read.version }); setRoute("oral"); return;
+      setOralSelected({ seed: read.id, pair, version: read.version }); navigate({ type: "open", screen: "oral" }); return;
     }
     // Its server projection chooses the step; no undo or correction of an earlier document comes with it (TA:48).
     if ((selected === null || readAfter) && read.kind === "written") {
       if (selected === null) setSelected({ seed: null, pair });
-      setWrittenSelected({ seed: read.id, pair, version: read.version }); setRoute("written"); return;
+      setWrittenSelected({ seed: read.id, pair, version: read.version }); navigate({ type: "open", screen: "written" }); return;
     }
     // A closed session is never resumed: one fresh open per closed id, then a manual retry.
     if ((selected === null || readAfter) && read.kind === "closed" && !synchronizedClosed.current.has(read.id)) {
@@ -164,14 +171,17 @@ export function ApplicationDocument(props: Props) {
 
   const today = () => {
     attemptedFloor.current = latest.current?.version ?? null;
-    setRoute("today");
+    navigate({ type: "home" });
     void synchronize();
   };
-  // Native Back on Settings is its «Сегодня» (SettingsScreen onToday); a gate-hidden Host is not Settings.
-  const settingsBack = useRef(today);
-  useLayoutEffect(() => { settingsBack.current = today; });
-  const onSettings = route === "settings";
-  useEffect(() => onSettings ? bindBackButton(window, () => settingsBack.current()) : undefined, [onSettings]);
+  // Native Back of a non-study screen (TA:86): a return to Today is its «Сегодня» (SettingsScreen onToday) with the
+  // same refresh; a session supplies its own exit from its owner. A gate-hidden Host is not Settings.
+  const destination = backDestination(route);
+  const back = destination === "today" ? today : () => navigate({ type: "back" });
+  useBackLayer("screen", destination === null ? null : back);
+  const openSettings = () => { setSettingsOpened(true); navigate({ type: "open", screen: "settings" }); };
+  // The panel only navigates: each section owns its screen (M-DICT, M-SET); Today keeps its refresh on return.
+  const openTab = (tab: Tab) => tab === "today" ? today() : tab === "settings" ? openSettings() : navigate({ type: "open", screen: tab });
   const renderPreview = useCallback((preview: LearningPreviewAddress) => <LearningPreviewCard content={preview.content}
     language={props.language} renderExamples={renderLearningPreviewExamples} />, [props.language]);
   const retry = () => { void synchronize(); };
@@ -185,10 +195,10 @@ export function ApplicationDocument(props: Props) {
   };
 
   // hostRoute "settings" means hidden, not navigation: the Host renders nothing and keeps its owner mounted.
-  let hostRoute: "today" | "learning" | "settings" = route === "oral" || route === "written" ? "settings" : route;
+  let hostRoute: "today" | "learning" | "settings" = at === "today" || at === "learning" ? at : "settings";
   let screen: ReactNode = null, todayShown = false;
   if (selected === null) screen = readScreen();
-  else if (route === "today") {
+  else if (at === "today") {
     if (!(fits && gate === "ready")) {
       hostRoute = "settings";
       screen = gate === "failed" ? failed : loading;
@@ -196,37 +206,42 @@ export function ApplicationDocument(props: Props) {
       hostRoute = "settings";
       screen = readScreen();
     } else todayShown = true;
-  }
+  } else if (at === "dictionary") {
+    screen = <DictionaryPlaceholder language={props.language}
+      navigation={{ onNavigate: openTab, enabled: tabs.filter(tab => tab !== "dictionary") }} />;
+  } else if (at === "statistics") screen = <StatisticsPlaceholder language={props.language} onBack={back} />;
   // The oral owner lives for the whole document; it shows a screen only on its own route.
   const oral = useOralHost({ access: props.access, transport: props.transport, stores: props.oralStores, newId: props.newId,
     language: props.language, settings, minimumStateVersion: highest(floor?.version, oralSelected?.version),
-    initialSessionId: oralSeed, seedPending: route === "oral" && readAfter && (read.kind === "pending" || read.kind === "oral"),
-    route: route === "oral" ? "oral" : todayShown ? "today" : "hidden",
-    onOral: () => setRoute("oral"), onToday: today });
+    initialSessionId: oralSeed, seedPending: at === "oral" && readAfter && (read.kind === "pending" || read.kind === "oral"),
+    route: at === "oral" ? "oral" : todayShown ? "today" : "hidden",
+    onOral: () => navigate({ type: "open", screen: "oral" }), onToday: today });
   // The written owner also lives for the whole document; L1→De rows of Today start it (tz_app М09).
   const written = useWrittenHost({ access: props.access, transport: props.transport, storage: props.storage, newId: props.newId,
     language: props.language, settings, minimumStateVersion: highest(floor?.version, writtenSelected?.version),
-    initialSessionId: writtenSeed, route: route === "written" ? "written" : todayShown ? "today" : "hidden",
-    onWritten: () => setRoute("written"), onToday: today });
+    initialSessionId: writtenSeed, route: at === "written" ? "written" : todayShown ? "today" : "hidden",
+    onWritten: () => navigate({ type: "open", screen: "written" }), onToday: today });
   if (todayShown && (oral.blocksToday || written.blocksToday)) { hostRoute = "settings"; screen = loading; }
   const quizzes = {
     onStartQuiz: (quiz: OrdinaryQuiz) => { if (quiz.direction === "l1-de") written.requestStart(quiz.material); },
     canStartQuiz: (quiz: OrdinaryQuiz) => quiz.direction === "l1-de" && written.canRequestStart,
   };
-  return <>
+  return <div className="nav-screen" ref={frame}>
     {selected !== null && <LearningHost access={props.access} transport={props.transport} storage={props.storage}
       newId={props.newId} language={props.language} settings={settings}
       minimumStateVersion={highest(floor?.version, selected.version)} initialSessionId={seed}
       route={hostRoute} submitOnEnter renderPreview={renderPreview} quizzes={quizzes}
-      onLearning={() => { hostClaimed.current = true; setRoute("learning"); }}
+      onLearning={() => { hostClaimed.current = true; navigate({ type: "open", screen: "learning" }); }}
       onToday={() => { hostClaimed.current = false; seedReleased.current = true; today(); }}
-      onSettings={() => { setSettingsOpened(true); setRoute("settings"); }} />}
+      onSettings={openSettings}
+      onNavigate={destination => destination === "statistics" ? navigate({ type: "push", screen: "statistics" }) : openTab(destination)} />}
     {screen}
     {oral.screen}
     {written.screen}
-    {settingsOpened && <div hidden={route !== "settings"}>
+    {settingsOpened && <div hidden={at !== "settings"}>
       <SettingsHost access={props.access} transport={props.transport} document={settings}
-        language={props.language} active={route === "settings"} onToday={today} />
+        language={props.language} active={at === "settings"} onToday={today}
+        onDictionary={() => openTab("dictionary")} />
     </div>}
-  </>;
+  </div>;
 }

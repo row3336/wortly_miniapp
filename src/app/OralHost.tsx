@@ -1,12 +1,13 @@
-import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, type ReactNode } from "react";
+import { useEffect, useMemo, useReducer, useRef, type ReactNode } from "react";
 import type { HttpOptions } from "../api/http";
 import type { Language } from "../i18n/language";
 import { OralScreen } from "../oral/OralScreen";
 import type { OralSessionPendingStore, OralStopPendingStore } from "../oral/oralPending";
 import { useOralDocument, type OralDocumentActions } from "../oral/useOralDocument";
-import { bindBackButton, notifyAcceptedMilestone } from "../platform/telegram";
+import { notifyAcceptedMilestone } from "../platform/telegram";
 import type { SettingsDocument } from "../settings/useSettingsDocument";
 import type { OrdinaryQuiz } from "../today/TodayScreen";
+import { useBackLayer } from "./navigationBack";
 import type { OpenedAccess } from "./openedAccess";
 
 /** One pair per storage: the pending slots serialize through their shared in-memory queue. */
@@ -172,11 +173,7 @@ export function useOralHost(options: OralHostOptions): OralHost {
     else if (ownSummary) back = () => { void latest.current.onToday(); };
     else if (awaitingStop) back = () => {};
   }
-  const backHandler = useRef<() => void>(() => {});
-  // Only a committed screen supplies the handler; binding follows presence alone.
-  useLayoutEffect(() => { if (back) backHandler.current = back; });
-  const hasBack = back !== null;
-  useEffect(() => hasBack ? bindBackButton(window, () => backHandler.current()) : undefined, [hasBack]);
+  useBackLayer("screen", back);
 
   const requestStart = (quiz: OrdinaryQuiz) => {
     const bucket = oralBucket(quiz);

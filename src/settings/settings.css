@@ -27,7 +27,4 @@
 .settings-screen summary { cursor: pointer; min-height: 44px; padding: 8px 0; }
 .settings-material, .settings-topic-editor, .settings-intervals, .settings-conflict { display: grid; gap: 12px; min-width: 0; }
 .settings-interval { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 12px; }
-.settings-nav { margin-top: auto; padding-top: 12px; border-top: 1px solid var(--line); display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; }
-.settings-nav button { min-height: 44px; padding: 8px 4px; border: 0; border-radius: 12px; background: none; color: var(--text); font: inherit; font-size: 14px; overflow-wrap: anywhere; }
-.settings-nav [aria-current="page"] { font-weight: 700; background: var(--surface); opacity: 1 !important; }
 @media (max-width: 359px) { .settings-screen { padding-left: calc(16px + var(--safe-left, env(safe-area-inset-left, 0px))); padding-right: calc(16px + var(--safe-right, env(safe-area-inset-right, 0px))); } .settings-group { padding: 16px; } .settings-interval { grid-template-columns: minmax(0, 1fr); } }

@@ -1,0 +1,8 @@
+/* Navigation shell additions: new classes only; the panel reuses .today-nav for its layout. */
+.bottom-nav button { display: grid; justify-items: center; align-content: center; gap: 2px; }
+.nav-icon { display: block; width: 22px; height: 22px; flex: 0 0 auto; }
+/* The И1 sprite fills the filter knobs with the prototype card colour; the sprite itself stays the accepted file. */
+.nav-icon { --w-card: var(--surface); }
+.nav-placeholder-text { color: var(--muted); }
+.today-direction { display: block; color: var(--muted); font-size: 14px; }
+.nav-screen { min-width: 0; }

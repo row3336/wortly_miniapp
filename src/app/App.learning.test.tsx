@@ -674,3 +674,26 @@ describe("R17 native Back across a failed stop and an owner swap", () => {
     expect(a.studyPosts().map(post => post.kind)).toEqual(["session.start", "learning.preview_next", "assignment.present"]);
   });
 });
+
+// M-NAV: the bottom navigation is hidden during the session (К09-040); Back is still the session's own exit.
+describe("M-NAV bottom navigation around a Learning session", () => {
+  it("N-L1 preview and question show no navigation panel; Back stops and Today shows the panel again", async () => {
+    const back = fakeBack(), a = app({ back }); render(<App />);
+    await startButton(a);
+    expect(screen.getByRole("navigation", { name: "Основная навигация" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Новая группа слов/ }));
+    await screen.findByRole("button", { name: "Дальше" });
+    expect(screen.queryByRole("navigation", { name: "Основная навигация" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Дальше" }));
+    await editable(); a.server.session = a.posts()[0].session_id;
+    expect(screen.queryByRole("navigation", { name: "Основная навигация" })).toBeNull();
+    a.route(async (url, init, base) => {
+      if (!isPost(init, "session.stop")) return base(url, init);
+      const reply = await base(url, init); a.server.session = null; return reply;
+    });
+    await back.click();
+    await waitFor(() => expect(a.studyPosts().at(-1)).toMatchObject({ kind: "session.stop", payload: { reason: "stop" } }));
+    await screen.findByText(pairText);
+    expect(screen.getByRole("navigation", { name: "Основная навигация" })).toBeTruthy();
+  });
+});
