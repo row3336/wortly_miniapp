@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenRequest, OralSessionProjection, Profile, TodayResponse } from "../api/generated";
 import { settingsResponse } from "../settings/settingsRead.test-support";
 import { App } from "./App";
+import { bindDocument, conflictSession, documentConflict, invalidOpen } from "./openRules.test-support";
 
 type Fetch = (url: string | URL | Request, init?: RequestInit) => Promise<Response>;
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -54,14 +55,10 @@ function device(options: { locks?: boolean; session?: boolean } = {}) {
     state_version: String(server.version), access: { status: "admitted", version: "1", reason: null } });
   const refused: string[] = [];
   const open = (body: OpenRequest) => {
-    if ((body.confirm_document_replacement === true) !== (body.expected_document_epoch != null)) {
-      return response({ error: { code: "VALIDATION_FAILED" } }, 422);
-    }
-    const replacing = server.document !== null && server.document !== body.document_id;
-    const confirmed = body.confirm_document_replacement === true && body.expected_document_epoch === String(server.epoch);
-    if (replacing && !(body.holds_document_lock === true || confirmed)) return response({ status: "SESSION_BUSY", profile: account(),
-      compatibility, session: { status: "busy", stop_remote_target: null, document_conflict: true, document_epoch: String(server.epoch) } });
-    if (server.document !== body.document_id) { server.document = body.document_id; server.epoch += 1; server.version += 1; }
+    if (invalidOpen(body)) return response({ error: { code: "VALIDATION_FAILED" } }, 422);
+    if (documentConflict(server.document, server.epoch, body)) return response({ status: "SESSION_BUSY", profile: account(),
+      compatibility, session: conflictSession(server.epoch) });
+    if (bindDocument(server, body)) server.version += 1;
     return response({ status: "opened", profile: account(), compatibility, client_instance_id: body.client_instance_id,
       document_id: body.document_id, document_epoch: String(server.epoch), proof_version: "1",
       session: server.session === null ? null : { id: server.session, phase: "active" } });

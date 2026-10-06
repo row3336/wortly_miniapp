@@ -8,6 +8,7 @@ import type { AsyncStorage } from "../platform/storage";
 import { RemoteStopPendingStore } from "../study/remoteStopPending";
 import type { DocumentLease, DocumentLock } from "./documentLock";
 import { EntryController } from "./entryController";
+import { bindDocument, conflictSession, documentConflict, invalidOpen } from "./openRules.test-support";
 import type { EntryState } from "./entryState";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -20,20 +21,11 @@ function documentServer() {
   const profile = (): Profile => ({ profile_id: id(1), role: "user", ui_language: "ru", dictionary_language: "ru",
     time_zone: "UTC", state_version: String(server.version), access: { status: "admitted", version: "1", reason: null } });
   const open = (request: OpenRequest): OpenedClient | BusyClient => {
-    // A confirmation always names its epoch, and an epoch is only a confirmation's.
-    if ((request.confirm_document_replacement === true) !== (request.expected_document_epoch != null)) {
-      throw new EntryApiError("http", 422, "VALIDATION_FAILED");
+    if (invalidOpen(request)) throw new EntryApiError("http", 422, "VALIDATION_FAILED");
+    if (documentConflict(server.document, server.epoch, request)) {
+      return { status: "SESSION_BUSY", profile: profile(), compatibility, session: conflictSession(server.epoch) };
     }
-    const replacing = server.document !== null && server.document !== request.document_id;
-    const confirmed = request.confirm_document_replacement === true
-      && request.expected_document_epoch === String(server.epoch);
-    if (replacing && !(request.holds_document_lock === true || confirmed)) {
-      return { status: "SESSION_BUSY", profile: profile(), compatibility, session: { status: "busy",
-        stop_remote_target: null, document_conflict: true, document_epoch: String(server.epoch) } };
-    }
-    if (server.document !== request.document_id) {
-      server.document = request.document_id; server.epoch += 1; server.version += 1;
-    }
+    if (bindDocument(server, request)) server.version += 1;
     if (server.otherSession) {
       return { status: "SESSION_BUSY", profile: profile(), compatibility, session: { status: "busy",
         stop_remote_target: server.otherSession, document_conflict: false, document_epoch: String(server.epoch) } };

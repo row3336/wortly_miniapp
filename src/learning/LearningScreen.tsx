@@ -1,5 +1,7 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useRef, type ReactNode } from "react";
 import type { LearningPreviewAddress } from "../api/generated";
+import { CommandRecovery } from "../commands/CommandRecovery";
+import { useEnterNext } from "../commands/useEnterNext";
 import type { Language } from "../i18n/language";
 import { WrittenAnswerInput } from "../study/WrittenAnswerInput";
 import { WrittenAnswerResult } from "../study/WrittenAnswerResult";
@@ -20,7 +22,6 @@ const copy = {
   ru: { title: "Изучение слов", exit: "Выйти", loading: "Загружаем занятие…", idle: "Занятие ещё не началось.",
     saving: "Сохраняем ответ…", present: "Подтверждаем показ задания…", unknown: "Проверяем, сохранилось ли действие.",
     stop: "Завершаем занятие…", closed: "Занятие завершено.", unavailable: "Занятие недоступно в этом окне.", stale: "Не удалось обновить занятие.",
-    check: "Проверить состояние", retry: "Повторить отправку", retryStop: "Повторить завершение",
     previous: "Предыдущий ответ", captured: "Отправленный ответ", forgot: "Забыл…", next: "Дальше", known: "Уже знаю",
     groupDone: "Группа изучена.", passDone: "Этот проход завершён.", today: "Вернуться на Сегодня",
     local: "Не удалось обновить данные на этом устройстве.", savedLocal: "Действие сохранено. Не удалось обновить данные на этом устройстве.",
@@ -28,7 +29,6 @@ const copy = {
   uk: { title: "Вивчення слів", exit: "Вийти", loading: "Завантажуємо заняття…", idle: "Заняття ще не почалося.",
     saving: "Зберігаємо відповідь…", present: "Підтверджуємо показ завдання…", unknown: "Перевіряємо, чи збереглася дія.",
     stop: "Завершуємо заняття…", closed: "Заняття завершено.", unavailable: "Заняття недоступне в цьому вікні.", stale: "Не вдалося оновити заняття.",
-    check: "Перевірити стан", retry: "Повторити надсилання", retryStop: "Повторити завершення",
     previous: "Попередня відповідь", captured: "Надіслана відповідь", forgot: "Не пам’ятаю…", next: "Далі", known: "Уже знаю",
     groupDone: "Групу вивчено.", passDone: "Цей прохід завершено.", today: "Повернутися на Сьогодні",
     local: "Не вдалося оновити дані на цьому пристрої.", savedLocal: "Дію збережено. Не вдалося оновити дані на цьому пристрої.",
@@ -36,7 +36,6 @@ const copy = {
   en: { title: "Learn words", exit: "Exit", loading: "Loading your session…", idle: "The session has not started yet.",
     saving: "Saving your answer…", present: "Confirming the displayed question…", unknown: "Checking whether the action was saved.",
     stop: "Ending the session…", closed: "The session has ended.", unavailable: "This session is unavailable in this window.", stale: "Could not refresh the session.",
-    check: "Check status", retry: "Retry sending", retryStop: "Retry ending the session",
     previous: "Previous answer", captured: "Submitted answer", forgot: "I forgot…", next: "Next", known: "I already know this",
     groupDone: "You have learned this group.", passDone: "This round has ended.", today: "Return to Today",
     local: "Could not update data on this device.", savedLocal: "The action was saved. Could not update data on this device.",
@@ -63,25 +62,11 @@ export function LearningScreen({ state, language, submitOnEnter, actions, render
     : state.problem ? t.stale : null;
   const unresolved = primary.pending && primary.outcome === null || stop.pending && stop.outcome === null;
   const showRecovery = !isClosed && (unresolved || problem || state.phase === "stale");
-  const checking = [primary, stop].some(lane => ["sending", "checking", "loading"].includes(lane.phase));
   const status = state.phase === "submitting" ? t.saving : state.phase === "visible_unconfirmed" ? t.present
     : state.phase === "unknown" ? t.unknown : undefined;
   const pendingForgot = primary.pending && primary.outcome === null && primary.pendingIntent?.kind === "answer.submit"
     && "forgot" in primary.pendingIntent.payload;
-  useEffect(() => {
-    const keydown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || event.key !== "Enter" || !submitOnEnter || !result || !state.canNext || pendingResult) return;
-      if (event.repeat || composing.current || event.isComposing || event.keyCode === 229) return;
-      const target = event.target;
-      if (!(target instanceof Element)) return;
-      if (target !== document.body && !root.current?.contains(target)) return;
-      // A focused control owns Enter; bubbling must not bypass its selected grade or action.
-      if (target.closest('button, a, input, textarea, select, [contenteditable="true"], [role="dialog"]')) return;
-      event.preventDefault(); void actions.next();
-    };
-    document.addEventListener("keydown", keydown);
-    return () => document.removeEventListener("keydown", keydown);
-  }, [submitOnEnter, result, state.canNext, pendingResult, actions]);
+  useEnterNext(root, composing, submitOnEnter, result, state.canNext && !pendingResult, actions);
 
   return <main ref={root} className={`learning-screen${state.phase === "summary" ? " learning-screen-summary" : ""}`} onCompositionStart={() => { composing.current = true; }}
     onCompositionEnd={() => { composing.current = false; }}>
@@ -120,10 +105,8 @@ export function LearningScreen({ state, language, submitOnEnter, actions, render
     </p>}
     {state.phase === "unknown" && !state.question && !unknownAnswer && !result && <p role="status">{t.unknown}</p>}
     {problem && !isClosed && <p role="status">{problem}</p>}
-    {showRecovery && <div className="learning-recovery">
-      <button type="button" disabled={checking} onClick={() => { if (!checking) void actions.refresh(); }}>{t.check}</button>
-      {state.canRetryPrimary && <button type="button" onClick={() => { void actions.retry("primary"); }}>{t.retry}</button>}
-      {stop.canRetry && <button type="button" onClick={() => { void actions.retry("stop"); }}>{t.retryStop}</button>}
-    </div>}
+    {showRecovery && <CommandRecovery className="learning-recovery" language={language} lanes={[primary, stop]}
+      canRetryPrimary={state.canRetryPrimary} canRetryStop={stop.canRetry}
+      onCheck={() => { void actions.refresh(); }} onRetry={lane => { void actions.retry(lane); }} />}
   </main>;
 }

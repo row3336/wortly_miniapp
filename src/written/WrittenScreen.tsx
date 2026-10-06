@@ -1,5 +1,7 @@
-import { useEffect, useRef } from "react";
+import { useRef } from "react";
 import type { Language } from "../i18n/language";
+import { CommandRecovery } from "../commands/CommandRecovery";
+import { useEnterNext } from "../commands/useEnterNext";
 import { WrittenAnswerInput } from "../study/WrittenAnswerInput";
 import { WrittenAnswerResult } from "../study/WrittenAnswerResult";
 import type { WrittenActions } from "./useWrittenDocument";
@@ -19,7 +21,7 @@ const copy = {
   ru: { words: "Слова: перевод на немецкий", phrases: "Фразы: перевод на немецкий", exit: "Выйти", loading: "Загружаем занятие…",
     saving: "Сохраняем ответ…", present: "Подтверждаем показ задания…", unknown: "Проверяем, сохранилось ли действие.",
     stop: "Завершаем занятие…", closed: "Занятие завершено.", unavailable: "Занятие недоступно в этом окне.", stale: "Не удалось обновить занятие.",
-    check: "Проверить состояние", retry: "Повторить отправку", retryStop: "Повторить завершение", previous: "Предыдущий ответ",
+    previous: "Предыдущий ответ",
     captured: "Отправленный ответ", forgot: "Забыл…", today: "На Сегодня", summary: "Итог занятия",
     local: "Не удалось обновить данные на этом устройстве.", blocked: "Действие нельзя повторить. Проверь состояние занятия.",
     changed: "Задание изменилось. Обнови занятие.", noMaterial: "Сейчас нет доступных слов для этого занятия.", noPhrases: "Пока нет доступного материала",
@@ -27,7 +29,7 @@ const copy = {
   uk: { words: "Слова: переклад німецькою", phrases: "Фрази: переклад німецькою", exit: "Вийти", loading: "Завантажуємо заняття…",
     saving: "Зберігаємо відповідь…", present: "Підтверджуємо показ завдання…", unknown: "Перевіряємо, чи збереглася дія.",
     stop: "Завершуємо заняття…", closed: "Заняття завершено.", unavailable: "Заняття недоступне в цьому вікні.", stale: "Не вдалося оновити заняття.",
-    check: "Перевірити стан", retry: "Повторити надсилання", retryStop: "Повторити завершення", previous: "Попередня відповідь",
+    previous: "Попередня відповідь",
     captured: "Надіслана відповідь", forgot: "Не пам’ятаю…", today: "На Сьогодні", summary: "Підсумок заняття",
     local: "Не вдалося оновити дані на цьому пристрої.", blocked: "Дію не можна повторити. Перевір стан заняття.",
     changed: "Завдання змінилося. Онови заняття.", noMaterial: "Зараз немає доступних слів для цього заняття.", noPhrases: "Поки немає доступного матеріалу",
@@ -35,7 +37,7 @@ const copy = {
   en: { words: "Words: translate into German", phrases: "Phrases: translate into German", exit: "Exit", loading: "Loading your session…",
     saving: "Saving your answer…", present: "Confirming the displayed question…", unknown: "Checking whether the action was saved.",
     stop: "Ending the session…", closed: "The session has ended.", unavailable: "This session is unavailable in this window.", stale: "Could not refresh the session.",
-    check: "Check status", retry: "Retry sending", retryStop: "Retry ending the session", previous: "Previous answer",
+    previous: "Previous answer",
     captured: "Submitted answer", forgot: "I forgot…", today: "Return to Today", summary: "Session summary",
     local: "Could not update data on this device.", blocked: "This action cannot be retried. Check session status.",
     changed: "The question has changed. Refresh the session.", noMaterial: "There are no words available for this session right now.", noPhrases: "No material is available yet",
@@ -68,27 +70,12 @@ export function WrittenScreen({ state, language, submitOnEnter, actions, onToday
   const isClosed = state.phase === "closed" || state.phase === "disposed";
   const summaryFailed = ownStop && closed?.summaryRead === "failed";
   const showRecovery = !isClosed && (unknownLane || !!problem && state.phase !== "idle" || state.phase === "stale") || summaryFailed;
-  const checking = [primary, stop].some(lane => ["sending", "checking", "loading"].includes(lane.phase));
   const status = state.phase === "submitting" ? t.saving : state.phase === "visible_unconfirmed" ? t.present
     : state.phase === "unknown" ? t.unknown : undefined;
   const pendingForgot = primary.pending && primary.outcome === null && primary.pendingIntent?.kind === "answer.submit"
     && "forgot" in primary.pendingIntent.payload;
   const canNext = state.canNext && !pendingResult;
-  useEffect(() => {
-    const keydown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || event.key !== "Enter" || !submitOnEnter || !result || !canNext) return;
-      // Enter of an IME composition, a held key or a repeated event never advances (TA §2).
-      if (event.repeat || composing.current || event.isComposing || event.keyCode === 229) return;
-      const target = event.target;
-      if (!(target instanceof Element)) return;
-      if (target !== document.body && !root.current?.contains(target)) return;
-      // A focused control owns Enter; bubbling must not bypass its own action.
-      if (target.closest('button, a, input, textarea, select, [contenteditable="true"], [role="dialog"]')) return;
-      event.preventDefault(); void actions.next();
-    };
-    document.addEventListener("keydown", keydown);
-    return () => document.removeEventListener("keydown", keydown);
-  }, [submitOnEnter, result, canNext, actions]);
+  useEnterNext(root, composing, submitOnEnter, result, canNext, actions);
 
   // Waiting for the summary of the own Stop looks like the application start, never like a zero result.
   if (ownStop && (closed.summaryRead === "pending" || closed.summaryRead === "reading")) return <main className="app-shell" lang={language} aria-busy="true">
@@ -134,11 +121,9 @@ export function WrittenScreen({ state, language, submitOnEnter, actions, onToday
     {state.phase === "closed" && !summary && <p role="status">{t.closed}</p>}
     {state.phase === "unknown" && !state.question && !unknownAnswer && !result && <p role="status">{t.unknown}</p>}
     {problem && !isClosed && <p role="status">{problem}</p>}
-    {showRecovery && <div className="written-recovery">
-      <button type="button" disabled={checking} onClick={() => { if (!checking) void actions.refresh(); }}>{t.check}</button>
-      {state.canRetryPrimary && <button type="button" onClick={() => { void actions.retry("primary"); }}>{t.retry}</button>}
-      {stop.canRetry && <button type="button" onClick={() => { void actions.retry("stop"); }}>{t.retryStop}</button>}
-    </div>}
+    {showRecovery && <CommandRecovery className="written-recovery" language={language} lanes={[primary, stop]}
+      canRetryPrimary={state.canRetryPrimary} canRetryStop={stop.canRetry}
+      onCheck={() => { void actions.refresh(); }} onRetry={lane => { void actions.retry(lane); }} />}
     {(state.phase === "idle" && !unresolved || summaryFailed) && <button type="button" className="written-today" onClick={onToday}>{t.today}</button>}
   </main>;
 }

@@ -4,7 +4,7 @@ import type { ClosedSessionBoundary, ErrorDetail, MissingCommandFact, Profile, R
 import { validProfile } from "../api/entryApi";
 import { ApiError, createJsonTransport, errorCode, httpError, type HttpOptions } from "../api/http";
 import { count, date, eventTime, exactKeys, oneOf, record, sameId, uuid, validClosedSessionBoundary, version } from "../api/wireValidation";
-import { validWrittenAnswerDetail } from "../learning/learningAnswerApi";
+import { validAnswerCapabilities, validAnswerFact, validSavedAnswer } from "../learning/learningAnswerApi";
 import { validWrittenSessionCurrent } from "../study/sessionProjection";
 import { createSessionReadApi } from "../study/sessionReadApi";
 import { copyWrittenIntent, isAnswerKind, validWrittenIntent, writtenIntentHash, type WrittenCommand } from "./writtenIntent";
@@ -58,39 +58,11 @@ type Address = { session_id: string; assignment_id: string; result_id?: string }
 function answerView(value: Record<string, unknown>, address: Address): (WrittenAnswer & { step: WrittenStepCurrent }) | null {
   const step = value.step, action = value.action, result = value.result, caps = value.capabilities;
   if (!validWrittenStep(step, address.session_id) || !record(caps)) return null;
-  const open = step.status === "active" || step.status === "summary";
   if ((action === null) !== (result === null)) return null;
   if (action !== null && result !== null) {
-    if (!("mode" in step) || !record(action) || !record(result)
-      || !exactKeys(action, ["action_id", "kind", "version", "status"]) || !uuid(action.action_id)
-      || action.kind !== "answer.submit" || !version(action.version) || !oneOf(action.status, ["active", "undone"])
-      || !exactKeys(result, ["result_id", "assignment_id", "version", "grade", "correct", "status", "accepted_at", "answer_date", "detail"])
-      || !uuid(result.result_id) || !sameId(result.assignment_id, address.assignment_id) || !version(result.version)
-      || address.result_id !== undefined && !sameId(result.result_id, address.result_id)
-      || ![2, 3, 4, 5].includes(result.grade as number) || result.correct !== (result.grade as number) >= 3
-      || result.status !== action.status || result.version !== action.version
-      || !eventTime(result.accepted_at) || !date(result.answer_date)
-      || result.detail !== null && !validWrittenAnswerDetail(result.detail)
-      // Closing a session deletes its temporary answer receipts.
-      || step.status === "closed" && result.detail !== null) return null;
+    if (!("mode" in step) || !record(action) || !record(result) || !validSavedAnswer(action, result, address, step.status === "closed")) return null;
   }
-  // A revision right addresses exactly this live result of this open session, as in Learning.
-  const target = (candidate: unknown, grades: boolean): boolean => {
-    if (!record(candidate) || !record(result) || !record(action) || action.status !== "active" || result.status !== "active" || !open
-      || !exactKeys(candidate, ["session_id", "assignment_id", "result_id", "expected_result_version", ...(grades ? ["values"] : [])])
-      || !sameId(candidate.session_id, address.session_id) || !sameId(candidate.assignment_id, address.assignment_id)
-      || !sameId(candidate.result_id, result.result_id as string) || candidate.expected_result_version !== result.version) return false;
-    const values = candidate.values;
-    return grades ? (result.grade as number) >= 3 && Array.isArray(values) && values.length === 3
-      && [3, 4, 5].every(grade => values.includes(grade)) : result.grade === 2;
-  };
-  // The contract has no written undo right yet: anything else is not this contract.
-  if (!exactKeys(caps, ["answer_target", "grades", "correct_target", "undo_target", "stop", "summary_home"])
-    || caps.grades !== null && !target(caps.grades, true) || caps.correct_target !== null && !target(caps.correct_target, false)
-    || caps.undo_target !== null || typeof caps.stop !== "boolean" || typeof caps.summary_home !== "boolean") return null;
-  if (caps.answer_target !== null && !(step.status === "active" && "assignment" in step
-    && step.assignment?.status === "presented" && sameId(caps.answer_target, step.assignment.id))) return null;
-  if (caps.stop && !open || caps.summary_home && step.status !== "summary") return null;
+  if (!validAnswerCapabilities(caps, step, action, result, address)) return null;
   return { action, result, step, capabilities: caps } as WrittenAnswer & { step: WrittenStepCurrent };
 }
 
@@ -103,29 +75,8 @@ function sessionFact(value: unknown, command: WrittenCommand): boolean {
     && value.action_id === null && value.result_id === null && value.context_id === null && value.object_version === null;
 }
 function answerFact(value: unknown, command: WrittenCommand, view: WrittenAnswer & { step: WrittenStepCurrent }): boolean {
-  if (!record(value) || command.kind !== "answer.submit" && command.kind !== "result.grade" && command.kind !== "result.correct"
-    || !exactKeys(value, ["id", "kind", "status", "applied_at", "target_id", "action_id", "result_id", "context_id", "object_version"])
-    || !sameId(value.id, command.command_id) || value.kind !== command.kind || !sameId(value.target_id, command.assignment_id)
-    || !oneOf(value.status, ["applied", "already_applied"]) || !eventTime(value.applied_at)
-    || !uuid(value.action_id) || !uuid(value.result_id) || value.context_id !== null || !version(value.object_version)) return false;
-  if (command.kind === "answer.submit" && value.object_version !== "1") return false;
-  if (command.kind !== "answer.submit") {
-    if (!sameId(value.result_id, command.result_id)) return false;
-    const expected = BigInt(command.expected_result_version), applied = BigInt(value.object_version);
-    // Re-selecting the saved grade is accepted without a new revision (К10-077); a correction always revises 2 to 4.
-    if (applied !== expected + 1n && !(command.kind === "result.grade" && applied === expected)) return false;
-    // A later revision can change the grade, but not the outcome of this one.
-    if (view.result?.version === value.object_version
-      && view.result.grade !== (command.kind === "result.correct" ? 4 : command.payload.grade)) return false;
-  }
-  if (view.result === null || view.action === null) return view.step.status === "unavailable" || view.step.status === "not_found";
-  if (!sameId(value.action_id, view.action.action_id) || !sameId(value.result_id, view.result.result_id)
-    || BigInt(value.object_version) > BigInt(view.result.version)) return false;
-  if (command.kind !== "answer.submit") return true;
-  // A revision changes the grade, never the originally submitted text or forgot flag.
-  const detail = view.result.detail;
-  return detail === null || ("text" in command.payload ? detail.input.kind === "text" && detail.input.text === command.payload.text
-    : detail.input.kind === "forgot");
+  return (command.kind === "answer.submit" || command.kind === "result.grade" || command.kind === "result.correct")
+    && validAnswerFact(value, command, view);
 }
 function refusal(value: Record<string, unknown>, status: number, command: WrittenCommand): Refusal | null {
   const code = errorCode(value);

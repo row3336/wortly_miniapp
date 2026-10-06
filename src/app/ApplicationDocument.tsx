@@ -40,6 +40,11 @@ function highest(...versions: (string | undefined)[]): string | undefined {
     value !== undefined && (top === undefined || BigInt(value) > BigInt(top)) ? value : top, undefined);
 }
 
+/** A mode owner's resume seed: it belongs to the dictionary pair it was read for. */
+type ModeSeed = { seed: string | null; pair: string; version?: string } | null;
+/** The owner of a new pair never starts from the old pair's session; the current owner keeps its own seed. */
+const seedFor = (selection: ModeSeed, pair: string) => selection !== null && selection.pair === pair ? selection.seed : null;
+
 type ModeRead =
   | { kind: "pending" | "failed" | "other" }
   | { kind: "learning" | "oral" | "written"; id: string; version: string }
@@ -66,12 +71,12 @@ export function ApplicationDocument(props: Props) {
   const [gate, setGate] = useState<"ready" | "loading" | "failed">("ready");
   // The Learning owner is chosen once per document; later mode reads never reseed or remount it.
   // A resumed seed belongs to the dictionary pair it was read for.
-  const [selected, setSelected] = useState<{ seed: string | null; pair: string; version?: string } | null>(null);
+  const [selected, setSelected] = useState<ModeSeed>(null);
   // The oral owner is re-seeded only from a fresh mode read: its hook takes an active seed from props alone.
-  const [oralSelected, setOralSelected] = useState<{ seed: string | null; pair: string; version?: string } | null>(null);
+  const [oralSelected, setOralSelected] = useState<ModeSeed>(null);
   // The written owner is re-seeded only from a fresh mode read, never on its own route: there a reseed would replace
   // the owner and the result view that waits for «Далее» after background (К05-152).
-  const [writtenSelected, setWrittenSelected] = useState<{ seed: string | null; pair: string; version?: string } | null>(null);
+  const [writtenSelected, setWrittenSelected] = useState<ModeSeed>(null);
   const current = useRef(props);
   current.current = props;
   const latest = useRef(floor);
@@ -126,10 +131,7 @@ export function ApplicationDocument(props: Props) {
   }, [at, fits, floor, synchronize]);
 
   const session = props.access.session, pair = props.access.profile.dictionary_language;
-  // The owner of a new pair never starts from the old pair's session; the current owner keeps its own seed.
-  const seed = selected !== null && selected.pair === pair ? selected.seed : null;
-  const oralSeed = oralSelected !== null && oralSelected.pair === pair ? oralSelected.seed : null;
-  const writtenSeed = writtenSelected !== null && writtenSelected.pair === pair ? writtenSelected.seed : null;
+  const seed = seedFor(selected, pair), oralSeed = seedFor(oralSelected, pair), writtenSeed = seedFor(writtenSelected, pair);
   // A session reported after selection is read again only on Today or the oral route, and only when no Host adopted it.
   const readAfter = selected !== null && session !== null && (at === "today" || at === "oral")
     && !(seed !== null && !seedReleased.current && sameId(session.id, seed))
@@ -141,12 +143,8 @@ export function ApplicationDocument(props: Props) {
   const readId = read.kind === "learning" || read.kind === "oral" || read.kind === "written" || read.kind === "closed" ? read.id : null;
   useEffect(() => {
     // Leaving the seed's pair closes that session on the server: it is never a seed again, even after a return.
-    if (selected !== null && selected.seed !== null && selected.pair !== pair) { setSelected({ ...selected, seed: null }); return; }
-    if (oralSelected !== null && oralSelected.seed !== null && oralSelected.pair !== pair) {
-      setOralSelected({ ...oralSelected, seed: null }); return;
-    }
-    if (writtenSelected !== null && writtenSelected.seed !== null && writtenSelected.pair !== pair) {
-      setWrittenSelected({ ...writtenSelected, seed: null }); return;
+    for (const [selection, select] of [[selected, setSelected], [oralSelected, setOralSelected], [writtenSelected, setWrittenSelected]] as const) {
+      if (selection !== null && selection.seed !== null && selection.pair !== pair) { select({ ...selection, seed: null }); return; }
     }
     if (selected === null && session === null) { setSelected({ seed: null, pair }); return; }
     if (selected === null && read.kind === "learning") {

@@ -1,39 +1,23 @@
-import { ApiError } from "../api/http";
 import type { ClosedSessionBoundary, LearningAnswerResponse, LearningSessionProjection, UnavailableCurrent } from "../api/generated";
 import { oneOf, sameId, uuid, version } from "../api/wireValidation";
-import { PendingSlot, PendingStoreError } from "../commands/pendingSlot";
+import { LaneCore, missingProblem, retryStep, type CommandProblem, type LaneResolved, type LaneSnapshot,
+  type MissingStatus, type WithoutId } from "../commands/commandLane";
+import type { PendingSlot } from "../commands/pendingSlot";
+import { revisionRetryProblem } from "../commands/resultRevision";
 import type { LearningSessionRead, LearningSessionReply, LearningSessionStatus } from "./learningSessionApi";
 import { copyLearningCommandIntent, validLearningCommandIntent, type LearningCommandIntent } from "./learningCommandIntent";
 import type { LearningAnswerReply, LearningAnswerStatus, LearningResultRead } from "./learningAnswerApi";
 import { copyLearningRevisionIntent, type LearningRevisionIntent } from "./learningRevisionIntent";
 import type { LearningSessionPending } from "./learningSessionPending";
 
-type WithoutId<T> = T extends unknown ? Omit<T, "command_id"> : never;
 export type LearningTransition = WithoutId<LearningCommandIntent>;
 type Current = LearningSessionRead["current"] | UnavailableCurrent;
 type Answer = Pick<LearningAnswerResponse, "action" | "result" | "capabilities">;
 type Reply = LearningSessionReply | LearningAnswerReply;
 type Status = LearningSessionStatus | LearningAnswerStatus;
 type Settled = Reply | Extract<Status, { outcome: "accepted" }>;
-export type LearningCommandSnapshot = {
-  phase: "loading" | "idle" | "checking" | "sending" | "unresolved" | "blocked" | "settled" | "disposed";
-  pending: boolean;
-  kind: LearningCommandIntent["kind"] | null;
-  sessionId: string | null;
-  outcome: "accepted" | "rejected" | "not_applied" | null;
-  resolved: { commandId: string; kind: LearningCommandIntent["kind"]; sessionId: string;
-    assignmentId?: string; resultId?: string } | null;
-  pendingIntent: LearningCommandIntent | null;
-  rejectionCode: string | null;
-  problem: "network" | "storage" | "invalid_pending" | "pending_changed" | "mismatch" | "not_found"
-    | "expired" | "forbidden" | "profile_changed" | "client_changed" | "pair_changed" | "step_changed"
-    | "closed" | "stale_response" | null;
-  canRetry: boolean;
-  current: Current | null;
-  answer: Answer | null;
-  closedSession: ClosedSessionBoundary | null;
-  stateVersion: string | null;
-};
+type Resolved = LaneResolved<LearningCommandIntent["kind"]> & { assignmentId?: string; resultId?: string };
+export type LearningCommandSnapshot = LaneSnapshot<LearningCommandIntent, Current, Resolved> & { answer: Answer | null };
 type Options = {
   profileId: string;
   clientInstanceId: string;
@@ -50,29 +34,24 @@ type Options = {
   onUpdate(snapshot: LearningCommandSnapshot): void;
 };
 
-/** Reconcile one command. A host owns the document, screens and the independent Stop lane. */
-export class LearningCommandController {
-  private readonly lifetime = new AbortController();
-  private phase: LearningCommandSnapshot["phase"] = "loading";
-  private problem: LearningCommandSnapshot["problem"] = null;
-  private pending: LearningSessionPending | null = null;
-  private outcome: LearningCommandSnapshot["outcome"] = null;
+/**
+ * Reconcile one command. A host owns the document, screens and the independent Stop lane. Learning keeps its own
+ * lane algorithm (no lane check, retry without a second check, no shared-floor memory): only the identical checks are shared.
+ */
+export class LearningCommandController extends LaneCore<LearningCommandIntent, LearningCommandSnapshot> {
   private resolved: LearningCommandSnapshot["resolved"] = null;
   private rejectionCode: string | null = null;
   private current: Current | null = null;
   private answer: Answer | null = null;
   private closedSession: ClosedSessionBoundary | null = null;
   private floor: string | null;
-  private loaded = false;
-  private running: Promise<void> | null = null;
-  private retryVerified = false;
 
   constructor(private readonly options: Options) {
+    super(options);
     if (!uuid(options.profileId) || !uuid(options.clientInstanceId) || !oneOf(options.pair, ["ru-de", "uk-de", "en-de"])
       || options.stateVersion !== undefined && !version(options.stateVersion)) throw new Error("invalid Learning context");
     this.floor = options.stateVersion ?? null;
   }
-  private live(): boolean { return !this.lifetime.signal.aborted && this.options.isLive(); }
   private minimumVersion(): string | null {
     const external = this.options.minimumStateVersion?.() ?? null;
     if (external !== null && !version(external)) throw new Error("invalid shared Learning version");
@@ -96,26 +75,7 @@ export class LearningCommandController {
         && this.outcome === null && this.pending.clientInstanceId === this.options.clientInstanceId
         && this.pending.pair === this.options.pair };
   }
-  private emit(): void { if (this.live()) this.options.onUpdate(this.snapshot()); }
-  private run(action: () => Promise<void>): Promise<void> {
-    if (!this.live()) return Promise.resolve();
-    if (this.running) return this.running;
-    const task = Promise.resolve().then(() => { if (this.live()) return action(); }).catch((error: unknown) => {
-      if (!this.live()) return;
-      this.retryVerified = false;
-      // A failed local cleanup must not erase an already confirmed result.
-      if (!this.outcome) this.clearCurrent();
-      if (error instanceof PendingStoreError) this.problem = error.kind === "invalid" ? "invalid_pending"
-        : error.kind === "changed" ? "pending_changed" : "storage";
-      else if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
-        this.problem = error.status === 401 ? "expired" : "forbidden";
-      } else this.problem = "network";
-      this.phase = this.pending ? "unresolved" : "blocked";
-    }).finally(() => { if (this.running === task) this.running = null; this.emit(); });
-    this.running = task;
-    return task;
-  }
-  private clearCurrent(): void { this.current = null; this.answer = null; this.closedSession = null; }
+  protected clearCurrent(): void { this.current = null; this.answer = null; this.closedSession = null; }
   private observe(stateVersion: string, current?: Current): boolean {
     const minimum = this.minimumVersion();
     if (minimum !== null && BigInt(stateVersion) < BigInt(minimum)) return false;
@@ -159,12 +119,7 @@ export class LearningCommandController {
       this.phase = "checking"; this.problem = null; this.retryVerified = false;
       if (!this.outcome) this.clearCurrent();
       this.emit();
-      if (!this.live()) return;
-      if (!this.loaded) {
-        this.pending = await this.options.pendingStore.load(this.options.profileId, this.lifetime.signal);
-        if (!this.live()) return;
-        this.loaded = true;
-      }
+      if (!this.live() || !await this.loadPending()) return;
       if (this.outcome) { await this.clearSettled(); return; }
       if (!this.pending) { this.phase = "idle"; return; }
       if (this.pending.mismatch) {
@@ -176,21 +131,16 @@ export class LearningCommandController {
       const reply = await this.options.check(copyLearningCommandIntent(pending.intent));
       if (!this.live()) return;
       if (reply.outcome === "accepted") { await this.settle("accepted", reply); return; }
+      const missing: MissingStatus = reply, problem = missingProblem(missing, pending, this.options);
       if (!this.observe(reply.state_version)) this.problem = "stale_response";
-      else if (!sameId(reply.current.profile_id, this.options.profileId)) this.problem = "profile_changed";
-      else if (reply.current.access.status !== "admitted") this.problem = "forbidden";
-      else if (reply.closed_session !== undefined) {
-        if (!sameId(reply.closed_session.session_id, pending.intent.session_id)) this.problem = "step_changed";
-        else {
-          // Only one locked server observation of absence plus final closure
-          // resolves this intent. A later closed-session read alone cannot.
-          this.outcome = "not_applied";
-          this.closedSession = structuredClone(reply.closed_session);
-          await this.clearSettled(); return;
-        }
+      else if (problem === "not_applied") {
+        // Only one locked server observation of absence plus final closure
+        // resolves this intent. A later closed-session read alone cannot.
+        this.outcome = "not_applied";
+        this.closedSession = structuredClone(missing.closed_session!);
+        await this.clearSettled(); return;
       }
-      else if (pending.clientInstanceId !== this.options.clientInstanceId) this.problem = "client_changed";
-      else if (pending.pair !== this.options.pair || `${reply.current.dictionary_language}-de` !== pending.pair) this.problem = "pair_changed";
+      else if (problem !== null) this.problem = problem;
       else if (pending.intent.kind === "result.grade" || pending.intent.kind === "result.correct") {
         const read = await this.options.readResult(copyLearningRevisionIntent(pending.intent));
         if (!this.live()) return;
@@ -198,7 +148,7 @@ export class LearningCommandController {
         else {
           this.answer = this.current !== null && "pair" in this.current
             ? structuredClone({ action: read.action, result: read.result, capabilities: read.capabilities }) : null;
-          this.problem = revisionRetryProblem(pending.intent, read, pending.pair);
+          this.problem = revisionRetryProblem(pending.intent, read, pending.pair, true);
           this.retryVerified = this.problem === "not_found";
         }
       }
@@ -231,9 +181,7 @@ export class LearningCommandController {
     } else await this.settle(reply.outcome, reply);
   }
   begin(action: LearningTransition): Promise<void> {
-    if (!this.live() || this.running || !this.loaded || this.pending || !["idle", "settled"].includes(this.phase)) {
-      return this.running ?? Promise.resolve();
-    }
+    if (this.busy()) return this.running ?? Promise.resolve();
     const intent = { ...action, command_id: this.options.newId() };
     if (!validLearningCommandIntent(intent)) return Promise.reject(new Error("invalid Learning action"));
     const pending: LearningSessionPending = { schemaVersion: 1, profileId: this.options.profileId,
@@ -246,44 +194,20 @@ export class LearningCommandController {
     if (!this.snapshot().canRetry) return this.running ?? Promise.resolve();
     return this.run(() => this.sendPending());
   }
-  dispose(): void { this.lifetime.abort(); this.clearCurrent(); this.phase = "disposed"; }
 }
 
 /** A missing acceptance fact authorizes no effect; retry only the same still-valid target. */
-function retryProblem(intent: Exclude<LearningCommandIntent, LearningRevisionIntent>, current: LearningSessionRead["current"], pair: string): LearningCommandSnapshot["problem"] {
-  if (!sameId(current.session_id, intent.session_id)) return "step_changed";
-  if (current.status === "closed") return "closed";
-  if (current.status === "unavailable") return "forbidden";
-  if (current.status === "not_found") return intent.kind === "session.start" ? "not_found" : "step_changed";
-  if (!("pair" in current)) return "forbidden";
-  if (current.pair !== pair) return "pair_changed";
+function retryProblem(intent: Exclude<LearningCommandIntent, LearningRevisionIntent>, current: LearningSessionRead["current"], pair: string): CommandProblem {
+  const step = retryStep(current, intent, pair);
+  if (typeof step === "string") return step;
   switch (intent.kind) {
     case "session.start": return "step_changed";
-    case "session.stop": return intent.payload.reason === "stop" || current.status === "summary" ? "not_found" : "step_changed";
-    case "assignment.present": return current.status === "active" && current.assignment?.status === "prefetched"
-      && sameId(current.assignment.id, intent.assignment_id) ? "not_found" : "step_changed";
-    case "answer.submit": return current.status === "active" && current.assignment?.status === "presented"
-      && sameId(current.assignment.id, intent.assignment_id) ? "not_found" : "step_changed";
-    case "learning.preview_next": case "learning.known": return current.status === "active"
-      && current.preview !== null && sameId(current.preview.id, intent.preview_id) ? "not_found" : "step_changed";
+    case "session.stop": return intent.payload.reason === "stop" || step.status === "summary" ? "not_found" : "step_changed";
+    case "assignment.present": return step.status === "active" && step.assignment?.status === "prefetched"
+      && sameId(step.assignment.id, intent.assignment_id) ? "not_found" : "step_changed";
+    case "answer.submit": return step.status === "active" && step.assignment?.status === "presented"
+      && sameId(step.assignment.id, intent.assignment_id) ? "not_found" : "step_changed";
+    case "learning.preview_next": case "learning.known": return step.status === "active"
+      && step.preview !== null && sameId(step.preview.id, intent.preview_id) ? "not_found" : "step_changed";
   }
-}
-
-function revisionRetryProblem(intent: LearningRevisionIntent, read: LearningResultRead, pair: string): LearningCommandSnapshot["problem"] {
-  const step = read.step;
-  if (step.status === "unavailable") return "forbidden";
-  if (!("session_id" in step) || !sameId(step.session_id, intent.session_id)) return "step_changed";
-  if (step.status === "closed") return "closed";
-  if (step.status === "not_found") return "step_changed";
-  if (!("pair" in step)) return "forbidden";
-  if (step.pair !== pair) return "pair_changed";
-  const { result, action, capabilities } = read;
-  if (result === null || action === null || result.status !== "active" || action.status !== "active"
-    || !sameId(result.result_id, intent.result_id) || !sameId(result.assignment_id, intent.assignment_id)
-    || result.version !== intent.expected_result_version || action.version !== result.version) return "step_changed";
-  const target = intent.kind === "result.correct" ? capabilities.correct_target : capabilities.grades;
-  if (target === null || !sameId(target.session_id, intent.session_id) || !sameId(target.assignment_id, intent.assignment_id)
-    || !sameId(target.result_id, intent.result_id) || target.expected_result_version !== intent.expected_result_version) return "step_changed";
-  if (intent.kind === "result.grade" && !capabilities.grades?.values.includes(intent.payload.grade as 3 | 4 | 5)) return "step_changed";
-  return "not_found";
 }

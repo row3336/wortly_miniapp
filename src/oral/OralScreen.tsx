@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef } from "react";
+import { commandCopy } from "../commands/commandCopy";
 import type { Language } from "../i18n/language";
 import type { OralDocumentSnapshot } from "./oralDocumentController";
 import type { OralDocumentActions } from "./useOralDocument";
@@ -22,8 +23,8 @@ const copy = {
     unknown: "Действие ещё не подтверждено. Проверь состояние.", stale: "Не удалось обновить занятие. Проверь состояние.",
     stopping: "Завершаем занятие…", closed: "Занятие завершено.", disposed: "Занятие недоступно в этом окне.",
     inactive: "Занятие сейчас не активно.", summary: "Итог занятия", completed: "Пройдено", right: "Верно", errors: "Ошибки",
-    remaining: "Осталось", today: "На Сегодня", refresh: "Проверить состояние", retryStudy: "Повторить действие",
-    retryStop: "Повторить завершение", recovery: "Проверка состояния", pendingStudy: "Учебное действие ещё не подтверждено.",
+    remaining: "Осталось", today: "На Сегодня", refresh: commandCopy.ru.check, retryStudy: "Повторить действие",
+    retryStop: commandCopy.ru.retryStop, recovery: "Проверка состояния", pendingStudy: "Учебное действие ещё не подтверждено.",
     pendingStop: "Завершение ещё не подтверждено.", cleanup: "Не удалось обновить данные на этом устройстве. Проверь состояние.",
     blocked: "Действие нельзя повторить. Проверь состояние занятия." },
   uk: { title: "Усне заняття", exit: "Вийти", reveal: "Розкрити", correct: "Правильно", wrong: "Неправильно",
@@ -33,8 +34,8 @@ const copy = {
     unknown: "Дію ще не підтверджено. Перевір стан.", stale: "Не вдалося оновити заняття. Перевір стан.",
     stopping: "Завершуємо заняття…", closed: "Заняття завершено.", disposed: "Заняття недоступне в цьому вікні.",
     inactive: "Заняття зараз не активне.", summary: "Підсумок заняття", completed: "Пройдено", right: "Правильно", errors: "Помилки",
-    remaining: "Залишилося", today: "На Сьогодні", refresh: "Перевірити стан", retryStudy: "Повторити дію",
-    retryStop: "Повторити завершення", recovery: "Перевірка стану", pendingStudy: "Навчальну дію ще не підтверджено.",
+    remaining: "Залишилося", today: "На Сьогодні", refresh: commandCopy.uk.check, retryStudy: "Повторити дію",
+    retryStop: commandCopy.uk.retryStop, recovery: "Перевірка стану", pendingStudy: "Навчальну дію ще не підтверджено.",
     pendingStop: "Завершення ще не підтверджено.", cleanup: "Не вдалося оновити дані на цьому пристрої. Перевір стан.",
     blocked: "Дію не можна повторити. Перевір стан заняття." },
   en: { title: "Oral practice", exit: "Exit", reveal: "Reveal", correct: "Correct", wrong: "Incorrect",
@@ -44,8 +45,8 @@ const copy = {
     unknown: "The action is not confirmed yet. Check status.", stale: "Could not refresh the session. Check status.",
     stopping: "Ending the session…", closed: "The session has ended.", disposed: "This session is unavailable in this window.",
     inactive: "This session is not active right now.", summary: "Session summary", completed: "Completed", right: "Correct", errors: "Errors",
-    remaining: "Remaining", today: "Return to Today", refresh: "Check status", retryStudy: "Retry action",
-    retryStop: "Retry ending the session", recovery: "Status check", pendingStudy: "The study action is not confirmed yet.",
+    remaining: "Remaining", today: "Return to Today", refresh: commandCopy.en.check, retryStudy: "Retry action",
+    retryStop: commandCopy.en.retryStop, recovery: "Status check", pendingStudy: "The study action is not confirmed yet.",
     pendingStop: "Ending the session is not confirmed yet.", cleanup: "Could not update data on this device. Check status.",
     blocked: "This action cannot be retried. Check session status." },
 } as const;

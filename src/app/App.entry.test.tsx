@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TodayResponse } from "../api/generated";
 import { settingsResponse } from "../settings/settingsRead.test-support";
 import { App } from "./App";
+import { conflictSession, documentConflict } from "./openRules.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status });
@@ -50,15 +51,11 @@ function fixture(language: "ru" | "uk" | "en", initial: Partial<Server> = {}) {
     if (path.endsWith("/client/register")) return json({ status: "registered", client_instance_id: body.client_instance_id,
       origin_proof: "synthetic-proof", proof_version: "1", activated: false });
     if (path.endsWith("/client/open")) {
-      // identity/clients.py after C-REOPEN: another document replaces the bound one only with the held lock or
-      // a confirmation of the current epoch.
+      // Documents are bound only when the test asks for it; then the core's open rules apply.
       const replacing = server.bindDocuments && server.boundDocument !== null && server.boundDocument !== body.document_id;
-      const conflicting = replacing && body.holds_document_lock !== true
-        && !(body.confirm_document_replacement === true && body.expected_document_epoch === String(server.epoch));
+      const conflicting = server.bindDocuments && documentConflict(server.boundDocument, server.epoch, body);
       if (server.busy || conflicting) return json({ profile: profile(), compatibility: { compatible: true, contract_version: "1" },
-        status: "SESSION_BUSY", session: { status: "busy", ...(conflicting
-          ? { stop_remote_target: null, document_conflict: true, document_epoch: String(server.epoch) }
-          : { stop_remote_target: server.target }) } });
+        status: "SESSION_BUSY", session: conflicting ? conflictSession(server.epoch) : { status: "busy", stop_remote_target: server.target } });
       if (server.boundDocument === null || replacing) { server.boundDocument = body.document_id; server.epoch += 1; }
       return json({ profile: profile(), compatibility: { compatible: true, contract_version: "1" }, status: "opened",
         client_instance_id: body.client_instance_id, document_id: body.document_id, document_epoch: String(server.epoch),

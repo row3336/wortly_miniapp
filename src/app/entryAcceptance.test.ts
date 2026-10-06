@@ -10,6 +10,7 @@ import type { RemoteSessionApi, RemoteStopReply } from "../study/remoteSessionAp
 import { RemoteStopPendingStore } from "../study/remoteStopPending";
 import type { TodayApi } from "../today/todayApi";
 import { EntryController, type EntrySnapshot } from "./entryController";
+import { bindDocument, conflictSession, documentConflict } from "./openRules.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const PROFILE = id(1);
@@ -183,12 +184,9 @@ describe("QA relaunch of an already opened installation (Н1, Н3 — after M-RE
       const profile: Profile = { profile_id: PROFILE, role: "user", ui_language: "ru", dictionary_language: "ru", time_zone: null,
         state_version: "20", access: { status: "admitted", version: "3", reason: null } };
       const compatibility = { compatible: true, contract_version: "1" };
-      const replacing = bound.document !== null && bound.document !== request.document_id;
-      const confirmed = request.confirm_document_replacement === true
-        && request.expected_document_epoch === String(bound.epoch);
-      if (replacing && !(request.holds_document_lock === true || confirmed)) return { status: "SESSION_BUSY", profile,
-        compatibility, session: { status: "busy", stop_remote_target: null, document_conflict: true, document_epoch: String(bound.epoch) } };
-      if (bound.document !== request.document_id) { bound.document = request.document_id; bound.epoch += 1; }
+      if (documentConflict(bound.document, bound.epoch, request)) return { status: "SESSION_BUSY", profile,
+        compatibility, session: conflictSession(bound.epoch) };
+      bindDocument(bound, request);
       return { status: "opened", client_instance_id: request.client_instance_id, document_id: request.document_id,
         document_epoch: String(bound.epoch), proof_version: "1", profile, session: null, compatibility };
     });

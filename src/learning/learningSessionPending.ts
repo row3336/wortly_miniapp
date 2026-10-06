@@ -1,5 +1,5 @@
 import type { LearningSessionProjection } from "../api/generated";
-import { exactKeys, oneOf, record, uuid } from "../api/wireValidation";
+import { copyLanePending, validLanePending } from "../commands/commandLane";
 import { PendingSlot, PendingStoreError } from "../commands/pendingSlot";
 import type { AsyncStorage } from "../platform/storage";
 import { copyLearningCommandIntent, validLearningCommandIntent, type LearningCommandIntent } from "./learningCommandIntent";
@@ -14,18 +14,12 @@ export type LearningSessionPending = {
 };
 
 export function validLearningSessionPending(value: unknown): value is LearningSessionPending {
-  return record(value) && exactKeys(value, ["schemaVersion", "profileId", "clientInstanceId", "pair", "intent",
-    ...(Object.hasOwn(value, "mismatch") ? ["mismatch"] : [])])
-    && value.schemaVersion === 1 && uuid(value.profileId) && uuid(value.clientInstanceId)
-    && oneOf(value.pair, ["ru-de", "uk-de", "en-de"])
-    && (!Object.hasOwn(value, "mismatch") || value.mismatch === true)
-    && validLearningCommandIntent(value.intent);
+  return validLanePending(value, validLearningCommandIntent);
 }
 
 function copy(value: unknown): LearningSessionPending {
   if (!validLearningSessionPending(value)) throw new PendingStoreError("invalid");
-  return { schemaVersion: 1, profileId: value.profileId, clientInstanceId: value.clientInstanceId, pair: value.pair,
-    intent: copyLearningCommandIntent(value.intent), ...(value.mismatch ? { mismatch: true } : {}) };
+  return copyLanePending(value, copyLearningCommandIntent);
 }
 
 /** One unresolved Learning transition, in the existing application storage. */
