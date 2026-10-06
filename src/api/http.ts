@@ -14,6 +14,8 @@ export type HttpOptions = {
   baseUrl?: string;
   timeoutMs: number;
   maxResponseBytes: number;
+  /** Told of every DOCUMENT_STALE refusal before the caller reads it; the window, not each module, reacts. */
+  onDocumentStale?(): void;
 };
 
 type Request = {
@@ -114,12 +116,16 @@ export function createJsonTransport(options: HttpOptions) {
       }
       return { status: response.status, ok: response.ok, value };
     };
-    try { return await Promise.race([exchange(), deadline]); }
+    let reply: JsonReply;
+    try { reply = await Promise.race([exchange(), deadline]); }
     catch (error) {
       // A stalled body cannot erase a refusal already received in the headers.
       if (refusalStatus !== undefined) throw new ApiError("http", refusalStatus);
       if (error instanceof ApiError) throw error;
       throw new ApiError("network");
     } finally { clearTimeout(timer); }
+    // One place for every module: a newer window of this installation may own the document now (decision 2.3).
+    if (reply.status === 409 && errorCode(reply.value) === "DOCUMENT_STALE") options.onDocumentStale?.();
+    return reply;
   };
 }

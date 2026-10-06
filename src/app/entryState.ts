@@ -8,12 +8,9 @@ export type EntryState =
   | { kind: "rejected"; reason?: string }
   | { kind: "reapplying"; reason?: string }
   | { kind: "busy"; remoteTarget?: string }
-  // Another live window of this installation keeps the document (its cross-window lock is held, or the
-  // user kept it). Coming back to the foreground checks again.
-  | { kind: "other_window" }
-  // Without the lock the server cannot tell whether that window is still alive (CT:188): only the user
-  // may end it, for the document epoch the server reported.
-  | { kind: "replace_confirm"; epoch: string }
+  // A newer window of this installation took the document over (decision 2.3). Terminal: this window closes
+  // itself; where it cannot (outside Telegram) it shows the busy screen without buttons until Q54 is answered.
+  | { kind: "replaced" }
   | { kind: "remote_confirm"; targetId: string }
   | { kind: "remote"; remote: RemoteStopSnapshot }
   | { kind: "opened" }

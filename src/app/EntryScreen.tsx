@@ -13,20 +13,18 @@ type Props = {
   onRemoteConfirm?: () => void;
   onRemoteCheck?: () => void;
   onRemoteRetry?: () => void;
-  onReplaceConfirm?: () => void;
-  onReplaceCancel?: () => void;
 };
 
 export function EntryScreen({ state, language, onRetry, onReapply,
-  onRemoteRequest, onRemoteCancel, onRemoteConfirm, onRemoteCheck, onRemoteRetry, onReplaceConfirm, onReplaceCancel }: Props) {
+  onRemoteRequest, onRemoteCancel, onRemoteConfirm, onRemoteCheck, onRemoteRetry }: Props) {
   if (state.kind === "remote" || state.kind === "remote_confirm" || state.kind === "busy" && state.remoteTarget) {
     return <RemoteStopScreen state={state} language={language} onRequest={onRemoteRequest}
       onCancel={onRemoteCancel} onConfirm={onRemoteConfirm} onCheck={onRemoteCheck} onRetry={onRemoteRetry} />;
   }
   const copy = t(language);
   const loading = state.kind === "checking" || state.kind === "opening" || state.kind === "reapplying";
-  // Another window of this installation, whether the lock or the server reported it, reads as «already open».
-  const busy = state.kind === "busy" || state.kind === "other_window" || state.kind === "replace_confirm";
+  // A window whose document a newer one took over reads as «already open», without buttons, until Q54 is answered.
+  const busy = state.kind === "busy" || state.kind === "replaced";
   const title = loading
     ? copy.loading
     : state.kind === "pending"
@@ -46,8 +44,6 @@ export function EntryScreen({ state, language, onRetry, onReapply,
       ? copy.pendingDetail
       : state.kind === "rejected"
         ? copy.rejectedDetail
-        : state.kind === "replace_confirm"
-          ? copy.replaceDetail
         : busy
           ? copy.busyDetail
           : state.kind === "opened"
@@ -72,16 +68,6 @@ export function EntryScreen({ state, language, onRetry, onReapply,
         {state.kind === "rejected" && onReapply && (
           <button className="primary-action" type="button" onClick={onReapply}>
             {copy.reapply}
-          </button>
-        )}
-        {state.kind === "replace_confirm" && onReplaceConfirm && (
-          <button className="primary-action" type="button" onClick={onReplaceConfirm}>
-            {copy.replaceConfirm}
-          </button>
-        )}
-        {state.kind === "replace_confirm" && onReplaceCancel && (
-          <button className="secondary-action" type="button" onClick={onReplaceCancel}>
-            {copy.replaceCancel}
           </button>
         )}
         {state.kind === "unavailable" && onRetry && (

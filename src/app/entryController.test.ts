@@ -211,10 +211,10 @@ describe("entry controller", () => {
     expect(f.controller.getOpenedAccess()).toBe(before);
     expect(f.states.slice(stateCount)).toEqual([]);
     expect(f.api.open).toHaveBeenCalledTimes(2);
-    // The live document still holds its cross-window lease, so the refresh says so (CT:188).
+    // The takeover needs no lock flag or confirmation (decision 2.3): the refresh names only the document.
     expect(vi.mocked(f.api.open).mock.calls[1]).toEqual(["memory-token", "saved-proof", {
       client_instance_id: instanceId, document_id: documentId, time_zone: "Asia/Tokyo",
-      event: "foreground", client_version: "0.0.0", contract_version: "1", holds_document_lock: true,
+      event: "foreground", client_version: "0.0.0", contract_version: "1",
     }]);
     finish(updated); await first;
     const after = f.controller.getOpenedAccess()!;
@@ -596,7 +596,7 @@ describe("entry controller", () => {
     expect(reapplyCase.storage.values.has(`wortly.reapply:${profileId}`)).toBe(true);
   });
 
-  it("expires the token and releases the lease after admitted reapply reaches an open 401", async () => {
+  it("expires the token after admitted reapply reaches an open 401; the lock was never taken for a refused document", async () => {
     const { controller, api, lock, states } = fixture("rejected");
     const release = vi.fn();
     vi.mocked(lock.acquire).mockResolvedValue({ release });
@@ -609,7 +609,7 @@ describe("entry controller", () => {
     await controller.start();
     await controller.reapply();
     expect(states.at(-1)).toBe("expired");
-    expect(release).toHaveBeenCalledTimes(1);
+    expect(lock.acquire).not.toHaveBeenCalled(); expect(release).not.toHaveBeenCalled();
     await controller.retry();
     expect(api.auth).toHaveBeenCalledTimes(2);
   });
@@ -704,13 +704,14 @@ describe("entry controller", () => {
     expect(states).not.toContain("opened");
   });
 
-  it("shows another tab as the other window before any registration", async () => {
+  it("never waits for the cross-window lock: it opens first and takes the lock of this installation after the answer", async () => {
     const { controller, api, states, lock } = fixture();
-    vi.mocked(lock.acquire).mockResolvedValueOnce("busy");
+    vi.mocked(lock.acquire).mockImplementationOnce(() => new Promise(() => {}));
     await controller.start();
-    expect(states.at(-1)).toBe("other_window");
-    expect(api.register).not.toHaveBeenCalled();
-    expect(api.open).not.toHaveBeenCalled();
+    expect(states.at(-1)).toBe("opened");
+    expect(lock.acquire).toHaveBeenCalledOnce();
+    expect(vi.mocked(lock.acquire).mock.calls[0][0]).toBe(`${profileId}:${instanceId}`);
+    expect(vi.mocked(lock.acquire).mock.invocationCallOrder[0]).toBeGreaterThan(vi.mocked(api.open).mock.invocationCallOrder[0]);
   });
 
   it("compares large versions without floating-point rounding", () => {

@@ -165,3 +165,41 @@ describe("bounded JSON exchange", () => {
     expect(JSON.stringify(httpError(reply))).not.toContain("do-not-expose");
   });
 });
+
+describe("the one DOCUMENT_STALE point", () => {
+  const reply = (value: unknown, status: number) => vi.fn(async () => new Response(JSON.stringify(value), { status }));
+
+  it("tells the window before the caller reads the refusal, and still hands the reply over unchanged", async () => {
+    const order: string[] = [];
+    const onDocumentStale = vi.fn(() => { order.push("window"); });
+    const envelope = { command: { id: "c", status: "rejected" }, current: { status: "unavailable" }, state_version: "3",
+      error: { code: "DOCUMENT_STALE" } };
+    const request = createJsonTransport({ fetcher: reply(envelope, 409), timeoutMs: 100, maxResponseBytes: 1000, onDocumentStale });
+    const answer = await request("/commands", { method: "POST", body: {} }).then(value => { order.push("caller"); return value; });
+    expect(answer).toEqual({ status: 409, ok: false, value: envelope });
+    expect(order).toEqual(["window", "caller"]);
+  });
+
+  it.each([
+    [409, { error: { code: "SESSION_BUSY" } }],
+    [409, { error: { code: "VERSION_CONFLICT" } }],
+    [403, { error: { code: "DOCUMENT_STALE" } }],
+    [200, { error: { code: "DOCUMENT_STALE" } }],
+    [409, { error: "DOCUMENT_STALE" }],
+  ])("says nothing for HTTP %s %j", async (status, value) => {
+    const onDocumentStale = vi.fn();
+    const request = createJsonTransport({ fetcher: reply(value, status), timeoutMs: 100, maxResponseBytes: 1000, onDocumentStale });
+    await request("/commands", { method: "POST", body: {} });
+    expect(onDocumentStale).not.toHaveBeenCalled();
+  });
+
+  it("works without a listener, and an unreadable 409 tells nothing", async () => {
+    const stale = { error: { code: "DOCUMENT_STALE" } };
+    await expect(transport(reply(stale, 409))("/today", { method: "GET" })).resolves.toMatchObject({ status: 409 });
+    const onDocumentStale = vi.fn();
+    const broken = vi.fn(async () => new Response("{", { status: 409 }));
+    const request = createJsonTransport({ fetcher: broken, timeoutMs: 100, maxResponseBytes: 1000, onDocumentStale });
+    await expect(request("/today", { method: "GET" })).resolves.toMatchObject({ status: 409, value: undefined });
+    expect(onDocumentStale).not.toHaveBeenCalled();
+  });
+});

@@ -80,9 +80,8 @@ function validOpen(value: unknown): value is OpenedClient | BusyClient {
   if (value.status === "SESSION_BUSY") {
     if (!record(value.session) || value.session.status !== "busy") return false;
     const { stop_remote_target: target, document_conflict: conflict, document_epoch: epoch } = value.session;
-    // A same-installation document conflict and its live epoch are accepted here;
-    // entryController turns them into the replacement question and treats a
-    // conflict without an epoch as an invalid response.
+    // document_conflict is always false since decision 2.3 (a new document of the same installation takes over);
+    // older cores' fields are still accepted here and ignored by entryController.
     return (target === undefined || target === null || typeof target === "string"
       && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(target))
       && (conflict === undefined || typeof conflict === "boolean")

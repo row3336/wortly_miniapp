@@ -10,7 +10,7 @@ import type { RemoteSessionApi, RemoteStopReply } from "../study/remoteSessionAp
 import { RemoteStopPendingStore } from "../study/remoteStopPending";
 import type { TodayApi } from "../today/todayApi";
 import { EntryController, type EntrySnapshot } from "./entryController";
-import { bindDocument, conflictSession, documentConflict } from "./openRules.test-support";
+import { keysOf, openDocument, openRequestKeys } from "./openRules.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const PROFILE = id(1);
@@ -175,66 +175,57 @@ describe("QA revocation (К02-047, Т38)", () => {
   });
 });
 
-describe("QA relaunch of an already opened installation (Н1, Н3 — after M-REOPEN)", () => {
-  /** identity/clients.py after C-REOPEN: another document of a bound installation replaces it only with the held
-   * lock or a confirmation of the current epoch; otherwise SESSION_BUSY with document_conflict and that epoch. */
+describe("QA relaunch of an already opened installation (Н1, Н3 — after M-REOPEN-2, decision 2.3)", () => {
+  /** identity/clients.py after C-REOPEN-2: an open of another document always replaces the live one with the next
+   * epoch; a foreground of a replaced document is DOCUMENT_STALE and changes nothing. */
   function bindDocuments(s: ReturnType<typeof accessServer>) {
     const bound = { document: null as string | null, epoch: 0 };
     vi.mocked(s.api.open).mockImplementation(async (_token, _proof, request) => {
       const profile: Profile = { profile_id: PROFILE, role: "user", ui_language: "ru", dictionary_language: "ru", time_zone: null,
         state_version: "20", access: { status: "admitted", version: "3", reason: null } };
-      const compatibility = { compatible: true, contract_version: "1" };
-      if (documentConflict(bound.document, bound.epoch, request)) return { status: "SESSION_BUSY", profile,
-        compatibility, session: conflictSession(bound.epoch) };
-      bindDocument(bound, request);
+      if (openDocument(bound, request) === "stale") throw new EntryApiError("http", 409, "DOCUMENT_STALE");
       return { status: "opened", client_instance_id: request.client_instance_id, document_id: request.document_id,
-        document_epoch: String(bound.epoch), proof_version: "1", profile, session: null, compatibility };
+        document_epoch: String(bound.epoch), proof_version: "1", profile, session: null,
+        compatibility: { compatible: true, contract_version: "1" } };
     });
     return bound;
   }
   const unsupported = { acquire: vi.fn(async () => "unsupported" as const) };
 
-  it("every relaunch sends a new document_id with the same installation proof; holding the lock it takes the next epoch", async () => {
+  it("every relaunch sends a new document_id with the same installation proof and takes the next epoch, without any legacy field", async () => {
     const s = accessServer(); s.server.status = "admitted"; const storage = memoryStorage(); const bound = bindDocuments(s);
     const first = launch(s.api, storage); await first.controller.start(); first.controller.dispose();
     const second = launch(s.api, storage, { newId: () => id(900) }); await second.controller.start();
     const [a, b] = vi.mocked(s.api.open).mock.calls.map(call => call[2]);
     expect(b.client_instance_id).toBe(a.client_instance_id);
     expect(b.document_id).not.toBe(a.document_id);
-    expect(b).toMatchObject({ holds_document_lock: true });
-    expect(b).not.toHaveProperty("confirm_document_replacement");
+    expect(keysOf(b)).toEqual(openRequestKeys);
     expect(s.api.register).toHaveBeenCalledOnce();
     expect(second.latest()).toEqual({ kind: "opened" });
     expect(bound).toEqual({ document: b.document_id, epoch: 2 });
   });
 
-  it("Н1: without the lock the relaunch asks before ending the other window — never a dead end without any action", async () => {
+  it("Н1: without the lock the relaunch enters at once while the first window lives; never a question or a dead end", async () => {
     const s = accessServer(); s.server.status = "admitted"; const storage = memoryStorage(); const bound = bindDocuments(s);
     const first = launch(s.api, storage, { lock: unsupported }); await first.controller.start();
-    expect(first.latest().kind).toBe("opened"); first.controller.dispose();
+    expect(first.latest().kind).toBe("opened");
     const second = launch(s.api, storage, { newId: () => id(901), lock: unsupported }); await second.controller.start();
-    expect(second.latest()).toEqual({ kind: "replace_confirm", epoch: "1" });
-    expect(bound.epoch).toBe(1);
-    await second.controller.confirmDocumentReplacement();
-    expect(second.latest()).toEqual({ kind: "opened" });
+    expect(second.kinds()).toEqual(["checking", "opening", "opened"]);
     expect(bound).toEqual({ document: id(901), epoch: 2 });
-    expect(s.api.open).toHaveBeenCalledTimes(3);
+    expect(s.api.open).toHaveBeenCalledTimes(2);
   });
 
-  it("Н3: a window whose lock is held elsewhere checks again when it returns to the foreground", async () => {
+  it("Н3: the old window that returns to the foreground is closed, and the live window keeps the document", async () => {
     const s = accessServer(); s.server.status = "admitted"; const storage = memoryStorage(); const bound = bindDocuments(s);
-    const first = launch(s.api, storage); await first.controller.start();
-    let held = true;
-    const lock = { acquire: vi.fn(async () => held ? "busy" as const : { release: vi.fn() }) };
-    const second = launch(s.api, storage, { newId: () => id(902), lock }); await second.controller.start();
-    expect(second.latest()).toEqual({ kind: "other_window" });
-    await second.controller.foreground();
-    expect(second.latest()).toEqual({ kind: "other_window" });
-    expect(lock.acquire).toHaveBeenCalledTimes(2); expect(s.api.open).toHaveBeenCalledOnce();
-    first.controller.dispose(); held = false;
+    const closeWindow = vi.fn();
+    const first = launch(s.api, storage, { closeWindow }); await first.controller.start();
+    const second = launch(s.api, storage, { newId: () => id(902) }); await second.controller.start();
+    await first.controller.foreground();
+    expect(first.latest()).toEqual({ kind: "replaced" });
+    expect(closeWindow).toHaveBeenCalledOnce();
+    expect(bound).toEqual({ document: id(902), epoch: 2 });
     await second.controller.foreground();
     expect(second.latest()).toEqual({ kind: "opened" });
-    expect(bound).toEqual({ document: id(902), epoch: 2 });
   });
 });
 

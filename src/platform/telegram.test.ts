@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { platformInsets, platformTheme, signedInitData, syncPlatform, telegramLanguage } from "./telegram";
+import { closeMiniApp, platformInsets, platformTheme, signedInitData, syncPlatform, telegramLanguage } from "./telegram";
 import type { TelegramWebApp } from "./telegram";
 
 describe("Telegram platform boundary", () => {
@@ -48,5 +48,16 @@ describe("Telegram platform boundary", () => {
     expect(root.style.getPropertyValue("--app-height")).toBe("320px");
     cleanup();
     expect(app.offEvent).toHaveBeenCalledTimes(4);
+  });
+
+  it("closes the Mini App through Telegram, and outside it or on a failing close changes nothing", () => {
+    const close = vi.fn();
+    closeMiniApp({ Telegram: { WebApp: { close } } } as unknown as Window);
+    expect(close).toHaveBeenCalledOnce();
+    expect(() => closeMiniApp({} as Window)).not.toThrow();
+    expect(() => closeMiniApp({ Telegram: { WebApp: {} } } as unknown as Window)).not.toThrow();
+    const failing = vi.fn(() => { throw new Error("WebView refused"); });
+    expect(() => closeMiniApp({ Telegram: { WebApp: { close: failing } } } as unknown as Window)).not.toThrow();
+    expect(failing).toHaveBeenCalledOnce();
   });
 });

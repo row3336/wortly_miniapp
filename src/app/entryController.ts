@@ -37,6 +37,8 @@ export type EntryControllerOptions = {
   timeZone(): string | null;
   newId(): string;
   onUpdate(snapshot: EntrySnapshot): void;
+  /** Closes this window when the platform can (the Telegram Mini App); otherwise the replaced screen stays. */
+  closeWindow?(): void;
 };
 
 export class EntryController {
@@ -47,11 +49,12 @@ export class EntryController {
   private installation: Installation | null = null;
   private documentId: string | null = null;
   private lease: DocumentLease | null = null;
-  // The document epoch the user agreed to end. It goes with this document's next open and with a
-  // repeat of that open after an unknown outcome. A server answer that passes the profile and
-  // compatibility checks spends it; an answer that fails them (invalid_response) does not, so a manual
-  // repeat sends the same epoch (the core still checks it against the live one).
-  private replacement: string | null = null;
+  // The pending lock request; reset, replacement and dispose drop it, so a late grant is given back.
+  private claim: object | null = null;
+  // A request of this document got DOCUMENT_STALE and no open has confirmed the document since.
+  private staleHint = false;
+  // A newer window of this installation took the document over: nothing here is sent for it again.
+  private replaced = false;
   private profileVersion: string | null = null;
   private accessVersion: string | null = null;
   private reapplyIntent: ReapplyIntent | null = null;
@@ -132,7 +135,7 @@ export class EntryController {
     this.observedStateVersion = null;
     this.accessVersion = null;
     this.reapplyIntent = null;
-    this.replacement = null;
+    this.staleHint = false;
     this.proofIssuedThisSession = false;
     return this.run(true);
   }
@@ -144,6 +147,7 @@ export class EntryController {
 
   /** Refresh the same document before its screens read the new calendar state. */
   foreground(): Promise<void> {
+    if (this.replaced) return Promise.resolve();
     if (this.running) {
       if (this.foregroundRunning || !this.refreshable()) return this.running;
       // Opened can be rendered before startup's finally clears running.
@@ -155,13 +159,9 @@ export class EntryController {
       return this.queuedForeground;
     }
     if (!this.refreshable() || !this.session) return Promise.resolve();
-    // The other window may have closed meanwhile (TA:181): take the lock and open this document again.
-    if (this.state.kind === "other_window") return this.run(false);
     const generation = this.generation;
     const task = this.open(this.session.access_token, generation, "foreground").catch((error: unknown) => {
-      if (!this.current(generation)) return;
-      this.resetInvalidSession(error);
-      this.emit(failure(error));
+      if (this.current(generation)) this.fail(error);
     }).finally(() => {
       if (this.running === task) {
         this.running = null;
@@ -174,22 +174,83 @@ export class EntryController {
   }
 
   private refreshable(): boolean {
-    return this.state.kind === "other_window" || this.getOpenedAccess() !== null || this.getBusyAccess() !== null;
+    return this.getOpenedAccess() !== null || this.getBusyAccess() !== null;
   }
 
   private run(authenticate: boolean): Promise<void> {
+    if (this.replaced) return Promise.resolve();
     this.remote?.dispose();
     this.remote = null;
     const generation = ++this.generation;
     const task = this.execute(generation, authenticate).catch((error: unknown) => {
-      if (!this.current(generation)) return;
-      this.resetInvalidSession(error);
-      this.emit(failure(error));
+      if (this.current(generation)) this.fail(error);
     }).finally(() => {
       if (this.running === task) this.running = null;
     });
     this.running = task;
     return task;
+  }
+
+  private fail(error: unknown): void {
+    if (error instanceof EntryApiError && error.kind === "http" && error.status === 409 && error.code === "DOCUMENT_STALE") {
+      // Only an open of this same document answers so: a newer window of the installation took it over.
+      this.replace();
+      return;
+    }
+    this.resetInvalidSession(error);
+    this.emit(failure(error));
+  }
+
+  /**
+   * A request of this window got DOCUMENT_STALE: the shared transport reports it before the module reads the reply.
+   * The core gives that answer to a replaced document, but also to a closed card context of the live one, so a
+   * foreground of this same document decides. It asks one task later, on purpose: the module settles its refusal
+   * first and clears its saved action from the storage that the installation's windows share; a window closed
+   * before that would leave the action there to block the new window's next command.
+   */
+  documentStale(): void {
+    if (this.disposed || this.replaced) return;
+    this.staleHint = true;
+    setTimeout(() => { if (this.staleHint) void this.foreground(); }, 0);
+  }
+
+  /** A newer window of this installation took the document over (decision 2.3). Terminal for this window. */
+  private replace(): void {
+    if (this.disposed || this.replaced) return;
+    this.replaced = true;
+    this.generation += 1; // A late reply of this document must not reopen or relabel anything.
+    this.releaseLock();
+    this.remote?.dispose();
+    this.remote = null;
+    this.emit({ kind: "replaced" }, this.session?.profile);
+    this.options.closeWindow?.();
+  }
+
+  private releaseLock(): void {
+    this.claim = null;
+    this.lease?.release();
+    this.lease = null;
+  }
+
+  /**
+   * The lock is no permission to open (the new window never waits for it): it only lets an older window of this
+   * installation learn at once that its document was replaced. Taken after the server accepted this document.
+   */
+  private claimLock(key: string): void {
+    if (this.lease || this.claim) return;
+    const claim = {};
+    this.claim = claim;
+    let lease: DocumentLease | null = null;
+    void this.options.lock.acquire(key, () => {
+      if (lease !== null && this.lease === lease) this.replace();
+    }).then((result) => {
+      if (typeof result !== "object") return;
+      if (this.claim !== claim) { result.release(); return; }
+      lease = result;
+      this.lease = result;
+    }, () => undefined).finally(() => {
+      if (this.claim === claim) this.claim = null;
+    });
   }
 
   private resetInvalidSession(error: unknown): void {
@@ -198,13 +259,12 @@ export class EntryController {
     this.session = null;
     this.installation = null;
     this.documentId = null;
-    this.replacement = null;
+    this.staleHint = false;
     this.proofIssuedThisSession = false;
     this.remote?.dispose();
     this.remote = null;
     this.observedStateVersion = null;
-    this.lease?.release();
-    this.lease = null;
+    this.releaseLock();
   }
 
   private async execute(generation: number, authenticate: boolean): Promise<void> {
@@ -255,15 +315,6 @@ export class EntryController {
       return;
     }
     this.emit({ kind: "opening" }, profile);
-    if (!this.lease) {
-      const acquired = await this.options.lock.acquire(profile.profile_id);
-      if (!this.current(generation)) {
-        if (typeof acquired === "object") acquired.release();
-        return;
-      }
-      if (acquired === "busy") { this.emit({ kind: "other_window" }, profile); return; }
-      if (typeof acquired === "object") this.lease = acquired;
-    }
     await this.prepareInstallation(profile.profile_id);
     if (!this.current(generation)) return;
     if (!this.installation) throw new Error("Missing installation");
@@ -337,12 +388,17 @@ export class EntryController {
   }
 
   private async open(token: string, generation: number, event: "open" | "foreground" = "open"): Promise<void> {
+    if (this.replaced) return;
     const installation = this.installation;
     if (!installation?.proof || !installation.proofVersion) throw new Error("Proof unavailable");
     const timeZone = this.options.timeZone();
     if (!timeZone) throw new Error("Time zone unavailable");
     this.documentId ??= this.options.newId();
     if (this.options.remote && (!await this.prepareRemote(token, generation) || !this.current(generation))) return;
+    // After DOCUMENT_STALE an open of this document would make it live again, taking it from the newer window
+    // (question 2.30 is open). Only a foreground may ask until an answer confirms the document.
+    if (this.staleHint) event = "foreground";
+    // A new document of this installation always becomes the live one (decision 2.3): no lock flag, no confirmation.
     const request: OpenRequest = {
       client_instance_id: installation.clientInstanceId,
       document_id: this.documentId,
@@ -350,25 +406,16 @@ export class EntryController {
       event,
       client_version: this.options.clientVersion,
       contract_version: this.options.contractVersion,
-      // Only a lease held at send time proves that no other window of this installation is alive (CT:188).
-      ...(this.lease ? { holds_document_lock: true } : {}),
-      ...(this.replacement ? { confirm_document_replacement: true, expected_document_epoch: this.replacement } : {}),
     };
     const opened = await this.options.api.open(token, installation.proof, request);
     if (!this.current(generation)) return;
     if (opened.profile.access.status !== "admitted" || !opened.compatibility.compatible
       || (this.observedStateVersion !== null && newerVersion(this.observedStateVersion, opened.profile.state_version))
       || !this.acceptProfile(opened.profile)) throw new EntryApiError("invalid_response");
-    this.replacement = null; // A valid answer: a confirmation never carries over to a later open.
+    this.staleHint = false; // The server answered for this document: it is still the live one.
+    this.claimLock(`${opened.profile.profile_id}:${installation.clientInstanceId}`);
     if (opened.status === "SESSION_BUSY") {
-      const { stop_remote_target: target, document_conflict: conflict, document_epoch: epoch } = opened.session;
-      if (conflict) {
-        // The question names the live epoch; without it no confirmation could be sent. A conflict that
-        // answers a confirmation is asked again too: only the user may confirm a newer epoch.
-        if (!epoch) throw new EntryApiError("invalid_response");
-        this.emit({ kind: "replace_confirm", epoch }, opened.profile);
-        return;
-      }
+      const { stop_remote_target: target } = opened.session;
       this.emit({ kind: "busy", ...(this.remote && target ? { remoteTarget: target } : {}) }, opened.profile);
       return;
     }
@@ -454,21 +501,6 @@ export class EntryController {
     this.emit({ kind: "busy", remoteTarget: this.state.targetId }, this.session?.profile);
   }
 
-  /** The user's explicit choice to end the other window's document and continue here (CT:188). */
-  confirmDocumentReplacement(): Promise<void> {
-    if (this.running) return this.running;
-    if (this.state.kind !== "replace_confirm") return Promise.resolve();
-    // The same document opens again and names the epoch the user saw.
-    this.replacement = this.state.epoch;
-    return this.run(false);
-  }
-
-  /** Keeping the other window sends nothing: the server state stays as it is. */
-  cancelDocumentReplacement(): void {
-    if (this.running || this.state.kind !== "replace_confirm") return;
-    this.emit({ kind: "other_window" }, this.session?.profile);
-  }
-
   private remoteAction(action: (remote: RemoteStopController) => Promise<void>): Promise<void> {
     if (this.running) return this.running;
     if (!this.remote || !this.session || this.disposed) return Promise.resolve();
@@ -481,9 +513,7 @@ export class EntryController {
       const phase = remote.snapshot().phase;
       if (phase === "idle" || phase === "settled") await this.open(token, generation);
     }).catch((error: unknown) => {
-      if (!this.current(generation)) return;
-      this.resetInvalidSession(error);
-      this.emit(failure(error));
+      if (this.current(generation)) this.fail(error);
     }).finally(() => { if (this.running === task) this.running = null; });
     this.running = task;
     return task;
@@ -589,8 +619,7 @@ export class EntryController {
     this.remote = null;
     this.disposed = true;
     this.generation += 1;
-    this.lease?.release();
-    this.lease = null;
+    this.releaseLock();
     this.session = null;
     this.openedAccess = null;
     this.busyAccess = null;

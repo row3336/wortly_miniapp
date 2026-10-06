@@ -4,7 +4,7 @@ import type { Language } from "../i18n/language";
 import { createEntryApi } from "../api/entryApi";
 import { browserStorage } from "../platform/storage";
 import type { AsyncStorage } from "../platform/storage";
-import { notifyAcceptedMilestone, signedInitData, syncPlatform, telegramLanguage } from "../platform/telegram";
+import { closeMiniApp, notifyAcceptedMilestone, signedInitData, syncPlatform, telegramLanguage } from "../platform/telegram";
 import { browserDocumentLock } from "./documentLock";
 import { EntryController } from "./entryController";
 import { EntryScreen } from "./EntryScreen";
@@ -98,6 +98,7 @@ export function App() {
           baseUrl: import.meta.env.VITE_WORTLY_API_BASE_URL || "",
           timeoutMs: Number(configuredTimeout),
           maxResponseBytes: Number(configuredLimit),
+          onDocumentStale: () => currentController?.documentStale(),
         };
         const api = createEntryApi(options);
         setTransport(options);
@@ -114,6 +115,7 @@ export function App() {
           contractVersion: import.meta.env.VITE_WORTLY_CONTRACT_VERSION || "1",
           timeZone: () => Intl.DateTimeFormat().resolvedOptions().timeZone || null,
           newId,
+          closeWindow: () => closeMiniApp(window),
           onUpdate(snapshot) {
             if (!active) return;
             setEntryState(snapshot.state);
@@ -192,8 +194,6 @@ export function App() {
       onRemoteConfirm={controller ? () => { void controller.confirmRemoteStop(); } : undefined}
       onRemoteCheck={controller ? () => { void controller.checkRemoteStop(); } : undefined}
       onRemoteRetry={controller ? () => { void controller.retryRemoteStop(); } : undefined}
-      onReplaceConfirm={controller ? () => { void controller.confirmDocumentReplacement(); } : undefined}
-      onReplaceCancel={controller ? () => controller.cancelDocumentReplacement() : undefined}
     />
   );
 }

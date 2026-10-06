@@ -18,6 +18,7 @@ export interface TelegramWebApp {
   };
   HapticFeedback?: { notificationOccurred(type: "success"): void };
   ready?(): void;
+  close?(): void;
   onEvent?(event: TelegramEvent, callback: () => void): void;
   offEvent?(event: TelegramEvent, callback: () => void): void;
 }
@@ -106,6 +107,13 @@ export function bindBackButton(win: Window, onBack: () => void): () => void {
     back.offClick(onBack);
     back.hide();
   };
+}
+
+/** Closes the Mini App; outside Telegram there is nothing to close and the page stays as it is. */
+export function closeMiniApp(win: Window): void {
+  try {
+    telegramWebApp(win)?.close?.();
+  } catch { /* A window that cannot close keeps showing its last screen. */ }
 }
 
 export function notifyAcceptedMilestone(

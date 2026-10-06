@@ -1,6 +1,5 @@
 import type { Language } from "./language";
 
-// replace* is working copy until the owner's answer (Q36): the specification sets no text for that screen.
 const messages = {
   uk: {
     loading: "Відкриваємо Wortly",
@@ -15,9 +14,6 @@ const messages = {
     retry: "Спробувати ще раз",
     busy: "Wortly вже відкрито",
     busyDetail: "Повернися до іншого відкритого вікна або пристрою.",
-    replaceDetail: "Wortly не може перевірити, чи закрите інше вікно. Якщо продовжити тут, там зміни не зберігатимуться.",
-    replaceConfirm: "Завершити там і продовжити тут",
-    replaceCancel: "Скасувати",
     opened: "Вхід підтверджено",
     openedDetail: "Продовження поки недоступне.",
     expired: "Потрібно знову підтвердити вхід",
@@ -36,9 +32,6 @@ const messages = {
     retry: "Try again",
     busy: "Wortly is already open",
     busyDetail: "Return to the other open window or device.",
-    replaceDetail: "Wortly cannot check whether the other window is closed. If you continue here, changes there will not be saved.",
-    replaceConfirm: "End there and continue here",
-    replaceCancel: "Cancel",
     opened: "Sign-in confirmed",
     openedDetail: "You cannot continue yet.",
     expired: "Please confirm sign-in again",
@@ -57,9 +50,6 @@ const messages = {
     retry: "Попробовать ещё раз",
     busy: "Wortly уже открыт",
     busyDetail: "Вернись в другое открытое окно или на другое устройство.",
-    replaceDetail: "Wortly не может проверить, закрыто ли другое окно. Если продолжить здесь, там изменения сохраняться не будут.",
-    replaceConfirm: "Завершить там и продолжить здесь",
-    replaceCancel: "Отмена",
     opened: "Вход подтверждён",
     openedDetail: "Продолжить пока нельзя.",
     expired: "Нужно снова подтвердить вход",

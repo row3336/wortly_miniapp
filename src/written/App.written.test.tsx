@@ -1,10 +1,19 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+import type { OpenRequest } from "../api/generated";
 import { App } from "../app/App";
+import { staleCommand, staleRefusal } from "../app/openRules.test-support";
 import { app, answer, settingsRefusalText, compatibility, field, loseReply, pairText, requests, row, startWords, useWrittenAppEnvironment } from "./writtenApp.test-support";
 import { deferred, id, profile, response } from "./writtenFixtures.test-support";
 
 useWrittenAppEnvironment();
+
+/** A spy on Telegram's close for the stubbed WebApp of app(). */
+function telegramClose() {
+  const close = vi.fn();
+  Object.assign((globalThis as unknown as { Telegram: { WebApp: object } }).Telegram.WebApp, { close });
+  return close;
+}
 
 describe("Written quiz through the actual App document", () => {
   it("W1 a tap on the L1→De count starts the written quiz at once; De→L1 rows stay inert", async () => {
@@ -157,7 +166,7 @@ describe("Written quiz through the actual App document", () => {
   });
 
   it("В02 a start refused as SESSION_BUSY leads to the busy Today; a confirmed remote stop there returns to a fresh Today", async () => {
-    const a = app({ refuseStart: "SESSION_BUSY" }), other = id(60), remote = { busy: false };
+    const a = app({ refuseStart: "SESSION_BUSY" }), other = id(60), remote = { busy: false }, close = telegramClose();
     const base = a.fetcher.getMockImplementation()!;
     a.fetcher.mockImplementation(async (url, init) => {
       const path = new URL(String(url), "http://localhost").pathname, body = init?.body ? JSON.parse(String(init.body)) : null;
@@ -196,6 +205,67 @@ describe("Written quiz through the actual App document", () => {
     expect(a.posts().map(post => [post.kind, post.session_id, post.payload]))
       .toEqual([["session.start", expect.any(String), { mode: "written", bucket: "words" }], ["session.stop_remote", other, { confirmed: true }]]);
     expect(screen.queryByRole("textbox")).toBeNull();
+    // Another installation's session never closes this window (decision 2.2: the busy screen is only for it).
+    expect(close).not.toHaveBeenCalled();
+  });
+
+  it("В02 a start refused as DOCUMENT_STALE (a newer window of this installation took the document): this window closes, never reopens it", async () => {
+    const a = app({ refuseStart: "DOCUMENT_STALE" }), close = telegramClose(), replaced = { now: false };
+    const opened = a.openReply.getMockImplementation()!;
+    a.openReply.mockImplementation(async body => replaced.now && (body as OpenRequest).event === "foreground"
+      ? response(staleRefusal, 409) : opened(body));
+    render(<App />);
+    await screen.findByText(pairText);
+    await waitFor(() => expect(row(/Слова: перевод на немецкий/).disabled).toBe(false));
+    const own = a.openReply.mock.calls[0][0].document_id;
+    replaced.now = true;
+    fireEvent.click(row(/Слова: перевод на немецкий/));
+    await waitFor(() => expect(close).toHaveBeenCalledOnce());
+    await screen.findByRole("heading", { name: "Wortly уже открыт" });
+    expect(screen.queryByText("Занятие открыто на другом устройстве")).toBeNull();
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(a.kinds()).toEqual(["session.start"]);
+    expect(a.openReply.mock.calls.map(([body]) => [body.document_id, (body as OpenRequest).event])).toEqual([[own, "open"], [own, "foreground"]]);
+  });
+
+  it("В02 two windows of one installation: B continues at once without A's typed answer; A's check is refused and A closes", async () => {
+    const a = app({ cards: [6, 7] }), close = telegramClose(), live = { document: null as string | null };
+    const base = a.fetcher.getMockImplementation()!;
+    // The core after C-REOPEN-2: an open makes its document live; a foreground or a write of another one is DOCUMENT_STALE.
+    a.fetcher.mockImplementation(async (url, init) => {
+      const address = new URL(String(url), "http://localhost"), body = init?.body ? JSON.parse(String(init.body)) : null;
+      if (address.pathname.endsWith("/client/open")) {
+        if (body.event === "foreground" && body.document_id !== live.document) return response(staleRefusal, 409);
+        live.document = body.document_id;
+        return base(url, init);
+      }
+      const document = body?.document_id ?? address.searchParams.get("document_id");
+      if (!document || document === live.document) return base(url, init);
+      if (!body?.command_id) return response(staleRefusal, 409);
+      const { current, ...refused } = staleCommand(body.command_id, body.session_id, a.server.state.version);
+      // An answer command answers with the written step envelope (written_projection.safe_written_projection).
+      return response(body.kind !== "answer.submit" ? { current, ...refused } : { ...refused, action: null, result: null, step: current,
+        capabilities: { answer_target: null, correct_target: null, grades: null, undo_target: null, stop: false, summary_home: false } }, 409);
+    });
+    const first = render(<App />);
+    await startWords();
+    const old = live.document;
+    fireEvent.change(field(), { target: { value: "Haus" } });
+    const second = render(<App />);
+    await within(second.container).findByText("слово 6");
+    const input = within(second.container).getByRole("textbox") as HTMLTextAreaElement;
+    await waitFor(() => expect(input.readOnly).toBe(false));
+    expect(input.value).toBe("");
+    expect(live.document).not.toBe(old);
+    fireEvent.click(within(first.container).getByRole("button", { name: "Проверить" }));
+    await waitFor(() => expect(close).toHaveBeenCalledOnce());
+    await within(first.container).findByRole("heading", { name: "Wortly уже открыт" });
+    expect(a.posts().filter(post => post.document_id === old).map(post => post.kind)).toEqual(["session.start", "assignment.present", "answer.submit"]);
+    expect(a.server.results.size).toBe(0);
+    expect(input.value).toBe("");
+    expect(within(second.container).queryByText("Есть ошибка")).toBeNull();
+    expect(within(second.container).queryByText("Учебное действие ещё не подтверждено.")).toBeNull();
+    expect(localStorage.getItem("wortly.pending.written_session")).toBeNull();
   });
 
   it("a prefetched question that waits for an unset transition mode keeps the refusal with its buttons, not an endless loading", async () => {
