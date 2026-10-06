@@ -95,7 +95,7 @@ function fixture() {
       return commandReply(body);
     }
     if (path.includes("/commands/")) return statusReply(path.split("/").at(-1)!);
-    // The persisted mode of the reported session: a valid Written summary (no Learning resume).
+    // The persisted mode of the reported session: a valid Written summary (it resumes on the written route, never in Learning).
     if (state.session && path.includes(`/sessions/${state.session.id}?`)) return json({ current: { session_id: state.session.id,
       mode: "written", status: "summary", pair: `${profile.dictionary_language}-de`, direction: "l1-de", local_date: "2026-09-30",
       bucket: "words", close_reason: null, progress: { completed: 2, total: 2, correct: 2, wrong: 0 }, assignment: null,
@@ -447,7 +447,7 @@ describe("Settings in the real App document", () => {
     const f = fixture(); render(<App />); await settings();
     f.state.session = { id: id(30), phase: "active" };
     fireEvent.click(screen.getByRole("button", { name: "Сегодня" }));
-    await screen.findByText("Вход подтверждён");
+    await screen.findByRole("region", { name: "Итог занятия" });
     expect(screen.queryByRole("heading", { name: "Настройки", level: 1 })).toBeNull();
     expect(f.todayReply).toHaveBeenCalledOnce();
   });

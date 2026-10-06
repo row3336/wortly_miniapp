@@ -17,6 +17,8 @@ export type WrittenHostOptions = {
   /** The document's existing settings owner. */
   settings: SettingsDocument;
   minimumStateVersion?: string;
+  /** Only a resume read that confirmed mode=written supplies an open session of this client (В02). */
+  initialSessionId: string | null;
   /** "today" only while the document would show Today; "hidden" keeps the owner without a screen. */
   route: "today" | "written" | "hidden";
   onWritten(): void;
@@ -67,7 +69,8 @@ export function useWrittenHost(options: WrittenHostOptions): WrittenHost {
     && BigInt(confirmed.state_version) >= BigInt(bound.floor);
   const enabled = route === "written" && gate;
   const { state, actions } = useWrittenDocument({ access, storage: options.storage, transport: options.transport, newId: options.newId,
-    transitionMode: confirmed?.settings.transition_mode.value ?? null, enabled, minimumStateVersion: bound.floor });
+    transitionMode: confirmed?.settings.transition_mode.value ?? null, enabled, minimumStateVersion: bound.floor,
+    initialSessionId: options.initialSessionId });
   const latestState = useRef(state); latestState.current = state;
   if (state && state.phase !== "loading" && state.phase !== "disposed") bound.recovered = true;
 

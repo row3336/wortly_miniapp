@@ -15,9 +15,11 @@ type Options = {
   enabled?: boolean;
   /** Confirmed observations must belong to this access key and profile. */
   minimumStateVersion?: string;
+  /** Only a resume read that confirmed mode=written supplies an open session of this client (В02). */
+  initialSessionId?: string | null;
 };
 type Owner = {
-  key: string; dictionaryLanguage: string; storage: AsyncStorage; transport: HttpOptions;
+  key: string; dictionaryLanguage: string; storage: AsyncStorage; transport: HttpOptions; seed: string | null;
   lastAccess: OpenedAccess; waitingForAccess: OpenedAccess | null; lastMinimumVersion: string; lastEnabled: boolean;
   startEpoch: number; activation: Promise<void> | null; controller: WrittenViewController;
 };
@@ -26,8 +28,9 @@ export type WrittenActions = Pick<WrittenViewController, "setDraft" | "submit" |
   & { start(bucket: "words" | "phrases"): Promise<void> };
 
 /**
- * One owner per opened document and dictionary pair. It stays mounted across routes so a durable receipt is
- * recovered by its ID; it never resumes a session reported by the entry handle (a separate package).
+ * One owner per opened document, dictionary pair and resume seed. It stays mounted across routes so a durable receipt
+ * is recovered by its ID. A seed only addresses the session: its step comes from the server projection, never from
+ * the view of an earlier document.
  */
 export function useWrittenDocument(options: Options): { state: WrittenViewSnapshot | null; actions: WrittenActions } {
   const latest = useRef(options); latest.current = options;
@@ -36,23 +39,25 @@ export function useWrittenDocument(options: Options): { state: WrittenViewSnapsh
   const currentOwner = () => {
     const bound = owner.current, current = latest.current;
     return bound?.key === current.access.key && bound.dictionaryLanguage === current.access.profile.dictionary_language
-      && bound.storage === current.storage && bound.transport === current.transport ? bound : null;
+      && bound.storage === current.storage && bound.transport === current.transport
+      && bound.seed === (current.initialSessionId ?? null) ? bound : null;
   };
   const lookup = useRef(currentOwner); lookup.current = currentOwner;
+  const seed = options.initialSessionId ?? null;
 
   useEffect(() => {
     if (!latest.current.access.isLive() || latest.current.access.profile.access.status !== "admitted") return;
     let active = true;
     const current = latest.current;
     const controller = new WrittenViewController({ access: () => latest.current.access, storage: current.storage,
-      transport: current.transport, newId: () => latest.current.newId(), sessionId: null,
+      transport: current.transport, newId: () => latest.current.newId(), sessionId: seed,
       transitionMode: () => latest.current.transitionMode,
       enabled: () => latest.current.enabled !== false && document.visibilityState === "visible",
       minimumStateVersion: () => latest.current.minimumStateVersion ?? null,
       onUpdate() { if (active && owner.current === bound) repaint(); },
     });
     const bound: Owner = { key: current.access.key, dictionaryLanguage: current.access.profile.dictionary_language,
-      storage: current.storage, transport: current.transport, lastAccess: current.access, waitingForAccess: null,
+      storage: current.storage, transport: current.transport, seed, lastAccess: current.access, waitingForAccess: null,
       lastEnabled: current.enabled !== false && current.transitionMode !== null, startEpoch: 0, activation: null,
       lastMinimumVersion: current.minimumStateVersion ?? current.access.profile.state_version, controller };
     owner.current = bound;
@@ -74,7 +79,7 @@ export function useWrittenDocument(options: Options): { state: WrittenViewSnapsh
       active = false; controller.dispose();
       if (owner.current === bound) owner.current = null;
     };
-  }, [options.access.key, options.access.profile.dictionary_language, options.storage, options.transport]);
+  }, [options.access.key, options.access.profile.dictionary_language, options.storage, options.transport, seed]);
 
   useEffect(() => {
     const bound = lookup.current();

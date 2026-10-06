@@ -39,15 +39,15 @@ function highest(...versions: (string | undefined)[]): string | undefined {
 
 type ModeRead =
   | { kind: "pending" | "failed" | "other" }
-  | { kind: "learning" | "oral"; id: string; version: string }
+  | { kind: "learning" | "oral" | "written"; id: string; version: string }
   | { kind: "closed"; id: string };
-/** Only an active/summary Learning or oral projection proves the mode; OpenedAccess.session carries no mode. */
+/** Only an active/summary Learning, oral or written projection proves the mode; OpenedAccess.session carries no mode. */
 function classify(state: SessionResumeState): ModeRead {
   if (state.kind === "loading" || state.kind === "idle") return { kind: "pending" };
   if (state.kind !== "ready" || !("mode" in state.data.current)) return { kind: "failed" };
   const current = state.data.current;
   if (current.status === "closed") return { kind: "closed", id: current.session_id.toLowerCase() };
-  return current.mode === "learning" || current.mode === "oral"
+  return current.mode === "learning" || current.mode === "oral" || current.mode === "written"
     ? { kind: current.mode, id: current.session_id, version: state.data.state_version } : { kind: "other" };
 }
 
@@ -62,6 +62,9 @@ export function ApplicationDocument(props: Props) {
   const [selected, setSelected] = useState<{ seed: string | null; pair: string; version?: string } | null>(null);
   // The oral owner is re-seeded only from a fresh mode read: its hook takes an active seed from props alone.
   const [oralSelected, setOralSelected] = useState<{ seed: string | null; pair: string; version?: string } | null>(null);
+  // The written owner is re-seeded only from a fresh mode read, never on its own route: there a reseed would replace
+  // the owner and the result view that waits for «Далее» after background (К05-152).
+  const [writtenSelected, setWrittenSelected] = useState<{ seed: string | null; pair: string; version?: string } | null>(null);
   const current = useRef(props);
   current.current = props;
   const latest = useRef(floor);
@@ -119,19 +122,24 @@ export function ApplicationDocument(props: Props) {
   // The owner of a new pair never starts from the old pair's session; the current owner keeps its own seed.
   const seed = selected !== null && selected.pair === pair ? selected.seed : null;
   const oralSeed = oralSelected !== null && oralSelected.pair === pair ? oralSelected.seed : null;
+  const writtenSeed = writtenSelected !== null && writtenSelected.pair === pair ? writtenSelected.seed : null;
   // A session reported after selection is read again only on Today or the oral route, and only when no Host adopted it.
   const readAfter = selected !== null && session !== null && (route === "today" || route === "oral")
     && !(seed !== null && !seedReleased.current && sameId(session.id, seed))
-    && !(oralSeed !== null && sameId(session.id, oralSeed)) && !hostClaimed.current;
+    && !(oralSeed !== null && sameId(session.id, oralSeed)) && !(writtenSeed !== null && sameId(session.id, writtenSeed))
+    && !hostClaimed.current;
   const resume = useSessionResumeDocument({ access: props.access, transport: props.transport,
     minimumStateVersion: floor?.version, enabled: session !== null && (selected === null || readAfter) });
   const read = selected === null && session === null ? { kind: "pending" } as const : classify(resume.state);
-  const readId = read.kind === "learning" || read.kind === "oral" || read.kind === "closed" ? read.id : null;
+  const readId = read.kind === "learning" || read.kind === "oral" || read.kind === "written" || read.kind === "closed" ? read.id : null;
   useEffect(() => {
     // Leaving the seed's pair closes that session on the server: it is never a seed again, even after a return.
     if (selected !== null && selected.seed !== null && selected.pair !== pair) { setSelected({ ...selected, seed: null }); return; }
     if (oralSelected !== null && oralSelected.seed !== null && oralSelected.pair !== pair) {
       setOralSelected({ ...oralSelected, seed: null }); return;
+    }
+    if (writtenSelected !== null && writtenSelected.seed !== null && writtenSelected.pair !== pair) {
+      setWrittenSelected({ ...writtenSelected, seed: null }); return;
     }
     if (selected === null && session === null) { setSelected({ seed: null, pair }); return; }
     if (selected === null && read.kind === "learning") {
@@ -142,12 +150,17 @@ export function ApplicationDocument(props: Props) {
       if (selected === null) setSelected({ seed: null, pair });
       setOralSelected({ seed: read.id, pair, version: read.version }); setRoute("oral"); return;
     }
+    // Its server projection chooses the step; no undo or correction of an earlier document comes with it (TA:48).
+    if ((selected === null || readAfter) && read.kind === "written") {
+      if (selected === null) setSelected({ seed: null, pair });
+      setWrittenSelected({ seed: read.id, pair, version: read.version }); setRoute("written"); return;
+    }
     // A closed session is never resumed: one fresh open per closed id, then a manual retry.
     if ((selected === null || readAfter) && read.kind === "closed" && !synchronizedClosed.current.has(read.id)) {
       synchronizedClosed.current.add(read.id);
       void synchronize();
     }
-  }, [selected, oralSelected, session, pair, read.kind, readId, readAfter, synchronize]);
+  }, [selected, oralSelected, writtenSelected, session, pair, read.kind, readId, readAfter, synchronize]);
 
   const today = () => {
     attemptedFloor.current = latest.current?.version ?? null;
@@ -192,8 +205,8 @@ export function ApplicationDocument(props: Props) {
     onOral: () => setRoute("oral"), onToday: today });
   // The written owner also lives for the whole document; L1→De rows of Today start it (tz_app М09).
   const written = useWrittenHost({ access: props.access, transport: props.transport, storage: props.storage, newId: props.newId,
-    language: props.language, settings, minimumStateVersion: floor?.version,
-    route: route === "written" ? "written" : todayShown ? "today" : "hidden",
+    language: props.language, settings, minimumStateVersion: highest(floor?.version, writtenSelected?.version),
+    initialSessionId: writtenSeed, route: route === "written" ? "written" : todayShown ? "today" : "hidden",
     onWritten: () => setRoute("written"), onToday: today });
   if (todayShown && (oral.blocksToday || written.blocksToday)) { hostRoute = "settings"; screen = loading; }
   const quizzes = {

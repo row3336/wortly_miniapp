@@ -16,7 +16,7 @@ const today = (): TodayResponse => ({ state_version: "11", pair: "uk-de", local_
   conjugation: { ready: 1, openable: 1, next_due_date: null }, next_repeat_date: null });
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status });
 const sessionId = "22222222-2222-4222-8222-222222222222";
-// The persisted server mode of a reported session: Written has no study route in this App yet.
+// A written session; for a closed one its closure, not its mode, decides the route.
 // Valid for the accepted decoder (sessionProjection.ts): an active step carries its assignment, summary/closed none.
 const written = (status: "active" | "summary" | "closed" = "active"): SessionResponse => ({ state_version: "11", current: {
   session_id: sessionId, mode: "written", status, pair: "uk-de", direction: "l1-de", local_date: "2026-09-30", bucket: "words",
@@ -26,11 +26,23 @@ const written = (status: "active" | "summary" | "closed" = "active"): SessionRes
   assignment: status !== "active" ? null : { id: "33333333-3333-4333-8333-333333333333", card_id: "44444444-4444-4444-8444-444444444444",
     status: "presented", kind: "original", prompt: { text: "дім", language: "uk", translations: ["дім"], personal_translation_version: null,
       hint: null, hint_version: null, conjunction_hint: null }, answer_spec: { kind: "word", labels: ["word"], part_count: 1, case_sensitive: true } } } });
+// The persisted server mode of a reported session: Conjugation has no study route in this App yet.
+const conjugation = (): SessionResponse => ({ state_version: "11", current: {
+  session_id: sessionId, status: "active", mode: "conjugation", pair: "uk-de", direction: "conjugation", local_date: "2026-09-30",
+  close_reason: null, progress: { total: 3, completed: 1, correct: 1, wrong: 0 },
+  assignment: { id: "33333333-3333-4333-8333-333333333333", card_id: "44444444-4444-4444-8444-444444444444", status: "presented",
+    kind: "conjugation", cycle_id: "55555555-5555-4555-8555-555555555555",
+    slot_id: { cycle_id: "55555555-5555-4555-8555-555555555555", pronoun_group: "du" }, base_verb_id: "44444444-4444-4444-8444-444444444444",
+    display_verb_id: "66666666-6666-4666-8666-666666666666", tense: "present", pronoun_group: "du",
+    prompt: { verb: "ankommen", translation: "прибувати", language: "uk", pronoun: "du", tense: "present" },
+    answer_spec: { kind: "forms", labels: ["du"], part_count: 1, case_sensitive: false } }, summary: null,
+  capabilities: { answer_target: "33333333-3333-4333-8333-333333333333", correct_target: null, grades: null, undo_target: null,
+    stop: true, summary_home: false } } });
 
 function fixture(options: { profile?: Profile; session?: OpenedClient["session"]; busy?: boolean; settingsVersion?: string } = {}) {
   const user = options.profile ?? profile();
   const todayReply = vi.fn(async () => json(today()));
-  const sessionReply = vi.fn(async (_path: string) => json(written()));
+  const sessionReply = vi.fn(async (_path: string) => json(conjugation()));
   const haptic = vi.fn();
   const openReply = vi.fn(async (body: { client_instance_id: string; document_id: string }) => json(options.busy
     ? { status: "SESSION_BUSY", profile: user, compatibility: { compatible: true, contract_version: "1" }, session: { status: "busy" } }

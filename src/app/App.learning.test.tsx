@@ -205,7 +205,7 @@ describe("Learning through the actual App document", () => {
       prompt: { verb: "ankommen", translation: "прибывать", language: "ru", pronoun: "du", tense: "present" },
       answer_spec: { kind: "forms", labels: ["du"], part_count: 1, case_sensitive: false } }, summary: null,
     capabilities: { answer_target: id(5), correct_target: null, grades: null, undo_target: null, stop: true, summary_home: false } };
-  it.each([["written", written, "Вход подтверждён"], ["conjugation", conjugation, "Вход подтверждён"],
+  it.each([["conjugation", conjugation, "Вход подтверждён"],
     ["unavailable", { session_id: id(3), status: "unavailable" }, "Не удалось загрузить план"]] as const)(
     "2: a %s session is never routed into Learning", async (_mode, projection, text) => {
       const a = app({ session: id(3) });
@@ -214,6 +214,17 @@ describe("Learning through the actual App document", () => {
       expect(a.posts()).toEqual([]); expect(a.gets("/commands/")).toEqual([]);
       expect(screen.queryByRole("textbox")).toBeNull(); expect(a.todayReply).not.toHaveBeenCalled();
     });
+  // An open written session of this client continues on the written screen at its server step (В02, tz_app:48);
+  // its assignment is already presented, so nothing is posted.
+  it("2: a written session is never routed into Learning and continues on the written screen", async () => {
+    const a = app({ session: id(3) });
+    a.route(async (url, init, base) => String(url).includes("/sessions/") ? response({ current: written, state_version: "1" }) : base(url, init));
+    render(<App />); await screen.findByText("дом");
+    await waitFor(() => expect((screen.getByRole("textbox") as HTMLTextAreaElement).readOnly).toBe(false)); await settled();
+    expect(screen.getByRole("heading", { name: "Слова: перевод на немецкий", level: 1 })).toBeTruthy();
+    expect(a.posts()).toEqual([]); expect(a.gets("/commands/")).toEqual([]);
+    expect(screen.queryByText("Вход подтверждён")).toBeNull(); expect(a.todayReply).not.toHaveBeenCalled();
+  });
   // An open oral session of this client continues on the oral screen (tz_app:48); its only POST is the visible-commit present.
   it("2: an oral session is never routed into Learning and continues on the oral screen", async () => {
     const a = app({ session: id(3) });
