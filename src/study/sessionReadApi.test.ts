@@ -78,9 +78,9 @@ describe("stored-mode session read", () => {
     current.assignment!.answer_spec = { kind: "forms", labels: ["Infinitiv", "Partizip II"], part_count: 2, case_sensitive: false };
     expect((await fixture(current).api.read("token", "proof", address)).current).toEqual(current);
   });
-  it("still accepts the reduced projection (two-key progress, no summary key) that the written step decoder hands over", async () => {
+  it("rejects the pre-summary projection (two-key progress, no summary key): the numbers are mandatory", async () => {
     const current: Record<string, any> = written(); current.progress = { completed: 0, total: 2 }; delete current.summary;
-    expect((await fixture(current).api.read("token", "proof", address)).current).toEqual(current);
+    await expect(fixture(current).api.read("token", "proof", address)).rejects.toMatchObject({ kind: "invalid_response" });
   });
   const unsafe: [string, (value: Record<string, any>) => void][] = [
     ["foreign session", x => { x.session_id = id(90); }],

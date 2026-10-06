@@ -188,7 +188,7 @@ describe("Learning through the actual App document", () => {
 
   // An active Written step is valid only with its assignment (sessionProjection.ts:74-75).
   const written = { session_id: id(3), mode: "written", status: "active", pair: "ru-de", direction: "l1-de", local_date: "2026-09-30",
-    bucket: "words", close_reason: null, progress: { completed: 0, total: 2 },
+    bucket: "words", close_reason: null, progress: { completed: 0, total: 2, correct: 0, wrong: 0 }, summary: null,
     assignment: { id: id(6), card_id: id(7), status: "presented", kind: "original",
       prompt: { text: "дом", language: "ru", translations: ["дом"], personal_translation_version: null, hint: null, hint_version: null, conjunction_hint: null },
       answer_spec: { kind: "word", labels: ["word"], part_count: 1, case_sensitive: true } } };

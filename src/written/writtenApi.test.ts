@@ -40,17 +40,59 @@ describe("written HTTP adapter", () => {
     expect(await g.answer("anders", 12)).toMatchObject({ outcome: "mismatch", error: { code: "COMMAND_PAYLOAD_MISMATCH" } });
   });
 
-  it("accepts only the current contract's null correct_target and undo_target", async () => {
+  it("accepts correct_target only as the address of this live error; undo_target stays null", async () => {
     const h = harness(); await h.start(); await h.present();
-    expect(await h.answer("falsch")).toMatchObject({ outcome: "accepted", result: { grade: 2 },
-      capabilities: { grades: null, correct_target: null, undo_target: null } });
-    const view = h.server.view(id(706)) as Record<string, unknown> & { capabilities: Record<string, unknown> };
     const target = { session_id: id(3), assignment_id: id(6), result_id: id(706), expected_result_version: "1" };
-    for (const capabilities of [{ ...view.capabilities, correct_target: target },
-      { ...view.capabilities, undo_target: { action_id: id(806), kind: "answer.submit", version: "1" } }]) {
-      h.fetcher.mockResolvedValueOnce(response({ ...view, capabilities, state_version: "9" }));
-      await expect(h.api.readResult("token", "proof", { session_id: id(3), assignment_id: id(6), result_id: id(706), ...origin }))
-        .rejects.toMatchObject({ kind: "invalid_response" });
+    expect(await h.answer("falsch")).toMatchObject({ outcome: "accepted", result: { grade: 2 },
+      capabilities: { grades: null, correct_target: target, undo_target: null } });
+    type View = Record<string, unknown> & { capabilities: Record<string, unknown>; result: Record<string, unknown>;
+      action: Record<string, unknown>; step: Record<string, unknown> };
+    const view = h.server.view(id(706)) as View;
+    const read = () => h.api.readResult("token", "proof", { session_id: id(3), assignment_id: id(6), result_id: id(706), ...origin });
+    h.fetcher.mockResolvedValueOnce(response({ ...view, state_version: "9" }));
+    expect(await read()).toMatchObject({ capabilities: { correct_target: target } });
+    const caps = (correct_target: unknown) => ({ ...view.capabilities, correct_target });
+    const closedStep = { ...view.step, status: "closed", close_reason: "stop", assignment: null,
+      summary: { completed: 1, correct: 0, wrong: 1, ratio: { numerator: 0, denominator: 1 } } };
+    for (const body of [
+      { ...view, capabilities: caps({ ...target, result_id: id(707) }) },
+      { ...view, capabilities: caps({ ...target, assignment_id: id(7) }) },
+      { ...view, capabilities: caps({ ...target, session_id: id(4) }) },
+      { ...view, capabilities: caps({ ...target, expected_result_version: "2" }) },
+      { ...view, capabilities: caps({ ...target, values: [3, 4, 5] }) },
+      { ...view, capabilities: caps({ session_id: id(3), assignment_id: id(6), result_id: id(706) }) },
+      // A correct answer is revised by grades, never by correct_target.
+      { ...view, result: { ...view.result, grade: 4, correct: true }, capabilities: caps(target) },
+      { ...view, result: { ...view.result, status: "undone" }, action: { ...view.action, status: "undone" }, capabilities: caps(target) },
+      { ...view, step: closedStep, result: { ...view.result, detail: null }, capabilities: { ...caps(target), stop: false } },
+      { ...view, capabilities: { ...view.capabilities, undo_target: { action_id: id(806), kind: "answer.submit", version: "1" } } },
+    ]) {
+      h.fetcher.mockResolvedValueOnce(response({ ...body, state_version: "9" }));
+      await expect(read()).rejects.toMatchObject({ kind: "invalid_response" });
+    }
+  });
+
+  it("accepts a correction fact at version+1 with grade 4 and the grade right that follows it", async () => {
+    const h = harness(); await h.start(); await h.present(); await h.answer("falsch");
+    const correct = { command_id: id(20), session_id: id(3), kind: "result.correct", assignment_id: id(6), result_id: id(706),
+      expected_result_version: "1", payload: {} };
+    expect(await h.send(correct)).toMatchObject({ outcome: "accepted", result: { grade: 4, version: "2", correct: true },
+      command: { kind: "result.correct", object_version: "2" },
+      capabilities: { correct_target: null, grades: { expected_result_version: "2", values: [3, 4, 5] } } });
+    expect(lastBody(h.fetcher)).toEqual({ ...correct, ...origin });
+    // The same ID replays its fact; its fingerprint (empty payload) is verified by status.
+    expect(await h.send(correct)).toMatchObject({ outcome: "accepted", command: { status: "already_applied", object_version: "2" } });
+    expect(await h.api.status("token", "proof", { ...origin, ...correct } as WrittenCommand))
+      .toMatchObject({ outcome: "accepted", result: { grade: 4 } });
+    // A fact that claims the same version for another grade, or no revision at all, is not this correction.
+    type Body = { result: { grade: number }; command: { object_version: string } };
+    for (const change of [(body: Body) => { body.result.grade = 3; }, (body: Body) => { body.command.object_version = "1"; }]) {
+      const g = harness(); await g.start(); await g.present(); await g.answer("falsch");
+      g.fetcher.mockImplementationOnce(async (url, init) => {
+        const body = await (await g.server.handle(url as RequestInfo, init)).json() as Body;
+        change(body); return response(body);
+      });
+      await expect(g.send(correct)).rejects.toMatchObject({ kind: "invalid_response" });
     }
   });
 

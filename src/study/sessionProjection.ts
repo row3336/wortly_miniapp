@@ -57,7 +57,8 @@ export function validLearningSessionCurrent(value: unknown, sessionId: string): 
 }
 
 
-const writtenKeys = ["session_id", "status", "mode", "pair", "direction", "local_date", "bucket", "close_reason", "progress", "assignment"];
+const writtenKeys = ["session_id", "status", "mode", "pair", "direction", "local_date", "bucket", "close_reason", "progress",
+  "assignment", "summary"];
 
 /** Correct/wrong counts and the final summary of a written session: progress and summary must agree (as in the oral projection). */
 function validWrittenNumbers(status: unknown, progress: Record<string, unknown>, summary: unknown): boolean {
@@ -71,25 +72,18 @@ function validWrittenNumbers(status: unknown, progress: Record<string, unknown>,
         && summary.ratio.numerator === progress.correct && summary.ratio.denominator === progress.completed);
 }
 
-/**
- * The server projection carries correct/wrong in progress and a nullable summary (C-WSUM).  Those numbers are validated here
- * but no screen reads them yet.  A projection without the summary key and with two-key progress is still accepted, as a
- * transitional branch: the written step decoder (written/writtenApi.ts) hands over exactly that reduced shape, and the recorded
- * core answers (written/writtenCoreRecording.json) still carry it.  Package M-WCORR removes the branch: validWrittenStep passes
- * the full projection, the recording is re-made, and the numbers become mandatory here.
- */
+/** The server projection carries correct/wrong in progress and the final summary once the session is finished (C-WSUM). */
 export function validWrittenSessionCurrent(value: unknown, sessionId: string): value is SessionProjection | UnavailableSession {
   if (!record(value) || !sameId(value.session_id, sessionId)) return false;
   if (oneOf(value.status, ["unavailable", "not_found"])) return exactKeys(value, ["session_id", "status"]);
-  const numbered = Object.hasOwn(value, "summary");
-  if (!exactKeys(value, numbered ? [...writtenKeys, "summary"] : writtenKeys)
+  if (!exactKeys(value, writtenKeys)
     || value.mode !== "written" || !oneOf(value.status, ["active", "summary", "closed"])
     || !oneOf(value.pair, ["ru-de", "uk-de", "en-de"]) || value.direction !== "l1-de"
     || !date(value.local_date) || !(value.bucket === null || oneOf(value.bucket, ["words", "phrases"]))
-    || !record(value.progress) || !exactKeys(value.progress, numbered ? ["completed", "total", "correct", "wrong"] : ["completed", "total"])
+    || !record(value.progress) || !exactKeys(value.progress, ["completed", "total", "correct", "wrong"])
     || !count(value.progress.completed) || !count(value.progress.total)
     || value.progress.completed > value.progress.total
-    || numbered && !validWrittenNumbers(value.status, value.progress, value.summary)) return false;
+    || !validWrittenNumbers(value.status, value.progress, value.summary)) return false;
   if (value.status === "closed") return value.assignment === null
     && oneOf(value.close_reason, ["midnight", "pair_changed", "timezone_date_changed", "stop", "remote_stop", "summary_home"]);
   if (value.close_reason !== null) return false;

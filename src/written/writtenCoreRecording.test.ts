@@ -1,15 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
+import { conformsToGenerated } from "./generatedContract.test-support";
 import { createWrittenApi } from "./writtenApi";
 import type { WrittenCommand } from "./writtenIntent";
 import recording from "./writtenCoreRecording.json";
 
 /**
  * Bridge to the real API: replies recorded from core's own ASGI app (TestClient over a disposable wortly_test
- * schema, no network port; probe in the M-WRITTEN stand). Each client request must equal the request the
- * server accepted, and each real reply must pass the strict client parser. Credentials were never recorded.
+ * schema, no network port) by core/tools/record_written_session.py. Each client request must equal the request
+ * the server accepted, and each real reply must pass the strict client parser. Credentials were never recorded.
+ * Re-record from the core root after a change of the written contract:
+ *   PYTHONDONTWRITEBYTECODE=1 PSYCOPG_IMPL=python DYLD_LIBRARY_PATH=/Applications/Postgres.app/Contents/Versions/18/lib
+ *   .venv/bin/python tools/record_written_session.py --out <miniapp>/src/written/writtenCoreRecording.json
  */
 type Exchange = { name: string; method: "GET" | "POST"; path: string; query: Record<string, string>;
-  body: Record<string, unknown> | null; status: number; response: unknown };
+  body: Record<string, unknown> | null; status: number; schema: string[]; response: unknown };
 const exchanges = recording.exchanges as unknown as Exchange[];
 const exchange = (name: string) => exchanges.find(item => item.name === name)!;
 
@@ -31,12 +35,25 @@ function replay() {
 }
 const command = (name: string) => exchange(name).body as unknown as WrittenCommand;
 const origin = () => ({ client_instance_id: command("start").client_instance_id, document_id: command("start").document_id });
+const sessionId = () => command("start").session_id;
+const resultAddress = (name: string) => ({ session_id: sessionId(), assignment_id: exchange(name).query.assignment_id,
+  result_id: exchange(name).query.result_id, ...origin() });
 
 describe("written adapter against recorded core replies", () => {
+  it("every recorded reply has exactly the structure of the generated OpenAPI contract the recorder matched", () => {
+    expect(exchanges.length).toBeGreaterThan(0);
+    for (const item of exchanges) {
+      // The recorder checked each reply against core's OpenAPI; the same schema must hold in the Mini App's copy.
+      expect(item.schema.length, item.name).toBeGreaterThan(0);
+      expect(conformsToGenerated(item.response, item.schema[0]), `${item.name}: ${item.schema[0]}`).toBe(true);
+    }
+  });
+
   it("sends the same requests the server accepted and accepts every real reply of one session", async () => {
     const { api, fetcher } = replay();
     const start = await api.send("token", "proof", command("start"));
-    expect(start).toMatchObject({ outcome: "accepted", current: { status: "active", mode: "written", bucket: "phrases" } });
+    expect(start).toMatchObject({ outcome: "accepted", current: { status: "active", mode: "written", bucket: "phrases",
+      progress: { completed: 0, correct: 0, wrong: 0 }, summary: null } });
     expect(await api.send("token", "proof", command("present_first"))).toMatchObject({ outcome: "accepted" });
     const answered = await api.send("token", "proof", command("answer_first"));
     expect(answered).toMatchObject({ outcome: "accepted", result: { grade: 4, version: "1" },
@@ -45,23 +62,36 @@ describe("written adapter against recorded core replies", () => {
     expect(await api.status("token", "proof", command("answer_first"))).toMatchObject({ outcome: "accepted",
       command: { status: "already_applied" } });
     expect(await api.send("token", "proof", command("present_second"))).toMatchObject({ outcome: "accepted" });
-    const first = exchange("read_first").query;
-    expect(await api.readResult("token", "proof", { session_id: command("start").session_id, assignment_id: first.assignment_id,
-      result_id: first.result_id, ...origin() })).toMatchObject({ result: { grade: 4 }, step: { status: "active" } });
+    expect(await api.readResult("token", "proof", resultAddress("read_first")))
+      .toMatchObject({ result: { grade: 4 }, step: { status: "active" } });
     expect(await api.send("token", "proof", command("grade_first"))).toMatchObject({ outcome: "accepted", result: { grade: 5, version: "2" } });
-    expect(await api.read("token", "proof", { session_id: command("start").session_id, ...origin() }))
-      .toMatchObject({ current: { status: "active" } });
-    const wrong = await api.send("token", "proof", command("answer_second"));
-    expect(wrong).toMatchObject({ outcome: "accepted", result: { grade: 2 }, capabilities: { grades: null, correct_target: null },
+    expect(await api.read("token", "proof", { session_id: sessionId(), ...origin() }))
+      .toMatchObject({ current: { status: "active", summary: null, progress: { completed: 1, correct: 1, wrong: 0 } } });
+    // The real server grants the correction of this error by its exact current address (C-WCORR).
+    const correction = command("correct_second");
+    const target = { session_id: sessionId(), assignment_id: exchange("answer_second").body!.assignment_id,
+      result_id: "result_id" in correction ? correction.result_id : "", expected_result_version: "1" };
+    expect(correction).toMatchObject({ kind: "result.correct", ...target, payload: {} });
+    expect(await api.send("token", "proof", command("answer_second"))).toMatchObject({ outcome: "accepted",
+      result: { grade: 2, result_id: target.result_id }, capabilities: { grades: null, correct_target: target },
       step: { assignment: { kind: "drill", status: "prefetched" } } });
-    expect(await api.send("token", "proof", command("stop"))).toMatchObject({ outcome: "accepted", current: { status: "closed", close_reason: "stop" } });
-    const closed = exchange("read_closed").query;
-    expect(await api.readResult("token", "proof", { session_id: command("start").session_id, assignment_id: closed.assignment_id,
-      result_id: closed.result_id, ...origin() })).toMatchObject({ result: { detail: null },
-      step: { status: "closed", summary: { completed: 2, correct: 1, wrong: 1, ratio: { numerator: 1, denominator: 2 } } } });
+    // Corrected before its drill was shown: the drill is withdrawn and the queue ends in the summary (CT:111).
+    expect(await api.send("token", "proof", command("correct_second"))).toMatchObject({ outcome: "accepted",
+      result: { grade: 4, version: "2", detail: { initial_check: { correct: false } } },
+      capabilities: { correct_target: null, grades: { values: [3, 4, 5], expected_result_version: "2" } },
+      step: { status: "summary", assignment: null, summary: { completed: 2, correct: 2, wrong: 0, ratio: { numerator: 2, denominator: 2 } } } });
+    // The fingerprint of a correction (empty payload) equals core's.
+    expect(await api.status("token", "proof", command("correct_second"))).toMatchObject({ outcome: "accepted",
+      command: { status: "already_applied", kind: "result.correct" }, result: { grade: 4 } });
+    expect(await api.read("token", "proof", { session_id: sessionId(), ...origin() })).toMatchObject({ current: { status: "summary",
+      summary: { completed: 2, correct: 2, wrong: 0, ratio: { numerator: 2, denominator: 2 } } } });
+    expect(await api.send("token", "proof", command("stop"))).toMatchObject({ outcome: "accepted",
+      current: { status: "closed", close_reason: "summary_home", summary: { completed: 2, correct: 2, wrong: 0 } } });
+    expect(await api.readResult("token", "proof", resultAddress("read_closed"))).toMatchObject({ result: { detail: null },
+      step: { status: "closed", summary: { completed: 2, correct: 2, wrong: 0, ratio: { numerator: 2, denominator: 2 } } } });
     const missing = exchange("status_missing").path.split("/").at(-1)!;
     expect(await api.status("token", "proof", { ...command("stop"), command_id: missing })).toMatchObject({ outcome: "not_found",
-      closed_session: { status: "closed", close_reason: "stop" } });
+      closed_session: { status: "closed", close_reason: "summary_home" } });
     expect(await api.send("token", "proof", command("start_again"))).toMatchObject({ outcome: "rejected", error: { code: "SESSION_CLOSED" } });
     expect(fetcher).toHaveBeenCalledTimes(exchanges.length);
   });

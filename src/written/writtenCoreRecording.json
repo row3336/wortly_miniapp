@@ -1,5 +1,5 @@
 {
- "source": "core main@6e81178 create_app via TestClient, wortly_test disposable schema",
+ "source": "core create_app via TestClient (tools/record_written_session.py), disposable wortly_test schema",
  "exchanges": [
   {
    "name": "start",
@@ -7,10 +7,10 @@
    "path": "/api/v1/commands",
    "query": {},
    "body": {
-    "command_id": "34b776b2-0299-4d20-9d76-c3a8ab9dd178",
-    "client_instance_id": "be1a3c92-af57-4ddd-b8b3-67d66219feb2",
-    "document_id": "876997f6-4073-4787-95f0-45d4c35d9cf6",
-    "session_id": "7c00a3dd-c07e-42d3-9b7c-8eb4f904a16c",
+    "command_id": "00000000-0000-4000-8000-000000000100",
+    "client_instance_id": "00000000-0000-4000-8000-000000000001",
+    "document_id": "00000000-0000-4000-8000-000000000002",
+    "session_id": "00000000-0000-4000-8000-000000000004",
     "kind": "session.start",
     "payload": {
      "mode": "written",
@@ -20,18 +20,18 @@
    "status": 200,
    "response": {
     "command": {
-     "id": "34b776b2-0299-4d20-9d76-c3a8ab9dd178",
+     "id": "00000000-0000-4000-8000-000000000100",
      "kind": "session.start",
      "status": "applied",
      "applied_at": "2026-09-29T12:00:00Z",
-     "target_id": "7c00a3dd-c07e-42d3-9b7c-8eb4f904a16c",
+     "target_id": "00000000-0000-4000-8000-000000000004",
      "action_id": null,
      "result_id": null,
      "context_id": null,
      "object_version": null
     },
     "current": {
-     "session_id": "7c00a3dd-c07e-42d3-9b7c-8eb4f904a16c",
+     "session_id": "00000000-0000-4000-8000-000000000004",
      "status": "active",
      "mode": "written",
      "pair": "ru-de",
@@ -41,18 +41,20 @@
      "close_reason": null,
      "progress": {
       "completed": 0,
-      "total": 2
+      "total": 2,
+      "correct": 0,
+      "wrong": 0
      },
      "assignment": {
-      "id": "15845309-964f-4003-ad5f-06ce3d32eced",
-      "card_id": "a0890a4a-0676-42f8-a94f-879dd2740819",
+      "id": "8a38e821-5a63-4321-8643-732465c39ce1",
+      "card_id": "00000000-0000-4000-8000-000000000010",
       "status": "prefetched",
       "kind": "original",
       "prompt": {
-       "text": "Большое спасибо",
+       "text": "Добрый день",
        "language": "ru",
        "translations": [
-        "Большое спасибо"
+        "Добрый день"
        ],
        "personal_translation_version": null,
        "hint": null,
@@ -67,10 +69,14 @@
        "part_count": 1,
        "case_sensitive": true
       }
-     }
+     },
+     "summary": null
     },
     "state_version": "4"
-   }
+   },
+   "schema": [
+    "SessionCommandResponse"
+   ]
   },
   {
    "name": "present_first",
@@ -78,29 +84,29 @@
    "path": "/api/v1/commands",
    "query": {},
    "body": {
-    "command_id": "c33c3402-a6c2-4f38-acab-a754e0e20cc7",
-    "client_instance_id": "be1a3c92-af57-4ddd-b8b3-67d66219feb2",
-    "document_id": "876997f6-4073-4787-95f0-45d4c35d9cf6",
-    "session_id": "7c00a3dd-c07e-42d3-9b7c-8eb4f904a16c",
+    "command_id": "00000000-0000-4000-8000-000000000101",
+    "client_instance_id": "00000000-0000-4000-8000-000000000001",
+    "document_id": "00000000-0000-4000-8000-000000000002",
+    "session_id": "00000000-0000-4000-8000-000000000004",
     "kind": "assignment.present",
-    "assignment_id": "15845309-964f-4003-ad5f-06ce3d32eced",
+    "assignment_id": "8a38e821-5a63-4321-8643-732465c39ce1",
     "payload": {}
    },
    "status": 200,
    "response": {
     "command": {
-     "id": "c33c3402-a6c2-4f38-acab-a754e0e20cc7",
+     "id": "00000000-0000-4000-8000-000000000101",
      "kind": "assignment.present",
      "status": "applied",
      "applied_at": "2026-09-29T12:00:00Z",
-     "target_id": "15845309-964f-4003-ad5f-06ce3d32eced",
+     "target_id": "8a38e821-5a63-4321-8643-732465c39ce1",
      "action_id": null,
      "result_id": null,
      "context_id": null,
      "object_version": null
     },
     "current": {
-     "session_id": "7c00a3dd-c07e-42d3-9b7c-8eb4f904a16c",
+     "session_id": "00000000-0000-4000-8000-000000000004",
      "status": "active",
      "mode": "written",
      "pair": "ru-de",
@@ -110,11 +116,402 @@
      "close_reason": null,
      "progress": {
       "completed": 0,
-      "total": 2
+      "total": 2,
+      "correct": 0,
+      "wrong": 0
      },
      "assignment": {
-      "id": "15845309-964f-4003-ad5f-06ce3d32eced",
-      "card_id": "a0890a4a-0676-42f8-a94f-879dd2740819",
+      "id": "8a38e821-5a63-4321-8643-732465c39ce1",
+      "card_id": "00000000-0000-4000-8000-000000000010",
+      "status": "presented",
+      "kind": "original",
+      "prompt": {
+       "text": "Добрый день",
+       "language": "ru",
+       "translations": [
+        "Добрый день"
+       ],
+       "personal_translation_version": null,
+       "hint": null,
+       "hint_version": null,
+       "conjunction_hint": null
+      },
+      "answer_spec": {
+       "kind": "phrase",
+       "labels": [
+        "Satz"
+       ],
+       "part_count": 1,
+       "case_sensitive": true
+      }
+     },
+     "summary": null
+    },
+    "state_version": "5"
+   },
+   "schema": [
+    "SessionCommandResponse"
+   ]
+  },
+  {
+   "name": "answer_first",
+   "method": "POST",
+   "path": "/api/v1/commands",
+   "query": {},
+   "body": {
+    "command_id": "00000000-0000-4000-8000-000000000102",
+    "client_instance_id": "00000000-0000-4000-8000-000000000001",
+    "document_id": "00000000-0000-4000-8000-000000000002",
+    "session_id": "00000000-0000-4000-8000-000000000004",
+    "kind": "answer.submit",
+    "assignment_id": "8a38e821-5a63-4321-8643-732465c39ce1",
+    "payload": {
+     "text": "Guten Tag"
+    }
+   },
+   "status": 200,
+   "response": {
+    "action": {
+     "action_id": "f3988d78-d386-455d-b660-70abef411305",
+     "kind": "answer.submit",
+     "version": "1",
+     "status": "active"
+    },
+    "result": {
+     "result_id": "f1584cd9-a1a4-4cbe-b82f-7de23051762d",
+     "assignment_id": "8a38e821-5a63-4321-8643-732465c39ce1",
+     "version": "1",
+     "grade": 4,
+     "correct": true,
+     "status": "active",
+     "accepted_at": "2026-09-29T12:00:00Z",
+     "answer_date": "2026-09-29",
+     "detail": {
+      "input": {
+       "kind": "text",
+       "text": "Guten Tag"
+      },
+      "initial_check": {
+       "correct": true,
+       "variant_index": 0,
+       "correct_answer": "Guten Tag",
+       "other_answers": [],
+       "matched_spans": [
+        {
+         "start": 0,
+         "end": 9
+        }
+       ],
+       "input_errors": [],
+       "answer_errors": [],
+       "span_unit": "unicode_code_point",
+       "span_bounds": "start_inclusive_end_exclusive"
+      },
+      "variants": [
+       {
+        "parts": [
+         "Guten Tag"
+        ]
+       }
+      ],
+      "conjunction_hint": null,
+      "examples": {
+       "common": [],
+       "personal": null
+      }
+     }
+    },
+    "step": {
+     "session_id": "00000000-0000-4000-8000-000000000004",
+     "status": "active",
+     "mode": "written",
+     "pair": "ru-de",
+     "direction": "l1-de",
+     "local_date": "2026-09-29",
+     "bucket": "phrases",
+     "close_reason": null,
+     "progress": {
+      "completed": 1,
+      "total": 2,
+      "correct": 1,
+      "wrong": 0
+     },
+     "assignment": {
+      "id": "b2b433eb-dd24-4ce1-a4e0-b2b2f441fc90",
+      "card_id": "00000000-0000-4000-8000-000000000011",
+      "status": "prefetched",
+      "kind": "original",
+      "prompt": {
+       "text": "Большое спасибо",
+       "language": "ru",
+       "translations": [
+        "Большое спасибо"
+       ],
+       "personal_translation_version": null,
+       "hint": null,
+       "hint_version": null,
+       "conjunction_hint": null
+      },
+      "answer_spec": {
+       "kind": "phrase",
+       "labels": [
+        "Satz"
+       ],
+       "part_count": 1,
+       "case_sensitive": true
+      }
+     },
+     "summary": null,
+     "practice": {
+      "pair": "ru-de",
+      "direction": "l1-de",
+      "local_date": "2026-09-29",
+      "time_zone": "UTC",
+      "count": 1
+     },
+     "review_progress": {
+      "interval_days": 18,
+      "repetitions": 3,
+      "ease": "2.550",
+      "due_date": "2026-10-17",
+      "version": "2"
+     }
+    },
+    "capabilities": {
+     "answer_target": null,
+     "grades": {
+      "session_id": "00000000-0000-4000-8000-000000000004",
+      "assignment_id": "8a38e821-5a63-4321-8643-732465c39ce1",
+      "result_id": "f1584cd9-a1a4-4cbe-b82f-7de23051762d",
+      "expected_result_version": "1",
+      "values": [
+       3,
+       4,
+       5
+      ]
+     },
+     "correct_target": null,
+     "undo_target": null,
+     "stop": true,
+     "summary_home": false
+    },
+    "command": {
+     "id": "00000000-0000-4000-8000-000000000102",
+     "kind": "answer.submit",
+     "status": "applied",
+     "applied_at": "2026-09-29T12:00:00Z",
+     "target_id": "8a38e821-5a63-4321-8643-732465c39ce1",
+     "action_id": "f3988d78-d386-455d-b660-70abef411305",
+     "result_id": "f1584cd9-a1a4-4cbe-b82f-7de23051762d",
+     "context_id": null,
+     "object_version": "1"
+    },
+    "state_version": "6"
+   },
+   "schema": [
+    "WrittenCommandResponse"
+   ]
+  },
+  {
+   "name": "status_answer",
+   "method": "GET",
+   "path": "/api/v1/commands/00000000-0000-4000-8000-000000000102",
+   "query": {
+    "client_instance_id": "00000000-0000-4000-8000-000000000001",
+    "document_id": "00000000-0000-4000-8000-000000000002",
+    "session_id": "00000000-0000-4000-8000-000000000004",
+    "expected_intent_hash": "bb37b6b09312b204fe4372fa9ad56ca05826fa9f328ff1d9634037c2223078d3"
+   },
+   "body": null,
+   "status": 200,
+   "response": {
+    "action": {
+     "action_id": "f3988d78-d386-455d-b660-70abef411305",
+     "kind": "answer.submit",
+     "version": "1",
+     "status": "active"
+    },
+    "result": {
+     "result_id": "f1584cd9-a1a4-4cbe-b82f-7de23051762d",
+     "assignment_id": "8a38e821-5a63-4321-8643-732465c39ce1",
+     "version": "1",
+     "grade": 4,
+     "correct": true,
+     "status": "active",
+     "accepted_at": "2026-09-29T12:00:00Z",
+     "answer_date": "2026-09-29",
+     "detail": {
+      "input": {
+       "kind": "text",
+       "text": "Guten Tag"
+      },
+      "initial_check": {
+       "correct": true,
+       "variant_index": 0,
+       "correct_answer": "Guten Tag",
+       "other_answers": [],
+       "matched_spans": [
+        {
+         "start": 0,
+         "end": 9
+        }
+       ],
+       "input_errors": [],
+       "answer_errors": [],
+       "span_unit": "unicode_code_point",
+       "span_bounds": "start_inclusive_end_exclusive"
+      },
+      "variants": [
+       {
+        "parts": [
+         "Guten Tag"
+        ]
+       }
+      ],
+      "conjunction_hint": null,
+      "examples": {
+       "common": [],
+       "personal": null
+      }
+     }
+    },
+    "step": {
+     "session_id": "00000000-0000-4000-8000-000000000004",
+     "status": "active",
+     "mode": "written",
+     "pair": "ru-de",
+     "direction": "l1-de",
+     "local_date": "2026-09-29",
+     "bucket": "phrases",
+     "close_reason": null,
+     "progress": {
+      "completed": 1,
+      "total": 2,
+      "correct": 1,
+      "wrong": 0
+     },
+     "assignment": {
+      "id": "b2b433eb-dd24-4ce1-a4e0-b2b2f441fc90",
+      "card_id": "00000000-0000-4000-8000-000000000011",
+      "status": "prefetched",
+      "kind": "original",
+      "prompt": {
+       "text": "Большое спасибо",
+       "language": "ru",
+       "translations": [
+        "Большое спасибо"
+       ],
+       "personal_translation_version": null,
+       "hint": null,
+       "hint_version": null,
+       "conjunction_hint": null
+      },
+      "answer_spec": {
+       "kind": "phrase",
+       "labels": [
+        "Satz"
+       ],
+       "part_count": 1,
+       "case_sensitive": true
+      }
+     },
+     "summary": null,
+     "practice": {
+      "pair": "ru-de",
+      "direction": "l1-de",
+      "local_date": "2026-09-29",
+      "time_zone": "UTC",
+      "count": 1
+     },
+     "review_progress": {
+      "interval_days": 18,
+      "repetitions": 3,
+      "ease": "2.550",
+      "due_date": "2026-10-17",
+      "version": "2"
+     }
+    },
+    "capabilities": {
+     "answer_target": null,
+     "grades": {
+      "session_id": "00000000-0000-4000-8000-000000000004",
+      "assignment_id": "8a38e821-5a63-4321-8643-732465c39ce1",
+      "result_id": "f1584cd9-a1a4-4cbe-b82f-7de23051762d",
+      "expected_result_version": "1",
+      "values": [
+       3,
+       4,
+       5
+      ]
+     },
+     "correct_target": null,
+     "undo_target": null,
+     "stop": true,
+     "summary_home": false
+    },
+    "command": {
+     "id": "00000000-0000-4000-8000-000000000102",
+     "kind": "answer.submit",
+     "status": "already_applied",
+     "applied_at": "2026-09-29T12:00:00Z",
+     "target_id": "8a38e821-5a63-4321-8643-732465c39ce1",
+     "action_id": "f3988d78-d386-455d-b660-70abef411305",
+     "result_id": "f1584cd9-a1a4-4cbe-b82f-7de23051762d",
+     "context_id": null,
+     "object_version": "1"
+    },
+    "state_version": "6",
+    "verified_intent_hash": "bb37b6b09312b204fe4372fa9ad56ca05826fa9f328ff1d9634037c2223078d3"
+   },
+   "schema": [
+    "WrittenStatusResponse"
+   ]
+  },
+  {
+   "name": "present_second",
+   "method": "POST",
+   "path": "/api/v1/commands",
+   "query": {},
+   "body": {
+    "command_id": "00000000-0000-4000-8000-000000000103",
+    "client_instance_id": "00000000-0000-4000-8000-000000000001",
+    "document_id": "00000000-0000-4000-8000-000000000002",
+    "session_id": "00000000-0000-4000-8000-000000000004",
+    "kind": "assignment.present",
+    "assignment_id": "b2b433eb-dd24-4ce1-a4e0-b2b2f441fc90",
+    "payload": {}
+   },
+   "status": 200,
+   "response": {
+    "command": {
+     "id": "00000000-0000-4000-8000-000000000103",
+     "kind": "assignment.present",
+     "status": "applied",
+     "applied_at": "2026-09-29T12:00:00Z",
+     "target_id": "b2b433eb-dd24-4ce1-a4e0-b2b2f441fc90",
+     "action_id": null,
+     "result_id": null,
+     "context_id": null,
+     "object_version": null
+    },
+    "current": {
+     "session_id": "00000000-0000-4000-8000-000000000004",
+     "status": "active",
+     "mode": "written",
+     "pair": "ru-de",
+     "direction": "l1-de",
+     "local_date": "2026-09-29",
+     "bucket": "phrases",
+     "close_reason": null,
+     "progress": {
+      "completed": 1,
+      "total": 2,
+      "correct": 1,
+      "wrong": 0
+     },
+     "assignment": {
+      "id": "b2b433eb-dd24-4ce1-a4e0-b2b2f441fc90",
+      "card_id": "00000000-0000-4000-8000-000000000011",
       "status": "presented",
       "kind": "original",
       "prompt": {
@@ -136,410 +533,37 @@
        "part_count": 1,
        "case_sensitive": true
       }
-     }
-    },
-    "state_version": "5"
-   }
-  },
-  {
-   "name": "answer_first",
-   "method": "POST",
-   "path": "/api/v1/commands",
-   "query": {},
-   "body": {
-    "command_id": "101e92ed-9a7c-4efc-99d3-008be37aec43",
-    "client_instance_id": "be1a3c92-af57-4ddd-b8b3-67d66219feb2",
-    "document_id": "876997f6-4073-4787-95f0-45d4c35d9cf6",
-    "session_id": "7c00a3dd-c07e-42d3-9b7c-8eb4f904a16c",
-    "kind": "answer.submit",
-    "assignment_id": "15845309-964f-4003-ad5f-06ce3d32eced",
-    "payload": {
-     "text": "Danke schön"
-    }
-   },
-   "status": 200,
-   "response": {
-    "action": {
-     "action_id": "0b1f9e0c-ee0e-4daa-9d08-70e54d814400",
-     "kind": "answer.submit",
-     "version": "1",
-     "status": "active"
-    },
-    "result": {
-     "result_id": "da9fe091-c71b-4219-a902-603ea6c3cf06",
-     "assignment_id": "15845309-964f-4003-ad5f-06ce3d32eced",
-     "version": "1",
-     "grade": 4,
-     "correct": true,
-     "status": "active",
-     "accepted_at": "2026-09-29T12:00:00Z",
-     "answer_date": "2026-09-29",
-     "detail": {
-      "input": {
-       "kind": "text",
-       "text": "Danke schön"
-      },
-      "initial_check": {
-       "correct": true,
-       "variant_index": 0,
-       "correct_answer": "Danke schön",
-       "other_answers": [],
-       "matched_spans": [
-        {
-         "start": 0,
-         "end": 11
-        }
-       ],
-       "input_errors": [],
-       "answer_errors": [],
-       "span_unit": "unicode_code_point",
-       "span_bounds": "start_inclusive_end_exclusive"
-      },
-      "variants": [
-       {
-        "parts": [
-         "Danke schön"
-        ]
-       }
-      ],
-      "conjunction_hint": null,
-      "examples": {
-       "common": [],
-       "personal": null
-      }
-     }
-    },
-    "step": {
-     "session_id": "7c00a3dd-c07e-42d3-9b7c-8eb4f904a16c",
-     "status": "active",
-     "mode": "written",
-     "pair": "ru-de",
-     "direction": "l1-de",
-     "local_date": "2026-09-29",
-     "bucket": "phrases",
-     "close_reason": null,
-     "progress": {
-      "completed": 1,
-      "total": 2,
-      "correct": 1,
-      "wrong": 0
      },
-     "assignment": {
-      "id": "2c27a259-c141-4c79-944c-3507af94cf1b",
-      "card_id": "700a2b07-5167-4042-9798-2a238171a0b3",
-      "status": "prefetched",
-      "kind": "original",
-      "prompt": {
-       "text": "Добрый день",
-       "language": "ru",
-       "translations": [
-        "Добрый день"
-       ],
-       "personal_translation_version": null,
-       "hint": null,
-       "hint_version": null,
-       "conjunction_hint": null
-      },
-      "answer_spec": {
-       "kind": "phrase",
-       "labels": [
-        "Satz"
-       ],
-       "part_count": 1,
-       "case_sensitive": true
-      }
-     },
-     "summary": null,
-     "practice": {
-      "pair": "ru-de",
-      "direction": "l1-de",
-      "local_date": "2026-09-29",
-      "time_zone": "UTC",
-      "count": 1
-     },
-     "review_progress": {
-      "interval_days": 18,
-      "repetitions": 3,
-      "ease": "2.550",
-      "due_date": "2026-10-17",
-      "version": "2"
-     }
-    },
-    "capabilities": {
-     "answer_target": null,
-     "grades": {
-      "session_id": "7c00a3dd-c07e-42d3-9b7c-8eb4f904a16c",
-      "assignment_id": "15845309-964f-4003-ad5f-06ce3d32eced",
-      "result_id": "da9fe091-c71b-4219-a902-603ea6c3cf06",
-      "expected_result_version": "1",
-      "values": [
-       3,
-       4,
-       5
-      ]
-     },
-     "correct_target": null,
-     "undo_target": null,
-     "stop": true,
-     "summary_home": false
-    },
-    "command": {
-     "id": "101e92ed-9a7c-4efc-99d3-008be37aec43",
-     "kind": "answer.submit",
-     "status": "applied",
-     "applied_at": "2026-09-29T12:00:00Z",
-     "target_id": "15845309-964f-4003-ad5f-06ce3d32eced",
-     "action_id": "0b1f9e0c-ee0e-4daa-9d08-70e54d814400",
-     "result_id": "da9fe091-c71b-4219-a902-603ea6c3cf06",
-     "context_id": null,
-     "object_version": "1"
-    },
-    "state_version": "6"
-   }
-  },
-  {
-   "name": "status_answer",
-   "method": "GET",
-   "path": "/api/v1/commands/101e92ed-9a7c-4efc-99d3-008be37aec43",
-   "query": {
-    "client_instance_id": "be1a3c92-af57-4ddd-b8b3-67d66219feb2",
-    "document_id": "876997f6-4073-4787-95f0-45d4c35d9cf6",
-    "session_id": "7c00a3dd-c07e-42d3-9b7c-8eb4f904a16c",
-    "expected_intent_hash": "681294595d16041d6eeb6e3711677539e3a7689303d103e5898746d3eabc8198"
-   },
-   "body": null,
-   "status": 200,
-   "response": {
-    "action": {
-     "action_id": "0b1f9e0c-ee0e-4daa-9d08-70e54d814400",
-     "kind": "answer.submit",
-     "version": "1",
-     "status": "active"
-    },
-    "result": {
-     "result_id": "da9fe091-c71b-4219-a902-603ea6c3cf06",
-     "assignment_id": "15845309-964f-4003-ad5f-06ce3d32eced",
-     "version": "1",
-     "grade": 4,
-     "correct": true,
-     "status": "active",
-     "accepted_at": "2026-09-29T12:00:00Z",
-     "answer_date": "2026-09-29",
-     "detail": {
-      "input": {
-       "kind": "text",
-       "text": "Danke schön"
-      },
-      "initial_check": {
-       "correct": true,
-       "variant_index": 0,
-       "correct_answer": "Danke schön",
-       "other_answers": [],
-       "matched_spans": [
-        {
-         "start": 0,
-         "end": 11
-        }
-       ],
-       "input_errors": [],
-       "answer_errors": [],
-       "span_unit": "unicode_code_point",
-       "span_bounds": "start_inclusive_end_exclusive"
-      },
-      "variants": [
-       {
-        "parts": [
-         "Danke schön"
-        ]
-       }
-      ],
-      "conjunction_hint": null,
-      "examples": {
-       "common": [],
-       "personal": null
-      }
-     }
-    },
-    "step": {
-     "session_id": "7c00a3dd-c07e-42d3-9b7c-8eb4f904a16c",
-     "status": "active",
-     "mode": "written",
-     "pair": "ru-de",
-     "direction": "l1-de",
-     "local_date": "2026-09-29",
-     "bucket": "phrases",
-     "close_reason": null,
-     "progress": {
-      "completed": 1,
-      "total": 2,
-      "correct": 1,
-      "wrong": 0
-     },
-     "assignment": {
-      "id": "2c27a259-c141-4c79-944c-3507af94cf1b",
-      "card_id": "700a2b07-5167-4042-9798-2a238171a0b3",
-      "status": "prefetched",
-      "kind": "original",
-      "prompt": {
-       "text": "Добрый день",
-       "language": "ru",
-       "translations": [
-        "Добрый день"
-       ],
-       "personal_translation_version": null,
-       "hint": null,
-       "hint_version": null,
-       "conjunction_hint": null
-      },
-      "answer_spec": {
-       "kind": "phrase",
-       "labels": [
-        "Satz"
-       ],
-       "part_count": 1,
-       "case_sensitive": true
-      }
-     },
-     "summary": null,
-     "practice": {
-      "pair": "ru-de",
-      "direction": "l1-de",
-      "local_date": "2026-09-29",
-      "time_zone": "UTC",
-      "count": 1
-     },
-     "review_progress": {
-      "interval_days": 18,
-      "repetitions": 3,
-      "ease": "2.550",
-      "due_date": "2026-10-17",
-      "version": "2"
-     }
-    },
-    "capabilities": {
-     "answer_target": null,
-     "grades": {
-      "session_id": "7c00a3dd-c07e-42d3-9b7c-8eb4f904a16c",
-      "assignment_id": "15845309-964f-4003-ad5f-06ce3d32eced",
-      "result_id": "da9fe091-c71b-4219-a902-603ea6c3cf06",
-      "expected_result_version": "1",
-      "values": [
-       3,
-       4,
-       5
-      ]
-     },
-     "correct_target": null,
-     "undo_target": null,
-     "stop": true,
-     "summary_home": false
-    },
-    "command": {
-     "id": "101e92ed-9a7c-4efc-99d3-008be37aec43",
-     "kind": "answer.submit",
-     "status": "already_applied",
-     "applied_at": "2026-09-29T12:00:00Z",
-     "target_id": "15845309-964f-4003-ad5f-06ce3d32eced",
-     "action_id": "0b1f9e0c-ee0e-4daa-9d08-70e54d814400",
-     "result_id": "da9fe091-c71b-4219-a902-603ea6c3cf06",
-     "context_id": null,
-     "object_version": "1"
-    },
-    "state_version": "6",
-    "verified_intent_hash": "681294595d16041d6eeb6e3711677539e3a7689303d103e5898746d3eabc8198"
-   }
-  },
-  {
-   "name": "present_second",
-   "method": "POST",
-   "path": "/api/v1/commands",
-   "query": {},
-   "body": {
-    "command_id": "fdcfb8d9-cce6-4e95-ae5c-f50fd776e32b",
-    "client_instance_id": "be1a3c92-af57-4ddd-b8b3-67d66219feb2",
-    "document_id": "876997f6-4073-4787-95f0-45d4c35d9cf6",
-    "session_id": "7c00a3dd-c07e-42d3-9b7c-8eb4f904a16c",
-    "kind": "assignment.present",
-    "assignment_id": "2c27a259-c141-4c79-944c-3507af94cf1b",
-    "payload": {}
-   },
-   "status": 200,
-   "response": {
-    "command": {
-     "id": "fdcfb8d9-cce6-4e95-ae5c-f50fd776e32b",
-     "kind": "assignment.present",
-     "status": "applied",
-     "applied_at": "2026-09-29T12:00:00Z",
-     "target_id": "2c27a259-c141-4c79-944c-3507af94cf1b",
-     "action_id": null,
-     "result_id": null,
-     "context_id": null,
-     "object_version": null
-    },
-    "current": {
-     "session_id": "7c00a3dd-c07e-42d3-9b7c-8eb4f904a16c",
-     "status": "active",
-     "mode": "written",
-     "pair": "ru-de",
-     "direction": "l1-de",
-     "local_date": "2026-09-29",
-     "bucket": "phrases",
-     "close_reason": null,
-     "progress": {
-      "completed": 1,
-      "total": 2
-     },
-     "assignment": {
-      "id": "2c27a259-c141-4c79-944c-3507af94cf1b",
-      "card_id": "700a2b07-5167-4042-9798-2a238171a0b3",
-      "status": "presented",
-      "kind": "original",
-      "prompt": {
-       "text": "Добрый день",
-       "language": "ru",
-       "translations": [
-        "Добрый день"
-       ],
-       "personal_translation_version": null,
-       "hint": null,
-       "hint_version": null,
-       "conjunction_hint": null
-      },
-      "answer_spec": {
-       "kind": "phrase",
-       "labels": [
-        "Satz"
-       ],
-       "part_count": 1,
-       "case_sensitive": true
-      }
-     }
+     "summary": null
     },
     "state_version": "7"
-   }
+   },
+   "schema": [
+    "SessionCommandResponse"
+   ]
   },
   {
    "name": "read_first",
    "method": "GET",
-   "path": "/api/v1/sessions/7c00a3dd-c07e-42d3-9b7c-8eb4f904a16c",
+   "path": "/api/v1/sessions/00000000-0000-4000-8000-000000000004",
    "query": {
-    "assignment_id": "15845309-964f-4003-ad5f-06ce3d32eced",
-    "result_id": "da9fe091-c71b-4219-a902-603ea6c3cf06",
-    "client_instance_id": "be1a3c92-af57-4ddd-b8b3-67d66219feb2",
-    "document_id": "876997f6-4073-4787-95f0-45d4c35d9cf6"
+    "assignment_id": "8a38e821-5a63-4321-8643-732465c39ce1",
+    "result_id": "f1584cd9-a1a4-4cbe-b82f-7de23051762d",
+    "client_instance_id": "00000000-0000-4000-8000-000000000001",
+    "document_id": "00000000-0000-4000-8000-000000000002"
    },
    "body": null,
    "status": 200,
    "response": {
     "action": {
-     "action_id": "0b1f9e0c-ee0e-4daa-9d08-70e54d814400",
+     "action_id": "f3988d78-d386-455d-b660-70abef411305",
      "kind": "answer.submit",
      "version": "1",
      "status": "active"
     },
     "result": {
-     "result_id": "da9fe091-c71b-4219-a902-603ea6c3cf06",
-     "assignment_id": "15845309-964f-4003-ad5f-06ce3d32eced",
+     "result_id": "f1584cd9-a1a4-4cbe-b82f-7de23051762d",
+     "assignment_id": "8a38e821-5a63-4321-8643-732465c39ce1",
      "version": "1",
      "grade": 4,
      "correct": true,
@@ -549,17 +573,17 @@
      "detail": {
       "input": {
        "kind": "text",
-       "text": "Danke schön"
+       "text": "Guten Tag"
       },
       "initial_check": {
        "correct": true,
        "variant_index": 0,
-       "correct_answer": "Danke schön",
+       "correct_answer": "Guten Tag",
        "other_answers": [],
        "matched_spans": [
         {
          "start": 0,
-         "end": 11
+         "end": 9
         }
        ],
        "input_errors": [],
@@ -570,7 +594,7 @@
       "variants": [
        {
         "parts": [
-         "Danke schön"
+         "Guten Tag"
         ]
        }
       ],
@@ -582,7 +606,7 @@
      }
     },
     "step": {
-     "session_id": "7c00a3dd-c07e-42d3-9b7c-8eb4f904a16c",
+     "session_id": "00000000-0000-4000-8000-000000000004",
      "status": "active",
      "mode": "written",
      "pair": "ru-de",
@@ -597,15 +621,15 @@
       "wrong": 0
      },
      "assignment": {
-      "id": "2c27a259-c141-4c79-944c-3507af94cf1b",
-      "card_id": "700a2b07-5167-4042-9798-2a238171a0b3",
+      "id": "b2b433eb-dd24-4ce1-a4e0-b2b2f441fc90",
+      "card_id": "00000000-0000-4000-8000-000000000011",
       "status": "presented",
       "kind": "original",
       "prompt": {
-       "text": "Добрый день",
+       "text": "Большое спасибо",
        "language": "ru",
        "translations": [
-        "Добрый день"
+        "Большое спасибо"
        ],
        "personal_translation_version": null,
        "hint": null,
@@ -638,11 +662,11 @@
      }
     },
     "capabilities": {
-     "answer_target": "2c27a259-c141-4c79-944c-3507af94cf1b",
+     "answer_target": "b2b433eb-dd24-4ce1-a4e0-b2b2f441fc90",
      "grades": {
-      "session_id": "7c00a3dd-c07e-42d3-9b7c-8eb4f904a16c",
-      "assignment_id": "15845309-964f-4003-ad5f-06ce3d32eced",
-      "result_id": "da9fe091-c71b-4219-a902-603ea6c3cf06",
+      "session_id": "00000000-0000-4000-8000-000000000004",
+      "assignment_id": "8a38e821-5a63-4321-8643-732465c39ce1",
+      "result_id": "f1584cd9-a1a4-4cbe-b82f-7de23051762d",
       "expected_result_version": "1",
       "values": [
        3,
@@ -656,7 +680,10 @@
      "summary_home": false
     },
     "state_version": "7"
-   }
+   },
+   "schema": [
+    "WrittenResultReadResponse"
+   ]
   },
   {
    "name": "grade_first",
@@ -664,13 +691,13 @@
    "path": "/api/v1/commands",
    "query": {},
    "body": {
-    "command_id": "8263eb56-8d45-4e4f-916e-2cce20e3ae53",
-    "client_instance_id": "be1a3c92-af57-4ddd-b8b3-67d66219feb2",
-    "document_id": "876997f6-4073-4787-95f0-45d4c35d9cf6",
-    "session_id": "7c00a3dd-c07e-42d3-9b7c-8eb4f904a16c",
+    "command_id": "00000000-0000-4000-8000-000000000104",
+    "client_instance_id": "00000000-0000-4000-8000-000000000001",
+    "document_id": "00000000-0000-4000-8000-000000000002",
+    "session_id": "00000000-0000-4000-8000-000000000004",
     "kind": "result.grade",
-    "assignment_id": "15845309-964f-4003-ad5f-06ce3d32eced",
-    "result_id": "da9fe091-c71b-4219-a902-603ea6c3cf06",
+    "assignment_id": "8a38e821-5a63-4321-8643-732465c39ce1",
+    "result_id": "f1584cd9-a1a4-4cbe-b82f-7de23051762d",
     "expected_result_version": "1",
     "payload": {
      "grade": 5
@@ -679,14 +706,14 @@
    "status": 200,
    "response": {
     "action": {
-     "action_id": "0b1f9e0c-ee0e-4daa-9d08-70e54d814400",
+     "action_id": "f3988d78-d386-455d-b660-70abef411305",
      "kind": "answer.submit",
      "version": "2",
      "status": "active"
     },
     "result": {
-     "result_id": "da9fe091-c71b-4219-a902-603ea6c3cf06",
-     "assignment_id": "15845309-964f-4003-ad5f-06ce3d32eced",
+     "result_id": "f1584cd9-a1a4-4cbe-b82f-7de23051762d",
+     "assignment_id": "8a38e821-5a63-4321-8643-732465c39ce1",
      "version": "2",
      "grade": 5,
      "correct": true,
@@ -696,17 +723,17 @@
      "detail": {
       "input": {
        "kind": "text",
-       "text": "Danke schön"
+       "text": "Guten Tag"
       },
       "initial_check": {
        "correct": true,
        "variant_index": 0,
-       "correct_answer": "Danke schön",
+       "correct_answer": "Guten Tag",
        "other_answers": [],
        "matched_spans": [
         {
          "start": 0,
-         "end": 11
+         "end": 9
         }
        ],
        "input_errors": [],
@@ -717,7 +744,7 @@
       "variants": [
        {
         "parts": [
-         "Danke schön"
+         "Guten Tag"
         ]
        }
       ],
@@ -729,7 +756,7 @@
      }
     },
     "step": {
-     "session_id": "7c00a3dd-c07e-42d3-9b7c-8eb4f904a16c",
+     "session_id": "00000000-0000-4000-8000-000000000004",
      "status": "active",
      "mode": "written",
      "pair": "ru-de",
@@ -744,15 +771,15 @@
       "wrong": 0
      },
      "assignment": {
-      "id": "2c27a259-c141-4c79-944c-3507af94cf1b",
-      "card_id": "700a2b07-5167-4042-9798-2a238171a0b3",
+      "id": "b2b433eb-dd24-4ce1-a4e0-b2b2f441fc90",
+      "card_id": "00000000-0000-4000-8000-000000000011",
       "status": "presented",
       "kind": "original",
       "prompt": {
-       "text": "Добрый день",
+       "text": "Большое спасибо",
        "language": "ru",
        "translations": [
-        "Добрый день"
+        "Большое спасибо"
        ],
        "personal_translation_version": null,
        "hint": null,
@@ -785,11 +812,11 @@
      }
     },
     "capabilities": {
-     "answer_target": "2c27a259-c141-4c79-944c-3507af94cf1b",
+     "answer_target": "b2b433eb-dd24-4ce1-a4e0-b2b2f441fc90",
      "grades": {
-      "session_id": "7c00a3dd-c07e-42d3-9b7c-8eb4f904a16c",
-      "assignment_id": "15845309-964f-4003-ad5f-06ce3d32eced",
-      "result_id": "da9fe091-c71b-4219-a902-603ea6c3cf06",
+      "session_id": "00000000-0000-4000-8000-000000000004",
+      "assignment_id": "8a38e821-5a63-4321-8643-732465c39ce1",
+      "result_id": "f1584cd9-a1a4-4cbe-b82f-7de23051762d",
       "expected_result_version": "2",
       "values": [
        3,
@@ -803,32 +830,35 @@
      "summary_home": false
     },
     "command": {
-     "id": "8263eb56-8d45-4e4f-916e-2cce20e3ae53",
+     "id": "00000000-0000-4000-8000-000000000104",
      "kind": "result.grade",
      "status": "applied",
      "applied_at": "2026-09-29T12:00:00Z",
-     "target_id": "15845309-964f-4003-ad5f-06ce3d32eced",
-     "action_id": "0b1f9e0c-ee0e-4daa-9d08-70e54d814400",
-     "result_id": "da9fe091-c71b-4219-a902-603ea6c3cf06",
+     "target_id": "8a38e821-5a63-4321-8643-732465c39ce1",
+     "action_id": "f3988d78-d386-455d-b660-70abef411305",
+     "result_id": "f1584cd9-a1a4-4cbe-b82f-7de23051762d",
      "context_id": null,
      "object_version": "2"
     },
     "state_version": "8"
-   }
+   },
+   "schema": [
+    "WrittenCommandResponse"
+   ]
   },
   {
    "name": "read_session",
    "method": "GET",
-   "path": "/api/v1/sessions/7c00a3dd-c07e-42d3-9b7c-8eb4f904a16c",
+   "path": "/api/v1/sessions/00000000-0000-4000-8000-000000000004",
    "query": {
-    "client_instance_id": "be1a3c92-af57-4ddd-b8b3-67d66219feb2",
-    "document_id": "876997f6-4073-4787-95f0-45d4c35d9cf6"
+    "client_instance_id": "00000000-0000-4000-8000-000000000001",
+    "document_id": "00000000-0000-4000-8000-000000000002"
    },
    "body": null,
    "status": 200,
    "response": {
     "current": {
-     "session_id": "7c00a3dd-c07e-42d3-9b7c-8eb4f904a16c",
+     "session_id": "00000000-0000-4000-8000-000000000004",
      "status": "active",
      "mode": "written",
      "pair": "ru-de",
@@ -838,18 +868,20 @@
      "close_reason": null,
      "progress": {
       "completed": 1,
-      "total": 2
+      "total": 2,
+      "correct": 1,
+      "wrong": 0
      },
      "assignment": {
-      "id": "2c27a259-c141-4c79-944c-3507af94cf1b",
-      "card_id": "700a2b07-5167-4042-9798-2a238171a0b3",
+      "id": "b2b433eb-dd24-4ce1-a4e0-b2b2f441fc90",
+      "card_id": "00000000-0000-4000-8000-000000000011",
       "status": "presented",
       "kind": "original",
       "prompt": {
-       "text": "Добрый день",
+       "text": "Большое спасибо",
        "language": "ru",
        "translations": [
-        "Добрый день"
+        "Большое спасибо"
        ],
        "personal_translation_version": null,
        "hint": null,
@@ -864,10 +896,14 @@
        "part_count": 1,
        "case_sensitive": true
       }
-     }
+     },
+     "summary": null
     },
     "state_version": "8"
-   }
+   },
+   "schema": [
+    "SessionResponse"
+   ]
   },
   {
    "name": "answer_second",
@@ -875,12 +911,12 @@
    "path": "/api/v1/commands",
    "query": {},
    "body": {
-    "command_id": "9a408332-024a-40ca-80c9-451cc0443ce4",
-    "client_instance_id": "be1a3c92-af57-4ddd-b8b3-67d66219feb2",
-    "document_id": "876997f6-4073-4787-95f0-45d4c35d9cf6",
-    "session_id": "7c00a3dd-c07e-42d3-9b7c-8eb4f904a16c",
+    "command_id": "00000000-0000-4000-8000-000000000105",
+    "client_instance_id": "00000000-0000-4000-8000-000000000001",
+    "document_id": "00000000-0000-4000-8000-000000000002",
+    "session_id": "00000000-0000-4000-8000-000000000004",
     "kind": "answer.submit",
-    "assignment_id": "2c27a259-c141-4c79-944c-3507af94cf1b",
+    "assignment_id": "b2b433eb-dd24-4ce1-a4e0-b2b2f441fc90",
     "payload": {
      "text": "falsch"
     }
@@ -888,14 +924,14 @@
    "status": 200,
    "response": {
     "action": {
-     "action_id": "5234a35b-9f61-4a61-9568-e4174fd02209",
+     "action_id": "505cde0c-13e0-4335-91f7-017a5773e99f",
      "kind": "answer.submit",
      "version": "1",
      "status": "active"
     },
     "result": {
-     "result_id": "cece1ae6-f939-43e3-a31d-f7f63a01d670",
-     "assignment_id": "2c27a259-c141-4c79-944c-3507af94cf1b",
+     "result_id": "f88b4dbf-c59e-4dcb-b8bb-504ec6b7ef25",
+     "assignment_id": "b2b433eb-dd24-4ce1-a4e0-b2b2f441fc90",
      "version": "1",
      "grade": 2,
      "correct": false,
@@ -910,7 +946,7 @@
       "initial_check": {
        "correct": false,
        "variant_index": null,
-       "correct_answer": "Guten Tag",
+       "correct_answer": "Danke schön",
        "other_answers": [],
        "matched_spans": [],
        "input_errors": [
@@ -920,17 +956,21 @@
         },
         {
          "start": 2,
-         "end": 6
+         "end": 3
         }
        ],
        "answer_errors": [
         {
          "start": 0,
-         "end": 7
+         "end": 1
         },
         {
-         "start": 8,
-         "end": 9
+         "start": 2,
+         "end": 6
+        },
+        {
+         "start": 9,
+         "end": 11
         }
        ],
        "span_unit": "unicode_code_point",
@@ -939,7 +979,7 @@
       "variants": [
        {
         "parts": [
-         "Guten Tag"
+         "Danke schön"
         ]
        }
       ],
@@ -951,7 +991,7 @@
      }
     },
     "step": {
-     "session_id": "7c00a3dd-c07e-42d3-9b7c-8eb4f904a16c",
+     "session_id": "00000000-0000-4000-8000-000000000004",
      "status": "active",
      "mode": "written",
      "pair": "ru-de",
@@ -966,15 +1006,15 @@
       "wrong": 1
      },
      "assignment": {
-      "id": "8534d100-e42b-45ef-99e2-70ade171691d",
-      "card_id": "700a2b07-5167-4042-9798-2a238171a0b3",
+      "id": "715fa568-27a2-4bce-b34d-39e01a761a6e",
+      "card_id": "00000000-0000-4000-8000-000000000011",
       "status": "prefetched",
       "kind": "drill",
       "prompt": {
-       "text": "Добрый день",
+       "text": "Большое спасибо",
        "language": "ru",
        "translations": [
-        "Добрый день"
+        "Большое спасибо"
        ],
        "personal_translation_version": null,
        "hint": null,
@@ -1009,123 +1049,140 @@
     "capabilities": {
      "answer_target": null,
      "grades": null,
-     "correct_target": null,
+     "correct_target": {
+      "session_id": "00000000-0000-4000-8000-000000000004",
+      "assignment_id": "b2b433eb-dd24-4ce1-a4e0-b2b2f441fc90",
+      "result_id": "f88b4dbf-c59e-4dcb-b8bb-504ec6b7ef25",
+      "expected_result_version": "1"
+     },
      "undo_target": null,
      "stop": true,
      "summary_home": false
     },
     "command": {
-     "id": "9a408332-024a-40ca-80c9-451cc0443ce4",
+     "id": "00000000-0000-4000-8000-000000000105",
      "kind": "answer.submit",
      "status": "applied",
      "applied_at": "2026-09-29T12:00:00Z",
-     "target_id": "2c27a259-c141-4c79-944c-3507af94cf1b",
-     "action_id": "5234a35b-9f61-4a61-9568-e4174fd02209",
-     "result_id": "cece1ae6-f939-43e3-a31d-f7f63a01d670",
+     "target_id": "b2b433eb-dd24-4ce1-a4e0-b2b2f441fc90",
+     "action_id": "505cde0c-13e0-4335-91f7-017a5773e99f",
+     "result_id": "f88b4dbf-c59e-4dcb-b8bb-504ec6b7ef25",
      "context_id": null,
      "object_version": "1"
     },
     "state_version": "9"
-   }
+   },
+   "schema": [
+    "WrittenCommandResponse"
+   ]
   },
   {
-   "name": "stop",
+   "name": "correct_second",
    "method": "POST",
    "path": "/api/v1/commands",
    "query": {},
    "body": {
-    "command_id": "21117986-59a6-4cb6-8214-c6403dd3aea3",
-    "client_instance_id": "be1a3c92-af57-4ddd-b8b3-67d66219feb2",
-    "document_id": "876997f6-4073-4787-95f0-45d4c35d9cf6",
-    "session_id": "7c00a3dd-c07e-42d3-9b7c-8eb4f904a16c",
-    "kind": "session.stop",
-    "payload": {
-     "reason": "stop"
-    }
+    "command_id": "00000000-0000-4000-8000-000000000106",
+    "client_instance_id": "00000000-0000-4000-8000-000000000001",
+    "document_id": "00000000-0000-4000-8000-000000000002",
+    "session_id": "00000000-0000-4000-8000-000000000004",
+    "kind": "result.correct",
+    "assignment_id": "b2b433eb-dd24-4ce1-a4e0-b2b2f441fc90",
+    "result_id": "f88b4dbf-c59e-4dcb-b8bb-504ec6b7ef25",
+    "expected_result_version": "1",
+    "payload": {}
    },
-   "status": 200,
-   "response": {
-    "command": {
-     "id": "21117986-59a6-4cb6-8214-c6403dd3aea3",
-     "kind": "session.stop",
-     "status": "applied",
-     "applied_at": "2026-09-29T12:00:00Z",
-     "target_id": "7c00a3dd-c07e-42d3-9b7c-8eb4f904a16c",
-     "action_id": null,
-     "result_id": null,
-     "context_id": null,
-     "object_version": null
-    },
-    "current": {
-     "session_id": "7c00a3dd-c07e-42d3-9b7c-8eb4f904a16c",
-     "status": "closed",
-     "mode": "written",
-     "pair": "ru-de",
-     "direction": "l1-de",
-     "local_date": "2026-09-29",
-     "bucket": "phrases",
-     "close_reason": "stop",
-     "progress": {
-      "completed": 2,
-      "total": 2
-     },
-     "assignment": null
-    },
-    "state_version": "11"
-   }
-  },
-  {
-   "name": "read_closed",
-   "method": "GET",
-   "path": "/api/v1/sessions/7c00a3dd-c07e-42d3-9b7c-8eb4f904a16c",
-   "query": {
-    "assignment_id": "2c27a259-c141-4c79-944c-3507af94cf1b",
-    "result_id": "cece1ae6-f939-43e3-a31d-f7f63a01d670",
-    "client_instance_id": "be1a3c92-af57-4ddd-b8b3-67d66219feb2",
-    "document_id": "876997f6-4073-4787-95f0-45d4c35d9cf6"
-   },
-   "body": null,
    "status": 200,
    "response": {
     "action": {
-     "action_id": "5234a35b-9f61-4a61-9568-e4174fd02209",
+     "action_id": "505cde0c-13e0-4335-91f7-017a5773e99f",
      "kind": "answer.submit",
-     "version": "1",
+     "version": "2",
      "status": "active"
     },
     "result": {
-     "result_id": "cece1ae6-f939-43e3-a31d-f7f63a01d670",
-     "assignment_id": "2c27a259-c141-4c79-944c-3507af94cf1b",
-     "version": "1",
-     "grade": 2,
-     "correct": false,
+     "result_id": "f88b4dbf-c59e-4dcb-b8bb-504ec6b7ef25",
+     "assignment_id": "b2b433eb-dd24-4ce1-a4e0-b2b2f441fc90",
+     "version": "2",
+     "grade": 4,
+     "correct": true,
      "status": "active",
      "accepted_at": "2026-09-29T12:00:00Z",
      "answer_date": "2026-09-29",
-     "detail": null
+     "detail": {
+      "input": {
+       "kind": "text",
+       "text": "falsch"
+      },
+      "initial_check": {
+       "correct": false,
+       "variant_index": null,
+       "correct_answer": "Danke schön",
+       "other_answers": [],
+       "matched_spans": [],
+       "input_errors": [
+        {
+         "start": 0,
+         "end": 1
+        },
+        {
+         "start": 2,
+         "end": 3
+        }
+       ],
+       "answer_errors": [
+        {
+         "start": 0,
+         "end": 1
+        },
+        {
+         "start": 2,
+         "end": 6
+        },
+        {
+         "start": 9,
+         "end": 11
+        }
+       ],
+       "span_unit": "unicode_code_point",
+       "span_bounds": "start_inclusive_end_exclusive"
+      },
+      "variants": [
+       {
+        "parts": [
+         "Danke schön"
+        ]
+       }
+      ],
+      "conjunction_hint": null,
+      "examples": {
+       "common": [],
+       "personal": null
+      }
+     }
     },
     "step": {
-     "session_id": "7c00a3dd-c07e-42d3-9b7c-8eb4f904a16c",
-     "status": "closed",
+     "session_id": "00000000-0000-4000-8000-000000000004",
+     "status": "summary",
      "mode": "written",
      "pair": "ru-de",
      "direction": "l1-de",
      "local_date": "2026-09-29",
      "bucket": "phrases",
-     "close_reason": "stop",
+     "close_reason": null,
      "progress": {
       "completed": 2,
       "total": 2,
-      "correct": 1,
-      "wrong": 1
+      "correct": 2,
+      "wrong": 0
      },
      "assignment": null,
      "summary": {
       "completed": 2,
-      "correct": 1,
-      "wrong": 1,
+      "correct": 2,
+      "wrong": 0,
       "ratio": {
-       "numerator": 1,
+       "numerator": 2,
        "denominator": 2
       }
      },
@@ -1137,11 +1194,375 @@
       "count": 2
      },
      "review_progress": {
-      "interval_days": 1,
-      "repetitions": 0,
-      "ease": "2.500",
-      "due_date": "2026-09-30",
-      "version": "2"
+      "interval_days": 18,
+      "repetitions": 3,
+      "ease": "2.550",
+      "due_date": "2026-10-17",
+      "version": "3"
+     }
+    },
+    "capabilities": {
+     "answer_target": null,
+     "grades": {
+      "session_id": "00000000-0000-4000-8000-000000000004",
+      "assignment_id": "b2b433eb-dd24-4ce1-a4e0-b2b2f441fc90",
+      "result_id": "f88b4dbf-c59e-4dcb-b8bb-504ec6b7ef25",
+      "expected_result_version": "2",
+      "values": [
+       3,
+       4,
+       5
+      ]
+     },
+     "correct_target": null,
+     "undo_target": null,
+     "stop": true,
+     "summary_home": true
+    },
+    "command": {
+     "id": "00000000-0000-4000-8000-000000000106",
+     "kind": "result.correct",
+     "status": "applied",
+     "applied_at": "2026-09-29T12:00:00Z",
+     "target_id": "b2b433eb-dd24-4ce1-a4e0-b2b2f441fc90",
+     "action_id": "505cde0c-13e0-4335-91f7-017a5773e99f",
+     "result_id": "f88b4dbf-c59e-4dcb-b8bb-504ec6b7ef25",
+     "context_id": null,
+     "object_version": "2"
+    },
+    "state_version": "10"
+   },
+   "schema": [
+    "WrittenCommandResponse"
+   ]
+  },
+  {
+   "name": "status_correct",
+   "method": "GET",
+   "path": "/api/v1/commands/00000000-0000-4000-8000-000000000106",
+   "query": {
+    "client_instance_id": "00000000-0000-4000-8000-000000000001",
+    "document_id": "00000000-0000-4000-8000-000000000002",
+    "session_id": "00000000-0000-4000-8000-000000000004",
+    "expected_intent_hash": "719a51f65e955096c931002647be9b23c6b83348c46e179d3149f169a3ca0c59"
+   },
+   "body": null,
+   "status": 200,
+   "response": {
+    "action": {
+     "action_id": "505cde0c-13e0-4335-91f7-017a5773e99f",
+     "kind": "answer.submit",
+     "version": "2",
+     "status": "active"
+    },
+    "result": {
+     "result_id": "f88b4dbf-c59e-4dcb-b8bb-504ec6b7ef25",
+     "assignment_id": "b2b433eb-dd24-4ce1-a4e0-b2b2f441fc90",
+     "version": "2",
+     "grade": 4,
+     "correct": true,
+     "status": "active",
+     "accepted_at": "2026-09-29T12:00:00Z",
+     "answer_date": "2026-09-29",
+     "detail": {
+      "input": {
+       "kind": "text",
+       "text": "falsch"
+      },
+      "initial_check": {
+       "correct": false,
+       "variant_index": null,
+       "correct_answer": "Danke schön",
+       "other_answers": [],
+       "matched_spans": [],
+       "input_errors": [
+        {
+         "start": 0,
+         "end": 1
+        },
+        {
+         "start": 2,
+         "end": 3
+        }
+       ],
+       "answer_errors": [
+        {
+         "start": 0,
+         "end": 1
+        },
+        {
+         "start": 2,
+         "end": 6
+        },
+        {
+         "start": 9,
+         "end": 11
+        }
+       ],
+       "span_unit": "unicode_code_point",
+       "span_bounds": "start_inclusive_end_exclusive"
+      },
+      "variants": [
+       {
+        "parts": [
+         "Danke schön"
+        ]
+       }
+      ],
+      "conjunction_hint": null,
+      "examples": {
+       "common": [],
+       "personal": null
+      }
+     }
+    },
+    "step": {
+     "session_id": "00000000-0000-4000-8000-000000000004",
+     "status": "summary",
+     "mode": "written",
+     "pair": "ru-de",
+     "direction": "l1-de",
+     "local_date": "2026-09-29",
+     "bucket": "phrases",
+     "close_reason": null,
+     "progress": {
+      "completed": 2,
+      "total": 2,
+      "correct": 2,
+      "wrong": 0
+     },
+     "assignment": null,
+     "summary": {
+      "completed": 2,
+      "correct": 2,
+      "wrong": 0,
+      "ratio": {
+       "numerator": 2,
+       "denominator": 2
+      }
+     },
+     "practice": {
+      "pair": "ru-de",
+      "direction": "l1-de",
+      "local_date": "2026-09-29",
+      "time_zone": "UTC",
+      "count": 2
+     },
+     "review_progress": {
+      "interval_days": 18,
+      "repetitions": 3,
+      "ease": "2.550",
+      "due_date": "2026-10-17",
+      "version": "3"
+     }
+    },
+    "capabilities": {
+     "answer_target": null,
+     "grades": {
+      "session_id": "00000000-0000-4000-8000-000000000004",
+      "assignment_id": "b2b433eb-dd24-4ce1-a4e0-b2b2f441fc90",
+      "result_id": "f88b4dbf-c59e-4dcb-b8bb-504ec6b7ef25",
+      "expected_result_version": "2",
+      "values": [
+       3,
+       4,
+       5
+      ]
+     },
+     "correct_target": null,
+     "undo_target": null,
+     "stop": true,
+     "summary_home": true
+    },
+    "command": {
+     "id": "00000000-0000-4000-8000-000000000106",
+     "kind": "result.correct",
+     "status": "already_applied",
+     "applied_at": "2026-09-29T12:00:00Z",
+     "target_id": "b2b433eb-dd24-4ce1-a4e0-b2b2f441fc90",
+     "action_id": "505cde0c-13e0-4335-91f7-017a5773e99f",
+     "result_id": "f88b4dbf-c59e-4dcb-b8bb-504ec6b7ef25",
+     "context_id": null,
+     "object_version": "2"
+    },
+    "state_version": "10",
+    "verified_intent_hash": "719a51f65e955096c931002647be9b23c6b83348c46e179d3149f169a3ca0c59"
+   },
+   "schema": [
+    "WrittenStatusResponse"
+   ]
+  },
+  {
+   "name": "read_summary",
+   "method": "GET",
+   "path": "/api/v1/sessions/00000000-0000-4000-8000-000000000004",
+   "query": {
+    "client_instance_id": "00000000-0000-4000-8000-000000000001",
+    "document_id": "00000000-0000-4000-8000-000000000002"
+   },
+   "body": null,
+   "status": 200,
+   "response": {
+    "current": {
+     "session_id": "00000000-0000-4000-8000-000000000004",
+     "status": "summary",
+     "mode": "written",
+     "pair": "ru-de",
+     "direction": "l1-de",
+     "local_date": "2026-09-29",
+     "bucket": "phrases",
+     "close_reason": null,
+     "progress": {
+      "completed": 2,
+      "total": 2,
+      "correct": 2,
+      "wrong": 0
+     },
+     "assignment": null,
+     "summary": {
+      "completed": 2,
+      "correct": 2,
+      "wrong": 0,
+      "ratio": {
+       "numerator": 2,
+       "denominator": 2
+      }
+     }
+    },
+    "state_version": "10"
+   },
+   "schema": [
+    "SessionResponse"
+   ]
+  },
+  {
+   "name": "stop",
+   "method": "POST",
+   "path": "/api/v1/commands",
+   "query": {},
+   "body": {
+    "command_id": "00000000-0000-4000-8000-000000000107",
+    "client_instance_id": "00000000-0000-4000-8000-000000000001",
+    "document_id": "00000000-0000-4000-8000-000000000002",
+    "session_id": "00000000-0000-4000-8000-000000000004",
+    "kind": "session.stop",
+    "payload": {
+     "reason": "summary_home"
+    }
+   },
+   "status": 200,
+   "response": {
+    "command": {
+     "id": "00000000-0000-4000-8000-000000000107",
+     "kind": "session.stop",
+     "status": "applied",
+     "applied_at": "2026-09-29T12:00:00Z",
+     "target_id": "00000000-0000-4000-8000-000000000004",
+     "action_id": null,
+     "result_id": null,
+     "context_id": null,
+     "object_version": null
+    },
+    "current": {
+     "session_id": "00000000-0000-4000-8000-000000000004",
+     "status": "closed",
+     "mode": "written",
+     "pair": "ru-de",
+     "direction": "l1-de",
+     "local_date": "2026-09-29",
+     "bucket": "phrases",
+     "close_reason": "summary_home",
+     "progress": {
+      "completed": 2,
+      "total": 2,
+      "correct": 2,
+      "wrong": 0
+     },
+     "assignment": null,
+     "summary": {
+      "completed": 2,
+      "correct": 2,
+      "wrong": 0,
+      "ratio": {
+       "numerator": 2,
+       "denominator": 2
+      }
+     }
+    },
+    "state_version": "12"
+   },
+   "schema": [
+    "SessionCommandResponse"
+   ]
+  },
+  {
+   "name": "read_closed",
+   "method": "GET",
+   "path": "/api/v1/sessions/00000000-0000-4000-8000-000000000004",
+   "query": {
+    "assignment_id": "b2b433eb-dd24-4ce1-a4e0-b2b2f441fc90",
+    "result_id": "f88b4dbf-c59e-4dcb-b8bb-504ec6b7ef25",
+    "client_instance_id": "00000000-0000-4000-8000-000000000001",
+    "document_id": "00000000-0000-4000-8000-000000000002"
+   },
+   "body": null,
+   "status": 200,
+   "response": {
+    "action": {
+     "action_id": "505cde0c-13e0-4335-91f7-017a5773e99f",
+     "kind": "answer.submit",
+     "version": "2",
+     "status": "active"
+    },
+    "result": {
+     "result_id": "f88b4dbf-c59e-4dcb-b8bb-504ec6b7ef25",
+     "assignment_id": "b2b433eb-dd24-4ce1-a4e0-b2b2f441fc90",
+     "version": "2",
+     "grade": 4,
+     "correct": true,
+     "status": "active",
+     "accepted_at": "2026-09-29T12:00:00Z",
+     "answer_date": "2026-09-29",
+     "detail": null
+    },
+    "step": {
+     "session_id": "00000000-0000-4000-8000-000000000004",
+     "status": "closed",
+     "mode": "written",
+     "pair": "ru-de",
+     "direction": "l1-de",
+     "local_date": "2026-09-29",
+     "bucket": "phrases",
+     "close_reason": "summary_home",
+     "progress": {
+      "completed": 2,
+      "total": 2,
+      "correct": 2,
+      "wrong": 0
+     },
+     "assignment": null,
+     "summary": {
+      "completed": 2,
+      "correct": 2,
+      "wrong": 0,
+      "ratio": {
+       "numerator": 2,
+       "denominator": 2
+      }
+     },
+     "practice": {
+      "pair": "ru-de",
+      "direction": "l1-de",
+      "local_date": "2026-09-29",
+      "time_zone": "UTC",
+      "count": 2
+     },
+     "review_progress": {
+      "interval_days": 18,
+      "repetitions": 3,
+      "ease": "2.550",
+      "due_date": "2026-10-17",
+      "version": "3"
      }
     },
     "capabilities": {
@@ -1152,27 +1573,30 @@
      "stop": false,
      "summary_home": false
     },
-    "state_version": "11"
-   }
+    "state_version": "12"
+   },
+   "schema": [
+    "WrittenResultReadResponse"
+   ]
   },
   {
    "name": "status_missing",
    "method": "GET",
-   "path": "/api/v1/commands/97e19172-9cfd-46e6-94ce-3544bcd3c80e",
+   "path": "/api/v1/commands/00000000-0000-4000-8000-000000000099",
    "query": {
-    "client_instance_id": "be1a3c92-af57-4ddd-b8b3-67d66219feb2",
-    "document_id": "876997f6-4073-4787-95f0-45d4c35d9cf6",
-    "session_id": "7c00a3dd-c07e-42d3-9b7c-8eb4f904a16c"
+    "client_instance_id": "00000000-0000-4000-8000-000000000001",
+    "document_id": "00000000-0000-4000-8000-000000000002",
+    "session_id": "00000000-0000-4000-8000-000000000004"
    },
    "body": null,
    "status": 200,
    "response": {
     "command": {
-     "id": "97e19172-9cfd-46e6-94ce-3544bcd3c80e",
+     "id": "00000000-0000-4000-8000-000000000099",
      "status": "not_found"
     },
     "current": {
-     "profile_id": "b5f8a424-b5a2-4ace-b32f-28beab63edb9",
+     "profile_id": "a68b913f-68c9-4d36-ab28-27f9040f5267",
      "access": {
       "status": "admitted",
       "version": "1",
@@ -1182,15 +1606,18 @@
      "ui_language": "ru",
      "dictionary_language": "ru",
      "time_zone": "UTC",
-     "state_version": "11"
+     "state_version": "12"
     },
-    "state_version": "11",
+    "state_version": "12",
     "closed_session": {
-     "session_id": "7c00a3dd-c07e-42d3-9b7c-8eb4f904a16c",
+     "session_id": "00000000-0000-4000-8000-000000000004",
      "status": "closed",
-     "close_reason": "stop"
+     "close_reason": "summary_home"
     }
-   }
+   },
+   "schema": [
+    "CommandStatusResponse"
+   ]
   },
   {
    "name": "start_again",
@@ -1198,10 +1625,10 @@
    "path": "/api/v1/commands",
    "query": {},
    "body": {
-    "command_id": "590cc3fb-02ee-4022-9ff9-13d5d866992f",
-    "client_instance_id": "be1a3c92-af57-4ddd-b8b3-67d66219feb2",
-    "document_id": "876997f6-4073-4787-95f0-45d4c35d9cf6",
-    "session_id": "7c00a3dd-c07e-42d3-9b7c-8eb4f904a16c",
+    "command_id": "00000000-0000-4000-8000-000000000108",
+    "client_instance_id": "00000000-0000-4000-8000-000000000001",
+    "document_id": "00000000-0000-4000-8000-000000000002",
+    "session_id": "00000000-0000-4000-8000-000000000004",
     "kind": "session.start",
     "payload": {
      "mode": "written",
@@ -1211,29 +1638,43 @@
    "status": 409,
    "response": {
     "command": {
-     "id": "590cc3fb-02ee-4022-9ff9-13d5d866992f",
+     "id": "00000000-0000-4000-8000-000000000108",
      "status": "rejected"
     },
     "current": {
-     "session_id": "7c00a3dd-c07e-42d3-9b7c-8eb4f904a16c",
+     "session_id": "00000000-0000-4000-8000-000000000004",
      "status": "closed",
      "mode": "written",
      "pair": "ru-de",
      "direction": "l1-de",
      "local_date": "2026-09-29",
      "bucket": "phrases",
-     "close_reason": "stop",
+     "close_reason": "summary_home",
      "progress": {
       "completed": 2,
-      "total": 2
+      "total": 2,
+      "correct": 2,
+      "wrong": 0
      },
-     "assignment": null
+     "assignment": null,
+     "summary": {
+      "completed": 2,
+      "correct": 2,
+      "wrong": 0,
+      "ratio": {
+       "numerator": 2,
+       "denominator": 2
+      }
+     }
     },
-    "state_version": "11",
+    "state_version": "12",
     "error": {
      "code": "SESSION_CLOSED"
     }
-   }
+   },
+   "schema": [
+    "SessionCommandResponse"
+   ]
   }
  ]
 }

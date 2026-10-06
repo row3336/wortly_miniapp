@@ -8,14 +8,8 @@ type WithoutOrigin<T> = T extends unknown ? Omit<T, "client_instance_id" | "docu
 export type WrittenSessionIntent = WithoutOrigin<
   (Omit<SessionStartCommand, "payload"> & { payload: SessionStartPayload }) | PresentCommand | SessionStopCommand>;
 export type WrittenAnswerIntent = LearningAnswerIntent;
-/**
- * Only result.grade: the server does not yet grant written correct_target (core written_projection.py,
- * models.py WrittenCapabilities), so the client has no right to address result.correct.
- */
-export type WrittenRevisionIntent = Extract<LearningRevisionIntent, { kind: "result.grade" }>;
-function validWrittenRevisionIntent(value: unknown): value is WrittenRevisionIntent {
-  return validLearningRevisionIntent(value) && value.kind === "result.grade";
-}
+/** An explicit grade of a correct answer or the one-tap correction of an error; both address a server right. */
+export type WrittenRevisionIntent = LearningRevisionIntent;
 export type WrittenIntent = WrittenSessionIntent | WrittenAnswerIntent | WrittenRevisionIntent;
 export type WrittenCommand = WrittenIntent & { client_instance_id: string; document_id: string };
 
@@ -32,16 +26,19 @@ export function validWrittenSessionIntent(value: unknown): value is WrittenSessi
   return valid && exactKeys(value, keys);
 }
 export function validWrittenIntent(value: unknown): value is WrittenIntent {
-  return validWrittenSessionIntent(value) || validLearningAnswerIntent(value) || validWrittenRevisionIntent(value);
+  return validWrittenSessionIntent(value) || validLearningAnswerIntent(value) || validLearningRevisionIntent(value);
 }
-export function isAnswerKind(kind: WrittenIntent["kind"]): kind is "answer.submit" | "result.grade" {
-  return kind === "answer.submit" || kind === "result.grade";
+export function isAnswerKind(kind: WrittenIntent["kind"]): kind is "answer.submit" | WrittenRevisionIntent["kind"] {
+  return kind === "answer.submit" || kind === "result.grade" || kind === "result.correct";
+}
+export function isRevisionIntent(value: WrittenIntent): value is WrittenRevisionIntent {
+  return value.kind === "result.grade" || value.kind === "result.correct";
 }
 
 /** Stable field order gives the shared slot an exact comparison across callers. */
 export function copyWrittenIntent(value: WrittenIntent): WrittenIntent {
   if (value.kind === "answer.submit") return copyLearningAnswerIntent(value);
-  if (value.kind === "result.grade") return copyLearningRevisionIntent(value) as WrittenRevisionIntent;
+  if (isRevisionIntent(value)) return copyLearningRevisionIntent(value);
   if (!validWrittenSessionIntent(value)) throw new Error("invalid written intent");
   const address = { command_id: value.command_id, session_id: value.session_id };
   switch (value.kind) {
@@ -70,7 +67,8 @@ export async function writtenIntentHash(value: WrittenIntent): Promise<string> {
       payload: "text" in intent.payload ? { text: intent.payload.text } : { forgot: true } }; break;
     default: payload = { session_id: session, assignment_id: intent.assignment_id.toLowerCase(),
       result_id: intent.result_id.toLowerCase(), expected_result_version: intent.expected_result_version,
-      payload: { grade: intent.payload.grade } };
+      // A correction has no payload of its own (core study/result_commands.py, _revise).
+      payload: intent.kind === "result.correct" ? {} : { grade: intent.payload.grade } };
   }
   const text = canonical({ kind: intent.kind, payload });
   const digest = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));

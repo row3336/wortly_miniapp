@@ -124,26 +124,68 @@ describe("М08 written task screen", () => {
     const h = setup(); await h.start();
     fireEvent.change(h.field(), { target: { value: "Haus" } }); fireEvent.click(h.button("Проверить"));
     await screen.findByText("Верно");
-    // Stop goes through; the following read of the closed session's summary is held.
+    // The Stop request is lost; meanwhile the session was closed by Stop, so the closed numbers are not at hand.
+    h.dropRequest(); fireEvent.click(h.button("Выйти"));
+    await screen.findByText("Завершаем занятие…");
+    Object.assign(h.server.state, { status: "closed", closeReason: "stop", assignment: null, version: h.server.state.version + 1 });
+    // The status check of the Stop goes through; the following read of the closed session is held.
     h.fetcher.mockImplementationOnce(h.server.handle); const gate = h.hold();
-    fireEvent.click(h.button("Выйти"));
+    fireEvent.click(h.button("Проверить состояние"));
     const status = await screen.findByRole("status", { name: "Итог занятия" });
     expect(status.textContent).toBe("Загружаем занятие…");
     gate.resolve(); await screen.findByText("Занятие прервано.");
   });
 
-  it("a wrong answer has no correction button and waits for «Далее» in the normal mode", async () => {
+  it("a wrong answer offers «Исправить ответ» by the server right: one tap gives 4, then 3/5 (Т06)", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const h = setup(); await h.start();
     fireEvent.change(h.field(), { target: { value: "falsch" } }); fireEvent.click(h.button("Проверить"));
     await screen.findByText("Есть ошибка");
     expect(document.querySelector(".written-timer")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Исправить ответ" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Легко" })).toBeNull();
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    expect(h.kinds().at(-1)).toBe("answer.submit");
+    fireEvent.click(h.button("Исправить ответ"));
+    await screen.findByText("Ответ исправлен");
+    expect(h.posts().at(-1)).toMatchObject({ kind: "result.correct", payload: {} });
+    expect(screen.queryByRole("button", { name: "Исправить ответ" })).toBeNull();
+    expect(["Трудно", "Нормально", "Легко"].every(name => h.button(name))).toBe(true);
+    // The submitted text is not edited or checked again (К05-053/054).
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(screen.getByText("falsch")).toBeTruthy();
+  });
+
+  it("the written result shows one German example of the answered card after the answer only (К05-126)", async () => {
+    const h = setup({ examples: { common: [{ id: "00000000-0000-4000-8000-000000000501", text: "Das Haus ist alt.", role: "general",
+      highlighted_parts: [] }],
+      personal: { value: "Mein Haus ist klein.", version: "1" } } });
+    await h.start();
+    expect(document.querySelector(".german-example")).toBeNull();
+    fireEvent.change(h.field(), { target: { value: "Haus" } }); fireEvent.click(h.button("Проверить"));
+    await screen.findByText("Верно");
+    expect([...document.querySelectorAll(".german-example")].map(node => node.textContent)).toEqual(["Mein Haus ist klein."]);
+  });
+
+  it("a wrong answer waits for «Далее» in the normal mode", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const h = setup(); await h.start();
+    fireEvent.change(h.field(), { target: { value: "falsch" } }); fireEvent.click(h.button("Проверить"));
+    await screen.findByText("Есть ошибка");
     await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
     expect(h.kinds().at(-1)).toBe("answer.submit");
     fireEvent.click(h.button("Далее"));
     await screen.findByText("слово 7");
+  });
+
+  it("while a correction is unconfirmed its result says so and no action is offered", async () => {
+    const h = setup(); await h.start();
+    fireEvent.change(h.field(), { target: { value: "falsch" } }); fireEvent.click(h.button("Проверить"));
+    await screen.findByText("Есть ошибка");
+    const gate = h.hold(); fireEvent.click(h.button("Исправить ответ"));
+    await screen.findByText("Сохраняем изменение");
+    expect(h.button("Далее").disabled).toBe(true);
+    expect(screen.queryByRole("button", { name: "Исправить ответ" })).toBeNull();
+    gate.resolve(); await screen.findByText("Ответ исправлен");
   });
 
   it("the previous result keeps the next card's draft and returns to it by «Далее»", async () => {

@@ -1,5 +1,5 @@
 import { vi } from "vitest";
-import type { OpenedClient, Profile, PublicAssignment, SessionProjection, WrittenStep } from "../api/generated";
+import type { CardExamples, OpenedClient, Profile, PublicAssignment, SessionProjection, WrittenStep } from "../api/generated";
 import { createOpenedAccess, type OpenedAccess } from "../app/openedAccess";
 import type { AsyncStorage } from "../platform/storage";
 import { writtenIntentHash, type WrittenIntent } from "./writtenIntent";
@@ -16,14 +16,17 @@ export function deferred<T>() {
 }
 export const pending = (intent: WrittenIntent) => ({ schemaVersion: 1, profileId: id(50), clientInstanceId: id(1), pair: "ru-de", intent });
 
-export function assignment(n: number, status: "prefetched" | "presented"): PublicAssignment {
-  return { id: id(n), card_id: id(100 + n), status, kind: "original",
+/** A drill of card n is assignment 900+n of the same card. */
+export function assignment(n: number, status: "prefetched" | "presented", kind: "original" | "drill" = "original"): PublicAssignment {
+  return { id: id(kind === "drill" ? 900 + n : n), card_id: id(100 + n), status, kind,
     prompt: { text: `слово ${n}`, language: "ru", translations: [`слово ${n}`], personal_translation_version: null, hint: null,
       hint_version: null, conjunction_hint: null },
     answer_spec: { kind: "word", labels: ["word"], part_count: 1, case_sensitive: true } };
 }
 
-type Stored = { resultId: string; assignmentId: string; actionId: string; version: number; grade: 2 | 3 | 4 | 5; text: string | null };
+type Item = { n: number; kind: "original" | "drill" };
+type Stored = { resultId: string; assignmentId: string; actionId: string; version: number; grade: 2 | 3 | 4 | 5; text: string | null;
+  item: Item };
 type Receipt = { intent: WrittenIntent; fact: Record<string, unknown> };
 export type ServerOptions = {
   /** Original assignment numbers of the session queue. */
@@ -34,28 +37,46 @@ export type ServerOptions = {
   refuseStart?: string;
   /** A session already active and presented at mount. */
   active?: boolean;
+  /** An original error issues one drill of its card right after it (retry_gap 0, retry_count 1). */
+  drills?: boolean;
+  /** Frozen example candidates of every answered card (result detail). */
+  examples?: CardExamples;
 };
 
 /**
  * A synthetic written server over the real HTTP transport and wire shapes: commands commit before replying,
  * duplicates replay their original fact, and status verifies the intent fingerprint like core command_status.
+ * Rights follow core (C-WCORR): grades for the latest correct result, correct_target for the latest error, both
+ * only while the session is open; a correction withdraws the unshown drill of its card and keeps a shown one.
  */
 export function writtenServer(options: ServerOptions = {}) {
   const cards = options.cards ?? [6, 7];
   const state = {
     sessionId: options.active ? id(3) : null as string | null, status: "active" as "active" | "summary" | "closed",
     closeReason: null as SessionProjection["close_reason"], version: 1, index: 0,
+    queue: cards.map((n): Item => ({ n, kind: "original" })),
     assignment: options.active ? "presented" as "prefetched" | "presented" | null : null as "prefetched" | "presented" | null,
     latest: null as string | null,
   };
   const results = new Map<string, Stored>(), receipts = new Map<string, Receipt>();
+  /** Results whose revision rights another context ended (e.g. a manual interval, К05-057). */
+  const revoked = new Set<string>();
   const grade = options.grade ?? ((text: string | null) => text === "Haus" ? 4 : 2);
-  const values = () => [...results.values()].filter(item => item.assignmentId !== "drill");
+  const values = () => [...results.values()].filter(item => item.item.kind === "original");
   const progress = () => {
     const done = values(), correct = done.filter(item => item.grade >= 3).length;
     return { completed: done.length, total: cards.length, correct, wrong: done.length - correct };
   };
-  const current = () => state.status === "active" && state.assignment ? assignment(cards[state.index], state.assignment) : null;
+  const current = () => {
+    const item = state.queue[state.index];
+    return state.status === "active" && state.assignment && item ? assignment(item.n, state.assignment, item.kind) : null;
+  };
+  const assignmentId = (item: Item) => id(item.kind === "drill" ? 900 + item.n : item.n);
+  /** The queue moves on: the next item is issued unshown, or the session reaches its summary. */
+  const advance = () => {
+    if (state.index < state.queue.length) state.assignment = "prefetched";
+    else { state.assignment = null; state.status = "summary"; }
+  };
   function projection(): SessionProjection {
     const counts = progress();
     return { session_id: state.sessionId!, status: state.status, mode: "written", pair: "ru-de", direction: "l1-de",
@@ -68,7 +89,8 @@ export function writtenServer(options: ServerOptions = {}) {
       count: progress().completed }, review_progress: null };
   }
   function view(resultId: string) {
-    const item = results.get(resultId)!, open = state.status !== "closed", latest = open && resultId === state.latest;
+    const item = results.get(resultId)!, open = state.status !== "closed";
+    const latest = open && resultId === state.latest && !revoked.has(resultId);
     const target = { session_id: state.sessionId!, assignment_id: item.assignmentId, result_id: resultId, expected_result_version: String(item.version) };
     const shown = current();
     const correct = item.grade >= 3, initial = grade(item.text) >= 3;
@@ -78,12 +100,12 @@ export function writtenServer(options: ServerOptions = {}) {
         detail: open ? { input: item.text === null ? { kind: "forgot" } : { kind: "text", text: item.text },
           initial_check: { correct: initial, variant_index: initial ? 0 : null, correct_answer: "das Haus", other_answers: ["Haus"],
             matched_spans: [], span_unit: "unicode_code_point", span_bounds: "start_inclusive_end_exclusive" },
-          variants: [{ parts: ["das Haus"] }, { parts: ["Haus"] }], conjunction_hint: null, examples: null } : null },
+          variants: [{ parts: ["das Haus"] }, { parts: ["Haus"] }], conjunction_hint: null, examples: options.examples ?? null } : null },
       step: step(),
       capabilities: { answer_target: shown?.status === "presented" ? shown.id : null,
         grades: latest && correct ? { ...target, values: [3, 4, 5] } : null,
-        // Today's core grants no written correction or undo right (written_projection.py).
-        correct_target: null, undo_target: null,
+        // Core grants no written undo right yet (written_projection.py).
+        correct_target: latest && !correct ? target : null, undo_target: null,
         stop: open, summary_home: state.status === "summary" } };
   }
   const fact = (intent: WrittenIntent, extra: Partial<Record<"action_id" | "result_id" | "object_version", string>> = {}) => ({
@@ -102,8 +124,9 @@ export function writtenServer(options: ServerOptions = {}) {
       state.sessionId = intent.session_id; state.status = "active"; state.index = 0; state.assignment = "prefetched"; state.version++;
       return { status: 200, body: { command: fact(intent), current: projection(), state_version: String(state.version) } };
     }
+    const issued = state.queue[state.index];
     if (intent.kind === "assignment.present") {
-      if (state.status !== "active" || state.assignment !== "prefetched" || id(cards[state.index]) !== intent.assignment_id) {
+      if (state.status !== "active" || state.assignment !== "prefetched" || !issued || assignmentId(issued) !== intent.assignment_id) {
         return refuse(intent, "ASSIGNMENT_STALE");
       }
       state.assignment = "presented"; state.version++;
@@ -115,23 +138,31 @@ export function writtenServer(options: ServerOptions = {}) {
       return { status: 200, body: { command: fact(intent), current: projection(), state_version: String(state.version) } };
     }
     if (intent.kind === "answer.submit") {
-      if (state.status !== "active" || state.assignment !== "presented" || id(cards[state.index]) !== intent.assignment_id) {
+      if (state.status !== "active" || state.assignment !== "presented" || !issued || assignmentId(issued) !== intent.assignment_id) {
         return refuse(intent, "ASSIGNMENT_STALE");
       }
-      const n = cards[state.index], resultId = id(700 + n), actionId = id(800 + n);
-      const text = "text" in intent.payload ? intent.payload.text : null;
-      results.set(resultId, { resultId, assignmentId: intent.assignment_id, actionId, version: 1, grade: grade(text), text });
+      const n = issued.kind === "drill" ? 900 + issued.n : issued.n, resultId = id(700 + n), actionId = id(800 + n);
+      const text = "text" in intent.payload ? intent.payload.text : null, value = grade(text);
+      results.set(resultId, { resultId, assignmentId: intent.assignment_id, actionId, version: 1, grade: value, text, item: issued });
       state.latest = resultId; state.index++; state.version++;
-      if (state.index < cards.length) state.assignment = "prefetched";
-      else { state.assignment = null; state.status = "summary"; }
+      if (options.drills && issued.kind === "original" && value === 2) state.queue.splice(state.index, 0, { n: issued.n, kind: "drill" });
+      advance();
       return { status: 200, body: { ...view(resultId), command: fact(intent, { action_id: actionId, result_id: resultId, object_version: "1" }),
         state_version: String(state.version) } };
     }
     const item = results.get(intent.result_id);
     if (!item || state.status === "closed") return refuse(intent, "SESSION_CLOSED");
     if (String(item.version) !== intent.expected_result_version) return refuse(intent, "VERSION_CONFLICT");
-    const next = intent.payload.grade as 3 | 4 | 5;
+    const rights = view(item.resultId).capabilities;
+    if (intent.kind === "result.correct" ? rights.correct_target === null : rights.grades === null) return refuse(intent, "FORBIDDEN", 403);
+    const next = intent.kind === "result.correct" ? 4 : intent.payload.grade as 3 | 4 | 5;
     if (item.grade !== next) { item.grade = next; item.version++; state.version++; }
+    if (intent.kind === "result.correct" && item.item.kind === "original") {
+      // Only the unshown drill of this card is withdrawn; a shown one keeps its ID and input (CT:111, К05-116).
+      const drill = state.queue.findIndex((queued, at) => queued.kind === "drill" && queued.n === item.item.n
+        && (at > state.index || at === state.index && state.assignment === "prefetched"));
+      if (drill >= 0) { state.queue.splice(drill, 1); if (drill === state.index) advance(); }
+    }
     return { status: 200, body: { ...view(item.resultId), command: fact(intent, { action_id: item.actionId, result_id: item.resultId,
       object_version: String(item.version) }), state_version: String(state.version) } };
   }
@@ -172,7 +203,9 @@ export function writtenServer(options: ServerOptions = {}) {
     if (outcome.status === 200) receipts.set(intent.command_id, { intent, fact: outcome.body.command as Record<string, unknown> });
     return response(outcome.body, outcome.status);
   }
-  return { state, results, receipts, handle, step, projection, view };
+  /** Another context ends the revision rights of a result (e.g. a manual interval increase, К05-057). */
+  const revokeRights = (resultId: string) => { revoked.add(resultId); state.version++; };
+  return { state, results, receipts, handle, step, projection, view, revokeRights };
 }
 
 /** Real access, storage and transport around one synthetic server. */

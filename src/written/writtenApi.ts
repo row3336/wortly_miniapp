@@ -37,20 +37,15 @@ const stepKeys = ["session_id", "status", "mode", "pair", "direction", "local_da
   "assignment", "summary", "practice", "review_progress"];
 const answerKeys = ["action", "result", "step", "capabilities"];
 
-/** A written step adds counts, summary and practice to the public session projection; queue and answers stay hidden. */
+/** A written step adds practice and review progress to the public session projection; queue and answers stay hidden. */
 export function validWrittenStep(value: unknown, sessionId: string): value is WrittenStepCurrent {
   if (!record(value)) return false;
   if (exactKeys(value, ["status"])) return value.status === "unavailable";
   if (oneOf(value.status, ["unavailable", "not_found"])) return exactKeys(value, ["session_id", "status"]) && sameId(value.session_id, sessionId);
   if (!exactKeys(value, stepKeys)) return false;
-  const { summary, practice, review_progress: progress, ...base } = value, counts = value.progress;
-  if (!record(counts) || !exactKeys(counts, ["completed", "total", "correct", "wrong"]) || !count(counts.correct)
-    || !count(counts.wrong) || !count(counts.completed) || counts.correct + counts.wrong !== counts.completed
-    || !validWrittenSessionCurrent({ ...base, progress: { completed: counts.completed, total: counts.total } }, sessionId)) return false;
-  if (value.status === "active" ? summary !== null : !(record(summary) && exactKeys(summary, ["completed", "correct", "wrong", "ratio"])
-    && summary.completed === counts.completed && summary.correct === counts.correct && summary.wrong === counts.wrong
-    && (counts.completed === 0 ? summary.ratio === null : record(summary.ratio) && exactKeys(summary.ratio, ["numerator", "denominator"])
-      && summary.ratio.numerator === counts.correct && summary.ratio.denominator === counts.completed))) return false;
+  // The counts and the summary belong to the session projection itself (C-WSUM) and are checked there.
+  const { practice, review_progress: progress, ...base } = value;
+  if (!validWrittenSessionCurrent(base, sessionId)) return false;
   if (!record(practice) || !exactKeys(practice, ["pair", "direction", "local_date", "time_zone", "count"])
     || !oneOf(practice.pair, ["ru-de", "uk-de", "en-de"]) || practice.direction !== "l1-de" || !date(practice.local_date)
     || typeof practice.time_zone !== "string" || !practice.time_zone || !count(practice.count)) return false;
@@ -79,17 +74,19 @@ function answerView(value: Record<string, unknown>, address: Address): (WrittenA
       // Closing a session deletes its temporary answer receipts.
       || step.status === "closed" && result.detail !== null) return null;
   }
-  const grades = (candidate: unknown): boolean => {
+  // A revision right addresses exactly this live result of this open session, as in Learning.
+  const target = (candidate: unknown, grades: boolean): boolean => {
     if (!record(candidate) || !record(result) || !record(action) || action.status !== "active" || result.status !== "active" || !open
-      || !exactKeys(candidate, ["session_id", "assignment_id", "result_id", "expected_result_version", "values"])
+      || !exactKeys(candidate, ["session_id", "assignment_id", "result_id", "expected_result_version", ...(grades ? ["values"] : [])])
       || !sameId(candidate.session_id, address.session_id) || !sameId(candidate.assignment_id, address.assignment_id)
       || !sameId(candidate.result_id, result.result_id as string) || candidate.expected_result_version !== result.version) return false;
     const values = candidate.values;
-    return (result.grade as number) >= 3 && Array.isArray(values) && values.length === 3 && [3, 4, 5].every(grade => values.includes(grade));
+    return grades ? (result.grade as number) >= 3 && Array.isArray(values) && values.length === 3
+      && [3, 4, 5].every(grade => values.includes(grade)) : result.grade === 2;
   };
-  // The contract has no written correction or undo right yet: anything else is not this contract.
+  // The contract has no written undo right yet: anything else is not this contract.
   if (!exactKeys(caps, ["answer_target", "grades", "correct_target", "undo_target", "stop", "summary_home"])
-    || caps.grades !== null && !grades(caps.grades) || caps.correct_target !== null
+    || caps.grades !== null && !target(caps.grades, true) || caps.correct_target !== null && !target(caps.correct_target, false)
     || caps.undo_target !== null || typeof caps.stop !== "boolean" || typeof caps.summary_home !== "boolean") return null;
   if (caps.answer_target !== null && !(step.status === "active" && "assignment" in step
     && step.assignment?.status === "presented" && sameId(caps.answer_target, step.assignment.id))) return null;
@@ -106,7 +103,7 @@ function sessionFact(value: unknown, command: WrittenCommand): boolean {
     && value.action_id === null && value.result_id === null && value.context_id === null && value.object_version === null;
 }
 function answerFact(value: unknown, command: WrittenCommand, view: WrittenAnswer & { step: WrittenStepCurrent }): boolean {
-  if (!record(value) || command.kind !== "answer.submit" && command.kind !== "result.grade"
+  if (!record(value) || command.kind !== "answer.submit" && command.kind !== "result.grade" && command.kind !== "result.correct"
     || !exactKeys(value, ["id", "kind", "status", "applied_at", "target_id", "action_id", "result_id", "context_id", "object_version"])
     || !sameId(value.id, command.command_id) || value.kind !== command.kind || !sameId(value.target_id, command.assignment_id)
     || !oneOf(value.status, ["applied", "already_applied"]) || !eventTime(value.applied_at)
@@ -115,9 +112,11 @@ function answerFact(value: unknown, command: WrittenCommand, view: WrittenAnswer
   if (command.kind !== "answer.submit") {
     if (!sameId(value.result_id, command.result_id)) return false;
     const expected = BigInt(command.expected_result_version), applied = BigInt(value.object_version);
-    // Re-selecting the saved grade is accepted without a new revision (К10-077).
+    // Re-selecting the saved grade is accepted without a new revision (К10-077); a correction always revises 2 to 4.
     if (applied !== expected + 1n && !(command.kind === "result.grade" && applied === expected)) return false;
-    if (view.result?.version === value.object_version && view.result.grade !== command.payload.grade) return false;
+    // A later revision can change the grade, but not the outcome of this one.
+    if (view.result?.version === value.object_version
+      && view.result.grade !== (command.kind === "result.correct" ? 4 : command.payload.grade)) return false;
   }
   if (view.result === null || view.action === null) return view.step.status === "unavailable" || view.step.status === "not_found";
   if (!sameId(value.action_id, view.action.action_id) || !sameId(value.result_id, view.result.result_id)

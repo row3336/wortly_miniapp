@@ -1,6 +1,9 @@
+import { useRef } from "react";
 import type { MatchedSpan, WrittenResult } from "../api/generated";
 import type { Language } from "../i18n/language";
+import { answerExampleCandidates, selectAnswerExample, type AnswerExampleChoice } from "./answerExample";
 import { ConjunctionHint } from "./ConjunctionHint";
+import { GermanExample } from "./GermanExample";
 import "./writtenAnswer.css";
 
 export type WrittenAnswerResultProps = {
@@ -14,6 +17,8 @@ export type WrittenAnswerResultProps = {
   onGrade(grade: 3 | 4 | 5): void;
   onCorrect(): void;
   onNext(): void;
+  /** Only the written quiz shows one example after the answer (К05-126); its source of randomness is injectable. */
+  example?: { random(): number };
 };
 const copy = {
   ru: { correct: "Верно", wrong: "Есть ошибка", corrected: "Ответ исправлен", changing: "Сохраняем изменение", unknown: "Проверяем изменение",
@@ -38,9 +43,27 @@ function HighlightedText({ text, errors }: { text: string; errors: readonly Matc
   return <>{fragments}{points.slice(offset).join("")}</>;
 }
 
+/** One example of the answered card per result: the choice stays while revisions of that result are shown. */
+function useAnswerExample(result: WrittenResult, source: WrittenAnswerResultProps["example"]): AnswerExampleChoice | null {
+  const chosen = useRef<{ key: string; choice: AnswerExampleChoice } | null>(null);
+  const examples = result.detail?.examples ?? null;
+  if (!source || examples === null) return null;
+  const key = `${result.result_id}:${JSON.stringify(examples)}`;
+  if (chosen.current?.key !== key) chosen.current = { key, choice: selectAnswerExample(answerExampleCandidates(examples), source.random) };
+  return chosen.current.choice;
+}
+
+/** German text only, without a heading or translation. The wechsel pair (К05-127) is not rendered here yet. */
+function AnswerExample({ choice }: { choice: AnswerExampleChoice | null }) {
+  if (choice?.kind === "personal") return <GermanExample text={choice.personal.value} highlightedParts={[]} />;
+  if (choice?.kind === "common") return <GermanExample text={choice.common.text} highlightedParts={choice.common.highlighted_parts} />;
+  return null;
+}
+
 /** Render only server-confirmed detail and capabilities; animation never runs a command. */
 export function WrittenAnswerResult(props: WrittenAnswerResultProps) {
   const t = copy[props.language], detail = props.result.detail, check = detail?.initial_check;
+  const example = useAnswerExample(props.result, props.example);
   const changed = !!check && !check.correct && props.result.correct;
   const status = props.pending ? t[props.pending] : changed ? t.corrected : props.result.correct ? t.correct : t.wrong;
   const blocked = props.pending !== null;
@@ -66,6 +89,7 @@ export function WrittenAnswerResult(props: WrittenAnswerResultProps) {
         <p className="written-parts">{t.others}</p>
         <ul lang="de">{check!.other_answers.map((answer, index) => <li key={index}>{answer}</li>)}</ul>
       </div>}
+      <AnswerExample choice={example} />
     </> : <><p role="status">{status}</p><p>{t.unavailable}</p></>}
     {props.timer && !blocked && <div className="written-timer" aria-hidden="true">
       <span key={props.timer.key} style={{ animationDuration: `${props.timer.durationMs}ms` }} />

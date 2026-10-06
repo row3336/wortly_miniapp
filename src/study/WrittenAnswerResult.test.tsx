@@ -118,3 +118,51 @@ describe("server-provided answer presentation", () => {
     fireEvent.click(screen.getByRole("button", { name: "Исправить ответ" })); expect(p.onCorrect).toHaveBeenCalledOnce();
   });
 });
+
+describe("example after a written answer (К05-126)", () => {
+  const common = (n: number, role: "general" | "wechsel_location" | "wechsel_direction" | null = "general") =>
+    ({ id: `example-${n}`, text: `Beispiel ${n}`, role, highlighted_parts: [{ start: 0, end: 8 }] });
+  const withExamples = (examples: NonNullable<WrittenResult["detail"]>["examples"]) => {
+    const p = props(); p.result.detail!.examples = examples; return p;
+  };
+  const shown = (container: HTMLElement) => [...container.querySelectorAll(".german-example")].map(node => node.textContent);
+
+  it("is shown only when the written quiz asks for it: Learning and conjugation render the same result without it", () => {
+    const p = withExamples({ common: [common(1)], personal: null });
+    const { container, rerender } = render(<WrittenAnswerResult {...p} />);
+    expect(shown(container)).toEqual([]);
+    rerender(<WrittenAnswerResult {...p} example={{ random: () => 0 }} />);
+    expect(shown(container)).toEqual(["Beispiel 1"]);
+    expect(container.querySelector(".german-example strong")?.textContent).toBe("Beispiel");
+    expect(container.querySelector(".german-example")?.getAttribute("lang")).toBe("de");
+  });
+  it("prefers the personal example; without one, one random common example; never a heading or translation", () => {
+    const personal = withExamples({ common: [common(1), common(2)], personal: { value: "Mein Satz", version: "1" } });
+    const random = vi.fn(() => 0.9);
+    const first = render(<WrittenAnswerResult {...personal} example={{ random }} />);
+    expect(shown(first.container)).toEqual(["Mein Satz"]); expect(random).not.toHaveBeenCalled();
+    expect(screen.queryByText(/Пример/)).toBeNull();
+    first.unmount();
+    const general = withExamples({ common: [common(1), common(2), common(3)], personal: null });
+    const second = render(<WrittenAnswerResult {...general} example={{ random: () => 0.5 }} />);
+    expect(shown(second.container)).toEqual(["Beispiel 2"]);
+  });
+  it("keeps one choice for the result across re-renders and revisions, and shows nothing without examples", () => {
+    const p = withExamples({ common: [common(1), common(2)], personal: null });
+    const random = vi.fn().mockReturnValueOnce(0).mockReturnValue(0.9);
+    const { container, rerender } = render(<WrittenAnswerResult {...p} example={{ random }} />);
+    expect(shown(container)).toEqual(["Beispiel 1"]);
+    rerender(<WrittenAnswerResult {...p} result={{ ...p.result, version: "2", grade: 4, correct: true }} example={{ random }} />);
+    expect(shown(container)).toEqual(["Beispiel 1"]); expect(random).toHaveBeenCalledOnce();
+    rerender(<WrittenAnswerResult {...p} result={{ ...p.result, detail: { ...p.result.detail!, examples: { common: [], personal: null } } }}
+      example={{ random }} />);
+    expect(shown(container)).toEqual([]);
+    rerender(<WrittenAnswerResult {...p} result={{ ...p.result, detail: null }} example={{ random }} />);
+    expect(shown(container)).toEqual([]);
+  });
+  it("leaves the Akkusativ/Dativ pair of a wechsel preposition to its own package (К05-127): no single random example", () => {
+    const p = withExamples({ common: [common(1, "wechsel_location"), common(2, "wechsel_direction")], personal: null });
+    const { container } = render(<WrittenAnswerResult {...p} example={{ random: () => 0 }} />);
+    expect(shown(container)).toEqual([]);
+  });
+});

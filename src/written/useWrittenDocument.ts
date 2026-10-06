@@ -21,7 +21,8 @@ type Owner = {
   lastAccess: OpenedAccess; waitingForAccess: OpenedAccess | null; lastMinimumVersion: string; lastEnabled: boolean;
   startEpoch: number; activation: Promise<void> | null; controller: WrittenViewController;
 };
-export type WrittenActions = Pick<WrittenViewController, "setDraft" | "submit" | "previousResult" | "next" | "grade" | "retry" | "refresh" | "stop">
+export type WrittenActions = Pick<WrittenViewController, "setDraft" | "submit" | "previousResult" | "next" | "grade" | "correct"
+  | "retry" | "refresh" | "stop">
   & { start(bucket: "words" | "phrases"): Promise<void> };
 
 /**
@@ -113,6 +114,7 @@ export function useWrittenDocument(options: Options): { state: WrittenViewSnapsh
       submit: flags => perform(controller => controller.submit(flags)),
       next: () => perform(controller => controller.next()),
       grade: grade => perform(controller => controller.grade(grade)),
+      correct: () => perform(controller => controller.correct()),
       retry: lane => perform(controller => controller.retry(lane)),
       refresh: () => {
         const bound = lookup.current();

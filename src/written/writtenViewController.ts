@@ -44,6 +44,8 @@ export type WrittenViewSnapshot = {
   canForget: boolean;
   canNext: boolean;
   canPrevious: boolean;
+  /** Only the server's correct_target of this exact result grants the one-tap correction, never the error itself. */
+  canCorrect: boolean;
   grades: (3 | 4 | 5)[];
   canStop: boolean;
   canSummaryHome: boolean;
@@ -150,7 +152,7 @@ export class WrittenViewController {
         if (kind === "assignment.present") {
           if (!this.is("previous_result")) this.phase = this.question ? "visible_unconfirmed" : "unknown";
         } else if (kind === "answer.submit") this.phase = state.primary.phase === "sending" ? "submitting" : "unknown";
-        else if (kind === "result.grade") {
+        else if (kind === "result.grade" || kind === "result.correct") {
           this.phase = state.primary.phase === "sending" ? "changing_result" : "unknown";
         } else this.phase = "unknown";
       }
@@ -178,7 +180,7 @@ export class WrittenViewController {
       submittedText: live && pending?.kind === "answer.submit" && "text" in pending.payload ? pending.payload.text : null,
       problem: this.problem ?? commands.primary.rejectionCode ?? commands.primary.problem ?? commands.stop.rejectionCode ?? commands.stop.problem,
       commands, timer: live && ready ? this.timer && { ...this.timer } : null,
-      bucket: this.current?.bucket ?? this.requestedBucket ?? (pending?.kind === "session.start" ? pending.payload.bucket : null),
+      bucket: live ? this.current?.bucket ?? this.requestedBucket ?? (pending?.kind === "session.start" ? pending.payload.bucket : null) : null,
       summary: live && this.summary ? structuredClone(this.summary.value) : null,
       closed: live && this.is("closed") && this.closedFacts ? structuredClone(this.closedFacts) : null,
       canStart: live && interactive && commands.canBegin && !this.operation && !this.reading && !this.stopping && this.is("idle", "closed"),
@@ -187,6 +189,7 @@ export class WrittenViewController {
       canForget: ready && activeQuestion,
       canNext: live && interactive && !this.reading && fresh && (ready && resultView || this.is("previous_result") && pendingPresent),
       canPrevious: live && interactive && !this.reading && !!this.answer?.result && this.is("question", "visible_unconfirmed"),
+      canCorrect: canRevise && !!this.answer?.capabilities.correct_target,
       grades: canRevise ? [...this.answer?.capabilities.grades?.values ?? []] : [],
       canStop: closing && !this.is("summary"), canSummaryHome: closing && this.is("summary"),
       canRetryPrimary: live && interactive && !this.operation && !this.reading && !this.stopping
@@ -238,7 +241,8 @@ export class WrittenViewController {
       this.problem = primary.rejectionCode ?? "rejected";
       // A refused start leaves no session of this owner: the reason stays visible and Today stays reachable.
       if (primary.resolved.kind === "session.start") { this.sessionId = null; this.current = null; this.phase = "idle"; return false; }
-      if (primary.resolved.kind === "result.grade" && primary.answer?.result && primary.stateVersion) {
+      const revision = primary.resolved.kind === "result.grade" || primary.resolved.kind === "result.correct";
+      if (revision && primary.answer?.result && primary.stateVersion) {
         this.setAnswer({ ...primary.answer, state_version: primary.stateVersion });
         this.phase = this.resultPhase(primary.answer.result.grade);
       } else this.phase = this.question && this.current?.status === "active" && this.current.assignment?.id === this.question.id
@@ -278,7 +282,11 @@ export class WrittenViewController {
   }
   /** Background is not Stop. Keep the draft and receipt, never present unseen work, and let the result wait. */
   suspend(): void {
-    if (this.is("result_correct", "result_wrong", "changing_result")) { this.waitNext = true; this.pendingGradeAdvance = null; }
+    // pendingGradeAdvance is kept: an explicit grade acknowledged around the background still advances once on return (К05-047).
+    // A revision with an unknown outcome keeps the old result on screen: it waits too. A lost answer.submit does not (no result seen yet).
+    const kind = this.commands.snapshot().primary.pendingIntent?.kind;
+    if (this.is("result_correct", "result_wrong", "changing_result")
+      || this.is("unknown") && (kind === "result.correct" || kind === "result.grade")) this.waitNext = true;
     this.active = false; this.activationGeneration++; this.cancelTimer(); this.emit();
   }
   /** Foreground callers must first supply a fresh open handle; route/config callers retain that boundary. */
@@ -384,39 +392,29 @@ export class WrittenViewController {
     if (!this.is("closed")) this.setAnswer(read);
   }
   /**
-   * The summary of this owner's own Stop: an unknown answer is first resolved by its ID, then the latest
-   * confirmed result of the closed session is read. Data only; it restores no right.
+   * The summary of this owner's own Stop is the closed session projection itself (C-WSUM): the server counted every
+   * answer committed before the closure, so neither a result address nor an unknown receipt is needed. Without that
+   * projection at hand the session is read once. Data only; it restores no right.
    */
   private readClosedSummary(): Promise<void> {
     const facts = this.closedFacts;
     if (!facts || facts.reason !== "stop" || facts.summaryRead === "known" || !this.live()) return Promise.resolve();
+    if (this.knowClosedSummary(facts, this.current)) { this.emit(); return Promise.resolve(); }
     if (this.summaryReading) return this.summaryReading;
     const task = (async () => {
       facts.summaryRead = "reading"; this.emit();
-      let primary = this.commands.snapshot().primary;
-      if (primary.pending && primary.outcome === null) { await this.commands.refresh(); primary = this.commands.snapshot().primary; }
+      const read = await this.commands.readSession(facts.sessionId);
       if (!this.live() || this.closedFacts !== facts) return;
-      if (primary.pending && primary.outcome === null) { facts.summaryRead = "failed"; return; }
-      const resolved = primary.outcome === "accepted" && primary.resolved?.assignmentId && primary.resolved.resultId
-        && sameId(primary.resolved.sessionId, facts.sessionId) ? primary.resolved : null;
-      const address = resolved ? { assignment_id: resolved.assignmentId!, result_id: resolved.resultId! }
-        : this.answer?.result ? { assignment_id: this.answer.result.assignment_id, result_id: this.answer.result.result_id } : null;
-      if (address === null) {
-        // Without any confirmed answer the closed projection itself proves an empty summary (В06.3).
-        const known = this.current && sameId(this.current.session_id, facts.sessionId) && this.current.progress.completed === 0;
-        facts.summary = known ? { completed: 0, correct: 0, wrong: 0, ratio: null } : null;
-        facts.summaryRead = known ? "known" : "failed"; return;
-      }
-      const read = await this.commands.readResult({ session_id: facts.sessionId, ...address });
-      if (!this.live() || this.closedFacts !== facts) return;
-      const step = read.step;
-      if ("summary" in step && step.status === "closed" && step.summary && sameId(step.session_id, facts.sessionId)) {
-        facts.summary = structuredClone(step.summary); facts.summaryRead = "known";
-      } else facts.summaryRead = "failed";
+      if (!this.knowClosedSummary(facts, read.current)) facts.summaryRead = "failed";
     })().catch(() => { if (this.closedFacts === facts) facts.summaryRead = "failed"; })
       .finally(() => { if (this.summaryReading === task) this.summaryReading = null; this.emit(); });
     this.summaryReading = task;
     return task;
+  }
+  private knowClosedSummary(facts: WrittenClosed, step: Step | Current | null): boolean {
+    if (!step || !("summary" in step) || step.status !== "closed" || !step.summary || !sameId(step.session_id, facts.sessionId)) return false;
+    facts.summary = structuredClone(step.summary); facts.summaryRead = "known";
+    return true;
   }
   private async showQuestion(): Promise<void> {
     const current = this.current?.status === "active" ? this.current : null;
@@ -492,15 +490,22 @@ export class WrittenViewController {
     if (this.current?.status === "summary") { this.previous = false; this.phase = "summary"; this.emit(); return Promise.resolve(); }
     return this.run(() => this.showQuestion());
   }
-  /** Change the saved grade of a correct answer; correction of an error waits for a server right (no written correct_target yet). */
-  grade(grade: 3 | 4 | 5): Promise<void> {
-    if (!this.snapshot().grades.includes(grade)) return Promise.resolve();
-    const target = this.answer!.capabilities.grades!;
-    const action: WrittenTransition = { kind: "result.grade", session_id: target.session_id, assignment_id: target.assignment_id,
-      result_id: target.result_id, expected_result_version: target.expected_result_version, payload: { grade } };
+  /** Change the saved grade of a correct answer. */
+  grade(grade: 3 | 4 | 5): Promise<void> { return this.revise(grade); }
+  /** One tap accepts an error as 4 without text or re-check (К05-050…054); 3/5 follow from the new right. */
+  correct(): Promise<void> { return this.revise(null); }
+  private revise(grade: 3 | 4 | 5 | null): Promise<void> {
+    // Both rights wait for a confirmed present of a visible B (canBegin): a revision never overtakes it (CT:107).
+    const view = this.snapshot();
+    if (grade === null ? !view.canCorrect : !view.grades.includes(grade)) return Promise.resolve();
+    const target = grade === null ? this.answer!.capabilities.correct_target! : this.answer!.capabilities.grades!;
+    const address = { session_id: target.session_id, assignment_id: target.assignment_id,
+      result_id: target.result_id, expected_result_version: target.expected_result_version };
+    const action: WrittenTransition = grade === null ? { kind: "result.correct", ...address, payload: {} }
+      : { kind: "result.grade", ...address, payload: { grade } };
     const previous = this.is("previous_result");
     return this.run(async () => {
-      // A pending change stops the old timer: it can neither confirm 4 nor show the next card.
+      // A pending change stops the old timer: it can neither confirm 4 nor show the next card (TA:111, CT:111).
       this.cancelTimer(); this.previous = previous; this.phase = "changing_result"; this.problem = null;
       await this.commands.begin(action); if (this.live()) this.consume();
     }).then(async () => {

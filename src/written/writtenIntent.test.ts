@@ -13,10 +13,12 @@ const text: WrittenIntent = { command_id: c, session_id: s, kind: "answer.submit
 const forgot: WrittenIntent = { command_id: c, session_id: s, kind: "answer.submit", assignment_id: a, payload: { forgot: true } };
 const grade: WrittenIntent = { command_id: c, session_id: s, kind: "result.grade", assignment_id: a, result_id: r,
   expected_result_version: "2", payload: { grade: 5 } };
+const correct: WrittenIntent = { command_id: c, session_id: s, kind: "result.correct", assignment_id: a, result_id: r,
+  expected_result_version: "2", payload: {} };
 
 describe("written intents", () => {
   it("accepts exactly the written session payloads and the shared answer/revision envelopes", () => {
-    for (const intent of [start, present, stop, text, forgot, grade]) {
+    for (const intent of [start, present, stop, text, forgot, grade, correct]) {
       expect(validWrittenIntent(intent)).toBe(true);
       expect(copyWrittenIntent(intent)).toEqual(intent);
     }
@@ -26,8 +28,9 @@ describe("written intents", () => {
     expect(validWrittenIntent({ ...present, extra: true })).toBe(false);
     expect(validWrittenIntent({ ...stop, payload: { reason: "midnight" } })).toBe(false);
     expect(validWrittenIntent({ ...grade, payload: { grade: 2 } })).toBe(false);
-    // No written correction right exists in the contract yet, so its command is not an intent of this client.
-    expect(validWrittenIntent({ ...grade, kind: "result.correct", payload: {} })).toBe(false);
+    // A correction carries no text, grade or other payload (К05-052…054).
+    expect(validWrittenIntent({ ...correct, payload: { grade: 4 } })).toBe(false);
+    expect(validWrittenIntent({ ...correct, payload: { text: "Haus" } })).toBe(false);
     expect(validWrittenIntent({ ...text, client_instance_id: id(1) })).toBe(false);
   });
 
@@ -39,6 +42,8 @@ describe("written intents", () => {
     ["answer.submit text", text, "302f647ae26995ea7b24886d663184efafc012685e8896f93f3d8dc4f87fe8c6"],
     ["answer.submit forgot", forgot, "9fa837cb9a83fdc1b2e1566638b8053dacfa4ee951f92affe0bc7c00631f7671"],
     ["result.grade", grade, "904789a7601379baca7a321dd520205431e7863ab0f4005a97f43708e832bc8a"],
+    // A correction's service payload is the address with an empty payload (core result_commands._revise).
+    ["result.correct", correct, "b643483f01b80c67421be887e713001f65c8d63e86994abd0a31420063b04e76"],
   ] as const)("fingerprints %s exactly like the server", async (_name, intent, expected) => {
     expect(await writtenIntentHash(intent)).toBe(expected);
     // The command ID and the letter case of UUIDs are not part of the fingerprint.

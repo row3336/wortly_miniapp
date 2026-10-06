@@ -41,16 +41,18 @@ const copy = {
     changed: "The question has changed. Refresh the session.", noMaterial: "There are no words available for this session right now.", noPhrases: "No material is available yet",
     busy: "A session is open on another device", setup: "Confirm session settings and the current dictionary pair to study." },
 } as const;
+/** The written quiz shows one example after the answer (К05-126); Learning and conjugation do not pass it. */
+const answerExample = { random: () => Math.random() };
 
 /** Connects the local display to the owner's exact capabilities; command identity and outcome are never invented here. */
 export function WrittenScreen({ state, language, submitOnEnter, actions, onToday }: WrittenScreenProps) {
   const t = copy[language], composing = useRef(false), root = useRef<HTMLElement>(null);
   const primary = state.commands.primary, stop = state.commands.stop;
-  const grading = primary.pendingIntent?.kind === "result.grade";
+  const revising = primary.pendingIntent?.kind === "result.grade" || primary.pendingIntent?.kind === "result.correct";
   const resultVisible = ["result_correct", "result_wrong", "previous_result", "changing_result"].includes(state.phase)
-    || state.phase === "unknown" && grading;
+    || state.phase === "unknown" && revising;
   const result = resultVisible ? state.answer?.result : null;
-  const pendingResult = state.phase === "changing_result" ? "changing" : state.phase === "unknown" && grading ? "unknown" : null;
+  const pendingResult = state.phase === "changing_result" ? "changing" : state.phase === "unknown" && revising ? "unknown" : null;
   const unknownAnswer = state.phase === "unknown" && primary.pendingIntent?.kind === "answer.submit";
   const closed = state.phase === "closed" ? state.closed : null;
   const ownStop = closed?.reason === "stop";
@@ -119,8 +121,8 @@ export function WrittenScreen({ state, language, submitOnEnter, actions, onToday
       <p role="status">{t.unknown}</p>
     </section>}
     {result && <WrittenAnswerResult result={result} language={language} pending={pendingResult}
-      grades={state.grades} canCorrect={false} canNext={canNext} timer={state.timer}
-      onGrade={grade => { void actions.grade(grade); }} onCorrect={() => undefined} onNext={() => { void actions.next(); }} />}
+      grades={state.grades} canCorrect={state.canCorrect} canNext={canNext} timer={state.timer} example={answerExample}
+      onGrade={grade => { void actions.grade(grade); }} onCorrect={() => { void actions.correct(); }} onNext={() => { void actions.next(); }} />}
     {state.phase === "previous_result" && primary.pendingIntent?.kind === "assignment.present" && primary.outcome === null
       && <p role="status">{t.present}</p>}
     {state.canPrevious && <button type="button" className="written-previous" onClick={() => actions.previousResult()}>{t.previous}</button>}

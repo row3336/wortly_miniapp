@@ -3,7 +3,8 @@ import type { ClosedSessionBoundary, SessionProjection, UnavailableCurrent } fro
 import { oneOf, sameId, uuid, version } from "../api/wireValidation";
 import { PendingStoreError, type PendingSlot } from "../commands/pendingSlot";
 import type { WrittenAnswer, WrittenCurrent, WrittenReply, WrittenResultRead, WrittenSessionRead, WrittenStatus } from "./writtenApi";
-import { copyWrittenIntent, isAnswerKind, validWrittenIntent, type WrittenIntent, type WrittenRevisionIntent } from "./writtenIntent";
+import { copyWrittenIntent, isAnswerKind, isRevisionIntent, validWrittenIntent, type WrittenIntent,
+  type WrittenRevisionIntent } from "./writtenIntent";
 import type { WrittenLane, WrittenPending } from "./writtenPending";
 
 type WithoutId<T> = T extends unknown ? Omit<T, "command_id"> : never;
@@ -193,7 +194,7 @@ export class WrittenCommandController {
       }
     } else if (pending.clientInstanceId !== this.options.clientInstanceId) this.problem = "client_changed";
     else if (pending.pair !== this.options.pair || `${reply.current.dictionary_language}-de` !== pending.pair) this.problem = "pair_changed";
-    else if (pending.intent.kind === "result.grade") {
+    else if (isRevisionIntent(pending.intent)) {
       const read = await this.options.readResult(pending.intent);
       if (!this.live()) return;
       if (!this.observe(read.state_version, read.step)) this.problem = "stale_response";
@@ -294,9 +295,10 @@ function revisionRetryProblem(intent: WrittenRevisionIntent, read: WrittenResult
   if (result === null || action === null || result.status !== "active" || action.status !== "active"
     || !sameId(result.result_id, intent.result_id) || !sameId(result.assignment_id, intent.assignment_id)
     || result.version !== intent.expected_result_version) return "step_changed";
-  const target = capabilities.grades;
+  // The same ID may be retried only while the server still grants this exact revision right.
+  const target = intent.kind === "result.correct" ? capabilities.correct_target : capabilities.grades;
   if (target === null || !sameId(target.session_id, intent.session_id) || !sameId(target.assignment_id, intent.assignment_id)
-    || !sameId(target.result_id, intent.result_id) || target.expected_result_version !== intent.expected_result_version
-    || !target.values.includes(intent.payload.grade as 3 | 4 | 5)) return "step_changed";
+    || !sameId(target.result_id, intent.result_id) || target.expected_result_version !== intent.expected_result_version) return "step_changed";
+  if (intent.kind === "result.grade" && !capabilities.grades?.values.includes(intent.payload.grade as 3 | 4 | 5)) return "step_changed";
   return "not_found";
 }

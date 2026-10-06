@@ -181,10 +181,44 @@ describe("present barrier and previous result (A01, К05-059–063)", () => {
     expect(h.view.snapshot()).toMatchObject({ phase: "question", question: { id: id(7) }, draft: "B draft" });
     expect(h.kinds().filter(kind => kind === "assignment.present")).toHaveLength(2);
   });
-  it("a wrong answer offers neither correction nor grades while the server grants no written correct_target", async () => {
+  it("Т06: a correction of A waits for the present of the visible B; B and its draft survive, 3/5 follow, no timer (К05-059…061)", async () => {
+    const h = harness({ cards: [6, 7, 8] }); await h.started(); await h.answer("falsch");
+    expect(h.view.snapshot()).toMatchObject({ phase: "result_wrong", canCorrect: true, grades: [] });
+    const gate = h.hold(); const showing = h.view.next();
+    await vi.waitFor(() => expect(h.kinds().at(-1)).toBe("assignment.present"));
+    h.view.setDraft("B draft"); h.view.previousResult();
+    // While the present of the visible B is unconfirmed, A's correction is not offered and cannot be sent (CT:107).
+    expect(h.view.snapshot()).toMatchObject({ phase: "previous_result", canCorrect: false, grades: [], timer: null, draft: "B draft" });
+    await h.view.correct(); await h.view.submit();
+    expect(h.kinds().filter(kind => kind === "result.correct" || kind === "answer.submit")).toEqual(["answer.submit"]);
+    gate.resolve(); await showing;
+    expect(h.view.snapshot()).toMatchObject({ phase: "previous_result", canCorrect: true, draft: "B draft" });
+    await h.view.correct();
+    expect([...h.server.receipts.values()].map(item => item.intent.kind))
+      .toEqual(["session.start", "assignment.present", "answer.submit", "assignment.present", "result.correct"]);
+    // One tap: no text, no grade, the address of the issued right only (К05-050…054).
+    expect(h.posts().at(-1)).toEqual({ command_id: expect.any(String), session_id: h.server.state.sessionId, kind: "result.correct",
+      assignment_id: id(6), result_id: id(706), expected_result_version: "1", payload: {}, client_instance_id: id(1), document_id: id(2) });
+    expect(h.view.snapshot()).toMatchObject({ phase: "previous_result", answer: { result: { grade: 4, version: "2" } },
+      canCorrect: false, grades: [3, 4, 5], timer: null, draft: "B draft" });
+    await h.view.next();
+    expect(h.view.snapshot()).toMatchObject({ phase: "question", question: { id: id(7) }, draft: "B draft" });
+    expect(h.kinds().filter(kind => kind === "assignment.present")).toHaveLength(2);
+  });
+  it("the correction button follows the server right, not the error: a right ended elsewhere shows none (К05-057)", async () => {
     const h = harness(); await h.started(); await h.answer("falsch");
-    expect(h.view.snapshot()).toMatchObject({ phase: "result_wrong", grades: [], canNext: true });
-    expect("correct" in h.view).toBe(false);
+    expect(h.view.snapshot()).toMatchObject({ phase: "result_wrong", canCorrect: true });
+    h.server.revokeRights(id(706)); await h.view.refresh();
+    expect(h.view.snapshot()).toMatchObject({ phase: "result_wrong", answer: { result: { grade: 2 } }, canCorrect: false, grades: [] });
+    await h.view.correct(); expect(h.kinds()).not.toContain("result.correct");
+  });
+  it("after the next accepted answer the previous error has no correction any more (capability null)", async () => {
+    const h = harness({ cards: [6, 7, 8] }); await h.started(); await h.answer("falsch"); await h.view.next();
+    h.view.previousResult(); expect(h.view.snapshot().canCorrect).toBe(true);
+    await h.view.next(); await h.answer("Haus");
+    expect(h.server.view(id(706)).capabilities.correct_target).toBeNull();
+    expect(h.view.snapshot()).toMatchObject({ answer: { result: { assignment_id: id(7) } }, canCorrect: false, canPrevious: false });
+    await h.view.correct(); expect(h.kinds()).not.toContain("result.correct");
   });
   it("the next accepted answer ends the previous grade right", async () => {
     const h = harness({ cards: [6, 7, 8] }); await h.started(); await h.answer("Haus"); await h.view.next();
@@ -221,13 +255,28 @@ describe("Stop and summary (Д02, Т96)", () => {
       closed: { reason: "stop", summary: { completed: 1, correct: 1, wrong: 0 } } });
     expect(h.kinds()).toEqual(["session.start", "assignment.present", "answer.submit", "session.stop"]);
   });
-  it("Stop after answers shows the server summary of the closed session", async () => {
+  it("Stop after answers shows the summary of the closed session projection itself, without an answer address (C-WSUM)", async () => {
     const h = harness({ cards: [6, 7, 8] }); await h.started(); await h.answer("Haus"); await h.view.next(); await h.answer("falsch");
+    const reads = h.fetcher.mock.calls.length;
     await h.view.stop();
-    await vi.waitFor(() => expect(h.view.snapshot().closed?.summaryRead).toBe("known"));
-    expect(h.view.snapshot().closed).toMatchObject({ reason: "stop", summary: { completed: 2, correct: 1, wrong: 1,
+    expect(h.view.snapshot().closed).toMatchObject({ reason: "stop", summaryRead: "known", summary: { completed: 2, correct: 1, wrong: 1,
       ratio: { numerator: 1, denominator: 2 } } });
-    expect(h.gets(`result_id=${id(707)}`)).toHaveLength(1);
+    // Only the Stop itself went to the server.
+    expect(h.fetcher.mock.calls.slice(reads).map(call => call[1]?.method)).toEqual(["POST"]);
+    expect(h.gets(`result_id=${id(707)}`)).toHaveLength(0);
+  });
+  it("without the closed projection at hand the summary of an own Stop is read from the session once", async () => {
+    const h = harness({ cards: [6, 7, 8] }); await h.started(); await h.answer("Haus");
+    h.dropRequest(); await h.view.stop();
+    expect(h.view.snapshot()).toMatchObject({ phase: "stopping", commands: { stop: { pending: true } } });
+    // Meanwhile the session was closed by Stop; this lost request never reached the server.
+    Object.assign(h.server.state, { status: "closed", closeReason: "stop", assignment: null, version: h.server.state.version + 1 });
+    await h.view.refresh();
+    await vi.waitFor(() => expect(h.view.snapshot().closed?.summaryRead).toBe("known"));
+    expect(h.view.snapshot()).toMatchObject({ phase: "closed", closed: { reason: "stop",
+      summary: { completed: 1, correct: 1, wrong: 0, ratio: { numerator: 1, denominator: 1 } } } });
+    expect(h.gets(`/sessions/${h.server.state.sessionId}?client_instance_id`)).toHaveLength(1);
+    expect(h.kinds().filter(kind => kind === "session.stop")).toHaveLength(1);
   });
   it("a natural end shows the confirmed summary; «На Сегодня» closes it with summary_home", async () => {
     const h = harness({ cards: [6] }); await h.started(); await h.answer("Haus");
@@ -249,5 +298,98 @@ describe("Stop and summary (Д02, Т96)", () => {
     await h.view.retry("stop");
     expect(h.posts().filter(post => post.kind === "session.stop")).toEqual([stop, stop]);
     expect(h.view.snapshot().phase).toBe("closed");
+  });
+});
+
+describe("written correction (C-WCORR: Т06, Т07/Т70, CT:111, TA:111)", () => {
+  it("a pending correction before B is shown stops the timer; the withdrawn drill is never shown (CT:111)", async () => {
+    vi.useFakeTimers(); const h = harness({ drills: true }, "accelerated"); await h.started(); await h.answer("falsch");
+    expect(h.view.snapshot()).toMatchObject({ phase: "result_wrong", canCorrect: true, timer: { durationMs: 2000 } });
+    expect(h.server.step().assignment).toMatchObject({ id: id(906), kind: "drill", status: "prefetched" });
+    const gate = h.hold(); const correcting = h.view.correct();
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(h.view.snapshot()).toMatchObject({ phase: "changing_result", timer: null, canNext: false, answer: { result: { grade: 2 } } });
+    expect(h.kinds().at(-1)).toBe("result.correct");
+    gate.resolve(); await correcting;
+    expect(h.view.snapshot()).toMatchObject({ phase: "result_correct", answer: { result: { grade: 4 } }, grades: [3, 4, 5],
+      current: { assignment: { id: id(7), kind: "original", status: "prefetched" } } });
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(h.view.snapshot()).toMatchObject({ phase: "question", question: { id: id(7) } });
+    expect(h.posts().filter(post => post.kind === "assignment.present").map(post => post.assignment_id)).toEqual([id(6), id(7)]);
+  });
+  it("Т70: a correction of the original error keeps the shown drill and its input; no new present (К05-116/117)", async () => {
+    const h = harness({ drills: true }); await h.started(); await h.answer("falsch"); await h.view.next();
+    expect(h.view.snapshot()).toMatchObject({ phase: "question", question: { id: id(906), kind: "drill" } });
+    h.view.setDraft("Drill"); h.view.previousResult(); await h.view.correct();
+    expect(h.view.snapshot()).toMatchObject({ phase: "previous_result", answer: { result: { grade: 4 } }, draft: "Drill" });
+    expect(h.server.step().assignment).toMatchObject({ id: id(906), status: "presented" });
+    await h.view.next();
+    expect(h.view.snapshot()).toMatchObject({ phase: "question", question: { id: id(906) }, draft: "Drill", canSubmit: true });
+    expect(h.kinds().filter(kind => kind === "assignment.present")).toHaveLength(2);
+  });
+  it("a correction whose reply is lost keeps one command_id; its unknown outcome blocks the answer to B", async () => {
+    const h = harness({ cards: [6, 7, 8] }); await h.started(); await h.answer("falsch"); await h.view.next();
+    h.view.setDraft("B text"); h.view.previousResult();
+    h.dropRequest(); await h.view.correct();
+    const first = h.posts().at(-1)!;
+    expect(first).toMatchObject({ kind: "result.correct", result_id: id(706) });
+    expect(h.view.snapshot()).toMatchObject({ phase: "unknown", canNext: false, canSubmit: false, grades: [], canCorrect: false,
+      commands: { primary: { pendingIntent: { kind: "result.correct" } } } });
+    await h.view.submit(); await h.view.next();
+    expect(h.kinds().filter(kind => kind === "answer.submit")).toHaveLength(1);
+    await h.view.refresh();
+    expect(h.gets(`/commands/${first.command_id}`)).toHaveLength(1);
+    expect(h.view.snapshot()).toMatchObject({ phase: "unknown", canRetryPrimary: true });
+    const ids = h.newId.mock.calls.length;
+    await h.view.retry();
+    expect(h.posts().filter(post => post.kind === "result.correct")).toEqual([first, first]);
+    expect(h.newId.mock.calls.length).toBe(ids);
+    expect(h.view.snapshot()).toMatchObject({ phase: "previous_result", answer: { result: { grade: 4 } }, draft: "B text" });
+    await h.view.next(); await h.view.submit();
+    expect(h.posts().at(-1)).toMatchObject({ kind: "answer.submit", assignment_id: id(7), payload: { text: "B text" } });
+  });
+  it("a correction committed but replied lost is resolved by its ID, never sent twice", async () => {
+    const h = harness(); await h.started(); await h.answer("falsch");
+    h.loseReply(); await h.view.correct();
+    expect(h.view.snapshot().phase).toBe("unknown");
+    await h.view.refresh();
+    expect(h.kinds().filter(kind => kind === "result.correct")).toHaveLength(1);
+    expect(h.view.snapshot()).toMatchObject({ phase: "result_correct", answer: { result: { grade: 4, version: "2" } }, grades: [3, 4, 5] });
+  });
+  it("a grade acknowledged while hidden advances once on return (К05-047; suspend keeps the pending advance)", async () => {
+    vi.useFakeTimers(); const h = harness({ cards: [6, 7, 8] }); await h.started(); await h.answer("Haus");
+    const gate = h.hold(); const grading = h.view.grade(5);
+    await vi.waitFor(() => expect(h.kinds().at(-1)).toBe("result.grade"));
+    h.view.suspend(); gate.resolve(); await grading;
+    expect(h.kinds().at(-1)).toBe("result.grade");
+    h.replace(); await h.view.resume();
+    expect(h.kinds().at(-1)).toBe("assignment.present");
+    expect(h.view.snapshot()).toMatchObject({ phase: "question", question: { id: id(7) } });
+    expect(h.kinds().filter(kind => kind === "assignment.present")).toHaveLength(2);
+  });
+  it("an unknown correction keeps its result visible: after background it waits for «Далее» (TA:109)", async () => {
+    vi.useFakeTimers(); const h = harness(); await h.started(); await h.answer("falsch");
+    h.loseReply(); await h.view.correct();
+    expect(h.view.snapshot().phase).toBe("unknown");
+    h.view.suspend(); h.replace(); await h.view.resume();
+    expect(h.view.snapshot()).toMatchObject({ phase: "result_correct", answer: { result: { grade: 4 } }, timer: null, canNext: true });
+    await vi.advanceTimersByTimeAsync(10000); expect(h.kinds().at(-1)).toBe("result.correct");
+    await h.view.next(); expect(h.kinds().at(-1)).toBe("assignment.present");
+  });
+  it("a correction confirmed in the foreground runs the ordinary result timer of a correct answer", async () => {
+    vi.useFakeTimers(); const h = harness(); await h.started(); await h.answer("falsch");
+    expect(h.view.snapshot().timer).toBeNull();
+    await h.view.correct();
+    expect(h.view.snapshot()).toMatchObject({ phase: "result_correct", timer: { durationMs: 3000 } });
+    await vi.advanceTimersByTimeAsync(3000); expect(h.kinds().at(-1)).toBe("assignment.present");
+  });
+});
+
+describe("liveness of the snapshot", () => {
+  it("a revoked document reports no material (bucket) like every other field", async () => {
+    const h = harness(); await h.started();
+    expect(h.view.snapshot()).toMatchObject({ phase: "question", bucket: "words" });
+    h.revoke();
+    expect(h.view.snapshot()).toMatchObject({ phase: "disposed", bucket: null, current: null, question: null });
   });
 });

@@ -96,7 +96,8 @@ function fixture() {
     // The persisted mode of the reported session: a valid Written summary (no Learning resume).
     if (state.session && path.includes(`/sessions/${state.session.id}?`)) return json({ current: { session_id: state.session.id,
       mode: "written", status: "summary", pair: `${profile.dictionary_language}-de`, direction: "l1-de", local_date: "2026-09-30",
-      bucket: "words", close_reason: null, progress: { completed: 2, total: 2 }, assignment: null }, state_version: data.state_version });
+      bucket: "words", close_reason: null, progress: { completed: 2, total: 2, correct: 2, wrong: 0 }, assignment: null,
+      summary: { completed: 2, correct: 2, wrong: 0, ratio: { numerator: 2, denominator: 2 } } }, state_version: data.state_version });
     throw new Error("Unexpected synthetic endpoint");
   });
   vi.stubGlobal("fetch", fetcher);
