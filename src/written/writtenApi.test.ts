@@ -40,7 +40,7 @@ describe("written HTTP adapter", () => {
     expect(await g.answer("anders", 12)).toMatchObject({ outcome: "mismatch", error: { code: "COMMAND_PAYLOAD_MISMATCH" } });
   });
 
-  it("accepts correct_target only as the address of this live error; undo_target stays null", async () => {
+  it("accepts correct_target only as the address of this live error", async () => {
     const h = harness(); await h.start(); await h.present();
     const target = { session_id: id(3), assignment_id: id(6), result_id: id(706), expected_result_version: "1" };
     expect(await h.answer("falsch")).toMatchObject({ outcome: "accepted", result: { grade: 2 },
@@ -65,9 +65,61 @@ describe("written HTTP adapter", () => {
       { ...view, result: { ...view.result, grade: 4, correct: true }, capabilities: caps(target) },
       { ...view, result: { ...view.result, status: "undone" }, action: { ...view.action, status: "undone" }, capabilities: caps(target) },
       { ...view, step: closedStep, result: { ...view.result, detail: null }, capabilities: { ...caps(target), stop: false } },
-      { ...view, capabilities: { ...view.capabilities, undo_target: { action_id: id(806), kind: "answer.submit", version: "1" } } },
     ]) {
       h.fetcher.mockResolvedValueOnce(response({ ...body, state_version: "9" }));
+      await expect(read()).rejects.toMatchObject({ kind: "invalid_response" });
+    }
+  });
+
+  // Transitional until M-UNDO adds the undo button: the decoder takes core's undo right, the client does not use it yet.
+  it("accepts undo_target as null or as the exact address of this live answer, and nothing else", async () => {
+    const h = harness(); await h.start(); await h.present(); await h.answer("Haus");
+    type View = Record<string, unknown> & { capabilities: Record<string, unknown>; result: Record<string, unknown>;
+      action: Record<string, unknown>; step: Record<string, unknown> };
+    const view = h.server.view(id(706)) as View;
+    const read = () => h.api.readResult("token", "proof", { session_id: id(3), assignment_id: id(6), result_id: id(706), ...origin });
+    const undo = { session_id: id(3), assignment_id: id(6), result_id: id(706), expected_result_version: "1",
+      action_id: view.action.action_id as string, kind: "answer.submit" };
+    const withUndo = (undo_target: unknown, patch: Record<string, unknown> = {}) =>
+      response({ ...view, ...patch, capabilities: { ...view.capabilities, undo_target }, state_version: "9" });
+    h.fetcher.mockResolvedValueOnce(withUndo(null));
+    expect(await read()).toMatchObject({ capabilities: { undo_target: null } });
+    h.fetcher.mockResolvedValueOnce(withUndo(undo));
+    expect(await read()).toMatchObject({ result: { grade: 4 }, capabilities: { undo_target: undo } });
+    // A wrong answer carries the undo right beside its correction right.
+    const g = harness(); await g.start(); await g.present(); await g.answer("falsch");
+    const wrong = g.server.view(id(706)) as View;
+    g.fetcher.mockResolvedValueOnce(response({ ...wrong, state_version: "9",
+      capabilities: { ...wrong.capabilities, undo_target: { ...undo, action_id: wrong.action.action_id as string } } }));
+    expect(await g.api.readResult("token", "proof", { session_id: id(3), assignment_id: id(6), result_id: id(706), ...origin }))
+      .toMatchObject({ result: { grade: 2 }, capabilities: { correct_target: expect.any(Object), undo_target: expect.any(Object) } });
+    const { kind: _kind, ...withoutKind } = undo;
+    const { action_id: _actionId, ...withoutAction } = undo;
+    const closedStep = { ...view.step, status: "closed", close_reason: "stop", assignment: null,
+      summary: { completed: 1, correct: 1, wrong: 0, ratio: { numerator: 1, denominator: 1 } } };
+    for (const body of [
+      withUndo({ ...undo, extra: 1 }),
+      withUndo({ ...undo, values: [3, 4, 5] }),
+      withUndo(withoutKind),
+      withUndo(withoutAction),
+      withUndo({ ...undo, kind: "result.correct" }),
+      withUndo({ ...undo, kind: "interval.increase" }),
+      withUndo({ ...undo, action_id: 806 }),
+      withUndo({ ...undo, action_id: "not-a-uuid" }),
+      withUndo({ ...undo, action_id: id(899) }),
+      withUndo({ ...undo, version: "1" }),
+      withUndo({ ...undo, result_id: id(707) }),
+      withUndo({ ...undo, assignment_id: id(7) }),
+      withUndo({ ...undo, session_id: id(4) }),
+      withUndo({ ...undo, expected_result_version: "2" }),
+      withUndo({ ...undo, expected_result_version: 1 }),
+      withUndo({}), withUndo([]), withUndo("answer.submit"), withUndo(undefined),
+      withUndo(undo, { result: { ...view.result, status: "undone" }, action: { ...view.action, status: "undone" } }),
+      // stop is off here, so only the undo rule itself can refuse a closed session.
+      response({ ...view, step: closedStep, result: { ...view.result, detail: null },
+        capabilities: { ...view.capabilities, undo_target: undo, stop: false }, state_version: "9" }),
+    ]) {
+      h.fetcher.mockResolvedValueOnce(body);
       await expect(read()).rejects.toMatchObject({ kind: "invalid_response" });
     }
   });

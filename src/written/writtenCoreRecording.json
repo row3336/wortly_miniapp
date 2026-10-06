@@ -46,7 +46,7 @@
       "wrong": 0
      },
      "assignment": {
-      "id": "8fbd2842-86e0-4adf-9235-32208d91b4da",
+      "id": "dc62ab58-74df-4559-8d1e-9035dc2869e2",
       "card_id": "00000000-0000-4000-8000-000000000010",
       "status": "prefetched",
       "kind": "original",
@@ -89,7 +89,7 @@
     "document_id": "00000000-0000-4000-8000-000000000002",
     "session_id": "00000000-0000-4000-8000-000000000004",
     "kind": "assignment.present",
-    "assignment_id": "8fbd2842-86e0-4adf-9235-32208d91b4da",
+    "assignment_id": "dc62ab58-74df-4559-8d1e-9035dc2869e2",
     "payload": {}
    },
    "status": 200,
@@ -99,7 +99,7 @@
      "kind": "assignment.present",
      "status": "applied",
      "applied_at": "2026-09-29T12:00:00Z",
-     "target_id": "8fbd2842-86e0-4adf-9235-32208d91b4da",
+     "target_id": "dc62ab58-74df-4559-8d1e-9035dc2869e2",
      "action_id": null,
      "result_id": null,
      "context_id": null,
@@ -121,7 +121,7 @@
       "wrong": 0
      },
      "assignment": {
-      "id": "8fbd2842-86e0-4adf-9235-32208d91b4da",
+      "id": "dc62ab58-74df-4559-8d1e-9035dc2869e2",
       "card_id": "00000000-0000-4000-8000-000000000010",
       "status": "presented",
       "kind": "original",
@@ -164,7 +164,7 @@
     "document_id": "00000000-0000-4000-8000-000000000002",
     "session_id": "00000000-0000-4000-8000-000000000004",
     "kind": "answer.submit",
-    "assignment_id": "8fbd2842-86e0-4adf-9235-32208d91b4da",
+    "assignment_id": "dc62ab58-74df-4559-8d1e-9035dc2869e2",
     "payload": {
      "text": "Guten Tag"
     }
@@ -172,14 +172,14 @@
    "status": 200,
    "response": {
     "action": {
-     "action_id": "61bfa3bd-90a1-460f-b62c-6fda5e04e97f",
+     "action_id": "a1b1b82e-5a7a-4d22-abd5-660a256acc15",
      "kind": "answer.submit",
      "version": "1",
      "status": "active"
     },
     "result": {
-     "result_id": "2c7be850-35bb-4530-b3bc-ef4ce42300dc",
-     "assignment_id": "8fbd2842-86e0-4adf-9235-32208d91b4da",
+     "result_id": "2465cda4-e721-4725-ab03-439f5905a87c",
+     "assignment_id": "dc62ab58-74df-4559-8d1e-9035dc2869e2",
      "version": "1",
      "grade": 4,
      "correct": true,
@@ -237,7 +237,7 @@
       "wrong": 0
      },
      "assignment": {
-      "id": "80c62042-a8bb-4ec8-b0e1-9e003ee81e89",
+      "id": "aebb1b49-76f8-4ae9-9a13-668e972e2494",
       "card_id": "00000000-0000-4000-8000-000000000011",
       "status": "prefetched",
       "kind": "original",
@@ -281,8 +281,8 @@
      "answer_target": null,
      "grades": {
       "session_id": "00000000-0000-4000-8000-000000000004",
-      "assignment_id": "8fbd2842-86e0-4adf-9235-32208d91b4da",
-      "result_id": "2c7be850-35bb-4530-b3bc-ef4ce42300dc",
+      "assignment_id": "dc62ab58-74df-4559-8d1e-9035dc2869e2",
+      "result_id": "2465cda4-e721-4725-ab03-439f5905a87c",
       "expected_result_version": "1",
       "values": [
        3,
@@ -291,7 +291,14 @@
       ]
      },
      "correct_target": null,
-     "undo_target": null,
+     "undo_target": {
+      "session_id": "00000000-0000-4000-8000-000000000004",
+      "assignment_id": "dc62ab58-74df-4559-8d1e-9035dc2869e2",
+      "result_id": "2465cda4-e721-4725-ab03-439f5905a87c",
+      "expected_result_version": "1",
+      "action_id": "a1b1b82e-5a7a-4d22-abd5-660a256acc15",
+      "kind": "answer.submit"
+     },
      "stop": true,
      "summary_home": false
     },
@@ -300,9 +307,9 @@
      "kind": "answer.submit",
      "status": "applied",
      "applied_at": "2026-09-29T12:00:00Z",
-     "target_id": "8fbd2842-86e0-4adf-9235-32208d91b4da",
-     "action_id": "61bfa3bd-90a1-460f-b62c-6fda5e04e97f",
-     "result_id": "2c7be850-35bb-4530-b3bc-ef4ce42300dc",
+     "target_id": "dc62ab58-74df-4559-8d1e-9035dc2869e2",
+     "action_id": "a1b1b82e-5a7a-4d22-abd5-660a256acc15",
+     "result_id": "2465cda4-e721-4725-ab03-439f5905a87c",
      "context_id": null,
      "object_version": "1"
     },
@@ -320,20 +327,20 @@
     "client_instance_id": "00000000-0000-4000-8000-000000000001",
     "document_id": "00000000-0000-4000-8000-000000000002",
     "session_id": "00000000-0000-4000-8000-000000000004",
-    "expected_intent_hash": "5bf4e632d36cbb5a2e60c887fc70d3d00680155cfc4d3328d484d084087c3536"
+    "expected_intent_hash": "d2499f40d01a4b7315f3694d858f800c29f0b9c9ece3a994221691b20c35c153"
    },
    "body": null,
    "status": 200,
    "response": {
     "action": {
-     "action_id": "61bfa3bd-90a1-460f-b62c-6fda5e04e97f",
+     "action_id": "a1b1b82e-5a7a-4d22-abd5-660a256acc15",
      "kind": "answer.submit",
      "version": "1",
      "status": "active"
     },
     "result": {
-     "result_id": "2c7be850-35bb-4530-b3bc-ef4ce42300dc",
-     "assignment_id": "8fbd2842-86e0-4adf-9235-32208d91b4da",
+     "result_id": "2465cda4-e721-4725-ab03-439f5905a87c",
+     "assignment_id": "dc62ab58-74df-4559-8d1e-9035dc2869e2",
      "version": "1",
      "grade": 4,
      "correct": true,
@@ -391,7 +398,7 @@
       "wrong": 0
      },
      "assignment": {
-      "id": "80c62042-a8bb-4ec8-b0e1-9e003ee81e89",
+      "id": "aebb1b49-76f8-4ae9-9a13-668e972e2494",
       "card_id": "00000000-0000-4000-8000-000000000011",
       "status": "prefetched",
       "kind": "original",
@@ -435,8 +442,8 @@
      "answer_target": null,
      "grades": {
       "session_id": "00000000-0000-4000-8000-000000000004",
-      "assignment_id": "8fbd2842-86e0-4adf-9235-32208d91b4da",
-      "result_id": "2c7be850-35bb-4530-b3bc-ef4ce42300dc",
+      "assignment_id": "dc62ab58-74df-4559-8d1e-9035dc2869e2",
+      "result_id": "2465cda4-e721-4725-ab03-439f5905a87c",
       "expected_result_version": "1",
       "values": [
        3,
@@ -445,7 +452,14 @@
       ]
      },
      "correct_target": null,
-     "undo_target": null,
+     "undo_target": {
+      "session_id": "00000000-0000-4000-8000-000000000004",
+      "assignment_id": "dc62ab58-74df-4559-8d1e-9035dc2869e2",
+      "result_id": "2465cda4-e721-4725-ab03-439f5905a87c",
+      "expected_result_version": "1",
+      "action_id": "a1b1b82e-5a7a-4d22-abd5-660a256acc15",
+      "kind": "answer.submit"
+     },
      "stop": true,
      "summary_home": false
     },
@@ -454,14 +468,14 @@
      "kind": "answer.submit",
      "status": "already_applied",
      "applied_at": "2026-09-29T12:00:00Z",
-     "target_id": "8fbd2842-86e0-4adf-9235-32208d91b4da",
-     "action_id": "61bfa3bd-90a1-460f-b62c-6fda5e04e97f",
-     "result_id": "2c7be850-35bb-4530-b3bc-ef4ce42300dc",
+     "target_id": "dc62ab58-74df-4559-8d1e-9035dc2869e2",
+     "action_id": "a1b1b82e-5a7a-4d22-abd5-660a256acc15",
+     "result_id": "2465cda4-e721-4725-ab03-439f5905a87c",
      "context_id": null,
      "object_version": "1"
     },
     "state_version": "6",
-    "verified_intent_hash": "5bf4e632d36cbb5a2e60c887fc70d3d00680155cfc4d3328d484d084087c3536"
+    "verified_intent_hash": "d2499f40d01a4b7315f3694d858f800c29f0b9c9ece3a994221691b20c35c153"
    },
    "schema": [
     "WrittenStatusResponse"
@@ -478,7 +492,7 @@
     "document_id": "00000000-0000-4000-8000-000000000002",
     "session_id": "00000000-0000-4000-8000-000000000004",
     "kind": "assignment.present",
-    "assignment_id": "80c62042-a8bb-4ec8-b0e1-9e003ee81e89",
+    "assignment_id": "aebb1b49-76f8-4ae9-9a13-668e972e2494",
     "payload": {}
    },
    "status": 200,
@@ -488,7 +502,7 @@
      "kind": "assignment.present",
      "status": "applied",
      "applied_at": "2026-09-29T12:00:00Z",
-     "target_id": "80c62042-a8bb-4ec8-b0e1-9e003ee81e89",
+     "target_id": "aebb1b49-76f8-4ae9-9a13-668e972e2494",
      "action_id": null,
      "result_id": null,
      "context_id": null,
@@ -510,7 +524,7 @@
       "wrong": 0
      },
      "assignment": {
-      "id": "80c62042-a8bb-4ec8-b0e1-9e003ee81e89",
+      "id": "aebb1b49-76f8-4ae9-9a13-668e972e2494",
       "card_id": "00000000-0000-4000-8000-000000000011",
       "status": "presented",
       "kind": "original",
@@ -547,8 +561,8 @@
    "method": "GET",
    "path": "/api/v1/sessions/00000000-0000-4000-8000-000000000004",
    "query": {
-    "assignment_id": "8fbd2842-86e0-4adf-9235-32208d91b4da",
-    "result_id": "2c7be850-35bb-4530-b3bc-ef4ce42300dc",
+    "assignment_id": "dc62ab58-74df-4559-8d1e-9035dc2869e2",
+    "result_id": "2465cda4-e721-4725-ab03-439f5905a87c",
     "client_instance_id": "00000000-0000-4000-8000-000000000001",
     "document_id": "00000000-0000-4000-8000-000000000002"
    },
@@ -556,14 +570,14 @@
    "status": 200,
    "response": {
     "action": {
-     "action_id": "61bfa3bd-90a1-460f-b62c-6fda5e04e97f",
+     "action_id": "a1b1b82e-5a7a-4d22-abd5-660a256acc15",
      "kind": "answer.submit",
      "version": "1",
      "status": "active"
     },
     "result": {
-     "result_id": "2c7be850-35bb-4530-b3bc-ef4ce42300dc",
-     "assignment_id": "8fbd2842-86e0-4adf-9235-32208d91b4da",
+     "result_id": "2465cda4-e721-4725-ab03-439f5905a87c",
+     "assignment_id": "dc62ab58-74df-4559-8d1e-9035dc2869e2",
      "version": "1",
      "grade": 4,
      "correct": true,
@@ -621,7 +635,7 @@
       "wrong": 0
      },
      "assignment": {
-      "id": "80c62042-a8bb-4ec8-b0e1-9e003ee81e89",
+      "id": "aebb1b49-76f8-4ae9-9a13-668e972e2494",
       "card_id": "00000000-0000-4000-8000-000000000011",
       "status": "presented",
       "kind": "original",
@@ -662,11 +676,11 @@
      }
     },
     "capabilities": {
-     "answer_target": "80c62042-a8bb-4ec8-b0e1-9e003ee81e89",
+     "answer_target": "aebb1b49-76f8-4ae9-9a13-668e972e2494",
      "grades": {
       "session_id": "00000000-0000-4000-8000-000000000004",
-      "assignment_id": "8fbd2842-86e0-4adf-9235-32208d91b4da",
-      "result_id": "2c7be850-35bb-4530-b3bc-ef4ce42300dc",
+      "assignment_id": "dc62ab58-74df-4559-8d1e-9035dc2869e2",
+      "result_id": "2465cda4-e721-4725-ab03-439f5905a87c",
       "expected_result_version": "1",
       "values": [
        3,
@@ -675,7 +689,14 @@
       ]
      },
      "correct_target": null,
-     "undo_target": null,
+     "undo_target": {
+      "session_id": "00000000-0000-4000-8000-000000000004",
+      "assignment_id": "dc62ab58-74df-4559-8d1e-9035dc2869e2",
+      "result_id": "2465cda4-e721-4725-ab03-439f5905a87c",
+      "expected_result_version": "1",
+      "action_id": "a1b1b82e-5a7a-4d22-abd5-660a256acc15",
+      "kind": "answer.submit"
+     },
      "stop": true,
      "summary_home": false
     },
@@ -696,8 +717,8 @@
     "document_id": "00000000-0000-4000-8000-000000000002",
     "session_id": "00000000-0000-4000-8000-000000000004",
     "kind": "result.grade",
-    "assignment_id": "8fbd2842-86e0-4adf-9235-32208d91b4da",
-    "result_id": "2c7be850-35bb-4530-b3bc-ef4ce42300dc",
+    "assignment_id": "dc62ab58-74df-4559-8d1e-9035dc2869e2",
+    "result_id": "2465cda4-e721-4725-ab03-439f5905a87c",
     "expected_result_version": "1",
     "payload": {
      "grade": 5
@@ -706,14 +727,14 @@
    "status": 200,
    "response": {
     "action": {
-     "action_id": "61bfa3bd-90a1-460f-b62c-6fda5e04e97f",
+     "action_id": "a1b1b82e-5a7a-4d22-abd5-660a256acc15",
      "kind": "answer.submit",
      "version": "2",
      "status": "active"
     },
     "result": {
-     "result_id": "2c7be850-35bb-4530-b3bc-ef4ce42300dc",
-     "assignment_id": "8fbd2842-86e0-4adf-9235-32208d91b4da",
+     "result_id": "2465cda4-e721-4725-ab03-439f5905a87c",
+     "assignment_id": "dc62ab58-74df-4559-8d1e-9035dc2869e2",
      "version": "2",
      "grade": 5,
      "correct": true,
@@ -771,7 +792,7 @@
       "wrong": 0
      },
      "assignment": {
-      "id": "80c62042-a8bb-4ec8-b0e1-9e003ee81e89",
+      "id": "aebb1b49-76f8-4ae9-9a13-668e972e2494",
       "card_id": "00000000-0000-4000-8000-000000000011",
       "status": "presented",
       "kind": "original",
@@ -812,11 +833,11 @@
      }
     },
     "capabilities": {
-     "answer_target": "80c62042-a8bb-4ec8-b0e1-9e003ee81e89",
+     "answer_target": "aebb1b49-76f8-4ae9-9a13-668e972e2494",
      "grades": {
       "session_id": "00000000-0000-4000-8000-000000000004",
-      "assignment_id": "8fbd2842-86e0-4adf-9235-32208d91b4da",
-      "result_id": "2c7be850-35bb-4530-b3bc-ef4ce42300dc",
+      "assignment_id": "dc62ab58-74df-4559-8d1e-9035dc2869e2",
+      "result_id": "2465cda4-e721-4725-ab03-439f5905a87c",
       "expected_result_version": "2",
       "values": [
        3,
@@ -825,7 +846,14 @@
       ]
      },
      "correct_target": null,
-     "undo_target": null,
+     "undo_target": {
+      "session_id": "00000000-0000-4000-8000-000000000004",
+      "assignment_id": "dc62ab58-74df-4559-8d1e-9035dc2869e2",
+      "result_id": "2465cda4-e721-4725-ab03-439f5905a87c",
+      "expected_result_version": "2",
+      "action_id": "a1b1b82e-5a7a-4d22-abd5-660a256acc15",
+      "kind": "answer.submit"
+     },
      "stop": true,
      "summary_home": false
     },
@@ -834,9 +862,9 @@
      "kind": "result.grade",
      "status": "applied",
      "applied_at": "2026-09-29T12:00:00Z",
-     "target_id": "8fbd2842-86e0-4adf-9235-32208d91b4da",
-     "action_id": "61bfa3bd-90a1-460f-b62c-6fda5e04e97f",
-     "result_id": "2c7be850-35bb-4530-b3bc-ef4ce42300dc",
+     "target_id": "dc62ab58-74df-4559-8d1e-9035dc2869e2",
+     "action_id": "a1b1b82e-5a7a-4d22-abd5-660a256acc15",
+     "result_id": "2465cda4-e721-4725-ab03-439f5905a87c",
      "context_id": null,
      "object_version": "2"
     },
@@ -873,7 +901,7 @@
       "wrong": 0
      },
      "assignment": {
-      "id": "80c62042-a8bb-4ec8-b0e1-9e003ee81e89",
+      "id": "aebb1b49-76f8-4ae9-9a13-668e972e2494",
       "card_id": "00000000-0000-4000-8000-000000000011",
       "status": "presented",
       "kind": "original",
@@ -916,7 +944,7 @@
     "document_id": "00000000-0000-4000-8000-000000000002",
     "session_id": "00000000-0000-4000-8000-000000000004",
     "kind": "answer.submit",
-    "assignment_id": "80c62042-a8bb-4ec8-b0e1-9e003ee81e89",
+    "assignment_id": "aebb1b49-76f8-4ae9-9a13-668e972e2494",
     "payload": {
      "text": "falsch"
     }
@@ -924,14 +952,14 @@
    "status": 200,
    "response": {
     "action": {
-     "action_id": "189b4f9f-4937-4343-80d9-df004137eef1",
+     "action_id": "510e0ddc-202d-44c4-b79e-7da0e6ceca24",
      "kind": "answer.submit",
      "version": "1",
      "status": "active"
     },
     "result": {
-     "result_id": "1e6d6c09-85fd-4949-aa02-f8660bb119f0",
-     "assignment_id": "80c62042-a8bb-4ec8-b0e1-9e003ee81e89",
+     "result_id": "e14573ed-02d4-43d2-a428-08f7b5a953d5",
+     "assignment_id": "aebb1b49-76f8-4ae9-9a13-668e972e2494",
      "version": "1",
      "grade": 2,
      "correct": false,
@@ -1006,7 +1034,7 @@
       "wrong": 1
      },
      "assignment": {
-      "id": "884a0b58-90b1-41f7-883c-72a36c9ddec2",
+      "id": "cb3008a8-8199-416a-9153-f75921262bb8",
       "card_id": "00000000-0000-4000-8000-000000000011",
       "status": "prefetched",
       "kind": "drill",
@@ -1051,11 +1079,18 @@
      "grades": null,
      "correct_target": {
       "session_id": "00000000-0000-4000-8000-000000000004",
-      "assignment_id": "80c62042-a8bb-4ec8-b0e1-9e003ee81e89",
-      "result_id": "1e6d6c09-85fd-4949-aa02-f8660bb119f0",
+      "assignment_id": "aebb1b49-76f8-4ae9-9a13-668e972e2494",
+      "result_id": "e14573ed-02d4-43d2-a428-08f7b5a953d5",
       "expected_result_version": "1"
      },
-     "undo_target": null,
+     "undo_target": {
+      "session_id": "00000000-0000-4000-8000-000000000004",
+      "assignment_id": "aebb1b49-76f8-4ae9-9a13-668e972e2494",
+      "result_id": "e14573ed-02d4-43d2-a428-08f7b5a953d5",
+      "expected_result_version": "1",
+      "action_id": "510e0ddc-202d-44c4-b79e-7da0e6ceca24",
+      "kind": "answer.submit"
+     },
      "stop": true,
      "summary_home": false
     },
@@ -1064,9 +1099,9 @@
      "kind": "answer.submit",
      "status": "applied",
      "applied_at": "2026-09-29T12:00:00Z",
-     "target_id": "80c62042-a8bb-4ec8-b0e1-9e003ee81e89",
-     "action_id": "189b4f9f-4937-4343-80d9-df004137eef1",
-     "result_id": "1e6d6c09-85fd-4949-aa02-f8660bb119f0",
+     "target_id": "aebb1b49-76f8-4ae9-9a13-668e972e2494",
+     "action_id": "510e0ddc-202d-44c4-b79e-7da0e6ceca24",
+     "result_id": "e14573ed-02d4-43d2-a428-08f7b5a953d5",
      "context_id": null,
      "object_version": "1"
     },
@@ -1087,22 +1122,22 @@
     "document_id": "00000000-0000-4000-8000-000000000002",
     "session_id": "00000000-0000-4000-8000-000000000004",
     "kind": "result.correct",
-    "assignment_id": "80c62042-a8bb-4ec8-b0e1-9e003ee81e89",
-    "result_id": "1e6d6c09-85fd-4949-aa02-f8660bb119f0",
+    "assignment_id": "aebb1b49-76f8-4ae9-9a13-668e972e2494",
+    "result_id": "e14573ed-02d4-43d2-a428-08f7b5a953d5",
     "expected_result_version": "1",
     "payload": {}
    },
    "status": 200,
    "response": {
     "action": {
-     "action_id": "189b4f9f-4937-4343-80d9-df004137eef1",
+     "action_id": "510e0ddc-202d-44c4-b79e-7da0e6ceca24",
      "kind": "answer.submit",
      "version": "2",
      "status": "active"
     },
     "result": {
-     "result_id": "1e6d6c09-85fd-4949-aa02-f8660bb119f0",
-     "assignment_id": "80c62042-a8bb-4ec8-b0e1-9e003ee81e89",
+     "result_id": "e14573ed-02d4-43d2-a428-08f7b5a953d5",
+     "assignment_id": "aebb1b49-76f8-4ae9-9a13-668e972e2494",
      "version": "2",
      "grade": 4,
      "correct": true,
@@ -1205,8 +1240,8 @@
      "answer_target": null,
      "grades": {
       "session_id": "00000000-0000-4000-8000-000000000004",
-      "assignment_id": "80c62042-a8bb-4ec8-b0e1-9e003ee81e89",
-      "result_id": "1e6d6c09-85fd-4949-aa02-f8660bb119f0",
+      "assignment_id": "aebb1b49-76f8-4ae9-9a13-668e972e2494",
+      "result_id": "e14573ed-02d4-43d2-a428-08f7b5a953d5",
       "expected_result_version": "2",
       "values": [
        3,
@@ -1215,7 +1250,14 @@
       ]
      },
      "correct_target": null,
-     "undo_target": null,
+     "undo_target": {
+      "session_id": "00000000-0000-4000-8000-000000000004",
+      "assignment_id": "aebb1b49-76f8-4ae9-9a13-668e972e2494",
+      "result_id": "e14573ed-02d4-43d2-a428-08f7b5a953d5",
+      "expected_result_version": "2",
+      "action_id": "510e0ddc-202d-44c4-b79e-7da0e6ceca24",
+      "kind": "answer.submit"
+     },
      "stop": true,
      "summary_home": true
     },
@@ -1224,9 +1266,9 @@
      "kind": "result.correct",
      "status": "applied",
      "applied_at": "2026-09-29T12:00:00Z",
-     "target_id": "80c62042-a8bb-4ec8-b0e1-9e003ee81e89",
-     "action_id": "189b4f9f-4937-4343-80d9-df004137eef1",
-     "result_id": "1e6d6c09-85fd-4949-aa02-f8660bb119f0",
+     "target_id": "aebb1b49-76f8-4ae9-9a13-668e972e2494",
+     "action_id": "510e0ddc-202d-44c4-b79e-7da0e6ceca24",
+     "result_id": "e14573ed-02d4-43d2-a428-08f7b5a953d5",
      "context_id": null,
      "object_version": "2"
     },
@@ -1244,20 +1286,20 @@
     "client_instance_id": "00000000-0000-4000-8000-000000000001",
     "document_id": "00000000-0000-4000-8000-000000000002",
     "session_id": "00000000-0000-4000-8000-000000000004",
-    "expected_intent_hash": "46f19026053f7c5738a8343a4ebe67a10cee1b77276637a512eb419a958d5ce9"
+    "expected_intent_hash": "fc11f6d8b79327f0fd1505a4c6f1586d4decf55265ea9604805eeb941dd10013"
    },
    "body": null,
    "status": 200,
    "response": {
     "action": {
-     "action_id": "189b4f9f-4937-4343-80d9-df004137eef1",
+     "action_id": "510e0ddc-202d-44c4-b79e-7da0e6ceca24",
      "kind": "answer.submit",
      "version": "2",
      "status": "active"
     },
     "result": {
-     "result_id": "1e6d6c09-85fd-4949-aa02-f8660bb119f0",
-     "assignment_id": "80c62042-a8bb-4ec8-b0e1-9e003ee81e89",
+     "result_id": "e14573ed-02d4-43d2-a428-08f7b5a953d5",
+     "assignment_id": "aebb1b49-76f8-4ae9-9a13-668e972e2494",
      "version": "2",
      "grade": 4,
      "correct": true,
@@ -1360,8 +1402,8 @@
      "answer_target": null,
      "grades": {
       "session_id": "00000000-0000-4000-8000-000000000004",
-      "assignment_id": "80c62042-a8bb-4ec8-b0e1-9e003ee81e89",
-      "result_id": "1e6d6c09-85fd-4949-aa02-f8660bb119f0",
+      "assignment_id": "aebb1b49-76f8-4ae9-9a13-668e972e2494",
+      "result_id": "e14573ed-02d4-43d2-a428-08f7b5a953d5",
       "expected_result_version": "2",
       "values": [
        3,
@@ -1370,7 +1412,14 @@
       ]
      },
      "correct_target": null,
-     "undo_target": null,
+     "undo_target": {
+      "session_id": "00000000-0000-4000-8000-000000000004",
+      "assignment_id": "aebb1b49-76f8-4ae9-9a13-668e972e2494",
+      "result_id": "e14573ed-02d4-43d2-a428-08f7b5a953d5",
+      "expected_result_version": "2",
+      "action_id": "510e0ddc-202d-44c4-b79e-7da0e6ceca24",
+      "kind": "answer.submit"
+     },
      "stop": true,
      "summary_home": true
     },
@@ -1379,14 +1428,14 @@
      "kind": "result.correct",
      "status": "already_applied",
      "applied_at": "2026-09-29T12:00:00Z",
-     "target_id": "80c62042-a8bb-4ec8-b0e1-9e003ee81e89",
-     "action_id": "189b4f9f-4937-4343-80d9-df004137eef1",
-     "result_id": "1e6d6c09-85fd-4949-aa02-f8660bb119f0",
+     "target_id": "aebb1b49-76f8-4ae9-9a13-668e972e2494",
+     "action_id": "510e0ddc-202d-44c4-b79e-7da0e6ceca24",
+     "result_id": "e14573ed-02d4-43d2-a428-08f7b5a953d5",
      "context_id": null,
      "object_version": "2"
     },
     "state_version": "10",
-    "verified_intent_hash": "46f19026053f7c5738a8343a4ebe67a10cee1b77276637a512eb419a958d5ce9"
+    "verified_intent_hash": "fc11f6d8b79327f0fd1505a4c6f1586d4decf55265ea9604805eeb941dd10013"
    },
    "schema": [
     "WrittenStatusResponse"
@@ -1500,8 +1549,8 @@
    "method": "GET",
    "path": "/api/v1/sessions/00000000-0000-4000-8000-000000000004",
    "query": {
-    "assignment_id": "80c62042-a8bb-4ec8-b0e1-9e003ee81e89",
-    "result_id": "1e6d6c09-85fd-4949-aa02-f8660bb119f0",
+    "assignment_id": "aebb1b49-76f8-4ae9-9a13-668e972e2494",
+    "result_id": "e14573ed-02d4-43d2-a428-08f7b5a953d5",
     "client_instance_id": "00000000-0000-4000-8000-000000000001",
     "document_id": "00000000-0000-4000-8000-000000000002"
    },
@@ -1509,14 +1558,14 @@
    "status": 200,
    "response": {
     "action": {
-     "action_id": "189b4f9f-4937-4343-80d9-df004137eef1",
+     "action_id": "510e0ddc-202d-44c4-b79e-7da0e6ceca24",
      "kind": "answer.submit",
      "version": "2",
      "status": "active"
     },
     "result": {
-     "result_id": "1e6d6c09-85fd-4949-aa02-f8660bb119f0",
-     "assignment_id": "80c62042-a8bb-4ec8-b0e1-9e003ee81e89",
+     "result_id": "e14573ed-02d4-43d2-a428-08f7b5a953d5",
+     "assignment_id": "aebb1b49-76f8-4ae9-9a13-668e972e2494",
      "version": "2",
      "grade": 4,
      "correct": true,
@@ -1596,7 +1645,7 @@
      "status": "not_found"
     },
     "current": {
-     "profile_id": "89e27447-70f6-48fe-b0da-2d04f40cfc67",
+     "profile_id": "4b9a7355-4003-48ef-bb7b-d6ddd901da43",
      "access": {
       "status": "admitted",
       "version": "1",

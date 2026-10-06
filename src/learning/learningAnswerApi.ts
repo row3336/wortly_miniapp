@@ -103,24 +103,33 @@ export function validSavedAnswer(action: Record<string, unknown>, result: Record
     && !(closed && result.detail !== null);
 }
 /**
- * The rights over that answer. A revision right addresses exactly this live result of this open session; the contract
- * has no undo right yet, so anything else is not this contract.
+ * The rights over that answer. A revision right addresses exactly this live result of this open session. The undo right
+ * exists only in the written contract (`allowUndoTarget`); the Learning contract still always carries null there.
  */
 export function validAnswerCapabilities(caps: Record<string, unknown>, step: { status: string; assignment?: { id: string; status: string } | null },
-  action: unknown, result: unknown, address: ResultAddress): boolean {
+  action: unknown, result: unknown, address: ResultAddress, allowUndoTarget = false): boolean {
   const open = ["active", "summary"].includes(step.status);
+  // The address of this live result of this open session; each right adds its own keys and conditions.
+  const liveAddress = (value: unknown, extraKeys: string[]): value is Record<string, unknown> =>
+    record(value) && record(result) && record(action) && action.status === "active" && result.status === "active" && open
+    && exactKeys(value, ["session_id", "assignment_id", "result_id", "expected_result_version", ...extraKeys])
+    && sameId(value.session_id, address.session_id) && sameId(value.assignment_id, address.assignment_id)
+    && sameId(value.result_id, result.result_id as string) && value.expected_result_version === result.version;
   const validTarget = (value: unknown, grades: boolean): boolean => {
-    if (!record(value) || !record(result) || !record(action) || action.status !== "active" || result.status !== "active" || !open
-      || !exactKeys(value, ["session_id", "assignment_id", "result_id", "expected_result_version", ...(grades ? ["values"] : [])])
-      || !sameId(value.session_id, address.session_id) || !sameId(value.assignment_id, address.assignment_id)
-      || !sameId(value.result_id, result.result_id as string) || value.expected_result_version !== result.version) return false;
-    const values = value.values;
-    return grades ? (result.grade as number) >= 3 && Array.isArray(values) && values.length === 3
-      && [3, 4, 5].every(grade => values.includes(grade)) : result.grade === 2;
+    if (!liveAddress(value, grades ? ["values"] : [])) return false;
+    const values = value.values, grade = (result as Record<string, unknown>).grade as number;
+    return grades ? grade >= 3 && Array.isArray(values) && values.length === 3
+      && [3, 4, 5].every(item => values.includes(item)) : grade === 2;
   };
+  // Transitional until M-UNDO adds the undo button: the shape is accepted so that core's new right does not break the
+  // written mode, but nothing in the client reads it yet. Any live grade can be undone, so there is no grade condition.
+  const validUndoTarget = (value: unknown): boolean => allowUndoTarget && liveAddress(value, ["action_id", "kind"])
+    && sameId(value.action_id, (action as Record<string, unknown>).action_id as string)
+    && value.kind === "answer.submit";
   if (!exactKeys(caps, ["answer_target", "grades", "correct_target", "undo_target", "stop", "summary_home"])
     || caps.grades !== null && !validTarget(caps.grades, true)
-    || caps.correct_target !== null && !validTarget(caps.correct_target, false) || caps.undo_target !== null
+    || caps.correct_target !== null && !validTarget(caps.correct_target, false)
+    || caps.undo_target !== null && !validUndoTarget(caps.undo_target)
     || typeof caps.stop !== "boolean" || typeof caps.summary_home !== "boolean") return false;
   if (caps.answer_target !== null && !(step.status === "active" && "assignment" in step
     && step.assignment?.status === "presented" && sameId(caps.answer_target, step.assignment.id))) return false;

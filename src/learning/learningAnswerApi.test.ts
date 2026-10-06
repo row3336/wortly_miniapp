@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AnswerSubmitCommand, LearningAnswerResponse, LearningSessionProjection } from "../api/generated";
-import { createLearningAnswerApi } from "./learningAnswerApi";
+import { createLearningAnswerApi, validAnswerCapabilities } from "./learningAnswerApi";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const command = (): AnswerSubmitCommand => ({ command_id: id(1), client_instance_id: id(2), document_id: id(3),
@@ -385,4 +385,51 @@ it.each(["send", "status"] as const)("the submit-only interface refuses a revisi
   const revision = { ...command(), kind: "result.correct", result_id: id(10), expected_result_version: "1", payload: {} };
   await expect(f.api[method]("token", "proof", revision as unknown as AnswerSubmitCommand)).rejects.toThrow();
   expect(f.fetcher).not.toHaveBeenCalled();
+});
+
+describe("undo_target of the answer capabilities", () => {
+  const address = { session_id: id(4), assignment_id: id(5), result_id: id(10) };
+  const undo = { session_id: id(4), assignment_id: id(5), result_id: id(10), expected_result_version: "1", action_id: id(9), kind: "answer.submit" };
+  const view = () => { const value = response(); return { caps: { ...value.capabilities } as Record<string, unknown>,
+    step: value.step, action: value.action, result: value.result }; };
+  const check = (undo_target: unknown, allow: boolean, patch: Partial<ReturnType<typeof view>> = {}) => {
+    const v = { ...view(), ...patch };
+    return validAnswerCapabilities({ ...v.caps, undo_target }, v.step, v.action, v.result, address, allow);
+  };
+
+  it("takes null always and the exact written shape only when the written contract asks for it", () => {
+    expect(check(null, false)).toBe(true);
+    expect(check(null, true)).toBe(true);
+    expect(check(undo, true)).toBe(true);
+    // The Learning contract has no undo right: core still sends null there, so an address is not this contract.
+    expect(check(undo, false)).toBe(false);
+  });
+
+  it("rejects a missing or extra key, another kind, a non-string or foreign action_id and a stale address", () => {
+    const { kind: _kind, ...withoutKind } = undo;
+    const { action_id: _actionId, ...withoutAction } = undo;
+    for (const value of [withoutKind, withoutAction, { ...undo, extra: true }, { ...undo, kind: "result.undo" },
+      { ...undo, kind: "result.correct" }, { ...undo, action_id: 9 }, { ...undo, action_id: null }, { ...undo, action_id: id(99) },
+      { ...undo, result_id: id(11) }, { ...undo, session_id: id(1) }, { ...undo, expected_result_version: "2" },
+      {}, [], "answer.submit"]) {
+      expect(check(value, true), JSON.stringify(value)).toBe(false);
+    }
+  });
+
+  it("is offered only for the live answer of an open session", () => {
+    const v = view();
+    expect(check(undo, true, { action: { ...v.action!, status: "undone" } })).toBe(false);
+    expect(check(undo, true, { result: { ...v.result!, status: "undone" } })).toBe(false);
+    expect(check(undo, true, { result: null, action: null })).toBe(false);
+    expect(check(undo, true, { step: { ...v.step, status: "closed" } as unknown as typeof v.step })).toBe(false);
+    // stop is off here, so only the undo rule itself can refuse a closed session.
+    expect(validAnswerCapabilities({ ...v.caps, undo_target: undo, stop: false }, { ...v.step, status: "closed" } as unknown as typeof v.step,
+      v.action, v.result, address, true)).toBe(false);
+    expect(validAnswerCapabilities({ ...v.caps, undo_target: undo, stop: false }, v.step, v.action, v.result, address, true)).toBe(true);
+  });
+
+  it("is refused by the Learning HTTP boundary even in the written shape", async () => {
+    const value = response(); value.capabilities = { ...value.capabilities, undo_target: undo } as never;
+    await expect(fixture(value).api.send("token", "proof", command())).rejects.toMatchObject({ kind: "invalid_response" });
+  });
 });

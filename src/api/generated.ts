@@ -324,6 +324,8 @@ export type ResultGradeCommand = { "command_id": string; "client_instance_id": s
 
 export type ResultGradePayload = { "grade": number; };
 
+export type ResultUndoCommand = { "command_id": string; "client_instance_id": string; "document_id": string; "session_id": string; "kind": "result.undo"; "assignment_id": string; "result_id": string; "expected_result_version": string; "payload": EmptyPayload; };
+
 export type RevealedOralAssignment = { "id": string; "card_id": string; "status": "presented"; "kind": "original" | "drill"; "prompt": OralPrompt; "revealed": true; "translations": Array<string>; };
 
 export type SavedCommandFact = { "id": string; "kind": string; "status": "applied" | "already_applied"; "applied_at": string; "target_id": (string | null); "action_id": (string | null); "result_id": (string | null); "context_id": (string | null); "object_version": (string | null); };
@@ -410,7 +412,7 @@ export type WrittenAction = { "action_id": string; "kind": "answer.submit"; "ver
 
 export type WrittenAnswerDetail = { "input": (WrittenTextInput | WrittenForgotInput); "initial_check": InitialAnswerCheck; "variants": Array<CompleteAnswerVariant>; "conjunction_hint": (ConjunctionHint | null); "examples": (CardExamples | null); };
 
-export type WrittenCapabilities = { "answer_target": (string | null); "grades": (WrittenGradeCapability | null); "correct_target": (LearningResultTarget | null); "undo_target": null; "stop": boolean; "summary_home": boolean; };
+export type WrittenCapabilities = { "answer_target": (string | null); "grades": (WrittenGradeCapability | null); "correct_target": (LearningResultTarget | null); "undo_target": (WrittenUndoTarget | null); "stop": boolean; "summary_home": boolean; };
 
 export type WrittenCommandResponse = { "action": (WrittenAction | null); "result": (WrittenResult | null); "step": (WrittenStep | UnavailableSession | UnavailableCurrent); "capabilities": WrittenCapabilities; "command": (SavedCommandFact | RejectedCommandFact); "state_version": string; "error"?: (ErrorDetail | null); };
 
@@ -433,4 +435,6 @@ export type WrittenStep = { "session_id": string; "status": "active" | "summary"
 export type WrittenSummary = { "completed": number; "correct": number; "wrong": number; "ratio": (SummaryRatio | null); };
 
 export type WrittenTextInput = { "kind": "text"; "text": string; };
+
+export type WrittenUndoTarget = { "session_id": string; "assignment_id": string; "result_id": string; "expected_result_version": string; "action_id": string; "kind": "answer.submit"; };
 

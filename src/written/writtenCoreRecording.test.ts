@@ -57,7 +57,10 @@ describe("written adapter against recorded core replies", () => {
     expect(await api.send("token", "proof", command("present_first"))).toMatchObject({ outcome: "accepted" });
     const answered = await api.send("token", "proof", command("answer_first"));
     expect(answered).toMatchObject({ outcome: "accepted", result: { grade: 4, version: "1" },
-      capabilities: { correct_target: null, undo_target: null, grades: { values: [3, 4, 5] } } });
+      capabilities: { correct_target: null, grades: { values: [3, 4, 5] } } });
+    // Core now grants the undo of the live answer by its exact address (C-UNDO-1); this client only decodes it (M-UNDO-DEC).
+    expect(answered).toMatchObject({ capabilities: { undo_target: { session_id: sessionId(), assignment_id: exchange("answer_first").body!.assignment_id,
+      result_id: exchange("read_first").query.result_id, expected_result_version: "1", action_id: expect.any(String), kind: "answer.submit" } } });
     // The client computes the same intent fingerprint as core identity.intent_hash on real data.
     expect(await api.status("token", "proof", command("answer_first"))).toMatchObject({ outcome: "accepted",
       command: { status: "already_applied" } });

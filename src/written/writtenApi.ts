@@ -62,7 +62,7 @@ function answerView(value: Record<string, unknown>, address: Address): (WrittenA
   if (action !== null && result !== null) {
     if (!("mode" in step) || !record(action) || !record(result) || !validSavedAnswer(action, result, address, step.status === "closed")) return null;
   }
-  if (!validAnswerCapabilities(caps, step, action, result, address)) return null;
+  if (!validAnswerCapabilities(caps, step, action, result, address, true)) return null;
   return { action, result, step, capabilities: caps } as WrittenAnswer & { step: WrittenStepCurrent };
 }
 

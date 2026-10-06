@@ -104,7 +104,7 @@ export function writtenServer(options: ServerOptions = {}) {
       step: step(),
       capabilities: { answer_target: shown?.status === "presented" ? shown.id : null,
         grades: latest && correct ? { ...target, values: [3, 4, 5] } : null,
-        // Core grants no written undo right yet (written_projection.py).
+        // The fixtures keep undo_target null on purpose: the decoder accepts it since M-UNDO-DEC; the button and command are M-UNDO.
         correct_target: latest && !correct ? target : null, undo_target: null,
         stop: open, summary_home: state.status === "summary" } };
   }
