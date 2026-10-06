@@ -10,7 +10,7 @@ function body(week: PracticeWeek = "current"): PracticeResponse {
     ends_at: week === "current" ? "2026-03-29T22:00:00Z" : "2026-03-22T23:00:00Z",
     days: Array.from({ length: 7 }, (_, index) => {
       const date = new Date(`${first}T00:00:00Z`); date.setUTCDate(date.getUTCDate() + index);
-      return { local_date: date.toISOString().slice(0, 10), directions: { "l1-de": index, "de-l1": 0 } };
+      return { local_date: date.toISOString().slice(0, 10), words: index, phrases: 0 };
     }) };
 }
 function setup(value: unknown = body(), status = 200) {
@@ -67,13 +67,14 @@ describe("strict practice facts", () => {
     ["sparse day", (v: any) => { delete v.days[1]; }],
     ["reordered day", (v: any) => { [v.days[0], v.days[1]] = [v.days[1], v.days[0]]; }],
     ["duplicate day", (v: any) => { v.days[1].local_date = v.days[0].local_date; }],
-    ["missing direction", (v: any) => { delete v.days[0].directions["de-l1"]; }],
-    ["extra direction", (v: any) => { v.days[0].directions.other = 1; }],
-    ["negative count", (v: any) => { v.days[0].directions["l1-de"] = -1; }],
-    ["fraction count", (v: any) => { v.days[0].directions["l1-de"] = 0.5; }],
-    ["boolean count", (v: any) => { v.days[0].directions["l1-de"] = false; }],
-    ["string count", (v: any) => { v.days[0].directions["l1-de"] = "1"; }],
-    ["unsafe count", (v: any) => { v.days[0].directions["l1-de"] = Number.MAX_SAFE_INTEGER + 1; }],
+    ["missing words", (v: any) => { delete v.days[0].words; }],
+    ["missing phrases", (v: any) => { delete v.days[0].phrases; }],
+    ["legacy directions", (v: any) => { v.days[0].directions = { "l1-de": 0, "de-l1": 0 }; }],
+    ["negative count", (v: any) => { v.days[0].words = -1; }],
+    ["fraction count", (v: any) => { v.days[0].words = 0.5; }],
+    ["boolean count", (v: any) => { v.days[0].phrases = false; }],
+    ["string count", (v: any) => { v.days[0].words = "1"; }],
+    ["unsafe count", (v: any) => { v.days[0].phrases = Number.MAX_SAFE_INTEGER + 1; }],
     ["unknown root", (v: any) => { v.profile_id = "private"; }],
     ["unknown day", (v: any) => { v.days[0].results = []; }],
   ])("rejects malformed %s", (_, mutate) => {

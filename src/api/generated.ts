@@ -272,7 +272,7 @@ export type OrdinaryCounts = { "words": DirectionCounts; "phrases": DirectionCou
 
 export type PersonalCardText = { "value": string; "version": string; };
 
-export type PracticeDay = { "local_date": string; "directions": PracticeDirections; };
+export type PracticeDay = { "local_date": string; "words": number; "phrases": number; };
 
 export type PracticeDirections = { "l1-de": number; "de-l1": number; };
 

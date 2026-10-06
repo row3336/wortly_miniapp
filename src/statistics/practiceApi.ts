@@ -20,10 +20,10 @@ export function validPractice(value: unknown, week: PracticeWeek): value is Prac
   const day = new Date(`${value.local_date}T00:00:00Z`);
   day.setUTCDate(day.getUTCDate() - (day.getUTCDay() + 6) % 7 - (week === "previous" ? 7 : 0));
   for (const item of value.days) {
-    if (!record(item) || !exactKeys(item, ["local_date", "directions"]) || !date(item.local_date)
-      || item.local_date !== day.toISOString().slice(0, 10) || !record(item.directions)
-      || !exactKeys(item.directions, ["l1-de", "de-l1"])
-      || !count(item.directions["l1-de"]) || !count(item.directions["de-l1"])) return false;
+    // Words are the main written L1->De cards; phrases are a separate counter. No direction split exists.
+    if (!record(item) || !exactKeys(item, ["local_date", "words", "phrases"]) || !date(item.local_date)
+      || item.local_date !== day.toISOString().slice(0, 10)
+      || !count(item.words) || !count(item.phrases)) return false;
     day.setUTCDate(day.getUTCDate() + 1);
   }
   return true;

@@ -15,7 +15,7 @@ function body(week: PracticeWeek = "current", pair: StatisticsOverviewResponse["
       ends_at: week === "current" ? "2026-03-29T22:00:00Z" : "2026-03-22T23:00:00Z",
       days: Array.from({ length: 7 }, (_, index) => {
         const day = new Date(`${first}T00:00:00Z`); day.setUTCDate(day.getUTCDate() + index);
-        return { local_date: day.toISOString().slice(0, 10), directions: { "l1-de": index, "de-l1": 0 } };
+        return { local_date: day.toISOString().slice(0, 10), words: index, phrases: 0 };
       }) },
   };
 }
@@ -39,9 +39,9 @@ describe("1. synthetic overview snapshots and exact GET", () => {
     const value = body(); value.base.total = value.base.words = value.base.phrases = 0;
     for (const type of Object.keys(value.base.by_type) as (keyof typeof value.base.by_type)[]) value.base.by_type[type] = 0;
     value.ready = { words: { "l1-de": 0, "de-l1": 0 }, phrases: { "l1-de": 0, "de-l1": 0 } };
-    value.practice.days[0].directions["de-l1"] = Number.MAX_SAFE_INTEGER;
+    value.practice.days[0].phrases = Number.MAX_SAFE_INTEGER;
     expect(await setup(value).api.get("synthetic-token", "current")).toEqual(value);
-    value.practice.days.forEach(day => { day.directions = { "l1-de": 0, "de-l1": 0 }; });
+    value.practice.days.forEach(day => { day.words = day.phrases = 0; });
     expect(validStatistics(value, "current")).toBe(true);
   });
 });
@@ -76,7 +76,7 @@ describe("4. safe counts and exact base sums", () => {
     for (const mutate of [
       (v: any) => { v.base.total = bad; }, (v: any) => { v.base.words = bad; }, (v: any) => { v.base.phrases = bad; },
       (v: any) => { v.base.by_type.noun = bad; }, (v: any) => { v.ready.words["l1-de"] = bad; },
-      (v: any) => { v.ready.phrases["de-l1"] = bad; }, (v: any) => { v.practice.days[0].directions["l1-de"] = bad; },
+      (v: any) => { v.ready.phrases["de-l1"] = bad; }, (v: any) => { v.practice.days[0].words = bad; },
     ]) { const value = body(); mutate(value); expect(validStatistics(value, "current")).toBe(false); }
   });
   it.each<Mutation>([
@@ -108,7 +108,7 @@ describe("6. reuse practice validation and bind its snapshot", () => {
     ["date mismatch", v => { v.practice.local_date = "2026-03-28"; }],
     ["practice extra", v => { v.practice.other = 0; }], ["missing day", v => { v.practice.days.pop(); }],
     ["extra day field", v => { v.practice.days[0].other = 0; }], ["wrong day", v => { v.practice.days[0].local_date = "2026-03-24"; }],
-    ["extra practice direction", v => { v.practice.days[0].directions.other = 0; }],
+    ["legacy practice directions", (v: any) => { v.practice.days[0].directions = { "l1-de": 0, "de-l1": 0 }; }],
     ["naive boundary", v => { v.practice.starts_at = "2026-03-22T23:00:00"; }],
     ["reversed boundary", v => { v.practice.starts_at = v.practice.ends_at; }],
   ])("rejects %s", async (_, mutate) => {

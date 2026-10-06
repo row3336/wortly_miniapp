@@ -16,7 +16,7 @@ function data(week: PracticeWeek, state_version = "1", pair: StatisticsOverviewR
     ready: { words: { "l1-de": 1, "de-l1": 0 }, phrases: { "l1-de": 0, "de-l1": 0 } },
     practice: { state_version, pair, local_date: "2026-10-01", time_zone: "UTC", starts_at: `${start}T00:00:00Z`, ends_at: `${end}T00:00:00Z`,
       days: Array.from({ length: 7 }, (_, i) => ({ local_date: new Date(Date.parse(`${start}T00:00:00Z`) + i * 86400000).toISOString().slice(0, 10),
-        directions: { "l1-de": 0, "de-l1": 0 } })) } };
+        words: 0, phrases: 0 })) } };
 }
 const response = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status });
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; }

@@ -12,7 +12,7 @@ function data(state_version = "1", pair: StatisticsOverviewResponse["pair"] = "r
     practice: { state_version, pair, local_date: "2026-09-30", time_zone: "UTC",
       starts_at: "2026-09-28T00:00:00Z", ends_at: "2026-10-05T00:00:00Z",
       days: Array.from({ length: 7 }, (_, index) => ({ local_date: index < 3 ? `2026-09-${28 + index}` : `2026-10-0${index - 2}`,
-        directions: { "l1-de": 0, "de-l1": 0 } })) } };
+        words: 0, phrases: 0 })) } };
 }
 function deferred<T>() {
   let resolve!: (value: T) => void, reject!: (error: unknown) => void;
