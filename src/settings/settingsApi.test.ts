@@ -65,8 +65,9 @@ describe("Settings current and constraints", () => {
     }
   });
 
-  // Recorded 2026-10-06 from the core application (GET /api/v1/settings, a new
-  // profile with the time zone opened as UTC), key order as served: not a hand-made shape.
+  // Recorded 2026-10-06 from the core application (GET /api/v1/settings, a new profile with the time zone
+  // opened as UTC), with keys sorted alphabetically when it was written down. The core itself serves settings,
+  // needs_setup, constraints, state_version; the JSON content is identical. Not a hand-made shape.
   const coreNewProfile = '{"constraints":{"dictionary_language":{"type":"enum","values":["ru","uk","en"]},'
     + '"include_comparative":{"type":"boolean"},"include_preterite":{"type":"boolean"},'
     + '"learning_content":{"type":"enum","values":["words","phrases","mixed"]},'
@@ -94,7 +95,7 @@ describe("Settings current and constraints", () => {
 
   it("opens the recorded core reply of a new profile with learning content words and its version", async () => {
     const recorded = JSON.parse(coreNewProfile) as SettingsResponse;
-    // The exact recorded text is served, not a re-serialized object.
+    // The recorded text is served as a string (not a re-serialized object); its key order is the sorted one.
     const fetcher = vi.fn<typeof fetch>(async () => new Response(coreNewProfile, { status: 200 }));
     const read = await createSettingsApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 20000 }).get("synthetic");
     expect(read).toEqual(recorded);
@@ -104,6 +105,9 @@ describe("Settings current and constraints", () => {
     const saved = await setup({ command: fact(), current: recorded, state_version: big })
       .api.save("synthetic", "proof", subject, command());
     expect(saved).toMatchObject({ outcome: "accepted", current: { settings: { learning_content: { value: "words" } } } });
+    const status = await setup({ command: { ...fact(), status: "already_applied" }, current: recorded, state_version: big })
+      .api.status("synthetic", subject, intent());
+    expect(status).toMatchObject({ outcome: "accepted", current: { settings: { learning_content: { value: "words" } } } });
   });
 
   it("does not display a successful projection carrying a contradictory error", async () => {

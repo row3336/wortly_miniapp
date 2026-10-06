@@ -48,7 +48,9 @@ export class EntryController {
   private documentId: string | null = null;
   private lease: DocumentLease | null = null;
   // The document epoch the user agreed to end. It goes with this document's next open and with a
-  // repeat of that open after an unknown outcome; any server answer spends it.
+  // repeat of that open after an unknown outcome. A server answer that passes the profile and
+  // compatibility checks spends it; an answer that fails them (invalid_response) does not, so a manual
+  // repeat sends the same epoch (the core still checks it against the live one).
   private replacement: string | null = null;
   private profileVersion: string | null = null;
   private accessVersion: string | null = null;
@@ -357,7 +359,7 @@ export class EntryController {
     if (opened.profile.access.status !== "admitted" || !opened.compatibility.compatible
       || (this.observedStateVersion !== null && newerVersion(this.observedStateVersion, opened.profile.state_version))
       || !this.acceptProfile(opened.profile)) throw new EntryApiError("invalid_response");
-    this.replacement = null; // Answered: a confirmation never carries over to a later open.
+    this.replacement = null; // A valid answer: a confirmation never carries over to a later open.
     if (opened.status === "SESSION_BUSY") {
       const { stop_remote_target: target, document_conflict: conflict, document_epoch: epoch } = opened.session;
       if (conflict) {

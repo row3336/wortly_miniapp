@@ -80,6 +80,11 @@ function device(options: { locks?: boolean; session?: boolean } = {}) {
     const document = body?.document_id ?? address.searchParams.get("document_id");
     if (document !== server.document) {
       refused.push(path);
+      // A command of the replaced document: the core answers with the command envelope, not a bare error
+      // (study/coordinator.py: rejected fact, unavailable projection, error SESSION_BUSY).
+      if (path.endsWith("/commands") && body?.command_id) return response({ command: { id: body.command_id, status: "rejected" },
+        current: { session_id: server.session, status: "unavailable" }, state_version: String(server.version),
+        error: { code: "SESSION_BUSY" } }, 409);
       return response({ error: { code: "SESSION_BUSY" } }, 409);
     }
     if (path.includes("/sessions/")) return response({ current: oral(), state_version: String(server.version) });

@@ -16,16 +16,11 @@ const today = (): TodayResponse => ({ state_version: "11", pair: "uk-de", local_
   conjugation: { ready: 1, openable: 1, next_due_date: null }, next_repeat_date: null });
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status });
 const sessionId = "22222222-2222-4222-8222-222222222222";
-// A written session; for a closed one its closure, not its mode, decides the route.
-// Valid for the accepted decoder (sessionProjection.ts): an active step carries its assignment, summary/closed none.
-const written = (status: "active" | "summary" | "closed" = "active"): SessionResponse => ({ state_version: "11", current: {
-  session_id: sessionId, mode: "written", status, pair: "uk-de", direction: "l1-de", local_date: "2026-09-30", bucket: "words",
-  close_reason: status === "closed" ? "stop" : null,
-  progress: status === "active" ? { completed: 0, total: 2, correct: 0, wrong: 0 } : { completed: 2, total: 2, correct: 1, wrong: 1 },
-  summary: status === "active" ? null : { completed: 2, correct: 1, wrong: 1, ratio: { numerator: 1, denominator: 2 } },
-  assignment: status !== "active" ? null : { id: "33333333-3333-4333-8333-333333333333", card_id: "44444444-4444-4444-8444-444444444444",
-    status: "presented", kind: "original", prompt: { text: "дім", language: "uk", translations: ["дім"], personal_translation_version: null,
-      hint: null, hint_version: null, conjunction_hint: null }, answer_spec: { kind: "word", labels: ["word"], part_count: 1, case_sensitive: true } } } });
+// A closed written session: its closure, not its mode, decides the route (no assignment, no step to resume).
+const written = (): SessionResponse => ({ state_version: "11", current: {
+  session_id: sessionId, mode: "written", status: "closed", pair: "uk-de", direction: "l1-de", local_date: "2026-09-30", bucket: "words",
+  close_reason: "stop", progress: { completed: 2, total: 2, correct: 1, wrong: 1 },
+  summary: { completed: 2, correct: 1, wrong: 1, ratio: { numerator: 1, denominator: 2 } }, assignment: null } });
 // The persisted server mode of a reported session: Conjugation has no study route in this App yet.
 const conjugation = (): SessionResponse => ({ state_version: "11", current: {
   session_id: sessionId, status: "active", mode: "conjugation", pair: "uk-de", direction: "conjugation", local_date: "2026-09-30",
@@ -298,7 +293,7 @@ describe("ordinary Entry to Today integration", () => {
       status: "opened", ...body, profile: { ...profile(), state_version: "11" }, compatibility: { compatible: true, contract_version: "1" },
       proof_version: "1", document_epoch: "1", session });
     f.openReply.mockImplementationOnce(opened({ id: sessionId, phase: "active" })).mockImplementationOnce(opened(null));
-    f.sessionReply.mockImplementationOnce(async () => json(written("closed")));
+    f.sessionReply.mockImplementationOnce(async () => json(written()));
     vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
     fireEvent(window, new Event("pageshow"));
     await waitFor(() => expect(f.todayReply).toHaveBeenCalledTimes(2));
