@@ -36,7 +36,7 @@ export type ClosedSessionBoundary = { "session_id": string; "status": "closed"; 
 
 export type CommandFact = { "id": string; "status": "applied" | "already_applied"; "applied_at": string; "target_id": (string | null); "object_version": string; };
 
-export type CommandStatusResponse = { "command": (StoredCommandFact | MissingCommandFact); "current": (Profile | ModeState | UnavailableCurrent | SettingsProjection | SessionProjection | LearningSessionProjection | OralSessionProjection | ConjugationSessionProjection | UnavailableSession | RemoteSessionProjection | LearningCurrentProjection | ConjugationCatalog); "state_version": string; "closed_session"?: (ClosedSessionBoundary | null); "verified_intent_hash"?: (string | null); };
+export type CommandStatusResponse = { "command": (StoredCommandFact | MissingCommandFact); "current": (Profile | ModeState | UnavailableCurrent | SettingsProjection | SessionProjection | LearningSessionProjection | OralSessionProjection | ConjugationSessionProjection | UnavailableSession | RemoteSessionProjection | LearningCurrentProjection | ConjugationCatalog | FeedbackCurrent); "state_version": string; "closed_session"?: (ClosedSessionBoundary | null); "verified_intent_hash"?: (string | null); };
 
 export type Compatibility = { "compatible": boolean; "contract_version": string; };
 
@@ -159,6 +159,14 @@ export type ErrorDetail = { "code": string; };
 export type ErrorResponse = { "error": ErrorDetail; };
 
 export type ExpectedProgressVersion = { "direction": "l1-de" | "de-l1"; "version": (string | null); };
+
+export type FeedbackCommand = { "command_id": string; "kind": "feedback.send"; "client_instance_id": string; "document_id": string; "payload": FeedbackPayload; };
+
+export type FeedbackCommandResponse = { "command": (SavedCommandFact | RejectedCommandFact); "current": (FeedbackCurrent | UnavailableCurrent); "state_version": string; "error"?: (ErrorDetail | null); };
+
+export type FeedbackCurrent = { "inbox_id": string; "card_id": (string | null); };
+
+export type FeedbackPayload = { "text": string; "card_id"?: (string | null); };
 
 export type ForgotAnswerPayload = { "forgot": true; };
 
