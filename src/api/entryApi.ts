@@ -79,9 +79,13 @@ function validOpen(value: unknown): value is OpenedClient | BusyClient {
   if (!record(value) || !validProfile(value.profile) || !validCompatibility(value.compatibility)) return false;
   if (value.status === "SESSION_BUSY") {
     if (!record(value.session) || value.session.status !== "busy") return false;
-    const target = value.session.stop_remote_target;
-    return target === undefined || target === null || typeof target === "string"
-      && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(target);
+    const { stop_remote_target: target, document_conflict: conflict, document_epoch: epoch } = value.session;
+    // A same-installation document conflict and its live epoch are accepted
+    // here only; the entry screens do not act on them yet.
+    return (target === undefined || target === null || typeof target === "string"
+      && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(target))
+      && (conflict === undefined || typeof conflict === "boolean")
+      && (epoch === undefined || epoch === null || validVersion(epoch));
   }
   return value.status === "opened" && nonemptyString(value.client_instance_id)
     && nonemptyString(value.document_id) && validVersion(value.document_epoch)

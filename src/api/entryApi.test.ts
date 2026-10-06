@@ -109,4 +109,25 @@ describe("entry API transport", () => {
         session: { status: "busy", stop_remote_target } }).open("synthetic", "synthetic", openRequest))
         .rejects.toMatchObject({ kind: "invalid_response" });
     });
+
+  it.each([
+    { stop_remote_target: null, document_conflict: true, document_epoch: "1" },
+    { stop_remote_target: "11111111-1111-4111-8111-111111111111", document_conflict: false, document_epoch: null },
+    { stop_remote_target: null, document_conflict: false, document_epoch: "9223372036854775807" },
+  ])("accepts the document conflict and its live epoch %#", async (fields) => {
+    const session = { status: "busy", ...fields };
+    const result = await respondingWith({ status: "SESSION_BUSY", profile: sampleProfile(),
+      compatibility, session }).open("synthetic", "synthetic", openRequest);
+    expect(result.session).toEqual(session);
+  });
+
+  it.each([
+    { document_conflict: "true" }, { document_conflict: 1 }, { document_conflict: null },
+    { document_epoch: 1 }, { document_epoch: "0" }, { document_epoch: "01" }, { document_epoch: "" },
+    { document_epoch: "9223372036854775808" }, { document_epoch: ["1"] },
+  ])("rejects a malformed document conflict %#", async (fields) => {
+    await expect(respondingWith({ status: "SESSION_BUSY", profile: sampleProfile(), compatibility,
+      session: { status: "busy", stop_remote_target: null, ...fields } }).open("synthetic", "synthetic", openRequest))
+      .rejects.toMatchObject({ kind: "invalid_response" });
+  });
 });

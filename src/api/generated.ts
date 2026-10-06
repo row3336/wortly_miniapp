@@ -16,7 +16,7 @@ export type BaseCounts = { "total": number; "words": number; "phrases": number; 
 
 export type BusyClient = { "status": "SESSION_BUSY"; "profile": Profile; "session": BusySession; "compatibility": Compatibility; };
 
-export type BusySession = { "status": "busy"; "stop_remote_target"?: (string | null); };
+export type BusySession = { "status": "busy"; "stop_remote_target"?: (string | null); "document_conflict"?: boolean; "document_epoch"?: (string | null); };
 
 export type CardContextCloseCommand = { "command_id": string; "kind": "context.close"; "client_instance_id": string; "document_id": string; "context_id": string; "payload": EmptyPayload; };
 
@@ -234,7 +234,7 @@ export type ModeState = { "mode": "manual" | "automatic"; "version": string; };
 
 export type OpenDictionaryContext = { "status": "open"; "context": DictionaryContextReference; "view": (DictionaryCardView | UnavailableCurrent); "interval": (DictionaryContextInterval | null); "capabilities": DictionaryContextCapabilities; };
 
-export type OpenRequest = { "client_version": string; "contract_version": string; "client_instance_id": string; "document_id": string; "time_zone": string; "event": "open" | "foreground"; };
+export type OpenRequest = { "client_version": string; "contract_version": string; "client_instance_id": string; "document_id": string; "time_zone": string; "event": "open" | "foreground"; "holds_document_lock"?: boolean; "confirm_document_replacement"?: boolean; "expected_document_epoch"?: (string | null); };
 
 export type OpenedClient = { "status": "opened"; "client_instance_id": string; "document_id": string; "document_epoch": string; "proof_version": string; "profile": Profile; "session": (SessionReference | null); "compatibility": Compatibility; };
 
