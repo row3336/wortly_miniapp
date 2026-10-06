@@ -24,7 +24,7 @@ export type ConjugationCommandSnapshot = {
   resolved: { commandId: string; kind: ConjugationIntent["kind"]; sessionId: string | null;
     assignmentId?: string; actionId?: string; resultId?: string; objectVersion?: string | null } | null;
   rejectionCode: string | null;
-  problem: "network" | "storage" | "invalid_pending" | "pending_changed" | "mismatch" | "not_found"
+  problem: "network" | "invalid_response" | "storage" | "invalid_pending" | "pending_changed" | "mismatch" | "not_found"
     | "expired" | "forbidden" | "profile_changed" | "client_changed" | "pair_changed" | "step_changed"
     | "closed" | "stale_response" | null;
   canRetry: boolean;
@@ -122,6 +122,8 @@ export class ConjugationCommandController {
         this.problem = error.kind === "invalid" ? "invalid_pending" : error.kind === "changed" ? "pending_changed" : "storage";
         if (error.kind === "changed") this.changedSlot = true;
       } else if (error instanceof ApiError && [401, 403].includes(error.status ?? 0)) this.problem = error.status === 401 ? "expired" : "forbidden";
+      // A reply that failed strict parsing leaves the outcome unknown like a lost one, but it is not a lost connection.
+      else if (error instanceof ApiError && error.kind === "invalid_response") this.problem = "invalid_response";
       else this.problem = "network";
       this.phase = this.pending ? "unresolved" : "blocked";
     }).finally(() => { if (this.running === task) this.running = null; this.emit(); });

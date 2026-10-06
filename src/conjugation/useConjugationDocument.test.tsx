@@ -260,7 +260,7 @@ async function acceptedA(model: ReturnType<typeof answerServer>) {
   const first = { ...options(model as unknown as ReturnType<typeof server>), access: tupleAccess() };
   const view = renderHook(props => useConjugationDocument(props), { initialProps: first });
   await waitFor(() => expect(view.result.current.state?.canSubmit).toBe(true));
-  await act(async () => { await view.result.current.actions.submit({ text: "kommst" }); });
+  await act(async () => { await view.result.current.actions.submit({ text: "kommst" }, B1); });
   expect(view.result.current.state).toMatchObject({ phase: "result", acceptedAddress: { session_id: S1, assignment_id: B1, result_id: R1 } });
   return { ...view, first };
 }

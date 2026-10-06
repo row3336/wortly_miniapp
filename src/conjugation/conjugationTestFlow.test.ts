@@ -5,7 +5,7 @@ import type { ConjugationCommandSnapshot } from "./conjugationCommandController"
 import type { ConjugationDocumentSnapshot, ConjugationPresentationTicket, ConjugationResultSnapshot,
   ConjugationStepTicket } from "./conjugationDocumentController";
 import { conjugationQuestion } from "./conjugationQuestion";
-import { ConjugationTestFlow, type FlowInput, type FlowOptions } from "./conjugationTestFlow";
+import { ConjugationTestFlow, type FlowInput } from "./conjugationTestFlow";
 
 const id = (n: number) => `aaaaaaaa-bbbb-4000-8000-${String(n).padStart(12, "0")}`;
 /** A0 is the answered assignment of A; B1/B2 are later questions. */
@@ -73,7 +73,7 @@ function access(generation = 1): OpenedAccess {
   token: "synthetic-token", proof: "synthetic-proof", generation, isLive: () => true, onDenied: () => undefined });
 }
 
-function harness(timerResume: FlowOptions["timerResume"] = "rearm") {
+function harness() {
   const actions = {
     refresh: vi.fn(async () => undefined), start: vi.fn(async () => undefined), openStep: vi.fn(), openResult: vi.fn(),
     shown: vi.fn(async () => undefined), submit: vi.fn(async () => undefined), grade: vi.fn(async () => undefined),
@@ -86,7 +86,7 @@ function harness(timerResume: FlowOptions["timerResume"] = "rearm") {
     return () => { timer.cancelled = true; };
   });
   const onToday = vi.fn(), onChange = vi.fn();
-  const flow = new ConjugationTestFlow({ actions, schedule, timerResume, onToday, onChange });
+  const flow = new ConjugationTestFlow({ actions, schedule, onToday, onChange });
   const A1 = access(1);
   const input = (state: ConjugationDocumentSnapshot | null, over: Partial<FlowInput> = {}): FlowInput =>
     ({ source: { tuple: "tuple-1", access: A1 }, state, transitionMode: "normal", active: true, ...over });
@@ -125,7 +125,7 @@ describe("conjugation test flow: question and draft", () => {
     h.flow.setDraft("  gehst ");
     h.flow.submit();
     h.flow.forget();
-    expect(h.actions.submit.mock.calls).toEqual([[{ text: "  gehst " }], [{ forgot: true }]]);
+    expect(h.actions.submit.mock.calls).toEqual([[{ text: "  gehst " }, B1], [{ forgot: true }, B1]]);
   });
 
   it("keeps the draft separate from rights: canSubmit=false or inactive is read-only, draft stays", () => {
@@ -175,6 +175,56 @@ describe("conjugation test flow: question and draft", () => {
   });
 });
 
+describe("conjugation test flow: К06-102 back from the summary to the last answer", () => {
+  const summaryWithA = (over: Partial<ConjugationDocumentSnapshot> = {}) => snap({ phase: "summary", display: { kind: "summary" }, canSubmit: false,
+    canSummaryHome: true, resultA: resultA(result(false, "5", 2)), currentStep: { stateVersion: "10", step: projection(null, "summary") }, ...over });
+  /** A reopened from the summary; the step ticket leads back to the summary; rights are the server's. */
+  const reopened = (value: WrittenResult, ticket: ConjugationStepTicket, over: Partial<ConjugationDocumentSnapshot> = {}) =>
+    onResult(value, { stepTicket: ticket, canSummaryHome: false, currentStep: { stateVersion: "10", step: projection(null, "summary") }, ...over });
+
+  it("the live summary offers the return only with a known A, while active and not stopping", () => {
+    const h = harness();
+    expect(h.show(h.input(summaryWithA()))).toMatchObject({ screen: "summary", canPrevious: true, canHome: true });
+    expect(h.show(h.input(summaryWithA(), { active: false }))).toMatchObject({ screen: "summary", canPrevious: false });
+    expect(h.show(h.input(summaryWithA({ phase: "stopping", canSummaryHome: false })))).toMatchObject({ screen: "summary", canPrevious: false });
+    expect(h.show(h.input(summaryWithA({ resultA: null })))).toMatchObject({ screen: "summary", canPrevious: false });
+    h.flow.previous();
+    expect(h.actions.openResult).not.toHaveBeenCalled();
+  });
+
+  it("previous from the summary opens A without a timer; correction keeps waiting for Next; Next returns to the summary", () => {
+    const h = harness();
+    // The answer was shown in answer mode first (its own timer history), then Next led to the summary.
+    h.show(h.input(onResult(result(false, "5", 2), { commands: { study: acceptedAnswer(), stop: command() }, stepTicket: stepTicket() })));
+    h.show(h.input(summaryWithA()));
+    h.flow.previous();
+    expect(h.actions.openResult).toHaveBeenCalledTimes(1);
+    const back = stepTicket();
+    const view = h.show(h.input(reopened(result(false, "5", 2), back, { canCorrect: true })));
+    expect(view).toMatchObject({ screen: "result", mode: "previous", timer: null, canCorrect: true, canNext: true });
+    h.flow.correct();
+    expect(h.actions.correct).toHaveBeenCalledTimes(1);
+    // The corrected version (a new timer key) still waits: previous mode never arms and never advances by itself.
+    const corrected = h.show(h.input(reopened(result(true, "6", 4), back, { allowedGrades: [3, 4, 5] })));
+    expect(corrected).toMatchObject({ screen: "result", mode: "previous", result: { version: "6", grade: 4 }, timer: null, grades: [3, 4, 5] });
+    expect(h.schedule).not.toHaveBeenCalled();
+    expect(h.actions.openStep).not.toHaveBeenCalled();
+    h.flow.next();
+    expect(onlyArgument(h.actions.openStep)).toBe(back);
+  });
+
+  it("without server rights the reopened result offers no correction or grades", () => {
+    const h = harness();
+    h.show(h.input(summaryWithA()));
+    h.flow.previous();
+    expect(h.show(h.input(reopened(result(false, "5", 2), stepTicket())))).toMatchObject({ screen: "result", mode: "previous",
+      canCorrect: false, grades: [], canNext: true, timer: null });
+    h.flow.correct(); h.flow.grade(4);
+    expect(h.actions.correct).not.toHaveBeenCalled();
+    expect(h.actions.grade).not.toHaveBeenCalled();
+  });
+});
+
 describe("conjugation test flow: identity, mask and terminal", () => {
   it("state:null and phase:disposed mask the same identity: loading, draft kept, every intent sends nothing", () => {
     const h = harness();
@@ -184,7 +234,8 @@ describe("conjugation test flow: identity, mask and terminal", () => {
     h.show(h.input(snap()));
     h.flow.setDraft("geh");
     for (const state of [null, snap({ phase: "disposed", sessionId: null })]) {
-      expect(h.show(h.input(state))).toEqual({ screen: "loading", canStop: false, stopping: false, problem: null, canRetry: { study: false, stop: false } });
+      expect(h.show(h.input(state))).toEqual({ screen: "loading", canStop: false, stopping: false, problem: null, canRetry: { study: false, stop: false },
+        canCheck: false });
       everyIntent(h.flow, ticket);
     }
     expect(h.calls()).toBe(0);
@@ -265,7 +316,7 @@ describe("conjugation test flow: identity, mask and terminal", () => {
   });
 });
 
-describe("conjugation test flow: timer (§5, D1 open)", () => {
+describe("conjugation test flow: timer (§5; a return waits for Next, DC 2.19)", () => {
   const answer = (value: WrittenResult, over: Partial<ConjugationDocumentSnapshot> = {}) =>
     onResult(value, { commands: { study: acceptedAnswer(), stop: command() }, stepTicket: ticket, ...over });
   let ticket = stepTicket();
@@ -324,49 +375,52 @@ describe("conjugation test flow: timer (§5, D1 open)", () => {
     const h = harness();
     h.show(h.input(answer(result(true))));
     const first = h.timers[0];
-    const A2 = access(2);
-    h.show(h.input(answer(result(true)), { source: { tuple: "tuple-1", access: A2 } }));
+    h.show(h.input(answer(result(true)), { source: { tuple: "tuple-1", access: access(2) } }));
     expect(first.cancelled).toBe(true);
     first.run(); // a scheduler that ignores cancel: generation and timer identity still refuse it
     expect(h.actions.openStep).not.toHaveBeenCalled();
-    const rearmed = h.timers[1];
+    // A new access of the same identity is a return: the same result waits for Next, nothing re-arms.
+    expect(h.timers).toHaveLength(1);
+
+    const other = harness();
+    other.show(other.input(answer(result(true))));
+    const armed = other.timers[0];
     // Same row 11 and key, but the controller issued another step ticket: the armed callback must not use either.
-    h.show(h.input(answer(result(true), { stepTicket: stepTicket() }), { source: { tuple: "tuple-1", access: A2 } }));
-    expect(h.timers).toHaveLength(2);
-    rearmed.run();
-    expect(h.actions.openStep).not.toHaveBeenCalled();
+    other.show(other.input(answer(result(true), { stepTicket: stepTicket() })));
+    expect(other.timers).toHaveLength(1);
+    armed.run();
+    expect(other.actions.openStep).not.toHaveBeenCalled();
   });
 
-  it.each(["rearm", "none"] as const)("return of the same row 11 after active=false→true follows timerResume=%s", mode => {
+  it("Ф12: after active=false→true the same result waits for Next; the timer never re-arms (DC 2.19, К05-152)", () => {
     ticket = stepTicket();
-    const h = harness(mode);
+    const h = harness();
     h.show(h.input(answer(result(true))));
     const paused = h.show(h.input(answer(result(true)), { active: false }));
     expect(paused).toMatchObject({ screen: "result", timer: null, canNext: false, grades: [] });
     expect(h.timers[0].cancelled).toBe(true);
     const back = h.show(h.input(answer(result(true))));
-    if (mode === "rearm") {
-      expect(back).toMatchObject({ timer: { durationMs: 3000 } });
-      expect(h.schedule).toHaveBeenCalledTimes(2);
-      h.fire();
-      expect(onlyArgument(h.actions.openStep)).toBe(ticket);
-    } else {
-      expect(back).toMatchObject({ timer: null, canNext: true });
-      expect(h.schedule).toHaveBeenCalledTimes(1);
-      h.show(h.input(answer(result(true))));
-      expect(h.schedule).toHaveBeenCalledTimes(1);
-    }
+    expect(back).toMatchObject({ timer: null, canNext: true });
+    for (const mode of ["normal", "accelerated"] as const) h.show(h.input(answer(result(true)), { transitionMode: mode }));
+    expect(h.schedule).toHaveBeenCalledTimes(1);
+    h.flow.next();
+    expect(onlyArgument(h.actions.openStep)).toBe(ticket);
   });
+
+  const graded = (state: ConjugationDocumentSnapshot) => ({ ...state, allowedGrades: [3, 4, 5] as const });
+  /** The study lane after the grade command: its own outcome, the same result address. */
+  const gradeOutcome = (outcome: "accepted" | "rejected", commandId = id(53)) => command({ phase: "settled", outcome, kind: "result.grade",
+    sessionId: S1, rejectionCode: outcome === "rejected" ? "VERSION_CONFLICT" : null,
+    resolved: { commandId, kind: "result.grade", sessionId: S1, assignmentId: A0, resultId: R1 } });
 
   it("an accepted grade in answer mode opens the step; in previous mode it stays", () => {
     ticket = stepTicket();
-    const graded = (state: ConjugationDocumentSnapshot) => ({ ...state, allowedGrades: [3, 4, 5] as const });
     const h = harness();
     h.show(h.input(graded(answer(result(true)))));
     h.flow.grade(5);
     expect(h.actions.grade).toHaveBeenCalledWith(5);
     const next = stepTicket();
-    h.show(h.input(answer(result(true, "6", 5), { stepTicket: next })));
+    h.show(h.input(answer(result(true, "6", 5), { stepTicket: next, commands: { study: gradeOutcome("accepted"), stop: command() } })));
     expect(onlyArgument(h.actions.openStep)).toBe(next);
 
     const p = harness();
@@ -374,14 +428,77 @@ describe("conjugation test flow: timer (§5, D1 open)", () => {
     p.flow.previous();
     p.show(p.input(graded(onResult(result(true), { stepTicket: ticket }))));
     p.flow.grade(3);
-    p.show(p.input(onResult(result(true, "6", 3), { stepTicket: stepTicket() })));
+    p.show(p.input(onResult(result(true, "6", 3), { stepTicket: stepTicket(), commands: { study: gradeOutcome("accepted"), stop: command() } })));
     expect(p.actions.openStep).not.toHaveBeenCalled();
     expect(p.schedule).not.toHaveBeenCalled();
   });
 
+  it("Ф7: the same grade (accepted as a no-op, version unchanged) advances once its command is accepted, not on a version", () => {
+    ticket = stepTicket();
+    const h = harness();
+    h.show(h.input(graded(answer(result(true)))));
+    h.flow.grade(4);
+    expect(h.timers[0].cancelled).toBe(true);
+    // Before the command's outcome: the same version and grade are not an acknowledgement.
+    const next = stepTicket();
+    h.show(h.input(answer(result(true), { stepTicket: next })));
+    expect(h.actions.openStep).not.toHaveBeenCalled();
+    h.show(h.input(answer(result(true), { stepTicket: next, commands: { study: gradeOutcome("accepted"), stop: command() } })));
+    expect(onlyArgument(h.actions.openStep)).toBe(next);
+    expect(h.schedule).toHaveBeenCalledTimes(1);
+  });
+
+  it("Ф7: a version that grew without this grade's accepted command does not advance; a refusal drops the request", () => {
+    ticket = stepTicket();
+    const grown = harness();
+    grown.show(grown.input(graded(answer(result(true)))));
+    grown.flow.grade(5);
+    grown.show(grown.input(answer(result(true, "6", 5), { stepTicket: stepTicket() })));
+    expect(grown.actions.openStep).not.toHaveBeenCalled();
+
+    const refused = harness();
+    refused.show(refused.input(graded(answer(result(true)))));
+    refused.flow.grade(5);
+    refused.show(refused.input(answer(result(true), { stepTicket: stepTicket(), commands: { study: gradeOutcome("rejected"), stop: command() } })));
+    // A later acceptance of some other grade command is not this request's outcome any more.
+    refused.show(refused.input(answer(result(true, "6", 5), { stepTicket: stepTicket(), commands: { study: gradeOutcome("accepted", id(54)), stop: command() } })));
+    expect(refused.actions.openStep).not.toHaveBeenCalled();
+  });
+
+  it("Ф7: the outcome resolved before the click is never taken for the new grade", () => {
+    ticket = stepTicket();
+    const h = harness();
+    h.show(h.input(graded(answer(result(true), { stepTicket: null }))));
+    h.flow.grade(5);
+    // The first grade is accepted while no step ticket exists yet; then a second, different grade is clicked.
+    const earlier = { study: gradeOutcome("accepted", id(55)), stop: command() };
+    h.show(h.input(graded(answer(result(true, "6", 5), { stepTicket: null, commands: earlier }))));
+    h.flow.grade(4);
+    h.show(h.input(answer(result(true, "7", 4), { stepTicket: stepTicket(), commands: earlier })));
+    expect(h.actions.openStep).not.toHaveBeenCalled();
+  });
+
+  it("Ф7: an acceptance seen while inactive advances once on return, through the restored result", () => {
+    ticket = stepTicket();
+    const h = harness();
+    h.show(h.input(graded(answer(result(true)))));
+    h.flow.grade(4);
+    const accepted = { study: gradeOutcome("accepted"), stop: command() };
+    h.show(h.input(answer(result(true), { commands: accepted }), { active: false }));
+    expect(h.actions.openStep).not.toHaveBeenCalled();
+    // A new document of the same identity: nothing selected yet; row 4a reopens A, the next commit advances.
+    const A2 = access(2), fresh = { study: command(), stop: command() };
+    h.show(h.input(answer(result(true), { display: { kind: "none" }, phase: "prefetched", commands: fresh }), { source: { tuple: "tuple-1", access: A2 } }));
+    expect(h.actions.openResult).toHaveBeenCalledTimes(1);
+    const next = stepTicket();
+    h.show(h.input(answer(result(true), { stepTicket: next, commands: fresh }), { source: { tuple: "tuple-1", access: A2 } }));
+    expect(onlyArgument(h.actions.openStep)).toBe(next);
+    expect(h.schedule).toHaveBeenCalledTimes(1);
+  });
+
   it("Enter-Next only on a correct answer row, only after the held Enter was released, never on repeat/IME", () => {
     ticket = stepTicket();
-    const h = harness("none");
+    const h = harness();
     h.show(h.input(snap()));
     h.flow.enter({ repeat: false, composing: false }); // the Enter that submitted, still held
     h.show(h.input(answer(result(true))));
@@ -514,6 +631,55 @@ describe("conjugation test flow: unknown, lanes and no automatic commands", () =
     expect(r.calls()).toBe(0);
   });
 
+  it("Ф2: an unknown answer, an unknown revision and recovery offer a manual check (GET), only while active", () => {
+    const h = harness();
+    h.show(h.input(snap()));
+    const unknown = h.show(h.input(unknownText({ text: "gehst" })));
+    expect(unknown).toMatchObject({ screen: "question", status: "unknown", canCheck: true });
+    h.flow.refresh();
+    expect(h.actions.refresh).toHaveBeenCalledTimes(1);
+    expect(h.show(h.input(unknownText({ text: "gehst" }), { active: false }))).toMatchObject({ canCheck: false });
+    h.flow.refresh();
+    expect(h.actions.refresh).toHaveBeenCalledTimes(1);
+
+    const r = harness();
+    r.show(r.input(onResult(result(true))));
+    const revision = command({ phase: "unresolved", pending: true, kind: "result.grade", sessionId: S1,
+      pendingIntent: { command_id: id(71), kind: "result.grade", session_id: S1, assignment_id: A0, result_id: R1,
+        expected_result_version: "5", payload: { grade: 4 } } });
+    expect(r.show(r.input(snap({ phase: "unknown", display: { kind: "none" }, currentStep: null, resultA: null, canSubmit: false,
+      commands: { study: revision, stop: command() } })))).toMatchObject({ screen: "result", pending: "unknown", canCheck: true });
+    r.flow.refresh();
+    expect(r.actions.refresh).toHaveBeenCalledTimes(1);
+
+    const recovery = harness();
+    expect(recovery.show(recovery.input({ ...unknownText({ text: "x" }), sessionId: null }))).toMatchObject({ screen: "recovery", canCheck: true });
+    recovery.flow.refresh();
+    expect(recovery.actions.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("Ф2: an ordinary question, result or summary offers no check; refresh there sends nothing", () => {
+    const h = harness();
+    const summary = snap({ phase: "summary", display: { kind: "summary" }, canSubmit: false, canSummaryHome: true,
+      currentStep: { stateVersion: "10", step: projection(null, "summary") } });
+    for (const state of [snap(), onResult(result(true)), summary]) {
+      expect(h.show(h.input(state))).toMatchObject({ canCheck: false });
+      h.flow.refresh();
+    }
+    expect(h.actions.refresh).not.toHaveBeenCalled();
+  });
+
+  it("Ф10: an unknown answer to another assignment is never shown under the remembered question", () => {
+    const h = harness();
+    h.show(h.input(snap()));
+    h.flow.setDraft("geh");
+    const foreign = command({ phase: "unresolved", pending: true, kind: "answer.submit", sessionId: S1,
+      pendingIntent: { command_id: id(72), kind: "answer.submit", session_id: S1, assignment_id: B2, payload: { text: "kommst" } } });
+    const view = h.show(h.input({ ...unknownText({ text: "x" }), commands: { study: foreign, stop: command() } }));
+    expect(view.screen).toBe("recovery");
+    expect(h.calls()).toBe(0);
+  });
+
   it("without the question in memory (recovery, no seed) the view is recovery with manual retry only", () => {
     const h = harness();
     const recovery = { ...unknownText({ text: "x" }), sessionId: null, problem: "unconfirmed_session" };
@@ -603,9 +769,9 @@ describe("conjugation test flow: change notification (G-2 V3) and CP2 correction
     expect(h.calls()).toBe(0);
   });
 
-  it("requires onChange like timerResume: no silent default", () => {
+  it("requires onChange: no silent default", () => {
     const actions = harness().actions;
-    const options = { actions, schedule: () => () => undefined, timerResume: "none" as const, onToday: () => undefined };
+    const options = { actions, schedule: () => () => undefined, onToday: () => undefined };
     expect(() => new ConjugationTestFlow({ ...options, onChange: undefined as unknown as () => void })).toThrow("onChange");
   });
 
@@ -620,7 +786,7 @@ describe("conjugation test flow: change notification (G-2 V3) and CP2 correction
     h.flow.setDraft("  geht ");
     expect(h.show(h.input(snap()))).toMatchObject({ canSubmit: true });
     h.flow.submit();
-    expect(h.actions.submit.mock.calls).toEqual([[{ forgot: true }], [{ text: "  geht " }]]);
+    expect(h.actions.submit.mock.calls).toEqual([[{ forgot: true }, B1], [{ text: "  geht " }, B1]]);
     expect(h.show(h.input(snap({ canSubmit: false })))).toMatchObject({ canSubmit: false, canForget: false });
   });
 

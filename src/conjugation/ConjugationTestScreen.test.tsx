@@ -82,7 +82,7 @@ function setup(initial: ConjugationDocumentSnapshot | null, options: { language?
   const onToday = vi.fn();
   const counts = { renders: 0, changes: 0, changesInRender: 0 };
   let repaint: () => void = () => undefined, latestToday: () => void = onToday, rendering = false;
-  const flow = new ConjugationTestFlow({ actions, schedule, timerResume: "none", onToday: () => latestToday(),
+  const flow = new ConjugationTestFlow({ actions, schedule, onToday: () => latestToday(),
     onChange: () => { counts.changes++; if (rendering) counts.changesInRender++; repaint(); } });
   const dispose = vi.spyOn(flow, "dispose");
   let change: (next: Partial<HostInput>) => void = () => undefined;
@@ -129,7 +129,7 @@ describe("ConjugationTestScreen question", () => {
     expect((h.field() as HTMLTextAreaElement).value).toBe("  gehst ");
     fireEvent.click(screen.getByRole("button", { name: "Проверить" }));
     fireEvent.click(screen.getByRole("button", { name: "Забыл…" }));
-    expect(h.actions.submit.mock.calls).toEqual([[{ text: "  gehst " }], [{ forgot: true }]]);
+    expect(h.actions.submit.mock.calls).toEqual([[{ text: "  gehst " }, B1], [{ forgot: true }, B1]]);
   });
 
   it("Enter with repeat or IME composition submits nothing; one plain Enter submits once", () => {
@@ -170,6 +170,53 @@ describe("ConjugationTestScreen question", () => {
     expect(h.actions.retry.mock.calls).toEqual([["study"]]);
     expect(screen.queryByRole("button", { name: "Повторить завершение" })).toBeNull();
   });
+
+  it("Ф2: an unknown answer before its check offers «Проверить статус» (GET), not a retry", async () => {
+    const h = setup(snap());
+    await h.update(snap({ phase: "unknown", canSubmit: false, currentStep: null, display: { kind: "none" }, problem: "network",
+      commands: { study: command({ phase: "unresolved", pending: true, kind: "answer.submit", sessionId: S1, problem: "network",
+        pendingIntent: { command_id: id(70), kind: "answer.submit", session_id: S1, assignment_id: B1, payload: { text: "gehst" } } }), stop: command() } }));
+    expect(screen.getByText("Нет связи с сервером.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Повторить действие" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Проверить статус" }));
+    expect(h.actions.refresh).toHaveBeenCalledTimes(1);
+    for (const spy of [h.actions.submit, h.actions.retry]) expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("Ф2: recovery and an unknown revision of the result offer the check too", async () => {
+    const h = setup(snap({ phase: "unknown", sessionId: null, canSubmit: false, currentStep: null, display: { kind: "none" },
+      commands: { study: command({ phase: "unresolved", pending: true, kind: "answer.submit", sessionId: S1,
+        pendingIntent: { command_id: id(70), kind: "answer.submit", session_id: S1, assignment_id: B1, payload: { text: "x" } } }), stop: command() } }));
+    expect(screen.getByText("Действие ещё не подтверждено. Проверьте статус.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Проверить статус" }));
+    expect(h.actions.refresh).toHaveBeenCalledTimes(1);
+    cleanup();
+
+    const revision = command({ phase: "unresolved", pending: true, kind: "result.grade", sessionId: S1,
+      pendingIntent: { command_id: id(71), kind: "result.grade", session_id: S1, assignment_id: A0, result_id: R1, expected_result_version: "5", payload: { grade: 5 } } });
+    const r = setup(onResult(result(true)));
+    expect(screen.queryByRole("button", { name: "Проверить статус" })).toBeNull();
+    await r.update(snap({ phase: "unknown", display: { kind: "none" }, currentStep: null, canSubmit: false, commands: { study: revision, stop: command() } }));
+    fireEvent.click(screen.getByRole("button", { name: "Проверить статус" }));
+    expect(r.actions.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("Ф9: a known refusal is shown with the text of Learning/written on the question; an unlisted code gets the general text", async () => {
+    const h = setup(snap({ problem: "ASSIGNMENT_STALE" }));
+    expect(screen.getByText("Задание изменилось. Обнови занятие.")).toBeTruthy();
+    await h.update(snap({ problem: "SESSION_BUSY" }));
+    expect(screen.getByText("Занятие открыто на другом устройстве")).toBeTruthy();
+    await h.update(snap({ problem: "VERSION_CONFLICT" }));
+    expect(screen.getByText("Не удалось обновить занятие.")).toBeTruthy();
+    await h.update(snap());
+    expect(screen.queryByText("Не удалось обновить занятие.")).toBeNull();
+  });
+
+  it.each([["uk", "Завдання змінилося. Онови заняття."], ["en", "The question has changed. Refresh the session."]] as const)(
+    "Ф9 %s: the refusal text is localized", (language, text) => {
+      setup(onResult(result(true), { problem: "ASSIGNMENT_STALE" }), { language });
+      expect(screen.getByText(text)).toBeTruthy();
+    });
 });
 
 describe("ConjugationTestScreen visible commit", () => {
@@ -291,6 +338,21 @@ describe("ConjugationTestScreen recovery, stale, summary and closed", () => {
     for (const spy of [h.actions.start, h.actions.submit, h.actions.retry, h.actions.stop]) expect(spy).not.toHaveBeenCalled();
   });
 
+  it("Ф4: a reply that failed strict parsing is not shown as a lost connection", () => {
+    setup(snap({ phase: "stale", problem: "invalid_response", currentStep: null, display: { kind: "none" } }));
+    expect(screen.getByText("Не удалось обновить занятие.")).toBeTruthy();
+    expect(screen.queryByText("Нет связи с сервером.")).toBeNull();
+  });
+
+  it("Ф8: while the summary_home Stop is in flight the summary shows the waiting text", async () => {
+    const summary = { display: { kind: "summary" } as const, canSubmit: false, currentStep: { stateVersion: "10", step: projection(null, "summary") } };
+    const h = setup(snap({ ...summary, phase: "summary", canSummaryHome: true }));
+    expect(screen.queryByText("Завершаем занятие…")).toBeNull();
+    await h.update(snap({ ...summary, phase: "stopping", canSummaryHome: false, canStop: false }));
+    expect(screen.getByText("Завершаем занятие…")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "На Сегодня" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it("summary phase: no refresh button; Today → summary_home", () => {
     const h = setup(snap({ phase: "summary", display: { kind: "summary" }, canSubmit: false, canSummaryHome: true,
       currentStep: { stateVersion: "10", step: projection(null, "summary") } }));
@@ -391,7 +453,7 @@ describe("ConjugationTestScreen G-2: the flow draft is the only source", () => {
     const h = setup(snap());
     fireEvent.change(h.field(), { target: { value: "  gehst" } });
     fireEvent.click(screen.getByRole("button", { name: "Проверить" }));
-    expect(h.actions.submit.mock.calls).toEqual([[{ text: "  gehst" }]]);
+    expect(h.actions.submit.mock.calls).toEqual([[{ text: "  gehst" }, B1]]);
     await h.update(onResult(result(true), { currentStep: null, acceptedAddress: null, commands: { study: command({ phase: "settled", outcome: "accepted",
       kind: "answer.submit", sessionId: S1, resolved: { commandId: id(52), kind: "answer.submit", sessionId: S1, assignmentId: B1, resultId: R1 } }), stop: command() } }));
     await h.update(snap());
@@ -430,7 +492,7 @@ describe("ConjugationTestScreen G-2: the flow draft is the only source", () => {
       const [, repaint] = useReducer((n: number) => n + 1, 0);
       useEffect(() => {
         const entry = { flow: null as unknown as ConjugationTestFlow, changes: 0 };
-        entry.flow = new ConjugationTestFlow({ actions, schedule: () => () => undefined, timerResume: "none", onToday: () => undefined,
+        entry.flow = new ConjugationTestFlow({ actions, schedule: () => () => undefined, onToday: () => undefined,
           onChange: () => { entry.changes++; repaint(); } });
         created.push(entry); setFlow(entry.flow);
         return () => { entry.flow.dispose(); };

@@ -11,14 +11,15 @@ export type FlowInput = Readonly<{ source: FlowSource; state: ConjugationDocumen
 export type FlowOptions = Readonly<{
   actions: ConjugationDocumentActions;
   schedule(delayMs: 2000 | 3000, run: () => void): () => void;
-  /** D1 is open: the host must choose; there is deliberately no default. */
-  timerResume: "rearm" | "none";
   onToday(): void;
   /** Synchronously, once, at the end of an intent that changed memory visible in `project` without a controller action
    * (an accepted, different draft). Never from constructor, project, commit, dispose, or after dispose. */
   onChange(): void;
 }>;
-type Common = { canStop: boolean; stopping: boolean; problem: string | null; canRetry: Record<ConjugationLane, boolean> };
+type Common = { canStop: boolean; stopping: boolean; problem: string | null; canRetry: Record<ConjugationLane, boolean>;
+  /** A manual GET may check the outcome now (TA табл. 5.1 `unknown`): stale, an unknown outcome, or a closed
+   * session whose frozen summary is unknown (T2 C2). It re-proves the same command IDs; it never sends. */
+  canCheck: boolean };
 export type ConjugationView = Common & (
   | { screen: "loading" } | { screen: "recovery" } | { screen: "stale" }
   | { screen: "question"; question: ConjugationQuestion; draft: string; editable: boolean; canSubmit: boolean; canForget: boolean;
@@ -27,7 +28,8 @@ export type ConjugationView = Common & (
   | { screen: "result"; result: WrittenResult; mode: "answer" | "previous"; grades: readonly (3 | 4 | 5)[];
       canCorrect: boolean; pending: "changing" | "unknown" | null; barrier: boolean; canNext: boolean;
       timer: { key: string; durationMs: 2000 | 3000 } | null }
-  | { screen: "summary"; summary: ConjugationSummary; canHome: boolean }
+  /** `canPrevious`: К06-102, back to the last answer's result while the session is live; no timer, it waits for Next. */
+  | { screen: "summary"; summary: ConjugationSummary; canHome: boolean; canPrevious: boolean }
   | { screen: "closed"; reason: CloseReason | null; summary: ConjugationSummary | null });
 
 /** Flow memory of one identity (tuple, sessionId). Replaced copy-on-write, so `project` can derive it without writing. */
@@ -50,7 +52,7 @@ type Eligible = { resultKey: string; durationMs: 2000 | 3000 | null; ticket: Con
 
 const busy = ["checking", "sending"];
 const noRetry = (): Record<ConjugationLane, boolean> => ({ study: false, stop: false });
-const loading = (): ConjugationView => ({ screen: "loading", canStop: false, stopping: false, problem: null, canRetry: noRetry() });
+const loading = (): ConjugationView => ({ screen: "loading", canStop: false, stopping: false, problem: null, canRetry: noRetry(), canCheck: false });
 
 /** `state:null`, `phase:"disposed"` and host gap are a mask, not an identity (DESIGN_V3 §3.2). */
 function unmasked(state: ConjugationDocumentSnapshot | null): ConjugationDocumentSnapshot | null {
@@ -119,17 +121,20 @@ export class ConjugationTestFlow {
   private input: FlowInput | null = null;
   private generation = 0;
   private timer: Timer | null = null;
-  /** Timer history per `session:result:version` of the current identity. */
-  private timerHistory = new Map<string, "interrupted" | "done">();
+  /** `session:result:version` keys of the current identity whose timer already ran or was cancelled. A key never
+   * re-arms: after a background return the result waits for Next, in conjugations too (DC 2.19, К05-152, TA:109). */
+  private timerHistory = new Set<string>();
   private readonly shownTickets = new WeakSet<ConjugationPresentationTicket>();
   private readonly autoTickets = new WeakSet<ConjugationStepTicket>();
   private autoResult: string | null = null;
-  private gradeRequest: { resultId: string; version: string; grade: 3 | 4 | 5 } | null = null;
+  /** An explicit grade advances once its own command is accepted, not when the version grows: the same grade
+   * is an accepted no-op without a new version (К05-047, TA:109). `after` is the study command resolved before
+   * the click, so an older outcome is never taken for this one. */
+  private gradeRequest: { resultId: string; grade: 3 | 4 | 5; after: string | null; acknowledged: boolean } | null = null;
   private enterDown = false;
   private disposed = false;
 
   constructor(options: FlowOptions) {
-    if (options.timerResume !== "rearm" && options.timerResume !== "none") throw new Error("conjugation flow requires timerResume");
     if (typeof options.onChange !== "function") throw new Error("conjugation flow requires onChange");
     this.options = { ...options };
   }
@@ -140,7 +145,7 @@ export class ConjugationTestFlow {
     if (this.disposed || !state) return loading();
     const memory = reconcile(this.memory, input, state);
     const generation = this.generation + (this.accessChanged(input) || memory.key !== this.memory.key ? 1 : 0);
-    return this.viewOf(memory, input, state, generation, this.memory.key === memory.key ? this.timerHistory : new Map());
+    return this.viewOf(memory, input, state, generation, this.memory.key === memory.key ? this.timerHistory : new Set());
   }
 
   /** Layout effect: identity change, timer, automatic local transitions and the one onToday. */
@@ -149,15 +154,15 @@ export class ConjugationTestFlow {
     const state = unmasked(input.state);
     const accessChanged = this.accessChanged(input);
     if (!state) {
-      this.interrupt(); this.input = input;
+      this.cancelTimer(); this.input = input;
       if (accessChanged) this.generation++;
       return;
     }
     const memory = reconcile(this.memory, input, state);
     if (memory.key !== this.memory.key) {
-      this.cancelTimer(); this.timerHistory = new Map(); this.autoResult = null; this.gradeRequest = null;
+      this.cancelTimer(); this.timerHistory = new Set(); this.autoResult = null; this.gradeRequest = null;
       this.generation++;
-    } else if (accessChanged) { this.interrupt(); this.generation++; }
+    } else if (accessChanged) { this.cancelTimer(); this.generation++; }
     this.memory = memory; this.input = input;
     if (memory.terminal) { this.cancelTimer(); this.gradeRequest = null; }
     this.runTimer(memory, input, state);
@@ -177,22 +182,24 @@ export class ConjugationTestFlow {
     const state = this.active();
     if (!state) return;
     const view = this.view(state);
-    // Verbatim: the server checks the text; only an empty field is not an answer.
-    if (view.screen === "question" && view.canSubmit) void this.options.actions.submit({ text: view.draft });
+    // Verbatim: the server checks the text; only an empty field is not an answer. The committed question
+    // goes along, so the controller refuses the text if it has meanwhile reached another form.
+    if (view.screen === "question" && view.canSubmit) void this.options.actions.submit({ text: view.draft }, view.question.assignmentId);
   }
   forget(): void {
     const state = this.active();
     if (!state) return;
     const view = this.view(state);
-    if (view.screen === "question" && view.canForget) void this.options.actions.submit({ forgot: true });
+    if (view.screen === "question" && view.canForget) void this.options.actions.submit({ forgot: true }, view.question.assignmentId);
   }
   grade(value: 3 | 4 | 5): void {
     const state = this.active();
     if (!state) return;
     const view = this.view(state);
     if (view.screen !== "result" || !view.grades.includes(value)) return;
-    this.cancelTimer(true);
-    this.gradeRequest = { resultId: view.result.result_id.toLowerCase(), version: view.result.version, grade: value };
+    this.cancelTimer();
+    this.gradeRequest = { resultId: view.result.result_id.toLowerCase(), grade: value,
+      after: state.commands.study.resolved?.commandId ?? null, acknowledged: false };
     void this.options.actions.grade(value);
   }
   correct(): void {
@@ -200,7 +207,7 @@ export class ConjugationTestFlow {
     if (!state) return;
     const view = this.view(state);
     if (view.screen !== "result" || !view.canCorrect) return;
-    this.cancelTimer(true); this.gradeRequest = null;
+    this.cancelTimer(); this.gradeRequest = null;
     void this.options.actions.correct();
   }
   next(): void {
@@ -208,15 +215,16 @@ export class ConjugationTestFlow {
     if (!state) return;
     const view = this.view(state);
     if (view.screen !== "result" || !view.canNext || !state.stepTicket) return;
-    this.cancelTimer(true);
+    this.cancelTimer();
     this.options.actions.openStep(state.stepTicket);
   }
+  /** Back to A's result from the question or (К06-102) from the live summary: previous mode, no timer, Next returns. */
   previous(): void {
     const state = this.active(), result = state && resultOf(state);
     if (!state || !result) return;
     const view = this.view(state);
-    if (view.screen !== "question" || !view.canPrevious) return;
-    this.cancelTimer(true);
+    if (view.screen !== "question" && view.screen !== "summary" || !view.canPrevious) return;
+    this.cancelTimer();
     const resultId = result.result_id.toLowerCase();
     this.memory = { ...this.memory, resultMode: { resultId, mode: "previous" } };
     this.options.actions.openResult();
@@ -262,12 +270,10 @@ export class ConjugationTestFlow {
     const state = this.active();
     if (state && (lane === "study" || lane === "stop") && state.canRetry[lane]) void this.options.actions.retry(lane);
   }
-  /** Manual GET only: stale, or a confirmed closed session whose frozen summary is still unknown (T2 C2). */
+  /** Manual GET only, when the view offers a check (`canCheck`). */
   refresh(): void {
     const state = this.active();
-    if (!state) return;
-    const view = this.view(state);
-    if (view.screen === "stale" || view.screen === "closed" && view.summary === null) void this.options.actions.refresh();
+    if (state && this.view(state).canCheck) void this.options.actions.refresh();
   }
   dispose(): void {
     this.cancelTimer(); this.disposed = true; this.input = null;
@@ -287,31 +293,32 @@ export class ConjugationTestFlow {
   }
 
   private viewOf(memory: Memory, input: FlowInput, state: ConjugationDocumentSnapshot, generation: number,
-    history: ReadonlyMap<string, "interrupted" | "done">): ConjugationView {
+    history: ReadonlySet<string>): ConjugationView {
     const active = input.active;
     const common: Common = { canStop: active && state.canStop, stopping: state.phase === "stopping", problem: state.problem,
-      canRetry: { study: active && state.canRetry.study, stop: active && state.canRetry.stop } };
+      canRetry: { study: active && state.canRetry.study, stop: active && state.canRetry.stop }, canCheck: false };
+    const checkable: Common = { ...common, canCheck: active };
     if (memory.terminal || state.phase === "closed") {
-      return { ...common, screen: "closed", reason: state.closed?.reason ?? null,
-        summary: state.closed?.summary ? structuredClone(state.closed.summary) : null };
+      const summary = state.closed?.summary ? structuredClone(state.closed.summary) : null;
+      return { ...(summary ? common : checkable), screen: "closed", reason: state.closed?.reason ?? null, summary };
     }
     if (state.phase === "loading" || state.phase === "idle") return { ...common, screen: "loading" };
-    if (state.phase === "stale") return { ...common, screen: "stale" };
+    if (state.phase === "stale") return { ...checkable, screen: "stale" };
     if (state.phase === "unknown") {
       // Row 10: the last question of the same assignment with the exact pending text, read-only.
       const answer = pendingAnswer(state);
       if (answer && memory.question && sameId(memory.question.assignmentId, answer.assignment_id)) {
         const payload = answer.payload;
-        return { ...common, screen: "question", question: memory.question, draft: "text" in payload ? payload.text : "",
+        return { ...checkable, screen: "question", question: memory.question, draft: "text" in payload ? payload.text : "",
           editable: false, canSubmit: false, canForget: false, status: "unknown", pendingForgot: "forgot" in payload, canPrevious: false, presentationTicket: null };
       }
       const study = state.commands.study, revision = study.pendingIntent;
       if (study.pending && study.outcome === null && (revision?.kind === "result.grade" || revision?.kind === "result.correct")
         && memory.lastResult && sameId(memory.lastResult.result_id, revision.result_id)) {
-        return { ...common, screen: "result", result: memory.lastResult, mode: "previous", grades: [], canCorrect: false,
+        return { ...checkable, screen: "result", result: memory.lastResult, mode: "previous", grades: [], canCorrect: false,
           pending: "unknown", barrier: false, canNext: false, timer: null };
       }
-      return { ...common, screen: "recovery" };
+      return { ...checkable, screen: "recovery" };
     }
     const display = state.display, study = state.commands.study;
     const presenting = state.phase === "visible_unconfirmed";
@@ -343,68 +350,67 @@ export class ConjugationTestFlow {
       // An armed timer shows its armed duration; a settings change after arming neither re-arms nor redraws it.
       const armed = this.timer && this.timer.key === generationKey ? this.timer : null;
       const timer = armed ? { key: armed.key, durationMs: armed.durationMs }
-        : eligible && eligible.durationMs !== null && this.mayArm(eligible.resultKey, history)
+        : eligible && eligible.durationMs !== null && !history.has(eligible.resultKey)
           ? { key: generationKey!, durationMs: eligible.durationMs } : null;
-      return { ...common, screen: "result", result, mode, grades: active ? [...state.allowedGrades] : [],
+      return { ...(pending === "unknown" ? checkable : common), screen: "result", result, mode, grades: active ? [...state.allowedGrades] : [],
         canCorrect: active && state.canCorrect, pending, barrier: presenting, canNext, timer };
     }
     if (display.kind === "summary" && state.currentStep?.step.summary) {
-      return { ...common, screen: "summary", summary: structuredClone(state.currentStep.step.summary), canHome: active && state.canSummaryHome };
+      // К06-102: rights on the reopened result stay the server's (grades, correct_target of A); the return itself
+      // needs only a known A of this live session.
+      return { ...common, screen: "summary", summary: structuredClone(state.currentStep.step.summary), canHome: active && state.canSummaryHome,
+        canPrevious: active && !common.stopping && resultOf(state) !== null };
     }
-    return { ...common, screen: state.problem ? "stale" : "loading" };
+    return state.problem ? { ...checkable, screen: "stale" } : { ...common, screen: "loading" };
   }
 
   /** Row 11 (§5): the only state in which the transition timer may run. */
   private eligible(input: FlowInput, state: ConjugationDocumentSnapshot, mode: "answer" | "previous",
-    pending: "changing" | "unknown" | null, canNext: boolean, ignoreActive = false): Eligible | null {
+    pending: "changing" | "unknown" | null, canNext: boolean): Eligible | null {
     const result = resultOf(state), ticket = state.stepTicket;
     if (!result || !ticket || mode !== "answer" || pending !== null || state.phase !== "result") return null;
-    if (!ignoreActive && (!input.active || !canNext)) return null;
+    if (!input.active || !canNext) return null;
     const correct = result.correct;
     const durationMs = input.transitionMode === "accelerated" ? 2000 : input.transitionMode === "normal" && correct ? 3000 : null;
     return { resultKey: `${state.sessionId}:${result.result_id.toLowerCase()}:${result.version}`, durationMs, ticket };
-  }
-  private mayArm(resultKey: string, history: ReadonlyMap<string, "interrupted" | "done">): boolean {
-    const past = history.get(resultKey);
-    return past === undefined || past === "interrupted" && this.options.timerResume === "rearm";
   }
   private runTimer(memory: Memory, input: FlowInput, state: ConjugationDocumentSnapshot): void {
     const view = this.viewOf(memory, input, state, this.generation, this.timerHistory);
     const eligible = view.screen === "result" ? this.eligible(input, state, view.mode, view.pending, view.canNext) : null;
     const key = eligible ? `${eligible.resultKey}:${this.generation}` : null;
-    if (this.timer && this.timer.key !== key) {
-      // The same row 11 paused by inactivity is an interruption (D1 decides its return); anything else ends it.
-      const paused = view.screen === "result" && !input.active
-        && this.eligible(input, state, view.mode, view.pending, true, true)?.resultKey === this.timer.resultKey;
-      this.cancelTimer(!paused);
-    }
+    // Any change of row 11 ends the timer, inactivity (background) included.
+    if (this.timer && this.timer.key !== key) this.cancelTimer();
     // An armed timer of the same key keeps running whatever the mode is now (the mode is read at arming only).
-    if (!eligible || this.timer || eligible.durationMs === null) return;
-    if (!this.mayArm(eligible.resultKey, this.timerHistory)) {
-      if (this.timerHistory.get(eligible.resultKey) === "interrupted") this.timerHistory.set(eligible.resultKey, "done");
-      return;
-    }
+    if (!eligible || this.timer || eligible.durationMs === null || this.timerHistory.has(eligible.resultKey)) return;
     const generation = this.generation, resultKey = eligible.resultKey, ticket = eligible.ticket, durationMs = eligible.durationMs;
-    this.timerHistory.delete(resultKey);
     const timer: Timer = { key: key!, resultKey, durationMs, ticket, cancel: () => undefined };
     this.timer = timer;
     timer.cancel = this.options.schedule(durationMs, () => {
       if (this.disposed || this.timer !== timer || this.generation !== generation) return;
       const current = this.input;
       if (!current?.active || unmasked(current.state)?.stepTicket !== ticket) return;
-      this.timer = null; this.timerHistory.set(resultKey, "done");
+      this.timer = null; this.timerHistory.add(resultKey);
       this.options.actions.openStep(ticket);
     });
   }
-  /** Ends the running timer: `done` forbids a return; otherwise the pause stays an interruption for D1. */
-  private cancelTimer(done = true): void {
+  /** Ends the running timer for good: its result key never arms again. */
+  private cancelTimer(): void {
     const timer = this.timer;
     if (!timer) return;
     this.timer = null;
-    this.timerHistory.set(timer.resultKey, done ? "done" : "interrupted");
+    this.timerHistory.add(timer.resultKey);
     timer.cancel();
   }
-  private interrupt(): void { this.cancelTimer(false); }
+
+  /** Records the outcome of the requested grade's own command, also while inactive: an acceptance seen around
+   * the background still advances once on return; a refusal drops the request. */
+  private acknowledgeGrade(state: ConjugationDocumentSnapshot): void {
+    const request = this.gradeRequest, study = state.commands.study, resolved = study.resolved;
+    if (!request || request.acknowledged || study.outcome === null || resolved?.kind !== "result.grade"
+      || resolved.commandId === request.after) return;
+    if (study.outcome !== "accepted") { this.gradeRequest = null; return; }
+    if (!resolved.resultId || sameId(resolved.resultId, request.resultId)) this.gradeRequest = { ...request, acknowledged: true };
+  }
 
   /** Only rows 4/4a, the advance after an accepted grade in answer mode, and row 15. */
   private automate(memory: Memory, input: FlowInput, state: ConjugationDocumentSnapshot): void {
@@ -415,19 +421,20 @@ export class ConjugationTestFlow {
       }
       return;
     }
+    this.acknowledgeGrade(state);
     if (!input.active) return;
-    const study = state.commands.study;
-    if (this.gradeRequest && study.outcome !== null && study.outcome !== "accepted" && study.resolved?.kind === "result.grade") this.gradeRequest = null;
     const request = this.gradeRequest, result = resultOf(state);
-    if (request && result && sameId(result.result_id, request.resultId) && BigInt(result.version) > BigInt(request.version)
-      && result.grade === request.grade) {
+    if (request?.acknowledged && result && sameId(result.result_id, request.resultId) && result.grade === request.grade) {
       const mode = memory.resultMode && sameId(memory.resultMode.resultId, request.resultId) ? memory.resultMode.mode : "previous";
-      if (mode !== "answer") { this.gradeRequest = null; return; }
-      if (state.display.kind === "result" && state.stepTicket && !this.autoTickets.has(state.stepTicket)) {
-        this.gradeRequest = null; this.autoTickets.add(state.stepTicket); this.cancelTimer();
-        this.options.actions.openStep(state.stepTicket);
+      if (mode !== "answer") this.gradeRequest = null;
+      else if (state.display.kind === "result") {
+        if (state.stepTicket && !this.autoTickets.has(state.stepTicket)) {
+          this.gradeRequest = null; this.autoTickets.add(state.stepTicket); this.cancelTimer();
+          this.options.actions.openStep(state.stepTicket);
+        }
+        return;
       }
-      return;
+      // No display yet (a new document after a return): row 4a restores A first, the next commit advances.
     }
     if (state.display.kind !== "none" || state.phase === "unknown" || state.phase === "stopping") return;
     if (!result) {

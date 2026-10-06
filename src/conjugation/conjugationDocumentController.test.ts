@@ -161,7 +161,7 @@ const macrotasks = async (n = 5) => { for (let i = 0; i < n; i++) await new Prom
 function tracked(promise: Promise<void>) { const box = { done: false, promise }; void promise.then(() => { box.done = true; }); return box; }
 async function answered(f: ReturnType<typeof fixture>, text = "kommst") {
   await f.controller.refresh();
-  await f.controller.submit({ text });
+  await f.controller.submit({ text }, B1);
   return s(f.controller);
 }
 async function shownB(f: ReturnType<typeof fixture>) {
@@ -293,7 +293,7 @@ describe("3. tickets and the presentation barrier", () => {
     f.controller.openResult();
     expect(s(f.controller)).toMatchObject({ phase: "visible_unconfirmed", allowedGrades: [], canCorrect: false });
     // Gated calls on the busy lane join its running promise instead of queueing a new intent.
-    const joined = [f.controller.grade(5), f.controller.submit({ text: "x" }), f.controller.correct()];
+    const joined = [f.controller.grade(5), f.controller.submit({ text: "x" }, B2), f.controller.correct()];
     expect(joined[0]).toBe(first);
     held.release(); await Promise.all([first, again, ...joined]);
     expect(f.posted.map(c => c.kind)).toEqual(["answer.submit", "assignment.present"]);
@@ -321,7 +321,7 @@ describe("4. revision of A before / after shown B", () => {
   });
   it("correction after shown B keeps the shown assignment", async () => {
     const f = fixture();
-    await f.controller.refresh(); await f.controller.submit({ text: "kamst" });
+    await f.controller.refresh(); await f.controller.submit({ text: "kamst" }, B1);
     f.controller.openStep(s(f.controller).stepTicket!);
     await f.controller.shown(s(f.controller).presentationTicket!);
     f.server.replaceOnCorrect = B3;
@@ -336,13 +336,37 @@ describe("5. exact input and server-only results", () => {
     const text = "  kommst́\n ", f = fixture();
     await f.controller.refresh();
     for (const bad of [{ text: 1 }, { text: "a", forgot: true }, { forgot: false }, null] as unknown[]) {
-      await expect(f.controller.submit(bad as { text: string })).rejects.toThrow();
+      await expect(f.controller.submit(bad as { text: string }, B1)).rejects.toThrow();
     }
-    await f.controller.submit({ text });
+    for (const bad of [undefined, null, 7, "not-a-uuid"] as unknown[]) {
+      await expect(f.controller.submit({ text }, bad as string)).rejects.toThrow();
+    }
+    expect(f.posted).toEqual([]);
+    await f.controller.submit({ text }, B1);
     expect(f.posted[0]).toMatchObject({ kind: "answer.submit", payload: { text } });
     expect(s(f.controller).resultA?.result).toMatchObject({ grade: 2, correct: false }); // server decided, not the client
-    const g = fixture(); await g.controller.refresh(); await g.controller.submit({ forgot: true });
+    const g = fixture(); await g.controller.refresh(); await g.controller.submit({ forgot: true }, B1);
     expect(g.posted[0].payload).toEqual({ forgot: true });
+  });
+  it("Ф1: an answer typed for one form is refused without a request once the document shows another form", async () => {
+    const f = fixture();
+    await f.controller.refresh();
+    expect(s(f.controller)).toMatchObject({ canSubmit: true, display: { kind: "step", assignmentId: B1 } });
+    // Another window answered B1; the server now presents B2 and this document reached it by two reads.
+    const session = f.sessions.get(S1)!;
+    session.results.push({ result_id: R1, assignment_id: B1, action_id: id(41), version: "1", grade: 2 });
+    session.assignment = B2; f.server.bump();
+    await f.controller.refresh(); await f.controller.refresh();
+    expect(s(f.controller)).toMatchObject({ canSubmit: true, display: { kind: "step", assignmentId: B2 } });
+    const before = f.newId.mock.calls.length;
+    await f.controller.submit({ text: "geh" }, B1);
+    await f.controller.submit({ forgot: true }, B1);
+    expect(f.posted).toEqual([]);
+    expect(f.newId.mock.calls.length).toBe(before);
+    expect(s(f.controller).commands.study.pending).toBe(false);
+    // The current form accepts its own answer; the address check is case-insensitive.
+    await f.controller.submit({ text: "kommst" }, B2.toUpperCase());
+    expect(f.posted.map(c => [c.kind, (c as { assignment_id?: string }).assignment_id])).toEqual([["answer.submit", B2]]);
   });
   it("grades from current server targets with versions above 2^53; conflict stays a server fact", async () => {
     const f = fixture();
@@ -359,6 +383,30 @@ describe("5. exact input and server-only results", () => {
     expect(f.posted.at(-1)).toMatchObject({ kind: "result.grade", expected_result_version: HIGH, payload: { grade: 3 } });
     expect(s(f.controller).resultA?.result).toMatchObject({ version: "9007199254740994", grade: 3 });
   });
+  it("Ф9: a refusal code reaches the snapshot problem until the lane's next command", async () => {
+    const f = fixture();
+    await answered(f);
+    f.server.rejectNext = "ASSIGNMENT_STALE";
+    await f.controller.grade(5);
+    expect(s(f.controller)).toMatchObject({ phase: "result", problem: "ASSIGNMENT_STALE",
+      commands: { study: { outcome: "rejected", rejectionCode: "ASSIGNMENT_STALE" } } });
+    await f.controller.grade(3);
+    expect(s(f.controller)).toMatchObject({ phase: "result", problem: null, resultA: { result: { grade: 3 } } });
+  });
+  it("Ф4: a reply that fails strict parsing is `invalid_response`, never `network` (session read and command lane)", async () => {
+    const f = fixture();
+    await f.controller.refresh();
+    const fetcher = vi.mocked(f.options.transport.fetcher);
+    fetcher.mockImplementationOnce(async () => response({ current: { session_id: S1, status: "active", hidden: true }, state_version: f.server.version }));
+    await f.controller.refresh();
+    expect(s(f.controller)).toMatchObject({ phase: "stale", problem: "invalid_response", currentStep: null });
+
+    const g = fixture();
+    await g.controller.refresh();
+    vi.mocked(g.options.transport.fetcher).mockImplementationOnce(async () => response({ unexpected: true }));
+    await g.controller.submit({ text: "kommst" }, B1);
+    expect(s(g.controller)).toMatchObject({ phase: "unknown", problem: "invalid_response", canSubmit: false });
+  });
 });
 
 describe("6. lost answer reply", () => {
@@ -366,7 +414,7 @@ describe("6. lost answer reply", () => {
     const f = fixture();
     await f.controller.refresh();
     f.server.lostReply = true;
-    await f.controller.submit({ text: "kommst" });
+    await f.controller.submit({ text: "kommst" }, B1);
     f.server.lostReply = false;
     expect(s(f.controller)).toMatchObject({ phase: "unknown", resultA: null, currentStep: null, canSubmit: false });
     await f.controller.refresh();
@@ -378,7 +426,7 @@ describe("6. lost answer reply", () => {
     const f = fixture();
     await f.controller.refresh();
     f.server.failPost = true;
-    await f.controller.submit({ text: "kommst" });
+    await f.controller.submit({ text: "kommst" }, B1);
     await f.controller.refresh();
     expect(f.gets.some(g => g.includes("result_id="))).toBe(false);
     expect(s(f.controller)).toMatchObject({ phase: "unknown", resultA: null });
@@ -390,7 +438,7 @@ describe("7. manual exact retry, storage and GET-only refresh", () => {
     const f = fixture();
     await f.controller.refresh();
     f.server.failPost = true;
-    await f.controller.submit({ text: " x " });
+    await f.controller.submit({ text: " x " }, B1);
     f.server.failPost = false;
     await f.controller.refresh(); await f.controller.refresh();
     expect(f.posted).toHaveLength(1); // no autoresend
@@ -405,7 +453,7 @@ describe("7. manual exact retry, storage and GET-only refresh", () => {
     const f = fixture();
     await f.controller.refresh();
     vi.mocked(f.storage.set).mockRejectedValueOnce(new Error("disk"));
-    await f.controller.submit({ text: "kommst" });
+    await f.controller.submit({ text: "kommst" }, B1);
     expect(f.posted).toEqual([]);
     expect(s(f.controller).commands.study.problem).toBe("storage");
   });
@@ -427,7 +475,7 @@ describe("8. independent Stop and terminal memory", () => {
     const f = fixture();
     await f.controller.refresh();
     f.server.failPost = true;
-    await f.controller.submit({ text: "kommst" });
+    await f.controller.submit({ text: "kommst" }, B1);
     f.server.failPost = false;
     await f.controller.refresh();
     const snap = s(f.controller);
@@ -501,7 +549,7 @@ describe("10. lifetime guards", () => {
     const f = fixture();
     await f.controller.refresh();
     const held = f.hold((_url, method) => method === "POST");
-    const task = f.controller.submit({ text: "kommst" });
+    const task = f.controller.submit({ text: "kommst" }, B1);
     await held.entered;
     f.activity.enabled = false; f.controller.setActivity({ enabled: false, visible: true });
     held.release(); await task;
@@ -509,7 +557,7 @@ describe("10. lifetime guards", () => {
     const g = fixture();
     await g.controller.refresh();
     const save = deferred(); vi.mocked(g.storage.set).mockImplementationOnce(async (k, v) => { await save.promise; g.values.set(k, v); });
-    const late = g.controller.submit({ text: "kommst" });
+    const late = g.controller.submit({ text: "kommst" }, B1);
     g.activity.enabled = false; g.controller.setActivity({ enabled: false, visible: true });
     save.resolve(); await late;
     expect(g.posted).toEqual([]);
@@ -522,7 +570,7 @@ describe("10. lifetime guards", () => {
     f.controller.setActivity({ enabled: true, visible: true });
     await f.controller.refresh();
     expect(s(f.controller)).toMatchObject({ canSubmit: false, canStop: false, currentStep: null });
-    await f.controller.submit({ text: "kommst" });
+    await f.controller.submit({ text: "kommst" }, B1);
     expect(f.posted).toEqual([]);
   });
   it("snapshots are detached and carry no credentials", async () => {
@@ -728,7 +776,7 @@ describe("C1: return to the already shown B while its present is pending", () =>
     expect(onB).toMatchObject({ phase: "visible_unconfirmed", display: { kind: "step", assignmentId: B2 }, presentationTicket: null,
       stepTicket: null, canSubmit: false, allowedGrades: [], canCorrect: false });
     // Dependent mutations stay behind the barrier: they join the running present, never queue a POST.
-    const gated = [tracked(f.controller.submit({ text: "kommst" })), tracked(f.controller.grade(5)), tracked(f.controller.correct())];
+    const gated = [tracked(f.controller.submit({ text: "kommst" }, B2)), tracked(f.controller.grade(5)), tracked(f.controller.correct())];
     f.controller.openStep(back.stepTicket!); // consumed
     expect(s(f.controller).display).toEqual({ kind: "step", assignmentId: B2 });
     await macrotasks();

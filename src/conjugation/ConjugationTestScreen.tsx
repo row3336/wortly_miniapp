@@ -34,14 +34,21 @@ const copy = {
     recovery: "The action is not confirmed yet. Check status.", stale: "Could not refresh the session.", refresh: "Check status",
     refreshSummary: "Refresh summary", retryStudy: "Retry action", retryStop: "Retry ending the session" },
 } as const;
-/** Known problem codes; any other code gets the general stale text. */
+/** Known problem codes; any other code (an unlisted refusal, a reply that failed strict parsing) gets the general
+ * stale text (CT табл. 2.2: an unknown code shows a general truthful message). Refusal texts repeat Learning/written. */
 const problems: Record<Language, Readonly<Record<string, string>>> = {
   ru: { network: "Нет связи с сервером.", unconfirmed_session: "Есть неподтверждённое занятие.", storage: "Не удалось обновить данные на этом устройстве.",
-      expired: "Доступ истёк.", forbidden: "Доступ закрыт." },
+      expired: "Доступ истёк.", forbidden: "Доступ закрыт.", ASSIGNMENT_STALE: "Задание изменилось. Обнови занятие.",
+      SESSION_CLOSED: "Занятие завершено.", SESSION_BUSY: "Занятие открыто на другом устройстве",
+      mismatch: "Действие нельзя повторить. Проверь состояние занятия." },
   uk: { network: "Немає зв’язку із сервером.", unconfirmed_session: "Є непідтверджене заняття.", storage: "Не вдалося оновити дані на цьому пристрої.",
-      expired: "Доступ закінчився.", forbidden: "Доступ закрито." },
+      expired: "Доступ закінчився.", forbidden: "Доступ закрито.", ASSIGNMENT_STALE: "Завдання змінилося. Онови заняття.",
+      SESSION_CLOSED: "Заняття завершено.", SESSION_BUSY: "Заняття відкрито на іншому пристрої",
+      mismatch: "Дію не можна повторити. Перевір стан заняття." },
   en: { network: "No connection to the server.", unconfirmed_session: "There is an unconfirmed session.", storage: "Could not update data on this device.",
-      expired: "Access has expired.", forbidden: "Access is closed." },
+      expired: "Access has expired.", forbidden: "Access is closed.", ASSIGNMENT_STALE: "The question has changed. Refresh the session.",
+      SESSION_CLOSED: "The session has ended.", SESSION_BUSY: "A session is open on another device",
+      mismatch: "This action cannot be retried. Check session status." },
 };
 const control = 'button, a, input, textarea, select, [contenteditable="true"], [role="dialog"]';
 
@@ -103,7 +110,10 @@ export function ConjugationTestScreen({ view, flow, language, submitOnEnter }: C
       : view.status === "unknown" ? view.pendingForgot ? `${t.unknown} ${t.forgot}` : t.unknown : undefined
     : undefined;
   const ended = view.screen === "summary" || view.screen === "closed";
-  const retries = (view.canRetry.study || view.canRetry.stop) && <div className="learning-recovery">
+  // An unknown outcome is first checked by GET with the same command ID; a retry appears only after that check.
+  const check = view.canCheck && view.screen !== "stale";
+  const recovery = (check || view.canRetry.study || view.canRetry.stop) && <div className="learning-recovery">
+    {check && <button type="button" onClick={() => flow.refresh()}>{t.refresh}</button>}
     {view.canRetry.study && <button type="button" onClick={() => flow.retry("study")}>{t.retryStudy}</button>}
     {view.canRetry.stop && <button type="button" onClick={() => flow.retry("stop")}>{t.retryStop}</button>}
   </div>;
@@ -132,14 +142,19 @@ export function ConjugationTestScreen({ view, flow, language, submitOnEnter }: C
         canCorrect={view.canCorrect} canNext={view.canNext} timer={view.timer}
         onGrade={grade => flow.grade(grade)} onCorrect={() => flow.correct()} onNext={() => flow.next()} />
     </>}
-    {view.screen === "summary" && <ConjugationSummaryView summary={view.summary} language={language}
-      onHome={view.canHome ? () => flow.home() : null} />}
+    {view.screen === "summary" && <>
+      {/* The summary_home Stop in flight: waiting, not just a disabled button. */}
+      {view.stopping && <p role="status">{t.stopping}</p>}
+      <ConjugationSummaryView summary={view.summary} language={language} onHome={view.canHome ? () => flow.home() : null} />
+    </>}
+    {/* A refusal or failure while studying reaches the person (recovery and stale render their own). */}
+    {problem && (view.screen === "question" || view.screen === "result" || view.screen === "summary") && <p role="status">{problem}</p>}
     {view.screen === "closed" && <>
       <ConjugationSummaryView summary={view.summary} closedReason={view.reason} language={language} onHome={() => flow.today()} />
       {/* T2 C2: the only way to learn an unknown frozen summary is this manual addressed read. */}
       {view.summary === null && <div className="learning-recovery">
         <button type="button" onClick={() => flow.refresh()}>{t.refreshSummary}</button></div>}
     </>}
-    {!ended && retries}
+    {!ended && recovery}
   </main>;
 }

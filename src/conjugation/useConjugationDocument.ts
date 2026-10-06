@@ -124,7 +124,7 @@ export function useConjugationDocument(options: ConjugationDocumentHookOptions):
       refresh: () => perform(c => c.refresh(), none()), start: () => perform(c => c.start(), none()),
       openStep: ticket => perform(c => c.openStep(ticket), undefined), openResult: () => perform(c => c.openResult(), undefined),
       shown: ticket => perform(c => c.shown(ticket), none()),
-      submit: answer => perform(c => c.submit(answer), none()),
+      submit: (answer, assignmentId) => perform(c => c.submit(answer, assignmentId), none()),
       grade: value => perform(c => c.grade(value), none()), correct: () => perform(c => c.correct(), none()),
       stop: reason => perform(c => c.stop(reason), none()), retry: lane => perform(c => c.retry(lane), none()),
     };

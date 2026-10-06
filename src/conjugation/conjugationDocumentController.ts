@@ -74,13 +74,19 @@ export type ConjugationDocumentActions = {
   refresh(): Promise<void>; start(): Promise<void>;
   openStep(ticket: ConjugationStepTicket): void; openResult(): void;
   shown(ticket: ConjugationPresentationTicket): Promise<void>;
-  submit(answer: { text: string } | { forgot: true }): Promise<void>;
+  /** `assignmentId` is the question the answer was typed for; any other current question refuses it without a request. */
+  submit(answer: { text: string } | { forgot: true }, assignmentId: string): Promise<void>;
   grade(value: 3 | 4 | 5): Promise<void>; correct(): Promise<void>;
   stop(reason: "stop" | "summary_home"): Promise<void>;
   retry(lane: ConjugationLane): Promise<void>;
 };
 
 const freshTicket = <T>() => Object.freeze({}) as T;
+/** A reply that arrived but failed strict parsing is not a lost connection. */
+function readProblem(error: unknown): string {
+  if (!(error instanceof ApiError)) return "network";
+  return error.code ?? (error.kind === "invalid_response" ? "invalid_response" : "network");
+}
 
 /** Owns one confirmed conjugation document: two frozen command owners, reads, the A-result /
  * B-step split and the presentation barrier. Durable slots, access and transport are accepted
@@ -420,7 +426,9 @@ export class ConjugationDocumentController implements ConjugationDocumentActions
       phase, sessionId: live ? this.sessionId : null, stateVersion: this.floor, terminalSessionIds: [...this.terminal],
       closed: live && closed ? this.closedSnapshot(this.sessionId!) : null,
       acceptedAddress: live && !closed && this.acceptedA && this.selected(this.acceptedA.session_id) ? { ...this.acceptedA } : null, commands,
-      problem: live ? commands.study.problem ?? commands.stop.problem ?? this.problem ?? (foreignReceipt ? "unconfirmed_session" : null) : null,
+      // A known server refusal of a lane reaches the screen as its code (CT табл. 2.2), as in Learning and written.
+      problem: live ? commands.study.problem ?? commands.study.rejectionCode ?? commands.stop.problem ?? commands.stop.rejectionCode
+        ?? this.problem ?? (foreignReceipt ? "unconfirmed_session" : null) : null,
       currentStep: step ? structuredClone(step) : null,
       resultA: resultA ? structuredClone(resultA) : null,
       display: live ? { ...display } : { kind: "none" },
@@ -509,7 +517,7 @@ export class ConjugationDocumentController implements ConjugationDocumentActions
     } catch (error) {
       if (!this.live()) return;
       this.step = null; this.stopRight = null;
-      this.problem = error instanceof ApiError && error.code ? error.code : "network";
+      this.problem = readProblem(error);
     }
   }
   private async readResult(address: ResultAddress): Promise<void> {
@@ -521,7 +529,7 @@ export class ConjugationDocumentController implements ConjugationDocumentActions
     } catch (error) {
       if (!this.live()) return;
       this.resultA = null;
-      this.problem = error instanceof ApiError && error.code ? error.code : "network";
+      this.problem = readProblem(error);
     }
   }
   private begin(lane: ConjugationLane, transition: ConjugationTransition | null, basis: string | null): Promise<void> {
@@ -616,13 +624,17 @@ export class ConjugationDocumentController implements ConjugationDocumentActions
     this.emit();
     return task;
   }
-  submit(answer: { text: string } | { forgot: true }): Promise<void> {
+  submit(answer: { text: string } | { forgot: true }, assignmentId: string): Promise<void> {
     const keys = answer !== null && typeof answer === "object" ? Object.keys(answer) : [];
     const text = keys.length === 1 && keys[0] === "text" && typeof (answer as { text: unknown }).text === "string";
     const forgot = keys.length === 1 && keys[0] === "forgot" && (answer as { forgot: unknown }).forgot === true;
     if (!text && !forgot) return Promise.reject(new Error("conjugation answer requires exact text or forgot"));
+    if (typeof assignmentId !== "string" || !uuid(assignmentId)) return Promise.reject(new Error("conjugation answer requires its assignment"));
     const snapshot = this.snapshot();
-    if (!snapshot.canSubmit || snapshot.display.kind !== "step") return this.tasks.study ?? Promise.resolve();
+    // An answer typed for one form is never sent to another one the document reached in the meantime (R-G1).
+    if (!snapshot.canSubmit || snapshot.display.kind !== "step" || !sameId(snapshot.display.assignmentId, assignmentId)) {
+      return this.tasks.study ?? Promise.resolve();
+    }
     // Verbatim: no trim, normalization or client-side grading.
     const payload = text ? { text: (answer as { text: string }).text } : { forgot: true as const };
     return this.begin("study", { kind: "answer.submit", session_id: snapshot.sessionId!, assignment_id: snapshot.display.assignmentId, payload },
