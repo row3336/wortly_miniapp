@@ -118,6 +118,10 @@ export type DictionaryContextStatusResponse = { "command": StoredCommandFact; "c
 
 export type DictionaryExclusion = { "excluded": boolean; "version": (string | null); };
 
+export type DictionaryHistoryItem = { "card_id": string; "opened_at": string; };
+
+export type DictionaryHistoryResponse = { "state_version": string; "items": Array<DictionaryHistoryItem>; };
+
 export type DictionaryIntervalCapability = { "directions": Array<"l1-de" | "de-l1">; };
 
 export type DictionaryIntervalChoice = { "option_id": number; "interval_days": number; "next_due_date": string; };
