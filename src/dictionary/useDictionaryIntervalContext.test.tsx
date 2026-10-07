@@ -44,7 +44,8 @@ function server() {
             learning: { ever_selected: true, finished_or_skipped: true, current: null }, non_learning_history: false },
           directions: dirs.map(direction => s.saved.has(direction)
             ? { direction, introduced: true, progress_present: true, progress_version: "1", schedule: { interval_days: 3, next_due_date: addDays(TODAY, 3) }, interval_preview: [] }
-            : { direction, introduced: true, progress_present: false, progress_version: null, schedule: null, interval_preview: null }) } },
+            : { direction, introduced: true, progress_present: false, progress_version: null, schedule: null, interval_preview: null }) },
+        card_actions: { exclude: true, return: false, relearn: true } },
       interval: { local_date: TODAY, expected_pair: "ru-de", directions: dirs.map(direction => s.saved.has(direction)
         ? { direction, applicable: true, current_schedule: { interval_days: 3, next_due_date: addDays(TODAY, 3), persisted: true }, expected_progress_version: "1", options: [] }
         : { direction, applicable: true, current_schedule: { interval_days: 1, next_due_date: TODAY, persisted: false }, expected_progress_version: null,

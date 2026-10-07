@@ -25,6 +25,7 @@ function view(cardId = A, state_version = "1", pair: Pair = "ru-de"): Dictionary
         direction, introduced: false, progress_present: false, progress_version: null, schedule: null, interval_preview: null,
       })),
     },
+    card_actions: { exclude: false, return: false, relearn: false },
   } };
 }
 const unavailable = (state_version = "1"): DictionaryCardViewResponse => ({ state_version, current: { status: "unavailable" } });

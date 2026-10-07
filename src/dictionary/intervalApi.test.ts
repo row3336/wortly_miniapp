@@ -55,6 +55,7 @@ function view(): DictionaryCardView {
           schedule: null, interval_preview: null },
       ],
     },
+    card_actions: { exclude: true, return: false, relearn: true },
   };
 }
 
@@ -382,6 +383,7 @@ describe("context validator (B8)", () => {
   it("accepts excluded directions only as inapplicable, without capability", () => {
     const excluded = (applicable: boolean) => mutated(value => {
       value.view.study.facts.exclusion = { excluded: true, version: "3" };
+      value.view.card_actions = { exclude: false, return: true, relearn: false };
       value.view.study.directions[0].schedule = null;
       value.view.study.directions[0].interval_preview = null;
       value.interval.directions = value.interval.directions.map((item: any) => ({ ...item, applicable,

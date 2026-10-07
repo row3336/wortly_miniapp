@@ -18,6 +18,10 @@ export type BusyClient = { "status": "SESSION_BUSY"; "profile": Profile; "sessio
 
 export type BusySession = { "status": "busy"; "stop_remote_target"?: (string | null); "document_conflict"?: boolean; "document_epoch"?: (string | null); };
 
+export type CardActionsCurrent = { "status": "available"; "card_id": string; "pair": "ru-de" | "uk-de" | "en-de"; "excluded": boolean; "version": (string | null); "actions": DictionaryCardActions; };
+
+export type CardCommandResponse = { "command": (SavedCommandFact | RejectedCommandFact); "current": (CardActionsCurrent | UnavailableCurrent); "state_version": string; "error"?: (ErrorDetail | null); };
+
 export type CardContextCloseCommand = { "command_id": string; "kind": "context.close"; "client_instance_id": string; "document_id": string; "context_id": string; "payload": EmptyPayload; };
 
 export type CardContextOpenCommand = { "command_id": string; "kind": "context.open"; "client_instance_id": string; "document_id": string; "payload": CardContextOpenPayload; };
@@ -27,6 +31,16 @@ export type CardContextOpenPayload = { "card_id": string; "source": DictionaryCo
 export type CardExample = { "id": string; "text": string; "role": ("general" | "wechsel_location" | "wechsel_direction" | null); "highlighted_parts": Array<JsonValue>; };
 
 export type CardExamples = { "common": Array<CardExample>; "personal": (PersonalCardText | null); };
+
+export type CardRelearnCommand = { "command_id": string; "kind": "card.relearn"; "client_instance_id": string; "document_id": string; "payload": CardRelearnPayload; };
+
+export type CardRelearnPayload = { "card_id": string; "confirmed": true; };
+
+export type CardStateCommand = { "command_id": string; "kind": "card.exclude" | "card.return"; "client_instance_id": string; "document_id": string; "expected_card_state_version": (string | null); "payload": CardStatePayload; };
+
+export type CardStatePayload = { "card_id": string; };
+
+export type CardStatusResponse = { "command": StoredCommandFact; "current": (CardActionsCurrent | UnavailableCurrent); "state_version": string; "verified_intent_hash"?: (string | null); };
 
 export type CardTranslations = { "common": Array<string>; "personal": (PersonalCardText | null); };
 
@@ -92,13 +106,15 @@ export type DecideCommand = { "command_id": string; "kind": "access.decide"; "pa
 
 export type DecidePayload = { "request_id": string; "expected_version": string; "approve": boolean; "reason"?: (string | null); };
 
+export type DictionaryCardActions = { "exclude": boolean; "return": boolean; "relearn": boolean; };
+
 export type DictionaryCardContent = { "pair": "ru-de" | "uk-de" | "en-de"; "card": DictionaryReferenceCard; "translations": CardTranslations; "grammar": (ReferenceNoun | ReferenceVerb | ReferenceAdjective | ReferencePreposition | ReferenceConjunction | null); "reference_conjugations": Array<ReferenceConjugation>; "examples": CardExamples; "association": (PersonalCardText | null); };
 
 export type DictionaryCardResponse = { "state_version": string; "current": (DictionaryCardContent | UnavailableCurrent); };
 
 export type DictionaryCardStudy = { "status": "available"; "card_id": string; "card_revision": string; "pair": "ru-de" | "uk-de" | "en-de"; "card_type": "noun" | "verb" | "phrase" | "adjective" | "pronoun" | "adverb" | "preposition" | "conjunction" | "particle"; "local_date": (string | null); "facts": DictionaryStudyFacts; "directions": Array<DictionaryStudyDirection>; };
 
-export type DictionaryCardView = { "status": "available"; "content": DictionaryViewContent; "study": DictionaryCardStudy; };
+export type DictionaryCardView = { "status": "available"; "content": DictionaryViewContent; "study": DictionaryCardStudy; "card_actions": DictionaryCardActions; };
 
 export type DictionaryCardViewResponse = { "state_version": string; "current": (DictionaryCardView | UnavailableCurrent); };
 

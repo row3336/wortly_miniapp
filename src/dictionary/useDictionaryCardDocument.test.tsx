@@ -28,6 +28,7 @@ function view(cardId: string, state_version = "1", pair: Pair = "ru-de"): Dictio
         direction, introduced: false, progress_present: false, progress_version: null, schedule: null, interval_preview: null,
       })),
     },
+    card_actions: { exclude: false, return: false, relearn: false },
   } };
 }
 const response = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status });

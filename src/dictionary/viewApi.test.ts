@@ -26,6 +26,7 @@ function current(): DictionaryCardView {
         direction, introduced: false, progress_present: false, progress_version: null, schedule: null, interval_preview: null,
       })),
     },
+    card_actions: { exclude: false, return: false, relearn: false },
   };
 }
 function body(value = current()): DictionaryCardViewResponse {
@@ -38,6 +39,7 @@ function review(): DictionaryCardView {
     Object.assign(d, { introduced: true, progress_present: true, progress_version: largeVersion,
       schedule: { interval_days: 350, next_due_date: "2026-10-02" }, interval_preview: [] });
   });
+  value.card_actions = { exclude: true, return: false, relearn: true };
   return value;
 }
 function transport(value: unknown, status = 200, maxResponseBytes = 100000) {
@@ -73,13 +75,33 @@ describe("coherent dictionary view", () => {
     expect(validDictionaryView(body(value), cardId)).toBe(true);
     expect(value.study.directions.map(d => d.schedule?.next_due_date)).toEqual(["2026-10-02", "2026-10-02"]);
   });
-  it.each(["learning", "excluded"])("suppresses old dates while preserving progress for %s", state => {
+  it("suppresses old dates of both directions while preserving progress in current Learning", () => {
     const value = review();
-    if (state === "excluded") value.study.facts.exclusion = { excluded: true, version: "3" };
-    else value.study.facts.learning.current = { group_id: groupId, group_status: "assembling", member_status: "pending", member_version: "4" };
+    value.study.facts.learning.current = { group_id: groupId, group_status: "assembling", member_status: "pending", member_version: "4" };
+    value.card_actions = { exclude: false, return: false, relearn: false };
     expect(validDictionaryView(body(value), cardId)).toBe(false);
     value.study.directions.forEach(d => { d.schedule = null; d.interval_preview = null; });
     expect(validDictionaryView(body(value), cardId)).toBe(true);
+  });
+  it("hides only the written L1->De terms of an excluded card and keeps the oral schedule (K07-058)", () => {
+    const value = review();
+    value.study.facts.exclusion = { excluded: true, version: "3" };
+    value.card_actions = { exclude: false, return: true, relearn: false };
+    expect(validDictionaryView(body(value), cardId)).toBe(false);
+    value.study.directions[0].schedule = null; value.study.directions[0].interval_preview = null;
+    expect(validDictionaryView(body(value), cardId)).toBe(true);
+    expect(value.study.directions[1].schedule).toEqual({ interval_days: 350, next_due_date: "2026-10-02" });
+    value.study.directions[1].schedule = null; value.study.directions[1].interval_preview = null;
+    expect(validDictionaryView(body(value), cardId)).toBe(false);
+  });
+  it.each([
+    { exclude: true, return: true, relearn: false },
+    { exclude: true, return: false, relearn: false },
+    { exclude: false, return: true, relearn: false },
+    { exclude: 1, return: false, relearn: 1 },
+  ])("rejects card actions that contradict the exclusion fact: %o", actions => {
+    const value = review() as any; value.card_actions = actions;
+    expect(validDictionaryView(body(value), cardId)).toBe(false);
   });
   it("preserves schedules without a time zone and requires null previews", () => {
     const value = review(); value.study.local_date = null;
@@ -163,7 +185,7 @@ describe("coherent dictionary view", () => {
   });
   it("rejects extra keys throughout the structured state", () => {
     const value = review(), response = body(value);
-    const roots = [response, value, value.study, value.study.facts,
+    const roots = [response, value, value.card_actions, value.study, value.study.facts,
       value.study.facts.manual, value.study.facts.exclusion, value.study.facts.learning,
       value.study.directions[0], value.study.directions[0].schedule];
     for (const root of roots) {
@@ -172,6 +194,12 @@ describe("coherent dictionary view", () => {
       Reflect.deleteProperty(root!, "__proto__");
     }
     expect(validDictionaryView(response, cardId)).toBe(true);
+  });
+  it("treats a view without card_actions as an invalid response", async () => {
+    const response = body(review()) as any;
+    delete response.current.card_actions;
+    const { api } = transport(response);
+    await expect(api.read("synthetic", cardId)).rejects.toMatchObject({ kind: "invalid_response" });
   });
   it("refuses bad caller input before dispatch and bounds bytes on a successful reply", async () => {
     const { api, fetcher } = transport(body(), 200, 1);

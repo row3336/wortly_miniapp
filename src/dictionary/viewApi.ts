@@ -1,5 +1,5 @@
 import type {
-  DictionaryCardContent, DictionaryCardStudy, DictionaryCardViewResponse,
+  DictionaryCardActions, DictionaryCardContent, DictionaryCardStudy, DictionaryCardViewResponse,
   DictionaryReviewSchedule, DictionaryStudyFacts,
 } from "../api/generated";
 import { ApiError, createJsonTransport, httpError, type HttpOptions } from "../api/http";
@@ -67,8 +67,10 @@ function validStudy(value: unknown, content: DictionaryCardContent): value is Di
     || !validFacts(value.facts) || !Array.isArray(value.directions) || value.directions.length !== 2
     || value.facts.common_translation_present !== (content.translations.common.length > 0)) return false;
   const facts = value.facts;
-  const suppressed = facts.exclusion.excluded || facts.learning.current !== null;
   for (const [index, direction] of value.directions.entries()) {
+    // Exclusion hides only the main written L1->De terms; the oral direction keeps
+    // its schedule (K07-058). Current Learning hides both directions.
+    const suppressed = (index === 0 && facts.exclusion.excluded) || facts.learning.current !== null;
     if (!record(direction) || !exactKeys(direction, ["direction", "introduced", "progress_present", "progress_version", "schedule", "interval_preview"])
       || direction.direction !== ["l1-de", "de-l1"][index]
       || typeof direction.introduced !== "boolean" || typeof direction.progress_present !== "boolean"
@@ -89,10 +91,19 @@ export function validDictionaryView(value: unknown, cardId: string): value is Di
     || !version(value.state_version) || !record(value.current)) return false;
   const current = value.current;
   if (current.status === "unavailable") return exactKeys(current, ["status"]);
-  if (current.status !== "available" || !exactKeys(current, ["status", "content", "study"])
+  if (current.status !== "available" || !exactKeys(current, ["status", "content", "study", "card_actions"])
     || !record(current.content) || typeof current.content.pair !== "string"
     || !validDictionaryViewContent(current.content, cardId, current.content.pair)) return false;
-  return validStudy(current.study, current.content);
+  return validStudy(current.study, current.content) && validCardActions(current.card_actions, current.study);
+}
+
+/** Allowed card study actions: a disabled card offers only return, otherwise exclusion and
+ * relearn go together. The server decides the rest from the facts; this is not a capability. */
+function validCardActions(value: unknown, study: DictionaryCardStudy): value is DictionaryCardActions {
+  if (!record(value) || !exactKeys(value, ["exclude", "return", "relearn"])
+    || typeof value.exclude !== "boolean" || typeof value.return !== "boolean" || typeof value.relearn !== "boolean") return false;
+  const excluded = study.facts.exclusion.excluded;
+  return value.return === excluded && value.exclude === value.relearn && !(value.exclude && excluded);
 }
 
 /** One authenticated bounded request; it never grants an action or changes study state. */

@@ -48,6 +48,7 @@ function server(start = 41n) {
             schedule: { interval_days: d.days, next_due_date: d.due },
             interval_preview: s.zone ? d.options.map(([step_id, days]) => ({ step_id, interval_days: days, next_due_date: addDays(TODAY, days) })) : null };
       }) },
+    card_actions: { exclude: true, return: false, relearn: true },
   });
   const project = (contextId: string) => {
     const context = s.contexts.get(contextId);
