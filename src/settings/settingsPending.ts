@@ -39,5 +39,6 @@ function copy(value: unknown): SettingsPending {
 
 /** Instantiate once for the application's document lifetimes, using its existing AsyncStorage. */
 export class SettingsPendingStore extends PendingSlot<SettingsPending> {
-  constructor(storage: AsyncStorage) { super(storage, "wortly.pending.setting", copy); }
+  /** The application storage, so a sibling slot of the same document (the message to the developer) lands beside this one. */
+  constructor(readonly backing: AsyncStorage) { super(backing, "wortly.pending.setting", copy); }
 }

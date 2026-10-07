@@ -13,7 +13,9 @@
 .settings-error:empty, .settings-help:empty { display: none; }
 .settings-saved { color: var(--success); }
 .settings-label { display: grid; gap: 8px; min-width: 0; }
-.settings-screen input[type="text"], .settings-screen select { width: 100%; min-width: 0; min-height: 44px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--text); font: inherit; }
+.settings-screen input[type="text"], .settings-screen select, .settings-screen textarea { width: 100%; min-width: 0; min-height: 44px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--text); font: inherit; }
+.settings-screen textarea { min-height: 120px; resize: vertical; }
+.settings-screen textarea:read-only { opacity: .75; }
 .settings-options, .settings-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 .settings-options label { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 8px 12px; cursor: pointer; }
 .settings-options input { width: 20px; height: 20px; accent-color: var(--text); }
@@ -23,7 +25,7 @@
 .settings-secondary { background: var(--surface); color: var(--text); }
 .settings-screen button:disabled { opacity: .55; cursor: default; }
 .settings-screen button:enabled:active { opacity: .8; }
-.settings-screen input:focus-visible, .settings-screen select:focus-visible, .settings-screen button:focus-visible, .settings-screen summary:focus-visible { outline: 2px solid var(--text); outline-offset: 3px; }
+.settings-screen input:focus-visible, .settings-screen select:focus-visible, .settings-screen textarea:focus-visible, .settings-screen button:focus-visible, .settings-screen summary:focus-visible { outline: 2px solid var(--text); outline-offset: 3px; }
 .settings-screen summary { cursor: pointer; min-height: 44px; padding: 8px 0; }
 .settings-material, .settings-topic-editor, .settings-intervals, .settings-conflict { display: grid; gap: 12px; min-width: 0; }
 .settings-interval { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 12px; }

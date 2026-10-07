@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useReducer, useRef } from "react";
+import { FeedbackPendingStore } from "../feedback/feedbackPending";
+import { useFeedbackDocument, type FeedbackDocument } from "../feedback/useFeedbackDocument";
 import type { HttpOptions } from "../api/http";
 import type { SettingsResponse } from "../api/generated";
 import type { OpenedAccess } from "../app/openedAccess";
@@ -22,6 +24,8 @@ export type SettingsDocument = {
   /** Only a current read with no unresolved setting command can configure study. */
   confirmed: SettingsResponse | null;
   actions: SettingsScreenProps["actions"];
+  /** The message to the developer; its owner lives as long as this document, like the unsaved settings drafts. */
+  feedback: FeedbackDocument;
 };
 type Owner = {
   key: string; transport: HttpOptions; store: SettingsPendingStore;
@@ -113,5 +117,7 @@ export function useSettingsDocument(options: Options): SettingsDocument {
     drafts: Object.fromEntries(Object.entries(state.drafts).map(([key, draft]) => [key, { ...draft, canSave: false, canKeepMine: false }])) };
   const confirmed = bound?.source === options.access && state.phase === "ready" && state.dataCurrent && !state.pending
     ? state.data : null;
-  return { state, confirmed, actions };
+  const feedbackStore = useMemo(() => new FeedbackPendingStore(options.pendingStore.backing), [options.pendingStore]);
+  const feedback = useFeedbackDocument({ access: options.access, transport: options.transport, pendingStore: feedbackStore });
+  return { state, confirmed, actions, feedback };
 }
