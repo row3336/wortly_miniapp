@@ -1,5 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { useLayoutEffect } from "react";
+import { useEffect, useLayoutEffect, useState } from "react";
 import { renderToString } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenedClient, OralSessionProjection } from "../api/generated";
@@ -320,6 +320,96 @@ describe("OralScreen: localized detached rendering and capability guards", () =>
     expect(grade).not.toHaveBeenCalled(); expect(stop).not.toHaveBeenCalled();
     ui.rerender(<OralScreen state={{ ...base, phase: "closed", current: null }} actions={f.actions} language="en" active={false} onToday={() => {}} />);
     expect(screen.queryByRole("button", { name: "Check status" })).toBeNull(); expect(refresh).not.toHaveBeenCalled(); f.controller.dispose();
+  });
+});
+
+describe("OralScreen: refused start while another device holds a session", () => {
+  it.each([
+    ["ru", "Занятие открыто на другом устройстве", "Не удалось обновить занятие. Проверь состояние."],
+    ["uk", "Заняття відкрито на іншому пристрої", "Не вдалося оновити заняття. Перевір стан."],
+    ["en", "A session is open on another device", "Could not refresh the session. Check status."],
+  ] as const)("names the other device for SESSION_BUSY in %s and keeps the generic text for other problems (К10-018)", async (language, busy, generic) => {
+    const f = fixture("summary"); f.set(projection("summary", 0, 0)); await f.controller.refresh();
+    const base = f.controller.snapshot();
+    const view = (problem: string) => <OralScreen state={{ ...base, current: null, phase: "idle", canStop: false, problem }}
+      actions={f.actions} language={language} active onToday={() => {}} />;
+    const ui = render(view("SESSION_BUSY"));
+    expect(screen.getByText(busy)).toBeTruthy(); expect(screen.queryByText(generic)).toBeNull();
+    ui.rerender(view("network"));
+    expect(screen.getByText(generic)).toBeTruthy(); expect(screen.queryByText(busy)).toBeNull();
+    f.controller.dispose();
+  });
+});
+
+describe("OralScreen: SESSION_BUSY through the real owner (К10-018)", () => {
+  const busyText = { ru: "Занятие открыто на другом устройстве", uk: "Заняття відкрито на іншому пристрої", en: "A session is open on another device" } as const;
+  const generic = { ru: "Не удалось обновить занятие. Проверь состояние.", uk: "Не вдалося оновити заняття. Перевір стан.", en: "Could not refresh the session. Check status." } as const;
+  function Live({ controller, language }: { controller: OralDocumentController; language: Language }) {
+    const [state, setState] = useState(() => controller.snapshot());
+    useEffect(() => { setState(controller.snapshot()); }, [controller]);
+    return <OralScreen state={state} actions={{ refresh: async () => { await controller.refresh(); setState(controller.snapshot()); },
+      start: async bucket => { await controller.start(bucket); setState(controller.snapshot()); }, shown: ticket => controller.shown(ticket),
+      reveal: () => controller.reveal(), grade: correct => controller.grade(correct), stop: reason => controller.stop(reason),
+      retry: lane => controller.retry(lane) }} language={language} active onToday={() => {}} />;
+  }
+  it.each(["ru", "uk", "en"] as const)("a start refused by the core as SESSION_BUSY (rejected command) names the other device in %s", async language => {
+    const f = fixture("prefetched");
+    const controller = new OralDocumentController({ ...f.options, initialSessionId: null, onUpdate() {} });
+    f.fetcher.mockImplementation(async (url, init) => {
+      if (init?.method !== "POST") return f.handler(url, init);
+      const command = JSON.parse(String(init.body)) as OralCommand;
+      return response({ command: { id: command.command_id, status: "rejected" }, error: { code: "SESSION_BUSY" },
+        current: { session_id: command.session_id, status: "not_found" }, state_version: "9" }, 409);
+    });
+    await controller.refresh(); await controller.start("words");
+    // Without the fix the follow-up read of the never-created session leaves the generic "network" problem.
+    expect(controller.snapshot().commands.study.rejectionCode).toBe("SESSION_BUSY");
+    expect(controller.snapshot().problem).toBe("SESSION_BUSY");
+    render(<Live controller={controller} language={language} />);
+    expect(screen.getByText(busyText[language])).toBeTruthy(); expect(screen.queryByText(generic[language])).toBeNull();
+    controller.dispose();
+  });
+  const refuseStart = (f: ReturnType<typeof fixture>, code: string) => f.fetcher.mockImplementation(async (url, init) => {
+    if (init?.method !== "POST") return f.handler(url, init);
+    const command = JSON.parse(String(init.body)) as OralCommand;
+    return response({ command: { id: command.command_id, status: "rejected" }, error: { code },
+      current: { session_id: command.session_id, status: "not_found" }, state_version: "9" }, 409);
+  });
+  it.each(["SESSION_CLOSED", "ASSIGNMENT_STALE"])("a start refused as %s is not reported as another device", async code => {
+    const f = fixture("prefetched");
+    const controller = new OralDocumentController({ ...f.options, initialSessionId: null, onUpdate() {} });
+    refuseStart(f, code);
+    await controller.refresh(); await controller.start("words");
+    expect(controller.snapshot().commands.study.rejectionCode).toBe(code);
+    expect(controller.snapshot().problem).not.toBe("SESSION_BUSY");
+    render(<Live controller={controller} language="ru" />);
+    expect(screen.queryByText(busyText.ru)).toBeNull();
+    controller.dispose();
+  });
+  it("a real lane problem outranks a SESSION_BUSY refusal kept beside it", async () => {
+    const f = fixture("prefetched");
+    const controller = new OralDocumentController({ ...f.options, initialSessionId: null, onUpdate() {} });
+    refuseStart(f, "SESSION_BUSY");
+    // The refusal is known, but forgetting the saved command fails: the lane keeps both the refusal and a storage problem.
+    f.storage.remove = async () => { throw new Error("synthetic storage failure"); };
+    await controller.refresh(); await controller.start("words");
+    const study = controller.snapshot().commands.study;
+    expect(study.rejectionCode).toBe("SESSION_BUSY"); expect(study.problem).toBe("storage");
+    expect(controller.snapshot().problem).toBe("storage");
+    render(<Live controller={controller} language="ru" />);
+    expect(screen.queryByText(busyText.ru)).toBeNull();
+    controller.dispose();
+  });
+  it.each(["ru", "uk", "en"] as const)("a read refused with HTTP 409 SESSION_BUSY names the other device in %s", async language => {
+    const f = fixture("prefetched");
+    const controller = new OralDocumentController({ ...f.options, onUpdate() {} });
+    f.fetcher.mockImplementation(async (url, init) => init?.method === "POST" ? f.handler(url, init)
+      : response({ error: { code: "SESSION_BUSY" } }, 409));
+    await controller.refresh();
+    expect(controller.snapshot().problem).toBe("SESSION_BUSY");
+    render(<Live controller={controller} language={language} />);
+    expect(screen.getByText(busyText[language])).toBeTruthy(); expect(screen.queryByText(generic[language])).toBeNull();
+    controller.dispose();
   });
 });
 

@@ -225,6 +225,40 @@ describe("Learning screen with its real command owner", () => {
     click("Проверить состояние"); await waitFor(() => expect(input().value).toBe("retained draft"));
     expect(f.posts()).toEqual([]);
   });
+  it.each([
+    ["ru", "Занятие открыто на другом устройстве"],
+    ["uk", "Заняття відкрито на іншому пристрої"],
+    ["en", "A session is open on another device"],
+  ] as const)("names the other device when a start is refused as SESSION_BUSY in %s (К10-018)", async (language, message) => {
+    const { f, rerender } = await mount({ language });
+    const base = f.view.snapshot(), screen_ = (problem: string) => <LearningScreen state={{ ...base, problem }} language={language}
+      submitOnEnter actions={f.view} renderPreview={() => null} />;
+    rerender(screen_("SESSION_BUSY"));
+    expect(screen.getByText(message)).toBeTruthy();
+    expect(document.body.textContent).not.toMatch(/SESSION_BUSY|Не удалось обновить занятие|Could not refresh/);
+    // Any other unclassified problem keeps the generic wording.
+    rerender(screen_("network"));
+    expect(screen.queryByText(message)).toBeNull();
+  });
+  it.each([
+    ["ru", "Занятие открыто на другом устройстве"],
+    ["uk", "Заняття відкрито на іншому пристрої"],
+    ["en", "A session is open on another device"],
+  ] as const)("a start refused by the core as SESSION_BUSY reaches the real screen in %s (К10-018)", async (language, message) => {
+    const f = learningViewFixture("normal", null); owners.push(f.view);
+    const base = f.handler;
+    f.fetcher.mockImplementation(async (url, init) => {
+      if (init?.method !== "POST") return base(url, init);
+      const command = JSON.parse(String(init.body));
+      return response({ command: { id: command.command_id, status: "rejected" }, error: { code: "SESSION_BUSY" },
+        current: { session_id: command.session_id, status: "not_found" }, state_version: "9" }, 409);
+    });
+    render(<LiveScreen f={f} language={language} />); await act(() => f.view.refresh());
+    await act(() => f.view.start());
+    expect(f.view.snapshot().problem).toBe("SESSION_BUSY");
+    expect(screen.getByText(message)).toBeTruthy();
+    expect(document.body.textContent).not.toMatch(/Не удалось обновить занятие|Не вдалося оновити заняття|Could not refresh/);
+  });
   it("summary closes only by an explicit tap on the full-screen message", async () => {
     const { f } = await mount();
     f.setStep({ ...current(), status: "summary", assignment: null, group: { ...current().group, status: "completed" } });

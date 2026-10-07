@@ -29,7 +29,8 @@ const copy = {
     remaining: "Осталось", today: "На Сегодня", refresh: commandCopy.ru.check, retryStudy: "Повторить действие",
     retryStop: commandCopy.ru.retryStop, recovery: "Проверка состояния", pendingStudy: "Учебное действие ещё не подтверждено.",
     pendingStop: "Завершение ещё не подтверждено.", cleanup: "Не удалось обновить данные на этом устройстве. Проверь состояние.",
-    blocked: "Действие нельзя повторить. Проверь состояние занятия.", refine: "Уточнить поля" },
+    blocked: "Действие нельзя повторить. Проверь состояние занятия.", refine: "Уточнить поля",
+    busy: "Занятие открыто на другом устройстве" },
   uk: { title: "Усне заняття", exit: "Вийти", reveal: "Розкрити", correct: "Правильно", wrong: "Неправильно",
     question: "Завдання", translation: "Переклад", meaning: "Значення сполучника", verb: "Позиція дієслова",
     loading: "Завантажуємо заняття…", idle: "Заняття ще не почалося.", remember: "Згадай переклад.",
@@ -40,7 +41,8 @@ const copy = {
     remaining: "Залишилося", today: "На Сьогодні", refresh: commandCopy.uk.check, retryStudy: "Повторити дію",
     retryStop: commandCopy.uk.retryStop, recovery: "Перевірка стану", pendingStudy: "Навчальну дію ще не підтверджено.",
     pendingStop: "Завершення ще не підтверджено.", cleanup: "Не вдалося оновити дані на цьому пристрої. Перевір стан.",
-    blocked: "Дію не можна повторити. Перевір стан заняття.", refine: "Уточнити поля" },
+    blocked: "Дію не можна повторити. Перевір стан заняття.", refine: "Уточнити поля",
+    busy: "Заняття відкрито на іншому пристрої" },
   en: { title: "Oral practice", exit: "Exit", reveal: "Reveal", correct: "Correct", wrong: "Incorrect",
     question: "Question", translation: "Translation", meaning: "Conjunction meaning", verb: "Verb position",
     loading: "Loading your session…", idle: "The session has not started yet.", remember: "Recall the translation.",
@@ -51,7 +53,8 @@ const copy = {
     remaining: "Remaining", today: "Return to Today", refresh: commandCopy.en.check, retryStudy: "Retry action",
     retryStop: commandCopy.en.retryStop, recovery: "Status check", pendingStudy: "The study action is not confirmed yet.",
     pendingStop: "Ending the session is not confirmed yet.", cleanup: "Could not update data on this device. Check status.",
-    blocked: "This action cannot be retried. Check session status.", refine: "Refine fields" },
+    blocked: "This action cannot be retried. Check session status.", refine: "Refine fields",
+    busy: "A session is open on another device" },
 } as const;
 
 /** A detached renderer: accepted state and command identity belong exclusively to the owner. */
@@ -91,14 +94,17 @@ export function OralScreen({ state, actions, language, active, onToday, onRefine
     void actions.refresh();
   }, [unread, actions]);
 
+  // The problem line already names the cause; the generic stale line beside it would contradict it.
+  const busyRefused = state?.problem === "SESSION_BUSY";
   const status = !active ? t.inactive : phase === "disposed" ? t.disposed : phase === "closed" ? readFailed ? t.stale : t.closed
     : phase === "stopping" ? t.stopping : phase === "visible_unconfirmed" ? t.present : saving ? t.saving : phase === "loading" ? t.loading
-    : phase === "idle" ? t.idle : phase === "unknown" ? t.unknown : phase === "stale" ? t.stale
+    : phase === "idle" ? t.idle : phase === "unknown" ? t.unknown : phase === "stale" ? busyRefused ? null : t.stale
     : phase === "prefetched" ? t.present
     : phase === "question" ? t.remember : phase === "revealed" ? t.grade : null;
   const localProblem = state?.problem === "storage" || lanes.some(lane => lane.problem === "storage");
   const blocked = lanes.some(lane => lane.problem === "mismatch" || lane.problem === "invalid_pending" || lane.problem === "pending_changed");
-  const problem = localProblem ? t.cleanup : blocked ? t.blocked : state?.problem ? t.stale : null;
+  // Same wording as the written quiz: a refused start names the other device, not a generic refresh failure.
+  const problem = localProblem ? t.cleanup : blocked ? t.blocked : busyRefused ? t.busy : state?.problem ? t.stale : null;
   const summary = state?.current?.status === "summary" ? state.current.summary : closedSummary?.summary ?? null;
   const progress = closedSummary ? closedSummary.progress : state?.current?.progress;
   const remaining = progress ? progress.total - progress.completed : null;

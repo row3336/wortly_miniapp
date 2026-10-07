@@ -33,6 +33,8 @@ export type OralDocumentSnapshot = {
   canRetry: Record<OralCommandLane, boolean>;
   closed: OralClosed | null;
 };
+const busyRefusal = (commands: Record<OralCommandLane, OralCommandSnapshot>): "SESSION_BUSY" | null =>
+  commands.study.rejectionCode === "SESSION_BUSY" || commands.stop.rejectionCode === "SESSION_BUSY" ? "SESSION_BUSY" : null;
 export type OralDocumentOptions = {
   access: OpenedAccess;
   transport: HttpOptions;
@@ -251,7 +253,10 @@ export class OralDocumentController {
     else phase = this.sessionId ? "stale" : "idle";
     return { phase, sessionId: live ? this.sessionId : null, current: structuredClone(current), stateVersion: this.floor,
       terminalSessionIds: [...this.terminal], commands,
-      problem: live ? commands.study.problem ?? commands.stop.problem ?? this.problem ?? (foreignReceipt ? "unconfirmed_session" : null) : null,
+      // A start refused as SESSION_BUSY is a fact of the core, not a lost reply: it outranks the generic problem that the
+      // follow-up read of the never-created session leaves behind, so the screen can name the other device (К10-018).
+      problem: live ? commands.study.problem ?? commands.stop.problem ?? busyRefusal(commands) ?? this.problem
+        ?? (foreignReceipt ? "unconfirmed_session" : null) : null,
       presentationTicket: live ? this.ticket : null,
       canStart: this.active("study") && this.recovered && !this.refreshing && studyReady && stopReady
         && !foreignHistory && (!this.sessionId || closed),

@@ -27,21 +27,24 @@ const copy = {
     previous: "Предыдущий ответ", captured: "Отправленный ответ", forgot: "Забыл…", next: "Дальше", known: "Уже знаю",
     groupDone: "Группа изучена.", passDone: "Этот проход завершён.", today: "Вернуться на Сегодня",
     local: "Не удалось обновить данные на этом устройстве.", savedLocal: "Действие сохранено. Не удалось обновить данные на этом устройстве.",
-    changed: "Задание изменилось. Обнови занятие.", resultChanged: "Результат изменился. Обнови занятие.", noMaterial: "Сейчас нет доступных слов для этого занятия." },
+    changed: "Задание изменилось. Обнови занятие.", resultChanged: "Результат изменился. Обнови занятие.", noMaterial: "Сейчас нет доступных слов для этого занятия.",
+    busy: "Занятие открыто на другом устройстве" },
   uk: { title: "Вивчення слів", exit: "Вийти", loading: "Завантажуємо заняття…", idle: "Заняття ще не почалося.",
     saving: "Зберігаємо відповідь…", present: "Підтверджуємо показ завдання…", unknown: "Перевіряємо, чи збереглася дія.",
     stop: "Завершуємо заняття…", closed: "Заняття завершено.", unavailable: "Заняття недоступне в цьому вікні.", stale: "Не вдалося оновити заняття.",
     previous: "Попередня відповідь", captured: "Надіслана відповідь", forgot: "Не пам’ятаю…", next: "Далі", known: "Уже знаю",
     groupDone: "Групу вивчено.", passDone: "Цей прохід завершено.", today: "Повернутися на Сьогодні",
     local: "Не вдалося оновити дані на цьому пристрої.", savedLocal: "Дію збережено. Не вдалося оновити дані на цьому пристрої.",
-    changed: "Завдання змінилося. Онови заняття.", resultChanged: "Результат змінився. Онови заняття.", noMaterial: "Зараз немає доступних слів для цього заняття." },
+    changed: "Завдання змінилося. Онови заняття.", resultChanged: "Результат змінився. Онови заняття.", noMaterial: "Зараз немає доступних слів для цього заняття.",
+    busy: "Заняття відкрито на іншому пристрої" },
   en: { title: "Learn words", exit: "Exit", loading: "Loading your session…", idle: "The session has not started yet.",
     saving: "Saving your answer…", present: "Confirming the displayed question…", unknown: "Checking whether the action was saved.",
     stop: "Ending the session…", closed: "The session has ended.", unavailable: "This session is unavailable in this window.", stale: "Could not refresh the session.",
     previous: "Previous answer", captured: "Submitted answer", forgot: "I forgot…", next: "Next", known: "I already know this",
     groupDone: "You have learned this group.", passDone: "This round has ended.", today: "Return to Today",
     local: "Could not update data on this device.", savedLocal: "The action was saved. Could not update data on this device.",
-    changed: "The question has changed. Refresh the session.", resultChanged: "The result has changed. Refresh the session.", noMaterial: "There are no words available for this session right now." },
+    changed: "The question has changed. Refresh the session.", resultChanged: "The result has changed. Refresh the session.", noMaterial: "There are no words available for this session right now.",
+    busy: "A session is open on another device" },
 } as const;
 
 /**
@@ -64,6 +67,7 @@ export function LearningScreen({ state, language, submitOnEnter, actions, render
   const refusedUndo = primary.outcome === "rejected" && primary.resolved?.kind === "result.undo" && state.problem === primary.rejectionCode;
   const problem = refusedUndo && state.problem !== "SESSION_CLOSED" ? stepBackCopy[language].unavailable
     : state.problem === "NO_MATERIAL" ? t.noMaterial
+    : state.problem === "SESSION_BUSY" ? t.busy
     : state.problem === "ASSIGNMENT_STALE" ? t.changed
     : state.problem === "RESULT_STALE" ? t.resultChanged
     : state.problem === "SESSION_CLOSED" ? t.closed
