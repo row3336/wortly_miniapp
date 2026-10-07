@@ -6,6 +6,7 @@ import type {
 import { validProfile } from "../api/entryApi";
 import { ApiError, createJsonTransport, errorCode, httpError, type HttpOptions } from "../api/http";
 import { count, date, eventTime, exactKeys, oneOf, record, sameId, uuid, version } from "../api/wireValidation";
+import { intentHash } from "../commands/intentHash";
 import { validDictionaryView } from "./viewApi";
 
 // Only the main written L1->De of a word is increased (core C-INTV, CON:94, K07-062).
@@ -244,21 +245,10 @@ function fingerprintPayload(intent: DictionaryIntervalIntent): Record<string, un
   }
 }
 
-/** json.dumps(sort_keys=True, separators=(",", ":")); payload strings are ASCII. */
-function canonical(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-  if (record(value)) {
-    return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonical(value[key])}`).join(",")}}`;
-  }
-  return JSON.stringify(value);
-}
-
 /** Matches core identity.intent_hash(kind, payload); origin and command ID are not part of it. */
 export async function dictionaryIntervalIntentHash(value: DictionaryIntervalIntent): Promise<string> {
   const intent = copyIntent(value);
-  const text = canonical({ kind: intent.kind, payload: fingerprintPayload(intent) });
-  const digest = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
-  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+  return intentHash(intent.kind, fingerprintPayload(intent));
 }
 
 /** The confirmed increase is built only from the server's offer; versions and dates are never computed. */
