@@ -52,6 +52,8 @@ export type CommandFact = { "id": string; "status": "applied" | "already_applied
 
 export type CommandStatusResponse = { "command": (StoredCommandFact | MissingCommandFact); "current": (Profile | ModeState | UnavailableCurrent | SettingsProjection | SessionProjection | LearningSessionProjection | OralSessionProjection | ConjugationSessionProjection | UnavailableSession | RemoteSessionProjection | LearningCurrentProjection | ConjugationCatalog | FeedbackCurrent | OnboardingProjection); "state_version": string; "closed_session"?: (ClosedSessionBoundary | null); "verified_intent_hash"?: (string | null); };
 
+export type CommonPrepositionPair = { "source": "common"; "akkusativ": CardExample; "dativ": CardExample; };
+
 export type Compatibility = { "compatible": boolean; "contract_version": string; };
 
 export type CompleteAnswerVariant = { "parts": Array<string>; };
@@ -108,7 +110,7 @@ export type DecidePayload = { "request_id": string; "expected_version": string; 
 
 export type DictionaryCardActions = { "exclude": boolean; "return": boolean; "relearn": boolean; };
 
-export type DictionaryCardContent = { "pair": "ru-de" | "uk-de" | "en-de"; "card": DictionaryReferenceCard; "translations": CardTranslations; "grammar": (ReferenceNoun | ReferenceVerb | ReferenceAdjective | ReferencePreposition | ReferenceConjunction | null); "reference_conjugations": Array<ReferenceConjugation>; "examples": CardExamples; "association": (PersonalCardText | null); };
+export type DictionaryCardContent = { "pair": "ru-de" | "uk-de" | "en-de"; "card": DictionaryReferenceCard; "translations": CardTranslations; "grammar": (ReferenceNoun | ReferenceVerb | ReferenceAdjective | ReferencePreposition | ReferenceConjunction | null); "reference_conjugations": Array<ReferenceConjugation>; "examples": (CardExamples | PrepositionCardExamples); "association": (PersonalCardText | null); };
 
 export type DictionaryCardResponse = { "state_version": string; "current": (DictionaryCardContent | UnavailableCurrent); };
 
@@ -172,7 +174,7 @@ export type DictionaryStudyFacts = { "common_translation_present": boolean; "exc
 
 export type DictionaryUndoTarget = { "action_id": string; "kind": "interval.increase"; "version": string; "context_id": string; };
 
-export type DictionaryViewContent = { "pair": "ru-de" | "uk-de" | "en-de"; "card": DictionaryReferenceCard; "translations": CardTranslations; "grammar": (ReferenceNoun | ReferenceVerb | ReferenceAdjective | ReferencePreposition | ReferenceConjunction | null); "reference_conjugations": Array<ReferenceConjugation>; "examples": CardExamples; "association": (PersonalCardText | null); "field_versions": DictionaryFieldVersions; };
+export type DictionaryViewContent = { "pair": "ru-de" | "uk-de" | "en-de"; "card": DictionaryReferenceCard; "translations": CardTranslations; "grammar": (ReferenceNoun | ReferenceVerb | ReferenceAdjective | ReferencePreposition | ReferenceConjunction | null); "reference_conjugations": Array<ReferenceConjugation>; "examples": (CardExamples | PrepositionCardExamples); "association": (PersonalCardText | null); "field_versions": DictionaryFieldVersions; };
 
 export type DirectionCounts = { "l1-de": ReadyCount; "de-l1": ReadyCount; };
 
@@ -192,13 +194,13 @@ export type FeedbackCurrent = { "inbox_id": string; "card_id": (string | null); 
 
 export type FeedbackPayload = { "text": string; "card_id"?: (string | null); };
 
-export type FieldCommandResponse = { "command": (SavedCommandFact | RejectedCommandFact); "current": (PersonalFieldCurrent | UnavailableCurrent); "state_version": string; "error"?: (ErrorDetail | null); };
+export type FieldCommandResponse = { "command": (SavedCommandFact | RejectedCommandFact); "current": (PersonalFieldCurrent | PrepositionExampleCurrent | UnavailableCurrent); "state_version": string; "error"?: (ErrorDetail | null); };
 
 export type FieldSaveCommand = { "command_id": string; "kind": "field.save"; "client_instance_id": string; "document_id": string; "context_id": string; "expected_field_version": string; "payload": FieldSavePayload; };
 
-export type FieldSavePayload = { "card_id": string; "field_name": "translation" | "example" | "association"; "scope": "personal"; "language": "uk" | "en" | "ru"; "value": (string | null); };
+export type FieldSavePayload = { "card_id": string; "field_name": "translation" | "example" | "association"; "scope": "personal"; "language": "uk" | "en" | "ru"; "value": (string | null); "case_role"?: ("akkusativ" | "dativ" | null); };
 
-export type FieldStatusResponse = { "command": StoredCommandFact; "current": (PersonalFieldCurrent | UnavailableCurrent); "state_version": string; "verified_intent_hash"?: (string | null); };
+export type FieldStatusResponse = { "command": StoredCommandFact; "current": (PersonalFieldCurrent | PrepositionExampleCurrent | UnavailableCurrent); "state_version": string; "verified_intent_hash"?: (string | null); };
 
 export type FieldUndoCommand = { "command_id": string; "kind": "field.undo"; "client_instance_id": string; "document_id": string; "context_id": string; "action_id": string; "expected_action_version": string; "expected_field_version": string; "payload": FieldUndoPayload; };
 
@@ -248,7 +250,7 @@ export type LearningPreviewAddress = { "id": string; "card_id": string; "positio
 
 export type LearningPreviewCommand = { "command_id": string; "client_instance_id": string; "document_id": string; "session_id": string; "kind": "learning.preview_next" | "learning.known"; "preview_id": string; "payload": EmptyPayload; };
 
-export type LearningPreviewContent = { "pair": "ru-de" | "uk-de" | "en-de"; "card": ReferenceCard; "translations": CardTranslations; "grammar": (ReferenceNoun | ReferenceVerb | ReferenceAdjective | ReferencePreposition | ReferenceConjunction | null); "reference_conjugations": Array<ReferenceConjugation>; "examples": CardExamples; "association": (PersonalCardText | null); };
+export type LearningPreviewContent = { "pair": "ru-de" | "uk-de" | "en-de"; "card": ReferenceCard; "translations": CardTranslations; "grammar": (ReferenceNoun | ReferenceVerb | ReferenceAdjective | ReferencePreposition | ReferenceConjunction | null); "reference_conjugations": Array<ReferenceConjugation>; "examples": (CardExamples | PrepositionCardExamples); "association": (PersonalCardText | null); };
 
 export type LearningResultReadResponse = { "action": (WrittenAction | null); "result": (WrittenResult | null); "step": (LearningSessionProjection | UnavailableSession | UnavailableCurrent); "capabilities": LearningAnswerCapabilities; "state_version": string; };
 
@@ -326,11 +328,23 @@ export type PersonalCardText = { "value": string; "version": string; };
 
 export type PersonalFieldCurrent = { "status": "available"; "card_id": string; "language": "uk" | "en" | "ru"; "card_revision": string; "field_name": "translation" | "example" | "association"; "field_version": string; "personal": (PersonalCardText | null); "common_translations": (Array<string> | null); "common_examples": (Array<CardExample> | null); "undo_target": (FieldUndoTarget | null); };
 
+export type PersonalPrepositionPair = { "source": "personal"; "akkusativ": PersonalCardText; "dativ": PersonalCardText; };
+
 export type PracticeDay = { "local_date": string; "words": number; "phrases": number; };
 
 export type PracticeDirections = { "l1-de": number; "de-l1": number; };
 
 export type PracticeResponse = { "state_version": string; "local_date": string; "pair": "ru-de" | "uk-de" | "en-de"; "time_zone": string; "starts_at": string; "ends_at": string; "days": Array<PracticeDay>; };
+
+export type PrepositionCardExamples = { "common": Array<CardExample>; "personal": (PersonalCardText | null); "preposition_pair": PrepositionPair; };
+
+export type PrepositionExampleCurrent = { "status": "available"; "card_id": string; "language": "uk" | "en" | "ru"; "card_revision": string; "field_name": "example"; "case_role": "akkusativ" | "dativ"; "field_version": string; "personal": (PersonalCardText | null); "preposition_pair": PrepositionPair; };
+
+export type PrepositionPair = { "editor": PrepositionPairEditor; "effective": (PersonalPrepositionPair | CommonPrepositionPair); };
+
+export type PrepositionPairEditor = { "akkusativ": PrepositionPairRole; "dativ": PrepositionPairRole; };
+
+export type PrepositionPairRole = { "value": (string | null); "version": string; };
 
 export type PresentCommand = { "command_id": string; "client_instance_id": string; "document_id": string; "session_id": string; "kind": "assignment.present"; "assignment_id": string; "payload": EmptyPayload; };
 
@@ -464,7 +478,7 @@ export type UnavailableSession = { "session_id": string; "status": "not_found" |
 
 export type WrittenAction = { "action_id": string; "kind": "answer.submit"; "version": string; "status": "active" | "undone"; };
 
-export type WrittenAnswerDetail = { "input": (WrittenTextInput | WrittenForgotInput); "initial_check": InitialAnswerCheck; "variants": Array<CompleteAnswerVariant>; "conjunction_hint": (ConjunctionHint | null); "examples": (CardExamples | null); };
+export type WrittenAnswerDetail = { "input": (WrittenTextInput | WrittenForgotInput); "initial_check": InitialAnswerCheck; "variants": Array<CompleteAnswerVariant>; "conjunction_hint": (ConjunctionHint | null); "examples": (CardExamples | PrepositionCardExamples | null); };
 
 export type WrittenCapabilities = { "answer_target": (string | null); "grades": (WrittenGradeCapability | null); "correct_target": (LearningResultTarget | null); "undo_target": (WrittenUndoTarget | null); "stop": boolean; "summary_home": boolean; };
 
