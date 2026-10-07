@@ -1,0 +1,15 @@
+.stat-weeks { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; padding: 4px; border-radius: 14px; background: var(--surface); }
+.stat-week { min-height: 44px; padding: 8px 4px; border: 0; border-radius: 10px; background: none; color: var(--text); font-size: 14px; overflow-wrap: anywhere; }
+.stat-week[aria-pressed="true"] { font-weight: 700; background: var(--bg); }
+.stat-group { display: grid; gap: 16px; min-width: 0; }
+.stat-screen h3 { margin: 0; font-size: 16px; line-height: 1.4; }
+.stat-list { display: grid; gap: 4px; margin: 0; }
+.stat-row { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; min-width: 0; }
+.stat-row dt { min-width: 0; font-size: 14px; }
+.stat-row dd { margin: 0; flex: 0 0 auto; font-weight: 700; font-variant-numeric: tabular-nums; }
+.stat-table { width: 100%; border-collapse: collapse; font-size: 14px; font-variant-numeric: tabular-nums; }
+.stat-table th, .stat-table td { padding: 6px 0; border-bottom: 1px solid var(--line); text-align: right; }
+.stat-table th:first-child { text-align: left; font-weight: 400; }
+.stat-table thead th { color: var(--muted); font-weight: 400; }
+.stat-table td { padding-left: 12px; font-weight: 700; }
+.stat-screen button:focus-visible { outline: 2px solid var(--text); outline-offset: 3px; }

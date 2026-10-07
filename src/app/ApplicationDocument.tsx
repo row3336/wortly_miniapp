@@ -10,6 +10,7 @@ import { LearningPreviewCard } from "../learning/LearningPreviewCard";
 import { ManualPendingStore } from "../learning/manualPending";
 import type { AsyncStorage } from "../platform/storage";
 import { SettingsHost } from "../settings/SettingsHost";
+import { StatisticsHost } from "../statistics/StatisticsHost";
 import { useSettingsDocument, type SettingsObservation } from "../settings/useSettingsDocument";
 import type { SettingsPendingStore } from "../settings/settingsPending";
 import { renderLearningPreviewExamples } from "../study/LearningPreviewExamples";
@@ -22,7 +23,6 @@ import { LearningHost } from "./LearningHost";
 import { backDestination, initialRoute, navigationReducer, type Route, type Tab } from "./navigation";
 import { useBackLayer } from "./navigationBack";
 import { useScreenTransition } from "./navigationMotion";
-import { StatisticsPlaceholder } from "./navigationStubs";
 import type { OpenedAccess } from "./openedAccess";
 import { useOralHost, type OralStores } from "./OralHost";
 
@@ -225,7 +225,11 @@ export function ApplicationDocument(props: Props) {
       hostRoute = "settings";
       screen = readScreen();
     } else todayShown = true;
-  } else if (at === "statistics") screen = <StatisticsPlaceholder language={props.language} onBack={back} />;
+  } else if (at === "statistics") {
+    // Every entry mounts a fresh host and so reads the server; a foreground access is read again by the host (TA:362).
+    screen = <StatisticsHost access={props.access} transport={props.transport} language={props.language}
+      minimumStateVersion={floor?.version} onBack={back} />;
+  }
   // One host per opened card: Back returns to the source with its return context (TA:86, К07-096).
   // The oral owner lives for the whole document; it shows a screen only on its own route.
   const oral = useOralHost({ access: props.access, transport: props.transport, stores: props.oralStores, newId: props.newId,
