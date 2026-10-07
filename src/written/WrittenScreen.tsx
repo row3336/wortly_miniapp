@@ -1,6 +1,7 @@
 import { useRef } from "react";
 import type { Language } from "../i18n/language";
 import { CommandRecovery } from "../commands/CommandRecovery";
+import { StepBackButton, stepBackCopy } from "../commands/StepBackButton";
 import { useEnterNext } from "../commands/useEnterNext";
 import { WrittenAnswerInput } from "../study/WrittenAnswerInput";
 import { WrittenAnswerResult } from "../study/WrittenAnswerResult";
@@ -59,7 +60,10 @@ export function WrittenScreen({ state, language, submitOnEnter, actions, onToday
   const closed = state.phase === "closed" ? state.closed : null;
   const ownStop = closed?.reason === "stop";
   const problemCode = state.problem, phrases = state.bucket === "phrases";
-  const problem = problemCode === "NO_MATERIAL" ? phrases ? t.noPhrases : t.noMaterial : problemCode === "SESSION_BUSY" ? t.busy
+  // A refused «Шаг назад» says that this right is gone; the re-read state shows what holds now (CT 2.2).
+  const refusedUndo = primary.outcome === "rejected" && primary.resolved?.kind === "result.undo" && problemCode === primary.rejectionCode;
+  const problem = refusedUndo && problemCode !== "SESSION_CLOSED" ? stepBackCopy[language].unavailable
+    : problemCode === "NO_MATERIAL" ? phrases ? t.noPhrases : t.noMaterial : problemCode === "SESSION_BUSY" ? t.busy
     : problemCode === "SETUP_REQUIRED" ? t.setup : problemCode === "ASSIGNMENT_STALE" ? t.changed
     : problemCode === "SESSION_CLOSED" ? t.closed : problemCode === "storage" ? t.local
     : problemCode === "mismatch" || problemCode === "invalid_pending" || problemCode === "pending_changed" ? t.blocked
@@ -110,14 +114,17 @@ export function WrittenScreen({ state, language, submitOnEnter, actions, onToday
     {result && <WrittenAnswerResult result={result} language={language} pending={pendingResult}
       grades={state.grades} canCorrect={state.canCorrect} canNext={canNext} timer={state.timer} example={answerExample}
       onGrade={grade => { void actions.grade(grade); }} onCorrect={() => { void actions.correct(); }} onNext={() => { void actions.next(); }} />}
+    {result && state.canUndo && <StepBackButton className="written-step-back" language={language} onUndo={() => { void actions.undo(); }} />}
     {state.phase === "previous_result" && primary.pendingIntent?.kind === "assignment.present" && primary.outcome === null
       && <p role="status">{t.present}</p>}
     {state.canPrevious && <button type="button" className="written-previous" onClick={() => actions.previousResult()}>{t.previous}</button>}
     {summary && <WrittenSummary summary={summary} outcome={state.phase === "summary" ? "completed" : "interrupted"} language={language}
       canToday={state.phase === "summary" ? state.canSummaryHome : true}
+      onUndo={state.phase === "summary" && state.canUndo ? () => { void actions.undo(); } : undefined}
       onToday={() => { if (state.phase === "summary") void actions.stop("summary_home"); else onToday(); }} />}
-    {["loading", "stopping", "disposed"].includes(state.phase) && <p role="status">
-      {state.phase === "loading" ? t.loading : state.phase === "stopping" ? t.stop : t.unavailable}</p>}
+    {["loading", "stopping", "disposed", "undoing"].includes(state.phase) && <p role="status">
+      {state.phase === "loading" ? t.loading : state.phase === "stopping" ? t.stop : state.phase === "undoing"
+        ? stepBackCopy[language].pending : t.unavailable}</p>}
     {state.phase === "closed" && !summary && <p role="status">{t.closed}</p>}
     {state.phase === "unknown" && !state.question && !unknownAnswer && !result && <p role="status">{t.unknown}</p>}
     {problem && !isClosed && <p role="status">{problem}</p>}

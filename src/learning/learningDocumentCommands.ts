@@ -1,10 +1,16 @@
 import { DocumentLanes, type DocumentLanesOptions, type DocumentLanesSnapshot } from "../commands/documentLanes";
 import { LearningCommandController, type LearningCommandSnapshot, type LearningTransition } from "./learningCommandController";
+import { isLearningResultIntent, type LearningAnswerIntent, type LearningCommandIntent,
+  type LearningResultIntent } from "./learningCommandIntent";
 import { createLearningResultApi, type LearningResultRead } from "./learningAnswerApi";
 import { createLearningSessionApi, type LearningSessionRead } from "./learningSessionApi";
 import { LearningSessionPendingStore, LearningStopPendingStore } from "./learningSessionPending";
 
 export type LearningDocumentSnapshot = DocumentLanesSnapshot<LearningCommandSnapshot>;
+
+function resultCommand(intent: LearningCommandIntent): intent is LearningAnswerIntent | LearningResultIntent {
+  return intent.kind === "answer.submit" || isLearningResultIntent(intent);
+}
 
 /** Own both durable command lanes for one opened document, without owning its views or drafts. */
 export class LearningDocumentCommands extends DocumentLanes<LearningCommandSnapshot, LearningTransition, LearningSessionRead, LearningResultRead> {
@@ -21,16 +27,16 @@ export class LearningDocumentCommands extends DocumentLanes<LearningCommandSnaps
         stateVersion: wiring.stateVersion, minimumStateVersion: wiring.minimumStateVersion,
         isLive: wiring.isLive, newId: wiring.newId,
         pendingStore: wiring.lane === "primary" ? new LearningSessionPendingStore(options.storage) : new LearningStopPendingStore(options.storage),
-        // Answers and their revisions go to the result endpoint; every other transition is a session command.
+        // Answers, their revisions and their undo go to the result endpoint; every other transition is a session command.
         send: intent => wiring.send(async credentials => {
           const address = wiring.origin(credentials);
-          return intent.kind === "answer.submit" || intent.kind === "result.grade" || intent.kind === "result.correct"
+          return resultCommand(intent)
             ? results.send(credentials.token, credentials.proof, { ...intent, ...address })
             : sessions.send(credentials.token, credentials.proof, { ...intent, ...address });
         }),
         check: intent => wiring.run(async credentials => {
           const address = wiring.origin(credentials);
-          return intent.kind === "answer.submit" || intent.kind === "result.grade" || intent.kind === "result.correct"
+          return resultCommand(intent)
             ? results.status(credentials.token, credentials.proof, { ...intent, ...address })
             : sessions.status(credentials.token, credentials.proof, { ...intent, ...address });
         }),

@@ -71,7 +71,7 @@ describe("written HTTP adapter", () => {
     }
   });
 
-  // Transitional until M-UNDO adds the undo button: the decoder takes core's undo right, the client does not use it yet.
+  // The decoder takes core's undo right (M-UNDO-DEC); M-UNDO builds «Шаг назад» from it.
   it("accepts undo_target as null or as the exact address of this live answer, and nothing else", async () => {
     const h = harness(); await h.start(); await h.present(); await h.answer("Haus");
     type View = Record<string, unknown> & { capabilities: Record<string, unknown>; result: Record<string, unknown>;
@@ -122,6 +122,53 @@ describe("written HTTP adapter", () => {
       h.fetcher.mockResolvedValueOnce(body);
       await expect(read()).rejects.toMatchObject({ kind: "invalid_response" });
     }
+  });
+
+  it("accepts an undo fact at version+1 with the undone answer and the new issue of its card (C-UNDO-1)", async () => {
+    const h = harness({ undo: true }); await h.start(); await h.present();
+    const answered = await h.answer("falsch");
+    const detail = "result" in answered ? answered.result?.detail : null;
+    expect(detail).toBeTruthy();
+    const undo = { command_id: id(21), session_id: id(3), kind: "result.undo", assignment_id: id(6), result_id: id(706),
+      expected_result_version: "1", payload: {} };
+    const undone = await h.send(undo);
+    expect(undone).toMatchObject({ outcome: "accepted", command: { kind: "result.undo", target_id: id(6), result_id: id(706),
+      object_version: "2" }, result: { status: "undone", version: "2", detail: null }, action: { status: "undone", version: "2" },
+      capabilities: { undo_target: null, correct_target: null, grades: null },
+      step: { status: "active", assignment: { id: id(10006), status: "prefetched" }, progress: { completed: 0 } } });
+    expect(lastBody(h.fetcher)).toEqual({ ...undo, ...origin });
+    expect(await h.send(undo)).toMatchObject({ outcome: "accepted", command: { status: "already_applied", object_version: "2" } });
+    expect(await h.api.status("token", "proof", { ...origin, ...undo } as WrittenCommand))
+      .toMatchObject({ outcome: "accepted", command: { kind: "result.undo" }, result: { status: "undone" } });
+    // A fact that is not exactly this undo, or a result that is still live, is not accepted.
+    type Body = Record<string, unknown> & { command: Record<string, unknown>; result: Record<string, unknown>; action: Record<string, unknown> };
+    const body = { ...h.server.view(id(706)), command: { ...h.server.receipts.get(id(21))!.fact }, state_version: "9" } as Body;
+    for (const changed of [
+      { ...body, command: { ...body.command, object_version: "3" } },
+      { ...body, command: { ...body.command, object_version: "1" } },
+      { ...body, command: { ...body.command, kind: "result.correct" } },
+      { ...body, command: { ...body.command, target_id: id(7) } },
+      { ...body, command: { ...body.command, result_id: id(707) } },
+      { ...body, command: { ...body.command, action_id: id(899) } },
+      { ...body, command: { ...body.command, context_id: id(5) } },
+      { ...body, result: { ...body.result, status: "active" }, action: { ...body.action, status: "active" } },
+      // An undone answer keeps no parsed input; core always sends detail=null.
+      { ...body, result: { ...body.result, detail } },
+    ]) {
+      h.fetcher.mockResolvedValueOnce(response(changed));
+      await expect(h.send(undo)).rejects.toMatchObject({ kind: "invalid_response" });
+    }
+    // Without a visible result (the session became unavailable) the fact alone must name exactly the next version.
+    const hidden = { ...body, step: { status: "unavailable" }, action: null, result: null,
+      capabilities: { answer_target: null, grades: null, correct_target: null, undo_target: null, stop: false, summary_home: false } };
+    h.fetcher.mockResolvedValueOnce(response(hidden));
+    expect(await h.send(undo)).toMatchObject({ outcome: "accepted", step: { status: "unavailable" }, result: null });
+    h.fetcher.mockResolvedValueOnce(response({ ...hidden, command: { ...body.command, object_version: "3" } }));
+    await expect(h.send(undo)).rejects.toMatchObject({ kind: "invalid_response" });
+    const refused = harness({ undo: true, refuseUndo: { code: "VERSION_CONFLICT" } });
+    await refused.start(); await refused.present(); await refused.answer("falsch");
+    expect(await refused.send(undo)).toMatchObject({ outcome: "rejected", error: { code: "VERSION_CONFLICT" },
+      result: { result_id: id(706), status: "active" }, capabilities: { undo_target: null } });
   });
 
   it("accepts a correction fact at version+1 with grade 4 and the grade right that follows it", async () => {

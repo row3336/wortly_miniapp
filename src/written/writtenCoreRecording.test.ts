@@ -16,9 +16,11 @@ type Exchange = { name: string; method: "GET" | "POST"; path: string; query: Rec
   body: Record<string, unknown> | null; status: number; schema: string[]; response: unknown };
 const exchanges = recording.exchanges as unknown as Exchange[];
 const exchange = (name: string) => exchanges.find(item => item.name === name)!;
+/** The «Шаг назад» part is a second session appended after the first one (M-UNDO). */
+const undoPart = exchanges.findIndex(item => item.name === "undo_start");
 
-function replay() {
-  const queue = [...exchanges];
+function replay(from = 0) {
+  const queue = exchanges.slice(from);
   const fetcher = vi.fn<typeof fetch>(async (url, init) => {
     const expected = queue.shift()!;
     const parsed = new URL(String(url), "http://localhost");
@@ -96,6 +98,40 @@ describe("written adapter against recorded core replies", () => {
     expect(await api.status("token", "proof", { ...command("stop"), command_id: missing })).toMatchObject({ outcome: "not_found",
       closed_session: { status: "closed", close_reason: "summary_home" } });
     expect(await api.send("token", "proof", command("start_again"))).toMatchObject({ outcome: "rejected", error: { code: "SESSION_CLOSED" } });
-    expect(fetcher).toHaveBeenCalledTimes(exchanges.length);
+    expect(fetcher).toHaveBeenCalledTimes(undoPart);
+  });
+
+  it("accepts a real «Шаг назад»: the undone answer, its status by the same ID and the new issue of the card (C-UNDO-1)", async () => {
+    expect(undoPart).toBeGreaterThan(0);
+    const { api, fetcher } = replay(undoPart);
+    const session = command("undo_start").session_id;
+    expect(session).not.toBe(sessionId());
+    expect(await api.send("token", "proof", command("undo_start"))).toMatchObject({ outcome: "accepted", current: { status: "active" } });
+    expect(await api.send("token", "proof", command("undo_present"))).toMatchObject({ outcome: "accepted" });
+    const answered = await api.send("token", "proof", command("undo_answer"));
+    const answer = command("undo_answer");
+    if (!("result" in answered) || !answered.result || !answered.action) throw new Error("the answer has no result");
+    const right = { session_id: session, assignment_id: answer.kind === "answer.submit" ? answer.assignment_id : "",
+      result_id: answered.result.result_id, expected_result_version: "1", action_id: answered.action.action_id, kind: "answer.submit" };
+    expect(answered).toMatchObject({ outcome: "accepted", result: { grade: 2 }, capabilities: { undo_target: right } });
+    // The command is the address of that right only, without its action ID (CT 2.3).
+    const { action_id: _action, kind: _kind, ...address } = right;
+    expect(command("undo")).toMatchObject({ kind: "result.undo", ...address, payload: {} });
+    expect(command("undo")).not.toHaveProperty("action_id");
+    const undone = await api.send("token", "proof", command("undo"));
+    expect(undone).toMatchObject({ outcome: "accepted", command: { kind: "result.undo", object_version: "2" },
+      result: { result_id: right.result_id, status: "undone", version: "2", detail: null }, action: { status: "undone", version: "2" },
+      capabilities: { undo_target: null, correct_target: null, grades: null },
+      step: { status: "active", summary: null, progress: { completed: 0 }, assignment: { status: "prefetched", kind: "original" } } });
+    const again = "step" in undone && undone.step.status === "active" && "assignment" in undone.step ? undone.step.assignment?.id : null;
+    expect(again).toBeTruthy();
+    expect(again).not.toBe(right.assignment_id);
+    // The client fingerprint of an undo equals core's on real data.
+    expect(await api.status("token", "proof", command("undo"))).toMatchObject({ outcome: "accepted",
+      command: { status: "already_applied", kind: "result.undo" }, result: { status: "undone" } });
+    expect(command("undo_present_again")).toMatchObject({ kind: "assignment.present", assignment_id: again });
+    expect(await api.send("token", "proof", command("undo_present_again"))).toMatchObject({ outcome: "accepted",
+      current: { assignment: { id: again, status: "presented" } } });
+    expect(fetcher).toHaveBeenCalledTimes(exchanges.length - undoPart);
   });
 });

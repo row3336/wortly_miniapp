@@ -4,8 +4,8 @@ import { CommandLane, retryStep, type CommandProblem, type LaneOptions, type Lan
   type WithoutId } from "../commands/commandLane";
 import { revisionRetryProblem } from "../commands/resultRevision";
 import type { WrittenAnswer, WrittenCurrent, WrittenReply, WrittenResultRead, WrittenSessionRead, WrittenStatus } from "./writtenApi";
-import { copyWrittenIntent, isAnswerKind, isRevisionIntent, validWrittenIntent, type WrittenIntent,
-  type WrittenRevisionIntent } from "./writtenIntent";
+import { copyWrittenIntent, isAnswerKind, isResultIntent, validWrittenIntent, type WrittenIntent,
+  type WrittenResultIntent } from "./writtenIntent";
 import type { WrittenLane } from "./writtenPending";
 
 export type WrittenTransition = WithoutId<WrittenIntent>;
@@ -14,9 +14,9 @@ type Resolved = LaneResolved<WrittenIntent["kind"]> & { assignmentId?: string; r
 export type WrittenCommandSnapshot = LaneSnapshot<WrittenIntent, Current, Resolved> & { answer: WrittenAnswer | null };
 type Spec = { intent: WrittenIntent; lane: WrittenLane; current: Current; resolved: Resolved; reply: WrittenReply;
   status: WrittenStatus; read: WrittenSessionRead; snapshot: WrittenCommandSnapshot };
-type Options = LaneOptions<Spec> & { readResult(intent: WrittenRevisionIntent): Promise<WrittenResultRead> };
+type Options = LaneOptions<Spec> & { readResult(intent: WrittenResultIntent): Promise<WrittenResultRead> };
 
-/** Own one addressed intent of one lane; the written answer and its revisions add the result view to the shared lane. */
+/** Own one addressed intent of one lane; the written answer, its revisions and its undo add the result view to the shared lane. */
 export class WrittenCommandController extends CommandLane<Spec, Options> {
   private answer: WrittenAnswer | null = null;
 
@@ -45,7 +45,7 @@ export class WrittenCommandController extends CommandLane<Spec, Options> {
   }
   protected async verify(pending: LanePending<WrittenIntent>): Promise<boolean> {
     const intent = pending.intent;
-    if (!isRevisionIntent(intent)) return this.verifySession(pending, current => retryProblem(intent, current, pending.pair));
+    if (!isResultIntent(intent)) return this.verifySession(pending, current => retryProblem(intent, current, pending.pair));
     const read = await this.options.readResult(intent);
     if (!this.live()) return false;
     if (!this.observe(read.state_version, read.step)) this.problem = "stale_response";
@@ -60,7 +60,7 @@ export class WrittenCommandController extends CommandLane<Spec, Options> {
 }
 
 /** A missing acceptance fact authorizes no effect; retry only the same still-valid target. */
-function retryProblem(intent: Exclude<WrittenIntent, WrittenRevisionIntent>, current: WrittenSessionRead["current"], pair: string): CommandProblem {
+function retryProblem(intent: Exclude<WrittenIntent, WrittenResultIntent>, current: WrittenSessionRead["current"], pair: string): CommandProblem {
   const step = retryStep(current, intent, pair);
   if (typeof step === "string") return step;
   const assignment = step.status === "active" ? step.assignment : null;

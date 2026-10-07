@@ -1,4 +1,4 @@
-// The retry check of a grade or a correction with an unknown outcome (M-REFAC-CMD): only the same live right.
+// The retry check of a grade, a correction (M-REFAC-CMD) or an undo (M-UNDO) with an unknown outcome: only the same live right.
 import { describe, expect, it } from "vitest";
 import { revisionRetryProblem, type RevisionIntent, type RevisionRead } from "./resultRevision";
 
@@ -9,7 +9,8 @@ const grade = (value: number): RevisionIntent => ({ ...target, kind: "result.gra
 function read(change: (value: RevisionRead) => void = () => {}, wrong = true): RevisionRead {
   const value: RevisionRead = { step: { status: "active", session_id: id(3), pair: "ru-de" },
     result: { result_id: id(7), assignment_id: id(6), version: "2", status: "active" }, action: { version: "2", status: "active" },
-    capabilities: { correct_target: wrong ? { ...target } : null, grades: wrong ? null : { ...target, values: [3, 4, 5] } } };
+    capabilities: { correct_target: wrong ? { ...target } : null, grades: wrong ? null : { ...target, values: [3, 4, 5] },
+      undo_target: { ...target } } };
   change(value);
   return value;
 }
@@ -36,6 +37,17 @@ describe("revision retry check", () => {
     expect(revisionRetryProblem(correct, read(value => { value.action!.status = "undone"; }), "ru-de", false)).toBe("step_changed");
     expect(revisionRetryProblem(correct, read(value => { value.capabilities.correct_target!.result_id = id(8); }), "ru-de", false)).toBe("step_changed");
     expect(revisionRetryProblem(correct, read(value => { value.capabilities.correct_target!.expected_result_version = "1"; }), "ru-de", false)).toBe("step_changed");
+  });
+  it("retries an unknown undo only while the server still grants exactly this undo right (CT 2.3)", () => {
+    const undo: RevisionIntent = { ...target, kind: "result.undo", payload: {} };
+    expect(revisionRetryProblem(undo, read(), "ru-de", false)).toBe("not_found");
+    expect(revisionRetryProblem(undo, read(value => { value.capabilities.undo_target = null; }), "ru-de", false)).toBe("step_changed");
+    expect(revisionRetryProblem(undo, read(value => { value.capabilities.undo_target!.expected_result_version = "3"; }), "ru-de", false))
+      .toBe("step_changed");
+    // An undo applied meanwhile by another command leaves the result undone: nothing to retry.
+    expect(revisionRetryProblem(undo, read(value => { value.result!.status = "undone"; }), "ru-de", false)).toBe("step_changed");
+    // The correction right alone does not authorize an undo.
+    expect(revisionRetryProblem(undo, read(value => { value.capabilities.undo_target = null; }, true), "ru-de", false)).toBe("step_changed");
   });
   it("compares the action version only where the mode always did (Learning)", () => {
     const older = read(value => { value.action!.version = "1"; });

@@ -39,11 +39,12 @@ type StudyController<S> = {
   next(): Promise<void>;
   grade(grade: 3 | 4 | 5): Promise<void>;
   correct(): Promise<void>;
+  undo(): Promise<void>;
   retry(lane?: DocumentLane): Promise<void>;
   stop(reason?: "stop" | "summary_home"): Promise<void>;
 };
 export type StudyActions = Pick<StudyController<unknown>, "setDraft" | "submit" | "previousResult" | "next" | "grade" | "correct"
-  | "retry" | "refresh" | "stop">;
+  | "undo" | "retry" | "refresh" | "stop">;
 type Owner<V> = {
   key: string; dictionaryLanguage: string; storage: AsyncStorage; transport: HttpOptions; seed: string | null;
   lastAccess: OpenedAccess; waitingForAccess: OpenedAccess | null; lastMinimumVersion: string; lastEnabled: boolean;
@@ -151,6 +152,7 @@ export function useStudyDocument<O extends StudyDocumentOptions, V extends Study
       next: () => perform(controller => controller.next()),
       grade: grade => perform(controller => controller.grade(grade)),
       correct: () => perform(controller => controller.correct()),
+      undo: () => perform(controller => controller.undo()),
       retry: lane => perform(controller => controller.retry(lane)),
       refresh: () => {
         const bound = lookup.current();

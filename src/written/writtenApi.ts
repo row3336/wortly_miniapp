@@ -75,8 +75,8 @@ function sessionFact(value: unknown, command: WrittenCommand): boolean {
     && value.action_id === null && value.result_id === null && value.context_id === null && value.object_version === null;
 }
 function answerFact(value: unknown, command: WrittenCommand, view: WrittenAnswer & { step: WrittenStepCurrent }): boolean {
-  return (command.kind === "answer.submit" || command.kind === "result.grade" || command.kind === "result.correct")
-    && validAnswerFact(value, command, view);
+  return (command.kind === "answer.submit" || command.kind === "result.grade" || command.kind === "result.correct"
+    || command.kind === "result.undo") && validAnswerFact(value, command, view);
 }
 function refusal(value: Record<string, unknown>, status: number, command: WrittenCommand): Refusal | null {
   const code = errorCode(value);

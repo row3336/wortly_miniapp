@@ -1,6 +1,7 @@
 import { useRef, type ReactNode } from "react";
 import type { LearningPreviewAddress } from "../api/generated";
 import { CommandRecovery } from "../commands/CommandRecovery";
+import { StepBackButton, stepBackCopy } from "../commands/StepBackButton";
 import { useEnterNext } from "../commands/useEnterNext";
 import type { Language } from "../i18n/language";
 import { WrittenAnswerInput } from "../study/WrittenAnswerInput";
@@ -9,7 +10,7 @@ import type { LearningViewController, LearningViewSnapshot } from "./learningVie
 import "./learning.css";
 
 export type LearningActions = Pick<LearningViewController,
-  "setDraft" | "submit" | "previousResult" | "next" | "grade" | "correct" | "retry" | "refresh" | "stop" | "advancePreview">;
+  "setDraft" | "submit" | "previousResult" | "next" | "grade" | "correct" | "undo" | "retry" | "refresh" | "stop" | "advancePreview">;
 export type LearningScreenProps = {
   state: LearningViewSnapshot;
   language: Language;
@@ -54,7 +55,10 @@ export function LearningScreen({ state, language, submitOnEnter, actions, render
   const pendingResult = state.phase === "changing_result" ? "changing" : state.phase === "unknown" && revision ? "unknown" : null;
   const unknownAnswer = state.phase === "unknown" && pendingKind === "answer.submit";
   const isClosed = state.phase === "closed" || state.phase === "disposed";
-  const problem = state.problem === "NO_MATERIAL" ? t.noMaterial
+  // A refused «Шаг назад» says that this right is gone; the re-read state shows what holds now (CT 2.2).
+  const refusedUndo = primary.outcome === "rejected" && primary.resolved?.kind === "result.undo" && state.problem === primary.rejectionCode;
+  const problem = refusedUndo && state.problem !== "SESSION_CLOSED" ? stepBackCopy[language].unavailable
+    : state.problem === "NO_MATERIAL" ? t.noMaterial
     : state.problem === "ASSIGNMENT_STALE" ? t.changed
     : state.problem === "RESULT_STALE" ? t.resultChanged
     : state.problem === "SESSION_CLOSED" ? t.closed
@@ -94,13 +98,18 @@ export function LearningScreen({ state, language, submitOnEnter, actions, render
     {result && <WrittenAnswerResult result={result} language={language} pending={pendingResult}
       grades={state.grades} canCorrect={state.canCorrect} canNext={state.canNext} timer={state.timer}
       onGrade={grade => { void actions.grade(grade); }} onCorrect={() => { void actions.correct(); }} onNext={() => { void actions.next(); }} />}
+    {result && state.canUndo && <StepBackButton className="learning-step-back" language={language} onUndo={() => { void actions.undo(); }} />}
     {state.canPrevious && <button type="button" className="learning-previous" onClick={() => actions.previousResult()}>{t.previous}</button>}
     {state.phase === "summary" && <button type="button" className="learning-summary" aria-label={t.today} disabled={!state.canStop}
       onClick={() => { if (state.canStop) void actions.stop("summary_home"); }}>
       {state.current?.group.status === "completed" ? t.groupDone : t.passDone}
     </button>}
-    {["loading", "idle", "stopping", "closed", "disposed"].includes(state.phase) && <p role="status">
+    {/* The phase summary keeps «Шаг назад» while the server grants it (К10-127, К05-151). */}
+    {state.phase === "summary" && state.canUndo
+      && <StepBackButton className="learning-step-back" language={language} onUndo={() => { void actions.undo(); }} />}
+    {["loading", "idle", "stopping", "closed", "disposed", "undoing"].includes(state.phase) && <p role="status">
       {state.phase === "loading" ? t.loading : state.phase === "idle" ? t.idle : state.phase === "stopping" ? t.stop
+        : state.phase === "undoing" ? stepBackCopy[language].pending
         : state.phase === "disposed" ? t.unavailable : t.closed}
     </p>}
     {state.phase === "unknown" && !state.question && !unknownAnswer && !result && <p role="status">{t.unknown}</p>}

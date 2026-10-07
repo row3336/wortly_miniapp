@@ -5,9 +5,9 @@ import { LaneCore, missingProblem, retryStep, type CommandProblem, type LaneReso
 import type { PendingSlot } from "../commands/pendingSlot";
 import { revisionRetryProblem } from "../commands/resultRevision";
 import type { LearningSessionRead, LearningSessionReply, LearningSessionStatus } from "./learningSessionApi";
-import { copyLearningCommandIntent, validLearningCommandIntent, type LearningCommandIntent } from "./learningCommandIntent";
+import { copyLearningCommandIntent, copyLearningResultIntent, isLearningResultIntent, validLearningCommandIntent,
+  type LearningCommandIntent, type LearningResultIntent } from "./learningCommandIntent";
 import type { LearningAnswerReply, LearningAnswerStatus, LearningResultRead } from "./learningAnswerApi";
-import { copyLearningRevisionIntent, type LearningRevisionIntent } from "./learningRevisionIntent";
 import type { LearningSessionPending } from "./learningSessionPending";
 
 export type LearningTransition = WithoutId<LearningCommandIntent>;
@@ -30,7 +30,7 @@ type Options = {
   send(intent: LearningCommandIntent): Promise<Reply>;
   check(intent: LearningCommandIntent): Promise<Status>;
   read(sessionId: string): Promise<LearningSessionRead>;
-  readResult(intent: LearningRevisionIntent): Promise<LearningResultRead>;
+  readResult(intent: LearningResultIntent): Promise<LearningResultRead>;
   onUpdate(snapshot: LearningCommandSnapshot): void;
 };
 
@@ -100,7 +100,7 @@ export class LearningCommandController extends LaneCore<LearningCommandIntent, L
       this.resolved = { commandId: intent.command_id, kind: intent.kind, sessionId: intent.session_id };
       // The exact accepted address is immutable evidence, even when the attached
       // result projection is older than a confirmed Settings observation.
-      if (outcome === "accepted" && ["answer.submit", "result.correct", "result.grade"].includes(intent.kind)
+      if (outcome === "accepted" && ["answer.submit", "result.correct", "result.grade", "result.undo"].includes(intent.kind)
         && "assignment_id" in intent && "result_id" in reply.command && uuid(reply.command.result_id)) {
         this.resolved.assignmentId = intent.assignment_id; this.resolved.resultId = reply.command.result_id;
       }
@@ -141,8 +141,9 @@ export class LearningCommandController extends LaneCore<LearningCommandIntent, L
         await this.clearSettled(); return;
       }
       else if (problem !== null) this.problem = problem;
-      else if (pending.intent.kind === "result.grade" || pending.intent.kind === "result.correct") {
-        const read = await this.options.readResult(copyLearningRevisionIntent(pending.intent));
+      else if (isLearningResultIntent(pending.intent)) {
+        // A revision or an undo is retried only while the server still grants exactly its right (CT 2.3).
+        const read = await this.options.readResult(copyLearningResultIntent(pending.intent));
         if (!this.live()) return;
         if (!this.observe(read.state_version, read.step)) this.problem = "stale_response";
         else {
@@ -197,7 +198,7 @@ export class LearningCommandController extends LaneCore<LearningCommandIntent, L
 }
 
 /** A missing acceptance fact authorizes no effect; retry only the same still-valid target. */
-function retryProblem(intent: Exclude<LearningCommandIntent, LearningRevisionIntent>, current: LearningSessionRead["current"], pair: string): CommandProblem {
+function retryProblem(intent: Exclude<LearningCommandIntent, LearningResultIntent>, current: LearningSessionRead["current"], pair: string): CommandProblem {
   const step = retryStep(current, intent, pair);
   if (typeof step === "string") return step;
   switch (intent.kind) {

@@ -4,17 +4,20 @@ import type { OpenedAccess } from "../app/openedAccess";
 import type { DocumentLane, DocumentLanesSnapshot, ResultAddress } from "./documentLanes";
 import type { RevisionTarget } from "./resultRevision";
 import { ResultTimer, type ResultTimerView } from "./resultTimer";
+import { undoAction, type UndoTarget } from "./resultUndo";
 
 export type StudyPhase = "loading" | "idle" | "preview" | "question" | "visible_unconfirmed" | "submitting" | "unknown"
-  | "result_correct" | "result_wrong" | "changing_result" | "previous_result" | "summary" | "stopping" | "closed" | "stale" | "disposed";
+  | "result_correct" | "result_wrong" | "changing_result" | "undoing" | "previous_result" | "summary" | "stopping" | "closed" | "stale"
+  | "disposed";
 /** The session projection a study view keeps (written quiz or Learning). */
 export type StudyCurrent = { session_id: string; status: "active" | "summary" | "closed"; pair: string;
   close_reason: string | null; assignment: PublicAssignment | null };
 /** The saved answer of the visible question and the server rights over it. */
 export type StudyAnswer = {
   action: { action_id: string; version: string; status: string } | null;
-  result: { result_id: string; assignment_id: string; version: string; grade: number } | null;
-  capabilities: { correct_target: RevisionTarget | null; grades: (RevisionTarget & { values: (3 | 4 | 5)[] }) | null };
+  result: { result_id: string; assignment_id: string; version: string; grade: number; status: string } | null;
+  capabilities: { correct_target: RevisionTarget | null; grades: (RevisionTarget & { values: (3 | 4 | 5)[] }) | null;
+    undo_target: UndoTarget | null };
 };
 type Intent = { command_id: string; kind: string; session_id: string; assignment_id?: string; payload?: object };
 /** The fields of a lane snapshot a study view reads. */
@@ -73,6 +76,8 @@ export type StudyViewFields<C, A, D> = {
   /** Only the server's correct_target of this exact result grants the one-tap correction, never the error itself. */
   canCorrect: boolean;
   grades: (3 | 4 | 5)[];
+  /** «Шаг назад»: only the server's undo_target of the answer on screen, on its result or on the summary (К05-066, RA Д02). */
+  canUndo: boolean;
   canRetryPrimary: boolean;
 };
 /** Mode rules that differ on purpose; each keeps the mode's established behavior. */
@@ -119,6 +124,8 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
   private active = true;
   private activationGeneration = 0;
   protected pendingGradeAdvance: string | null = null;
+  /** Where «Шаг назад» was tapped: a refusal returns there (the result or the summary). */
+  private undoFrom: StudyPhase | null = null;
 
   constructor(protected readonly options: StudyViewOptions & { onUpdate(snapshot: S): void }, private readonly rules: StudyViewRules,
     commands: (onUpdate: (state: StudyLanes) => void) => K) {
@@ -190,6 +197,7 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
         if (kind === "assignment.present") {
           if (!this.is("previous_result")) this.phase = this.question ? "visible_unconfirmed" : "unknown";
         } else if (kind === "answer.submit") this.phase = state.primary.phase === "sending" ? "submitting" : "unknown";
+        else if (kind === "result.undo") this.phase = state.primary.phase === "sending" ? "undoing" : "unknown";
         else if (kind === "result.grade" || kind === "result.correct") {
           this.phase = state.primary.phase === "sending" ? "changing_result" : "unknown";
         } else this.phase = "unknown";
@@ -226,6 +234,7 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
       canPrevious: live && interactive && !this.reading && !!this.answer?.result && this.is("question", "visible_unconfirmed"),
       canCorrect: canRevise && !!this.answer?.capabilities.correct_target,
       grades: canRevise ? [...this.answer?.capabilities.grades?.values ?? []] : [],
+      canUndo: ready && answerFresh && (resultView || this.is("summary")) && !!this.answer?.capabilities.undo_target,
       canRetryPrimary: live && interactive && !this.operation && !this.reading && !this.stopping
         && commands.primary.canRetry && !commands.stop.pending } };
   }
@@ -247,10 +256,33 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
   private resultPhase(grade: number): StudyPhase { return this.previous ? "previous_result" : grade === 2 ? "result_wrong" : "result_correct"; }
   private acceptResult(read: Pick<ResultRead, "action" | "result" | "capabilities" | "state_version">, kind: string): void {
     if (!read.result) return;
+    if (kind === "result.undo") { this.undone(); return; }
     this.setAnswer(read);
     if (kind === "answer.submit") { this.draft = ""; this.previous = false; this.waitNext = false; }
     this.phase = this.resultPhase(read.result.grade);
     if (kind === "result.grade" && !this.previous) this.pendingGradeAdvance = `${read.result.result_id}:${read.result.version}`;
+  }
+  /**
+   * The undone answer leaves the screen together with the question the server withdrew (its draft too): one undo, no
+   * history (К05-066). The current step then carries the new issue of the same card, shown by one present (TA:117).
+   */
+  private undone(): void {
+    this.answer = null; this.answerVersion = null; this.question = null; this.draft = ""; this.draftAssignmentId = null;
+    this.previous = false; this.waitNext = false; this.pendingGradeAdvance = null;
+    this.chooseCurrent();
+  }
+  /**
+   * A refused undo shows the refusal's projection of the addressed answer where it was tapped; its right is re-read.
+   * The result then waits for «Далее», as after a refused revision: no timer advances it under the refusal message.
+   */
+  private refusedUndo(answer: StudyAnswer | null, stateVersion: string | null): void {
+    const result = answer?.result;
+    if (result?.status === "undone") { this.undone(); return; }
+    // Also without a projection: the re-read brings the result back, and it must not advance by itself.
+    this.waitNext = true;
+    if (!answer || !result || !stateVersion) { this.phase = "stale"; return; }
+    this.setAnswer({ ...answer, state_version: stateVersion });
+    this.phase = this.undoFrom === "summary" && this.current?.status === "summary" ? "summary" : this.resultPhase(result.grade);
   }
   protected consume(): boolean {
     const state = this.commands.snapshot(), primary = state.primary;
@@ -267,6 +299,7 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
     if (primary.outcome !== "accepted") {
       this.problem = primary.rejectionCode ?? "rejected";
       if (this.refused(primary.resolved.kind)) return false;
+      if (primary.resolved.kind === "result.undo") { this.refusedUndo(primary.answer, primary.stateVersion); return false; }
       const revision = primary.resolved.kind === "result.grade" || primary.resolved.kind === "result.correct";
       if (revision && primary.answer?.result && primary.stateVersion) {
         this.setAnswer({ ...primary.answer, state_version: primary.stateVersion });
@@ -499,6 +532,22 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
     }).then(async () => {
       if (!this.live() || this.commands.snapshot().primary.outcome !== "accepted") return;
       if (!previous) await this.continueView();
+    });
+  }
+  /** «Шаг назад»: one undo of the answer on screen, built only from the server's current undo_target (CT 2.3). */
+  undo(): Promise<void> {
+    if (!this.view().fields.canUndo) return Promise.resolve();
+    const from = this.phase, action = undoAction(this.answer!.capabilities.undo_target!);
+    return this.run(async () => {
+      // A pending undo stops the old timer: it can neither advance nor confirm the result it removes (TA:111).
+      this.cancelTimer(); this.pendingGradeAdvance = null; this.undoFrom = from; this.phase = "undoing"; this.problem = null;
+      await this.begin(action); if (this.live()) this.consume();
+    }).then(async () => {
+      if (!this.live()) return;
+      const outcome = this.commands.snapshot().primary.outcome;
+      // Accepted: show the new issue of the card. Refused: the right is gone or changed, read the actual state (CT 2.2).
+      if (outcome === "accepted") await this.continueView();
+      else if (outcome === "rejected") await this.refresh();
     });
   }
   retry(lane: DocumentLane = "primary"): Promise<void> {

@@ -4,7 +4,7 @@ import { ApiError } from "../api/http";
 import { LearningCommandController, type LearningTransition } from "./learningCommandController";
 import type { LearningAnswerReply, LearningAnswerStatus, LearningResultRead } from "./learningAnswerApi";
 import type { LearningRevisionIntent } from "./learningRevisionIntent";
-import type { LearningCommandIntent } from "./learningCommandIntent";
+import type { LearningCommandIntent, LearningResultIntent } from "./learningCommandIntent";
 import { LearningSessionPendingStore, LearningStopPendingStore, type LearningSessionPending } from "./learningSessionPending";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -16,7 +16,7 @@ function intent(kind: LearningRevisionIntent["kind"] = "result.correct"): Learni
 function action(original = intent()): LearningTransition { const { command_id: _id, ...value } = structuredClone(original); return value; }
 const saved = (original: LearningCommandIntent = intent()): LearningSessionPending => ({ schemaVersion: 1,
   profileId: id(50), clientInstanceId: id(1), pair: "ru-de", intent: structuredClone(original) });
-function current(original = intent()): LearningResultRead {
+function current(original: LearningResultIntent = intent()): LearningResultRead {
   const target = { session_id: original.session_id, assignment_id: original.assignment_id, result_id: original.result_id,
     expected_result_version: original.expected_result_version };
   return { state_version: "8", action: { action_id: id(7), kind: "answer.submit", status: "active", version: "1" },

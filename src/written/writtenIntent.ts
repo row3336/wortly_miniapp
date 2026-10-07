@@ -1,5 +1,6 @@
 import type { PresentCommand, SessionStartCommand, SessionStartPayload, SessionStopCommand } from "../api/generated";
 import { exactKeys, oneOf, record, uuid } from "../api/wireValidation";
+import { copyResultUndoIntent, validResultUndoIntent, type ResultUndoIntent } from "../commands/resultUndo";
 // The answer and grade envelopes are shared with Learning; only the session payloads are written-specific.
 import { copyLearningAnswerIntent, validLearningAnswerIntent, type LearningAnswerIntent } from "../learning/learningCommandIntent";
 import { copyLearningRevisionIntent, validLearningRevisionIntent, type LearningRevisionIntent } from "../learning/learningRevisionIntent";
@@ -10,7 +11,11 @@ export type WrittenSessionIntent = WithoutOrigin<
 export type WrittenAnswerIntent = LearningAnswerIntent;
 /** An explicit grade of a correct answer or the one-tap correction of an error; both address a server right. */
 export type WrittenRevisionIntent = LearningRevisionIntent;
-export type WrittenIntent = WrittenSessionIntent | WrittenAnswerIntent | WrittenRevisionIntent;
+/** «Шаг назад»: the one undo of the answer on screen, addressed by the server's undo_target (CT 2.3). */
+export type WrittenUndoIntent = ResultUndoIntent;
+/** Every intent addressed to one saved result; its reply is the result view, its retry check reads that result. */
+export type WrittenResultIntent = WrittenRevisionIntent | WrittenUndoIntent;
+export type WrittenIntent = WrittenSessionIntent | WrittenAnswerIntent | WrittenResultIntent;
 export type WrittenCommand = WrittenIntent & { client_instance_id: string; document_id: string };
 
 export function validWrittenSessionIntent(value: unknown): value is WrittenSessionIntent {
@@ -26,19 +31,24 @@ export function validWrittenSessionIntent(value: unknown): value is WrittenSessi
   return valid && exactKeys(value, keys);
 }
 export function validWrittenIntent(value: unknown): value is WrittenIntent {
-  return validWrittenSessionIntent(value) || validLearningAnswerIntent(value) || validLearningRevisionIntent(value);
+  return validWrittenSessionIntent(value) || validLearningAnswerIntent(value) || validLearningRevisionIntent(value)
+    || validResultUndoIntent(value);
 }
-export function isAnswerKind(kind: WrittenIntent["kind"]): kind is "answer.submit" | WrittenRevisionIntent["kind"] {
-  return kind === "answer.submit" || kind === "result.grade" || kind === "result.correct";
+export function isAnswerKind(kind: WrittenIntent["kind"]): kind is "answer.submit" | WrittenResultIntent["kind"] {
+  return kind === "answer.submit" || kind === "result.grade" || kind === "result.correct" || kind === "result.undo";
 }
 export function isRevisionIntent(value: WrittenIntent): value is WrittenRevisionIntent {
   return value.kind === "result.grade" || value.kind === "result.correct";
+}
+export function isResultIntent(value: WrittenIntent): value is WrittenResultIntent {
+  return isRevisionIntent(value) || value.kind === "result.undo";
 }
 
 /** Stable field order gives the shared slot an exact comparison across callers. */
 export function copyWrittenIntent(value: WrittenIntent): WrittenIntent {
   if (value.kind === "answer.submit") return copyLearningAnswerIntent(value);
   if (isRevisionIntent(value)) return copyLearningRevisionIntent(value);
+  if (value.kind === "result.undo") return copyResultUndoIntent(value);
   if (!validWrittenSessionIntent(value)) throw new Error("invalid written intent");
   const address = { command_id: value.command_id, session_id: value.session_id };
   switch (value.kind) {
@@ -67,8 +77,8 @@ export async function writtenIntentHash(value: WrittenIntent): Promise<string> {
       payload: "text" in intent.payload ? { text: intent.payload.text } : { forgot: true } }; break;
     default: payload = { session_id: session, assignment_id: intent.assignment_id.toLowerCase(),
       result_id: intent.result_id.toLowerCase(), expected_result_version: intent.expected_result_version,
-      // A correction has no payload of its own (core study/result_commands.py, _revise).
-      payload: intent.kind === "result.correct" ? {} : { grade: intent.payload.grade } };
+      // A correction and an undo have no payload of their own (core result_commands._revise, ResultUndoService.undo).
+      payload: intent.kind === "result.grade" ? { grade: intent.payload.grade } : {} };
   }
   const text = canonical({ kind: intent.kind, payload });
   const digest = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));

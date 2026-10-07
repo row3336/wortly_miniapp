@@ -31,6 +31,8 @@ export type LearningViewSnapshot = {
   canPrevious: boolean;
   canCorrect: boolean;
   grades: (3 | 4 | 5)[];
+  /** «Шаг назад»: only the server's undo_target of the answer on screen (its result view or the phase summary). */
+  canUndo: boolean;
   canStop: boolean;
   canAdvancePreview: boolean;
   canRetryPrimary: boolean;

@@ -375,11 +375,11 @@ function answerReply(intent = answerIntent()): Extract<LearningAnswerReply, { ou
 function answerFixture(raw?: LearningSessionPending) {
   const f = fixture(raw);
   const send = vi.fn<Options["send"]>(async intent => {
-    if (intent.kind === "result.correct" || intent.kind === "result.grade") throw new Error("unexpected revision");
+    if (intent.kind === "result.correct" || intent.kind === "result.grade" || intent.kind === "result.undo") throw new Error("unexpected revision");
     return intent.kind === "answer.submit" ? answerReply(intent) : accepted(intent);
   });
   const check = vi.fn<Options["check"]>(async intent => {
-    if (intent.kind === "result.correct" || intent.kind === "result.grade") throw new Error("unexpected revision");
+    if (intent.kind === "result.correct" || intent.kind === "result.grade" || intent.kind === "result.undo") throw new Error("unexpected revision");
     return intent.kind === "answer.submit"
       ? { ...answerReply(intent), command: { ...answerReply(intent).command, status: "already_applied" } } : recovered(intent);
   });

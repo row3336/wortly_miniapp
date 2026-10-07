@@ -7,7 +7,7 @@ type Options = StudyDocumentOptions & {
   initialSessionId?: string | null;
 };
 export type WrittenActions = Pick<WrittenViewController, "setDraft" | "submit" | "previousResult" | "next" | "grade" | "correct"
-  | "retry" | "refresh" | "stop">
+  | "undo" | "retry" | "refresh" | "stop">
   & { start(bucket: "words" | "phrases"): Promise<void> };
 
 /**

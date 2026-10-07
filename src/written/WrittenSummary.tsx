@@ -1,4 +1,5 @@
 import type { WrittenSummary as Summary } from "../api/generated";
+import { StepBackButton } from "../commands/StepBackButton";
 import type { Language } from "../i18n/language";
 
 export type WrittenSummaryProps = {
@@ -8,6 +9,8 @@ export type WrittenSummaryProps = {
   language: Language;
   canToday: boolean;
   onToday(): void;
+  /** Present only while the server grants «Шаг назад» on the summary of an open session (RA Д02, К10-127). */
+  onUndo?(): void;
 };
 const copy = {
   ru: { title: "Итог занятия", completed: "Занятие завершено.", interrupted: "Занятие прервано.", done: "Пройдено", right: "Верно",
@@ -20,7 +23,7 @@ const copy = {
 const locales = { ru: "ru-RU", uk: "uk-UA", en: "en-US" } as const;
 
 /** Д02 renders only confirmed server numbers: no answers is «—», never 0 % (В06.3); drills never add cards. */
-export function WrittenSummary({ summary, outcome, language, canToday, onToday }: WrittenSummaryProps) {
+export function WrittenSummary({ summary, outcome, language, canToday, onToday, onUndo }: WrittenSummaryProps) {
   const t = copy[language], ratio = summary.ratio;
   const percent = ratio === null || ratio.denominator === 0 ? "—"
     : new Intl.NumberFormat(locales[language], { style: "percent", maximumFractionDigits: 0 }).format(ratio.numerator / ratio.denominator);
@@ -33,6 +36,9 @@ export function WrittenSummary({ summary, outcome, language, canToday, onToday }
       <div><dt>{t.errors}</dt><dd>{summary.wrong}</dd></div>
       <div><dt>{t.percent}</dt><dd>{percent}</dd></div>
     </dl>
-    <button type="button" disabled={!canToday} onClick={() => { if (canToday) onToday(); }}>{t.today}</button>
+    <div className="written-summary-actions">
+      <button type="button" disabled={!canToday} onClick={() => { if (canToday) onToday(); }}>{t.today}</button>
+      {onUndo && <StepBackButton className="written-step-back" language={language} onUndo={onUndo} />}
+    </div>
   </section>;
 }

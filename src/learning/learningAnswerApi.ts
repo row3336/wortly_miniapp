@@ -1,15 +1,17 @@
-import type { AnswerSubmitCommand, ResultCorrectCommand, ResultGradeCommand, ClosedSessionBoundary, LearningAnswerResponse, MissingCommandFact, Profile,
+import type { AnswerSubmitCommand, ResultCorrectCommand, ResultGradeCommand, ResultUndoCommand, ClosedSessionBoundary, LearningAnswerResponse, MissingCommandFact, Profile,
   RejectedCommandFact, SavedCommandFact, StoredCommandFact, WrittenAnswerDetail } from "../api/generated";
 import { validProfile } from "../api/entryApi";
 import { ApiError, createJsonTransport, errorCode, httpError, type HttpOptions } from "../api/http";
 import { count, date, eventTime, exactKeys, oneOf, record, sameId, uuid, version, validClosedSessionBoundary } from "../api/wireValidation";
+import { validResultFact } from "../commands/resultRevision";
+import { copyResultUndoIntent, validResultUndoIntent, validUndoFact } from "../commands/resultUndo";
 import { validLearningSessionCurrent } from "./learningSessionApi";
 import { copyLearningAnswerIntent, validLearningAnswerIntent } from "./learningCommandIntent";
 import { copyLearningRevisionIntent, validLearningRevisionIntent } from "./learningRevisionIntent";
 import { validConjunctionHint } from "../study/questionContext";
 import { validCardExamples } from "./learningPreviewContent";
 
-export type LearningResultCommand = AnswerSubmitCommand | ResultCorrectCommand | ResultGradeCommand;
+export type LearningResultCommand = AnswerSubmitCommand | ResultCorrectCommand | ResultGradeCommand | ResultUndoCommand;
 export type LearningResultAddress = Pick<ResultCorrectCommand,
   "session_id" | "assignment_id" | "result_id" | "client_instance_id" | "document_id">;
 
@@ -39,7 +41,8 @@ function prepare(token: string, proof: string, value: LearningResultCommand): Le
   }
   const { client_instance_id, document_id, ...intent } = value;
   const copy = validLearningAnswerIntent(intent) ? copyLearningAnswerIntent(intent)
-    : validLearningRevisionIntent(intent) ? copyLearningRevisionIntent(intent) : null;
+    : validLearningRevisionIntent(intent) ? copyLearningRevisionIntent(intent)
+    : validResultUndoIntent(intent) ? copyResultUndoIntent(intent) : null;
   if (copy === null) throw new Error("invalid Learning result command");
   return { ...copy, client_instance_id, document_id };
 }
@@ -122,8 +125,7 @@ export function validAnswerCapabilities(caps: Record<string, unknown>, step: { s
     return grades ? grade >= 3 && Array.isArray(values) && values.length === 3
       && [3, 4, 5].every(item => values.includes(item)) : grade === 2;
   };
-  // Transitional until M-UNDO adds the undo button: the shape is accepted so that core's new right does not break the
-  // written or the Learning mode, but nothing in the client reads it yet. Any live grade can be undone, so there is no grade condition.
+  // «Шаг назад» of this live answer (M-UNDO builds the command from it). Any live grade can be undone: no grade condition.
   const validUndoTarget = (value: unknown): boolean => allowUndoTarget && liveAddress(value, ["action_id", "kind"])
     && sameId(value.action_id, (action as Record<string, unknown>).action_id as string)
     && value.kind === "answer.submit";
@@ -151,15 +153,12 @@ function current(value: Record<string, unknown>, command: { session_id: string; 
   return { action, result, step, capabilities: caps } as Current;
 }
 
-type AnswerView = { action: { action_id: string } | null; step: { status: string };
-  result: { result_id: string; version: string; grade: number; detail: WrittenAnswerDetail | null } | null };
-/** An accepted fact of an answer or of its revision matches the command and the saved result it produced. */
+type AnswerView = { action: { action_id: string; status: string } | null; step: { status: string };
+  result: { result_id: string; version: string; grade: number; status: string; detail: WrittenAnswerDetail | null } | null };
+/** An accepted fact of an answer, of its revision or of its undo matches the command and the saved result it produced. */
 export function validAnswerFact(value: unknown, command: LearningResultCommand, view: AnswerView): value is SavedCommandFact {
-  if (!record(value) || !exactKeys(value, ["id", "kind", "status", "applied_at", "target_id",
-    "action_id", "result_id", "context_id", "object_version"])
-    || !sameId(value.id, command.command_id) || value.kind !== command.kind || !sameId(value.target_id, command.assignment_id)
-    || !oneOf(value.status, ["applied", "already_applied"]) || !eventTime(value.applied_at)
-    || !uuid(value.action_id) || !uuid(value.result_id) || value.context_id !== null || !version(value.object_version)) return false;
+  if (command.kind === "result.undo") return validUndoFact(value, command, view);
+  if (!validResultFact(value, command)) return false;
   if (command.kind === "answer.submit" && value.object_version !== "1") return false;
   if (command.kind !== "answer.submit") {
     if (!sameId(value.result_id, command.result_id)) return false;

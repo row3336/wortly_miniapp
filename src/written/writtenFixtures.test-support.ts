@@ -16,17 +16,18 @@ export function deferred<T>() {
 }
 export const pending = (intent: WrittenIntent) => ({ schemaVersion: 1, profileId: id(50), clientInstanceId: id(1), pair: "ru-de", intent });
 
-/** A drill of card n is assignment 900+n of the same card. */
-export function assignment(n: number, status: "prefetched" | "presented", kind: "original" | "drill" = "original"): PublicAssignment {
-  return { id: id(kind === "drill" ? 900 + n : n), card_id: id(100 + n), status, kind,
+/** A drill of card n is assignment 900+n of the same card; each new issue of an undone answer adds 10000 (a new ID). */
+export function assignment(n: number, status: "prefetched" | "presented", kind: "original" | "drill" = "original",
+  attempt = 0): PublicAssignment {
+  return { id: id((kind === "drill" ? 900 + n : n) + 10000 * attempt), card_id: id(100 + n), status, kind,
     prompt: { text: `слово ${n}`, language: "ru", translations: [`слово ${n}`], personal_translation_version: null, hint: null,
       hint_version: null, conjunction_hint: null },
     answer_spec: { kind: "word", labels: ["word"], part_count: 1, case_sensitive: true } };
 }
 
-type Item = { n: number; kind: "original" | "drill" };
+type Item = { n: number; kind: "original" | "drill"; attempt?: number };
 type Stored = { resultId: string; assignmentId: string; actionId: string; version: number; grade: 2 | 3 | 4 | 5; text: string | null;
-  item: Item };
+  item: Item; status: "active" | "undone"; epoch: number };
 type Receipt = { intent: WrittenIntent; fact: Record<string, unknown> };
 export type ServerOptions = {
   /** Original assignment numbers of the session queue. */
@@ -41,6 +42,10 @@ export type ServerOptions = {
   drills?: boolean;
   /** Frozen example candidates of every answered card (result detail). */
   examples?: CardExamples;
+  /** The server grants the undo of the latest answer of this document, as core does since C-UNDO-1. */
+  undo?: boolean;
+  /** Every result.undo is refused with this code; the refusal leaves no undo right (the reason it was refused). */
+  refuseUndo?: { code: string; status?: number };
 };
 
 /**
@@ -48,6 +53,8 @@ export type ServerOptions = {
  * duplicates replay their original fact, and status verifies the intent fingerprint like core command_status.
  * Rights follow core (C-WCORR): grades for the latest correct result, correct_target for the latest error, both
  * only while the session is open; a correction withdraws the unshown drill of its card and keeps a shown one.
+ * With `undo` the latest live answer of the current document also carries undo_target (C-UNDO-1): an undo retires it,
+ * withdraws the next question and issues the same card again under a new ID; a new document ends the right.
  */
 export function writtenServer(options: ServerOptions = {}) {
   const cards = options.cards ?? [6, 7];
@@ -56,22 +63,22 @@ export function writtenServer(options: ServerOptions = {}) {
     closeReason: null as SessionProjection["close_reason"], version: 1, index: 0,
     queue: cards.map((n): Item => ({ n, kind: "original" })),
     assignment: options.active ? "presented" as "prefetched" | "presented" | null : null as "prefetched" | "presented" | null,
-    latest: null as string | null,
+    latest: null as string | null, epoch: 1,
   };
   const results = new Map<string, Stored>(), receipts = new Map<string, Receipt>();
   /** Results whose revision rights another context ended (e.g. a manual interval, К05-057). */
   const revoked = new Set<string>();
   const grade = options.grade ?? ((text: string | null) => text === "Haus" ? 4 : 2);
-  const values = () => [...results.values()].filter(item => item.item.kind === "original");
+  const values = () => [...results.values()].filter(item => item.item.kind === "original" && item.status === "active");
   const progress = () => {
     const done = values(), correct = done.filter(item => item.grade >= 3).length;
     return { completed: done.length, total: cards.length, correct, wrong: done.length - correct };
   };
   const current = () => {
     const item = state.queue[state.index];
-    return state.status === "active" && state.assignment && item ? assignment(item.n, state.assignment, item.kind) : null;
+    return state.status === "active" && state.assignment && item ? assignment(item.n, state.assignment, item.kind, item.attempt) : null;
   };
-  const assignmentId = (item: Item) => id(item.kind === "drill" ? 900 + item.n : item.n);
+  const assignmentId = (item: Item) => assignment(item.n, "prefetched", item.kind, item.attempt).id;
   /** The queue moves on: the next item is issued unshown, or the session reaches its summary. */
   const advance = () => {
     if (state.index < state.queue.length) state.assignment = "prefetched";
@@ -90,22 +97,23 @@ export function writtenServer(options: ServerOptions = {}) {
   }
   function view(resultId: string) {
     const item = results.get(resultId)!, open = state.status !== "closed";
-    const latest = open && resultId === state.latest && !revoked.has(resultId);
+    const latest = open && resultId === state.latest && !revoked.has(resultId) && item.status === "active";
     const target = { session_id: state.sessionId!, assignment_id: item.assignmentId, result_id: resultId, expected_result_version: String(item.version) };
     const shown = current();
     const correct = item.grade >= 3, initial = grade(item.text) >= 3;
-    return { action: { action_id: item.actionId, kind: "answer.submit", version: String(item.version), status: "active" },
+    const undo = options.undo && latest && item.epoch === state.epoch ? { ...target, action_id: item.actionId, kind: "answer.submit" } : null;
+    return { action: { action_id: item.actionId, kind: "answer.submit", version: String(item.version), status: item.status },
       result: { result_id: resultId, assignment_id: item.assignmentId, version: String(item.version), grade: item.grade, correct,
-        status: "active", accepted_at: "2026-10-05T12:00:00Z", answer_date: "2026-10-05",
-        detail: open ? { input: item.text === null ? { kind: "forgot" } : { kind: "text", text: item.text },
+        status: item.status, accepted_at: "2026-10-05T12:00:00Z", answer_date: "2026-10-05",
+        detail: open && item.status === "active" ? { input: item.text === null ? { kind: "forgot" } : { kind: "text", text: item.text },
           initial_check: { correct: initial, variant_index: initial ? 0 : null, correct_answer: "das Haus", other_answers: ["Haus"],
             matched_spans: [], span_unit: "unicode_code_point", span_bounds: "start_inclusive_end_exclusive" },
           variants: [{ parts: ["das Haus"] }, { parts: ["Haus"] }], conjunction_hint: null, examples: options.examples ?? null } : null },
       step: step(),
       capabilities: { answer_target: shown?.status === "presented" ? shown.id : null,
         grades: latest && correct ? { ...target, values: [3, 4, 5] } : null,
-        // The fixtures keep undo_target null on purpose: the decoder accepts it since M-UNDO-DEC; the button and command are M-UNDO.
-        correct_target: latest && !correct ? target : null, undo_target: null,
+        // Without `undo` the right stays null, as before C-UNDO-1: those tests are about the other rights.
+        correct_target: latest && !correct ? target : null, undo_target: undo,
         stop: open, summary_home: state.status === "summary" } };
   }
   const fact = (intent: WrittenIntent, extra: Partial<Record<"action_id" | "result_id" | "object_version", string>> = {}) => ({
@@ -113,7 +121,9 @@ export function writtenServer(options: ServerOptions = {}) {
     target_id: "assignment_id" in intent ? intent.assignment_id : intent.session_id,
     action_id: extra.action_id ?? null, result_id: extra.result_id ?? null, context_id: null, object_version: extra.object_version ?? null });
   const refuse = (intent: WrittenIntent, code: string, status = 409) => ({ status, body: {
-    ...("result_id" in intent || intent.kind === "answer.submit" ? { ...(state.latest ? view(state.latest) : {
+    // An undo refusal shows the result it addressed, like core's projection by the requested address.
+    ...(intent.kind === "result.undo" && results.has(intent.result_id) ? view(intent.result_id)
+      : "result_id" in intent || intent.kind === "answer.submit" ? { ...(state.latest ? view(state.latest) : {
       action: null, result: null, step: step(), capabilities: { answer_target: null, grades: null, correct_target: null,
         undo_target: null, stop: true, summary_home: false } }) } : { current: projection() }),
     command: { id: intent.command_id, status: "rejected" }, state_version: String(state.version), error: { code } } });
@@ -141,15 +151,18 @@ export function writtenServer(options: ServerOptions = {}) {
       if (state.status !== "active" || state.assignment !== "presented" || !issued || assignmentId(issued) !== intent.assignment_id) {
         return refuse(intent, "ASSIGNMENT_STALE");
       }
-      const n = issued.kind === "drill" ? 900 + issued.n : issued.n, resultId = id(700 + n), actionId = id(800 + n);
+      const n = (issued.kind === "drill" ? 900 + issued.n : issued.n) + 10000 * (issued.attempt ?? 0);
+      const resultId = id(700 + n), actionId = id(800 + n);
       const text = "text" in intent.payload ? intent.payload.text : null, value = grade(text);
-      results.set(resultId, { resultId, assignmentId: intent.assignment_id, actionId, version: 1, grade: value, text, item: issued });
+      results.set(resultId, { resultId, assignmentId: intent.assignment_id, actionId, version: 1, grade: value, text, item: issued,
+        status: "active", epoch: state.epoch });
       state.latest = resultId; state.index++; state.version++;
       if (options.drills && issued.kind === "original" && value === 2) state.queue.splice(state.index, 0, { n: issued.n, kind: "drill" });
       advance();
       return { status: 200, body: { ...view(resultId), command: fact(intent, { action_id: actionId, result_id: resultId, object_version: "1" }),
         state_version: String(state.version) } };
     }
+    if (intent.kind === "result.undo") return undo(intent);
     const item = results.get(intent.result_id);
     if (!item || state.status === "closed") return refuse(intent, "SESSION_CLOSED");
     if (String(item.version) !== intent.expected_result_version) return refuse(intent, "VERSION_CONFLICT");
@@ -163,6 +176,29 @@ export function writtenServer(options: ServerOptions = {}) {
         && (at > state.index || at === state.index && state.assignment === "prefetched"));
       if (drill >= 0) { state.queue.splice(drill, 1); if (drill === state.index) advance(); }
     }
+    return { status: 200, body: { ...view(item.resultId), command: fact(intent, { action_id: item.actionId, result_id: item.resultId,
+      object_version: String(item.version) }), state_version: String(state.version) } };
+  }
+  /** Core order (study/result_undo.py): closed session, address, version, then the right itself. */
+  function undo(intent: Extract<WrittenIntent, { kind: "result.undo" }>): { status: number; body: Record<string, unknown> } {
+    const item = results.get(intent.result_id);
+    if (state.status === "closed") return refuse(intent, "SESSION_CLOSED");
+    if (options.refuseUndo) {
+      if (item) revoked.add(item.resultId);
+      return refuse(intent, options.refuseUndo.code, options.refuseUndo.status);
+    }
+    if (!item || item.assignmentId !== intent.assignment_id) return refuse(intent, "ASSIGNMENT_STALE");
+    if (String(item.version) !== intent.expected_result_version) return refuse(intent, "VERSION_CONFLICT");
+    if (view(item.resultId).capabilities.undo_target === null) return refuse(intent, "CAPABILITY_EXPIRED");
+    item.status = "undone"; item.version++; state.latest = null; state.version++;
+    const at = state.queue.findIndex(queued => assignmentId(queued) === item.assignmentId);
+    // The next question is withdrawn (its later issue is a new ID); the drill this error scheduled is dropped.
+    const next = state.queue[at + 1];
+    if (next && state.index === at + 1 && state.assignment) next.attempt = (next.attempt ?? 0) + 1;
+    const drill = state.queue.findIndex((queued, position) => position > at && queued.kind === "drill" && queued.n === item.item.n);
+    if (item.item.kind === "original" && drill >= 0) state.queue.splice(drill, 1);
+    state.queue[at] = { ...item.item, attempt: (item.item.attempt ?? 0) + 1 };
+    state.index = at; state.status = "active"; state.assignment = "prefetched";
     return { status: 200, body: { ...view(item.resultId), command: fact(intent, { action_id: item.actionId, result_id: item.resultId,
       object_version: String(item.version) }), state_version: String(state.version) } };
   }
@@ -205,7 +241,9 @@ export function writtenServer(options: ServerOptions = {}) {
   }
   /** Another context ends the revision rights of a result (e.g. a manual interval increase, К05-057). */
   const revokeRights = (resultId: string) => { revoked.add(resultId); state.version++; };
-  return { state, results, receipts, handle, step, projection, view, revokeRights };
+  /** A new document of the same installation (a restart): the undo right of earlier answers ends (К05-074). */
+  const newDocument = () => { state.epoch++; state.version++; };
+  return { state, results, receipts, handle, step, projection, view, revokeRights, newDocument };
 }
 
 /** Real access, storage and transport around one synthetic server. */

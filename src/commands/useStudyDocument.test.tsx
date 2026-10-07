@@ -23,6 +23,7 @@ class FakeController {
   async next(): Promise<void> { this.calls.push("next"); }
   async grade(grade: 3 | 4 | 5): Promise<void> { this.calls.push(`grade:${grade}`); }
   async correct(): Promise<void> { this.calls.push("correct"); }
+  async undo(): Promise<void> { this.calls.push("undo"); }
   async retry(lane: "primary" | "stop" = "primary"): Promise<void> { this.calls.push(`retry:${lane}`); }
   async stop(reason: "stop" | "summary_home" = "stop"): Promise<void> { this.calls.push(`stop:${reason}`); }
   async start(): Promise<void> { this.calls.push("start"); }

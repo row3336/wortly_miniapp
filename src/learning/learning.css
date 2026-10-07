@@ -11,3 +11,5 @@
 .learning-captured p { white-space: pre-wrap; margin: 0; }
 .learning-screen-summary { max-width: none; min-height: 100dvh; padding: 0; gap: 0; }
 .learning-summary { min-height: 100dvh; border: 0; padding: 24px 16px; background: transparent; color: var(--text); font: inherit; font-size: 24px; line-height: 1.4; text-align: center; }
+.learning-step-back { min-height: 48px; min-width: 48px; justify-self: start; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; color: var(--text); background: var(--surface); font: inherit; font-size: 20px; line-height: 1; }
+.learning-screen-summary .learning-step-back { position: fixed; left: 16px; bottom: max(16px, env(safe-area-inset-bottom)); }

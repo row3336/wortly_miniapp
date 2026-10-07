@@ -48,6 +48,8 @@ export type WrittenViewSnapshot = {
   /** Only the server's correct_target of this exact result grants the one-tap correction, never the error itself. */
   canCorrect: boolean;
   grades: (3 | 4 | 5)[];
+  /** «Шаг назад»: only the server's undo_target of the answer on screen (its result view or the summary). */
+  canUndo: boolean;
   canStop: boolean;
   canSummaryHome: boolean;
   canRetryPrimary: boolean;

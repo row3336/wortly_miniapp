@@ -14,8 +14,9 @@ const current = (item: PublicAssignment | null, status: StudyCurrent["status"] =
   ({ session_id: SESSION, status, pair: "ru-de", close_reason: null, assignment: item });
 const target = (version: string) => ({ session_id: SESSION, assignment_id: id(6), result_id: id(7), expected_result_version: version });
 const answer = (grade: number, version = "1"): StudyAnswer => ({ action: { action_id: id(8), version, status: "active" },
-  result: { result_id: id(7), assignment_id: id(6), version, grade },
-  capabilities: { correct_target: grade === 2 ? target(version) : null, grades: grade >= 3 ? { ...target(version), values: [3, 4, 5] } : null } });
+  result: { result_id: id(7), assignment_id: id(6), version, grade, status: "active" },
+  capabilities: { correct_target: grade === 2 ? target(version) : null, grades: grade >= 3 ? { ...target(version), values: [3, 4, 5] } : null,
+    undo_target: null } });
 type Lane = StudyLanes["primary"];
 const idle = (): Lane => ({ phase: "idle", pending: false, kind: null, pendingIntent: null, outcome: null, resolved: null,
   rejectionCode: null, problem: null, canRetry: false, current: null, answer: null, closedSession: null, stateVersion: null });
@@ -68,6 +69,10 @@ function view(options: { mode?: "normal" | "accelerated"; rules?: Partial<StudyV
   { ignoreUnboundUnavailable: true, keepClosedAfterRead: true, ...options.rules }, f.connect);
   return { ...f, controller, onUpdate };
 }
+/** An answer whose undo the server grants (C-UNDO-1). */
+const undoable = (grade: number): StudyAnswer => ({ ...answer(grade),
+  capabilities: { ...answer(grade).capabilities, undo_target: { ...target("1"), action_id: id(8), kind: "answer.submit" } } });
+const undoResolved = { commandId: id(92), kind: "result.undo", sessionId: SESSION, assignmentId: id(6), resultId: id(7) };
 /** The answer reply: the result and the next prefetched question B. */
 const answered = (grade: number) => () => ({ resolved: { commandId: id(90), kind: "answer.submit", sessionId: SESSION, assignmentId: id(6), resultId: id(7) },
   answer: answer(grade), current: current(assignment(10, "prefetched")) });
@@ -122,7 +127,7 @@ describe("shared study view", () => {
   });
   it("a correction exists only as the server's correct_target of this result", async () => {
     const f = view(); await f.controller.refresh();
-    f.controller.setDraft("x"); f.replies.set("answer.submit", () => ({ ...answered(2)(), answer: { ...answer(2), capabilities: { correct_target: null, grades: null } } }));
+    f.controller.setDraft("x"); f.replies.set("answer.submit", () => ({ ...answered(2)(), answer: { ...answer(2), capabilities: { correct_target: null, grades: null, undo_target: null } } }));
     await f.controller.submit();
     expect(f.controller.snapshot()).toMatchObject({ phase: "result_wrong", canCorrect: false });
     await f.controller.correct(); expect(f.commands.begin).toHaveBeenCalledOnce();
@@ -159,5 +164,54 @@ describe("shared study view", () => {
       await f.controller.refresh();
       expect(f.controller.snapshot().phase).toBe(phase);
     }
+  });
+});
+
+describe("shared study view: «Шаг назад» (M-UNDO)", () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+  const submitted = async (grade: number) => {
+    const f = view(); await f.controller.refresh();
+    f.controller.setDraft("Haus");
+    f.replies.set("answer.submit", () => ({ ...answered(grade)(), answer: undoable(grade) }));
+    await f.controller.submit();
+    return f;
+  };
+
+  it("offers the right only while the answer is as fresh as the lanes", async () => {
+    const f = await submitted(4);
+    expect(f.controller.snapshot()).toMatchObject({ phase: "result_correct", canUndo: true });
+    // A newer projection arrives without a new read of this answer: its rights may be gone, so none is offered.
+    f.state.stateVersion = "20";
+    f.state.primary = { ...f.state.primary, current: current(assignment(10, "prefetched")), stateVersion: "20" };
+    f.publish();
+    expect(f.controller.snapshot()).toMatchObject({ phase: "result_correct", canNext: true, canUndo: false });
+    await f.controller.undo();
+    expect(f.commands.begin.mock.calls.map(call => call[0].kind)).toEqual(["answer.submit"]);
+  });
+  it("a refused undo keeps the result without its timer: it waits for «Далее»", async () => {
+    const f = await submitted(4);
+    expect(f.controller.snapshot().timer).not.toBeNull();
+    f.replies.set("result.undo", () => ({ outcome: "rejected", rejectionCode: "CAPABILITY_EXPIRED", resolved: undoResolved,
+      answer: answer(4), current: current(assignment(10, "prefetched")) }));
+    await f.controller.undo();
+    expect(f.controller.snapshot()).toMatchObject({ phase: "result_correct", problem: "CAPABILITY_EXPIRED", canUndo: false, timer: null });
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(f.commands.begin.mock.calls.map(call => call[0].kind)).toEqual(["answer.submit", "result.undo"]);
+    expect(f.controller.snapshot()).toMatchObject({ phase: "result_correct", timer: null, canNext: true });
+  });
+  it("a refusal whose projection shows the answer already undone shows the current step instead", async () => {
+    const f = await submitted(2);
+    const gone = answer(2);
+    gone.result!.status = "undone"; gone.action!.status = "undone"; gone.capabilities = { correct_target: null, grades: null, undo_target: null };
+    f.replies.set("result.undo", () => ({ outcome: "rejected", rejectionCode: "ASSIGNMENT_STALE", resolved: undoResolved,
+      answer: gone, current: current(assignment(11, "prefetched")) }));
+    f.replies.set("assignment.present", () => ({ current: current(assignment(11, "presented")) }));
+    f.commands.readSession.mockImplementation(async () => ({ state_version: f.state.stateVersion, current: current(assignment(11, "prefetched")) }));
+    await f.controller.undo();
+    // The current step is the new issue of the card: it is shown by one present (whose own outcome replaces the refusal).
+    expect(f.controller.snapshot()).toMatchObject({ phase: "question", question: { id: id(11) }, answer: null, canUndo: false,
+      canPrevious: false });
+    expect(f.commands.begin.mock.calls.map(call => call[0].kind)).toEqual(["answer.submit", "result.undo", "assignment.present"]);
   });
 });
