@@ -16,10 +16,10 @@ function telegramClose() {
 }
 
 describe("Written quiz through the actual App document", () => {
-  it("W1 a tap on the L1→De count starts the written quiz at once; De→L1 rows stay inert", async () => {
+  // De→L1 rows start the oral quiz since M-ORAL-ENTRY (CP14 B-ENTRY lifted): App.oralEntry.test.tsx E1.
+  it("W1 a tap on the L1→De count starts the written quiz at once", async () => {
     const a = app(); render(<App />);
     await screen.findByText(pairText);
-    expect(row(/Слова: перевод с немецкого/).disabled).toBe(true);
     await startWords();
     expect(a.posts()[0]).toMatchObject({ kind: "session.start", payload: { mode: "written", bucket: "words" } });
     expect(a.kinds()).toEqual(["session.start", "assignment.present"]);

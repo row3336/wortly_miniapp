@@ -232,7 +232,9 @@ export function ApplicationDocument(props: Props) {
     language: props.language, settings, minimumStateVersion: highest(floor?.version, oralSelected?.version),
     initialSessionId: oralSeed, seedPending: at === "oral" && readAfter && (read.kind === "pending" || read.kind === "oral"),
     route: at === "oral" ? "oral" : todayShown ? "today" : "hidden",
-    onOral: () => navigate({ type: "open", screen: "oral" }), onToday: today });
+    onOral: () => navigate({ type: "open", screen: "oral" }), onToday: today,
+    // «Уточнить поля» in М18 (M-ORAL-ENTRY): the card opens on top of the oral quiz; Back returns to the same question.
+    onOpenCard: (cardId, details) => navigate({ type: "push", screen: "card", subject: cardId, details }) });
   // The written owner also lives for the whole document; L1→De rows of Today start it (tz_app М09).
   const written = useWrittenHost({ access: props.access, transport: props.transport, storage: props.storage, newId: props.newId,
     language: props.language, settings, minimumStateVersion: highest(floor?.version, writtenSelected?.version),
@@ -250,9 +252,10 @@ export function ApplicationDocument(props: Props) {
     activeCard = { key, cardId: route.subject, origin: cardOrigin(route.back?.source ?? null) };
   }
   const cardSlot = activeCard ?? leavingCard;
+  // L1→De rows start the written quiz, De→L1 rows the oral one (tz_app М09/М18; CP14 B-ENTRY lifted by M-ORAL-ENTRY).
   const quizzes = {
-    onStartQuiz: (quiz: OrdinaryQuiz) => { if (quiz.direction === "l1-de") written.requestStart(quiz.material); },
-    canStartQuiz: (quiz: OrdinaryQuiz) => quiz.direction === "l1-de" && written.canRequestStart,
+    onStartQuiz: (quiz: OrdinaryQuiz) => { if (quiz.direction === "l1-de") written.requestStart(quiz.material); else oral.requestStart(quiz); },
+    canStartQuiz: (quiz: OrdinaryQuiz) => quiz.direction === "l1-de" ? written.canRequestStart : oral.canRequestStart,
   };
   return <div className="nav-screen" ref={frame}>
     {selected !== null && <LearningHost access={props.access} transport={props.transport} storage={props.storage}

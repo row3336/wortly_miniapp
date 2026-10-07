@@ -46,7 +46,8 @@ function fakeBack() {
 }
 
 type Options = { step?: Step | null; completed?: number; reason?: Reason; seed?: boolean; saved?: OralIntent; reject?: string;
-  route?: OralHostOptions["route"]; holdRoute?: boolean; settings?: (data: SettingsResponse) => void; holdStop?: boolean };
+  route?: OralHostOptions["route"]; holdRoute?: boolean; settings?: (data: SettingsResponse) => void; holdStop?: boolean;
+  openCard?: boolean };
 /** A synthetic server model for one profile; it makes no claim of backend acceptance. */
 function setup(options: Options = {}) {
   let counter = 100, version = 8n;
@@ -98,14 +99,15 @@ function setup(options: Options = {}) {
   const stores = { study: new OralSessionPendingStore(storage), stop: new OralStopPendingStore(storage) };
   const settingsStore = new SettingsPendingStore(storage), back = fakeBack(), haptic = vi.fn();
   vi.stubGlobal("Telegram", { WebApp: { HapticFeedback: { notificationOccurred: haptic }, BackButton: back.api } });
-  const onToday = vi.fn(), onOral = vi.fn(), host: { current: OralHost | null } = { current: null };
+  const onToday = vi.fn(), onOral = vi.fn(), onOpenCard = vi.fn(), host: { current: OralHost | null } = { current: null };
   let setRoute!: (route: OralHostOptions["route"]) => void;
   function Harness() {
     const [route, update] = useState<OralHostOptions["route"]>(options.route ?? (seed ? "oral" : "today")); setRoute = update;
     const settings = useSettingsDocument({ access, transport, pendingStore: settingsStore, onCurrent() {} });
     const value = useOralHost({ access, transport, stores, newId: () => id(counter++), language: "ru", settings,
       initialSessionId: seed, seedPending: false, route,
-      onOral: () => { onOral(); if (!options.holdRoute) update("oral"); }, onToday: () => { onToday(); update("today"); } });
+      onOral: () => { onOral(); if (!options.holdRoute) update("oral"); }, onToday: () => { onToday(); update("today"); },
+      onOpenCard: options.openCard ? onOpenCard : undefined });
     host.current = value;
     return <>{value.screen}{route === "today" && <p data-testid="today">{value.blocksToday ? "held" : "shown"}</p>}</>;
   }
@@ -113,7 +115,7 @@ function setup(options: Options = {}) {
   const kinds = () => posts.map(post => post.kind);
   const commandChecks = () => fetcher.mock.calls.filter(([url, init]) => init?.method !== "POST" && String(url).includes("/commands/")).length;
   const sessionReads = () => fetcher.mock.calls.filter(([url, init]) => init?.method !== "POST" && String(url).includes("/sessions/")).length;
-  return { posts, kinds, values, onToday, onOral, host, back, haptic, stopGate, commandChecks, sessionReads,
+  return { posts, kinds, values, onToday, onOral, onOpenCard, host, back, haptic, stopGate, commandChecks, sessionReads,
     route: (route: OralHostOptions["route"]) => act(() => setRoute(route)), setCurrent: (next: OralSessionProjection) => { current = next; version++; } };
 }
 const button = (name: string) => screen.getByRole("button", { name }) as HTMLButtonElement;
@@ -244,5 +246,33 @@ describe("useOralHost: closure, summary, native Back and haptics", () => {
     expect(h.kinds()).toEqual(["session.stop"]);
     await act(async () => { h.stopGate.resolve(); });
     await waitFor(() => expect(dd()).toEqual(["0", "0", "0", "2"])); expect(h.onToday).not.toHaveBeenCalled();
+  });
+});
+
+// M-ORAL-ENTRY: М18 opens the question's card on top of the quiz; the hidden owner keeps the same question for Back.
+describe("useOralHost: «Уточнить поля» and the return from the card", () => {
+  it.each(["presented", "revealed"] as const)("C1 %s question: the card opens with its question, Back returns to it without a command", async step => {
+    const h = setup({ step, seed: true, openCard: true });
+    const control = step === "presented" ? "Раскрыть" : "Правильно";
+    await waitFor(() => expect(button(control).disabled).toBe(false));
+    fireEvent.click(button("Уточнить поля"));
+    expect(h.onOpenCard).toHaveBeenCalledExactlyOnceWith(id(7), { assignment: id(6) });
+    // The card route hides the owner: no screen, no Back of its own (the card's Back belongs to the document).
+    await h.route("hidden"); await settled();
+    expect(screen.queryByText("wenn")).toBeNull(); expect(h.back.bound).toBe(0);
+    const reads = h.sessionReads();
+    await h.route("oral");
+    await waitFor(() => expect(button(control).disabled).toBe(false));
+    expect(screen.getByText("wenn")).toBeTruthy();
+    // The reveal is server state: it survives the card, and a hidden question stays hidden.
+    expect(screen.queryByText("если") !== null).toBe(step === "revealed");
+    expect(h.sessionReads()).toBeGreaterThan(reads);
+    expect(h.posts).toEqual([]); expect(h.onToday).not.toHaveBeenCalled(); expect(h.back.bound).toBe(1);
+  });
+
+  it("C2 without the document option the oral screen has no «Уточнить поля»", async () => {
+    setup({ step: "presented", seed: true });
+    await waitFor(() => expect(button("Раскрыть").disabled).toBe(false));
+    expect(screen.queryByRole("button", { name: "Уточнить поля" })).toBeNull();
   });
 });

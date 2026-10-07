@@ -18,6 +18,7 @@
 .oral-screen .oral-correct { color: var(--success); }
 .oral-screen .oral-wrong { color: var(--error); }
 .oral-screen .oral-reveal { background: var(--text); color: var(--bg); }
+.oral-refine { justify-self: start; }
 .oral-summary dl { display: grid; gap: 12px; }
 .oral-summary dl > div { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; }
 .oral-summary dd { font-weight: 700; }

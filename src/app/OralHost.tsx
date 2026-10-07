@@ -30,6 +30,11 @@ export type OralHostOptions = {
   onOral(): void;
   /** Navigation only: a confirmed closure, a rejected start or nothing left to show. */
   onToday(): void | Promise<void>;
+  /**
+   * «Уточнить поля» (M-ORAL-ENTRY): the question's card opens on top of the quiz and Back returns to it. The oral quiz
+   * never moves on by a card action (К07-080), so nothing is reported back.
+   */
+  onOpenCard?(cardId: string, details: { assignment: string }): void;
 };
 export type OralHost = {
   /** Today waits for the first recovery and for own receipts or sessions it must show first. */
@@ -182,11 +187,13 @@ export function useOralHost(options: OralHostOptions): OralHost {
     if (route !== "oral") options.onOral();
     repaint();
   };
+  const openCard = options.onOpenCard
+    ? (cardId: string, assignment: string) => latest.current.onOpenCard?.(cardId, { assignment }) : undefined;
   return {
     blocksToday: !bound.recovered || claim !== null,
     canRequestStart: gate,
     requestStart,
     screen: route === "oral" ? <OralScreen state={seedPending ? null : state} actions={screenActions} language={options.language}
-      active onToday={() => { void latest.current.onToday(); }} /> : null,
+      active onToday={() => { void latest.current.onToday(); }} onRefineFields={openCard} /> : null,
   };
 }

@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef } from "react";
 import { commandCopy } from "../commands/commandCopy";
 import type { Language } from "../i18n/language";
 import type { OralDocumentSnapshot } from "./oralDocumentController";
+import { oralRefineCardId } from "./oralRefine";
 import type { OralDocumentActions } from "./useOralDocument";
 import "./oral.css";
 
@@ -13,6 +14,8 @@ export type OralScreenProps = {
   active: boolean;
   /** Leaves the summary of this owner's own Stop for Today; navigation belongs to the host. */
   onToday(): void;
+  /** «Уточнить поля»: opens the question's card (М12) on top of the quiz; without it the button is absent. */
+  onRefineFields?(cardId: string, assignmentId: string): void;
 };
 
 const copy = {
@@ -26,7 +29,7 @@ const copy = {
     remaining: "Осталось", today: "На Сегодня", refresh: commandCopy.ru.check, retryStudy: "Повторить действие",
     retryStop: commandCopy.ru.retryStop, recovery: "Проверка состояния", pendingStudy: "Учебное действие ещё не подтверждено.",
     pendingStop: "Завершение ещё не подтверждено.", cleanup: "Не удалось обновить данные на этом устройстве. Проверь состояние.",
-    blocked: "Действие нельзя повторить. Проверь состояние занятия." },
+    blocked: "Действие нельзя повторить. Проверь состояние занятия.", refine: "Уточнить поля" },
   uk: { title: "Усне заняття", exit: "Вийти", reveal: "Розкрити", correct: "Правильно", wrong: "Неправильно",
     question: "Завдання", translation: "Переклад", meaning: "Значення сполучника", verb: "Позиція дієслова",
     loading: "Завантажуємо заняття…", idle: "Заняття ще не почалося.", remember: "Згадай переклад.",
@@ -37,7 +40,7 @@ const copy = {
     remaining: "Залишилося", today: "На Сьогодні", refresh: commandCopy.uk.check, retryStudy: "Повторити дію",
     retryStop: commandCopy.uk.retryStop, recovery: "Перевірка стану", pendingStudy: "Навчальну дію ще не підтверджено.",
     pendingStop: "Завершення ще не підтверджено.", cleanup: "Не вдалося оновити дані на цьому пристрої. Перевір стан.",
-    blocked: "Дію не можна повторити. Перевір стан заняття." },
+    blocked: "Дію не можна повторити. Перевір стан заняття.", refine: "Уточнити поля" },
   en: { title: "Oral practice", exit: "Exit", reveal: "Reveal", correct: "Correct", wrong: "Incorrect",
     question: "Question", translation: "Translation", meaning: "Conjunction meaning", verb: "Verb position",
     loading: "Loading your session…", idle: "The session has not started yet.", remember: "Recall the translation.",
@@ -48,11 +51,11 @@ const copy = {
     remaining: "Remaining", today: "Return to Today", refresh: commandCopy.en.check, retryStudy: "Retry action",
     retryStop: commandCopy.en.retryStop, recovery: "Status check", pendingStudy: "The study action is not confirmed yet.",
     pendingStop: "Ending the session is not confirmed yet.", cleanup: "Could not update data on this device. Check status.",
-    blocked: "This action cannot be retried. Check session status." },
+    blocked: "This action cannot be retried. Check session status.", refine: "Refine fields" },
 } as const;
 
 /** A detached renderer: accepted state and command identity belong exclusively to the owner. */
-export function OralScreen({ state, actions, language, active, onToday }: OralScreenProps) {
+export function OralScreen({ state, actions, language, active, onToday, onRefineFields }: OralScreenProps) {
   const t = copy[language], promptElement = useRef<HTMLParagraphElement>(null);
   const assignment = state?.current?.status === "active" ? state.current.assignment : null;
   const ticket = state?.presentationTicket ?? null;
@@ -105,6 +108,7 @@ export function OralScreen({ state, actions, language, active, onToday }: OralSc
     || !!problem || lanes.some(lane => lane.pending) || state!.canRetry.study || state!.canRetry.stop);
   const allowed = (capability: boolean | undefined) => usable && capability === true;
   const toToday = closedSummary !== null || allowed(state?.canSummaryHome);
+  const refineCard = active && phase !== "disposed" ? oralRefineCardId(state) : null;
 
   // Waiting for the summary of the own Stop looks like the application start, never like a zero result.
   if (waiting) return <main className="app-shell" lang={language} aria-busy="true">
@@ -141,6 +145,8 @@ export function OralScreen({ state, actions, language, active, onToday }: OralSc
         </div>
       </> : <button type="button" className="oral-reveal" disabled={!allowed(state?.canReveal)}
         onClick={() => { if (allowed(state?.canReveal)) void actions.reveal(); }}>{t.reveal}</button>}
+      {refineCard !== null && onRefineFields && <button type="button" className="oral-refine"
+        onClick={() => onRefineFields(refineCard, assignment.id)}>{t.refine}</button>}
     </section>}
     {summary && <section className="oral-summary" aria-label={t.summary}>
       <h2>{t.summary}</h2>

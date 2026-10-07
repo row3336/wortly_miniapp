@@ -83,9 +83,10 @@ function fixture(step: Step = "prefetched") {
   const actions: OralDocumentActions = { refresh: () => controller.refresh(), start: bucket => controller.start(bucket),
     shown: ticket => controller.shown(ticket), reveal: () => controller.reveal(), grade: correct => controller.grade(correct),
     stop: reason => controller.stop(reason), retry: lane => controller.retry(lane) };
-  function Harness({ active = true, language = "ru" }: { active?: boolean; language?: Language }) {
+  function Harness({ active = true, language = "ru", onRefineFields }: { active?: boolean; language?: Language;
+    onRefineFields?(cardId: string, assignmentId: string): void; }) {
     const doc = useOralDocument({ ...options, enabled: active });
-    return <OralScreen {...doc} language={language} active={active} onToday={() => {}} />;
+    return <OralScreen {...doc} language={language} active={active} onToday={() => {}} onRefineFields={onRefineFields} />;
   }
   return { controller, actions, options, Harness, posts, gets, values, accepted, storage, fetcher, handler,
     hold: (kind: OralIntent["kind"]) => { const gate = deferred<void>(); holds.set(kind, gate); return gate; },
@@ -426,5 +427,50 @@ describe("OralScreen: summary of the own Stop", () => {
     await act(async () => {});
     expect(screen.getByText("Занятие завершено.")).toBeTruthy(); expect(document.querySelector(".wortly-loader")).toBeNull();
     expect(refresh).not.toHaveBeenCalled(); f.controller.dispose();
+  });
+});
+
+// M-ORAL-ENTRY: «Уточнить поля» in М18 until the self-assessment (RA:220; root decision, pending owner — Q25).
+describe("OralScreen: «Уточнить поля» before the self-assessment", () => {
+  const refine = () => screen.queryByRole("button", { name: "Уточнить поля" });
+
+  it("R1 the hidden question offers it; a tap hands over its card and question and sends no command", async () => {
+    const f = fixture("presented"), opened = vi.fn(); render(<f.Harness onRefineFields={opened} />);
+    await waitFor(() => expect(button("Раскрыть").disabled).toBe(false));
+    expect(screen.queryByText("если")).toBeNull();
+    fireEvent.click(refine()!);
+    expect(opened).toHaveBeenCalledWith(id(7), id(6));
+    await act(async () => {}); expect(f.posts).toEqual([]);
+  });
+
+  it("R2 the revealed question offers it; an unresolved grade, the next prefetched question and the summary do not", async () => {
+    const f = fixture("revealed"), opened = vi.fn(); render(<f.Harness onRefineFields={opened} />);
+    await waitFor(() => expect(button("Правильно").disabled).toBe(false));
+    expect(refine()).toBeTruthy();
+    const gate = f.hold("oral.grade"), present = f.hold("assignment.present");
+    fireEvent.click(button("Правильно"));
+    await waitFor(() => expect(screen.getByText("Сохраняем действие…")).toBeTruthy());
+    expect(refine()).toBeNull();
+    await act(async () => { gate.resolve(); });
+    await waitFor(() => expect(f.posts.map(post => post.kind)).toEqual(["oral.grade", "assignment.present"]));
+    expect(refine()).toBeNull();
+    await act(async () => { present.resolve(); });
+    await waitFor(() => expect(button("Раскрыть").disabled).toBe(false));
+    expect(refine()).toBeTruthy(); expect(screen.getByText("die Straße")).toBeTruthy();
+    expect(opened).not.toHaveBeenCalled();
+  });
+
+  it("R3 without the host option, inactive or after the summary there is no button", async () => {
+    const f = fixture("presented"); await f.controller.refresh(); const state = f.controller.snapshot(), opened = vi.fn();
+    const ui = render(<OralScreen state={state} actions={f.actions} language="ru" active onToday={() => {}} />);
+    expect(refine()).toBeNull();
+    ui.rerender(<OralScreen state={state} actions={f.actions} language="ru" active={false} onToday={() => {}} onRefineFields={opened} />);
+    expect(refine()).toBeNull();
+    ui.rerender(<OralScreen state={state} actions={f.actions} language="en" active onToday={() => {}} onRefineFields={opened} />);
+    expect(screen.getByRole("button", { name: "Refine fields" })).toBeTruthy();
+    f.set(projection("summary", 2, 1)); await f.controller.refresh();
+    ui.rerender(<OralScreen state={f.controller.snapshot()} actions={f.actions} language="ru" active onToday={() => {}} onRefineFields={opened} />);
+    expect(screen.getByRole("region", { name: "Итог занятия" })).toBeTruthy(); expect(refine()).toBeNull();
+    expect(opened).not.toHaveBeenCalled(); f.controller.dispose();
   });
 });

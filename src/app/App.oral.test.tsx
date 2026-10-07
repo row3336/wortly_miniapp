@@ -124,11 +124,13 @@ describe("Oral host through the actual App document", () => {
     expect(screen.queryByRole("region", { name: "Итог занятия" })).toBeNull(); expect(a.posts()).toEqual([]);
   });
 
-  it("A4 Today keeps the De→L1 rows inert until the full oral card is available (blocker B-ENTRY)", async () => {
+  // CP14 bound B-ENTRY is lifted by M-ORAL-ENTRY (editors M-EDIT, card actions M-ACTIONS); the start itself — App.oralEntry.test.tsx E1.
+  it("A4 Today offers both De→L1 rows once the oral owner may start; nothing is sent before a tap", async () => {
     const a = app(); render(<App />);
     await screen.findByText(pairText);
-    const row = screen.getByRole("button", { name: /Слова: перевод с немецкого/ }) as HTMLButtonElement;
-    expect(row.disabled).toBe(true); fireEvent.click(row);
+    for (const name of [/Слова: перевод с немецкого/, /Фразы: перевод с немецкого/]) {
+      await waitFor(() => expect((screen.getByRole("button", { name }) as HTMLButtonElement).disabled).toBe(false));
+    }
     await act(async () => {}); expect(a.posts()).toEqual([]); expect(screen.getByText(pairText)).toBeTruthy();
   });
 });
