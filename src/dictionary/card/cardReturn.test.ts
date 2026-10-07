@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { backDestination, initialRoute, navigationReducer, type Route } from "../../app/navigation";
-import { cardOrigin } from "./cardOrigin";
+import { cardOrigin, movesWrittenQuiz } from "./cardOrigin";
 import { CARD } from "./cardTestData.test-support";
 
 /** The route ApplicationDocument renders CardHost from: subject is the card, origin comes from back.source. */
@@ -31,5 +31,11 @@ describe("М12 return to its source (TA:86, M-CARD В4): the entry point of M-AC
     expect(cardOrigin(card.back?.source ?? null)).toEqual({ kind: "dictionary" });
     expect(navigationReducer(card, { type: "back" })).toMatchObject({ screen: "dictionary",
       restored: { source: "dictionary", search: { query: "Haus", mode: "words" }, scroll: 120 } });
+  });
+
+  it("only a card of the main written quiz moves that quiz on after its study action (M-ACTIONS Р4)", () => {
+    expect(movesWrittenQuiz(cardOrigin(openFrom("written").back?.source ?? null))).toBe(true);
+    expect(movesWrittenQuiz(cardOrigin(openFrom("oral").back?.source ?? null))).toBe(false);
+    expect(movesWrittenQuiz(cardOrigin(openFrom("dictionary").back?.source ?? null))).toBe(false);
   });
 });

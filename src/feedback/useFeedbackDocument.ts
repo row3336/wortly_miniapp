@@ -5,7 +5,11 @@ import { createFeedbackApi } from "./feedbackApi";
 import { FeedbackController, type FeedbackSnapshot } from "./feedbackController";
 import type { FeedbackPendingStore } from "./feedbackPending";
 
-type Options = { access: OpenedAccess; transport: HttpOptions; pendingStore: FeedbackPendingStore };
+type Options = {
+  access: OpenedAccess; transport: HttpOptions; pendingStore: FeedbackPendingStore;
+  /** A complaint form attaches its card (К07-051); the settings form sends a general message. */
+  cardId?: string;
+};
 export type FeedbackDocument = {
   state: FeedbackSnapshot;
   actions: Pick<FeedbackController, "edit" | "send" | "retry">;
@@ -32,14 +36,14 @@ export function useFeedbackDocument(options: Options): FeedbackDocument {
     if (!current.access.isLive() || current.access.profile.access.status !== "admitted") return;
     let live = true;
     const controller = new FeedbackController({ api: createFeedbackApi(current.transport), pendingStore: current.pendingStore,
-      access: () => latest.current.access, newId: () => window.crypto.randomUUID(),
+      cardId: current.cardId, access: () => latest.current.access, newId: () => window.crypto.randomUUID(),
       onUpdate: () => { if (live && owner.current === bound) repaint(); } });
     const bound: Owner = { key: current.access.key, transport: current.transport, store: current.pendingStore, controller };
     owner.current = bound;
     lastAccess.current = current.access;
     void controller.refresh();
     return () => { live = false; controller.dispose(); if (owner.current === bound) owner.current = null; };
-  }, [options.access.key, options.transport, options.pendingStore]);
+  }, [options.access.key, options.transport, options.pendingStore, options.cardId]);
 
   // A returning foreground gives a new handle: an unconfirmed message is checked again by its own command_id.
   useEffect(() => {

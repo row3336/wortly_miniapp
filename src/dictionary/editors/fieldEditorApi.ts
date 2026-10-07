@@ -43,7 +43,7 @@ export type FieldCommandStatus =
 
 /**
  * One request per call, never repeated. A thrown local Error means nothing was sent;
- * an ApiError after a command POST is resolved by status (fieldOutcomeUnknown).
+ * an ApiError after a command POST is resolved by status (commands/commandOutcome.ts).
  */
 export interface FieldEditorApi {
   send(token: string, proof: string, command: FieldCommand): Promise<FieldCommandReply>;
@@ -101,10 +101,6 @@ export function fieldIntentHash(value: FieldIntent): Promise<string> {
   return intentHash(intent.kind, fingerprintPayload(intent));
 }
 
-/** After a command POST only an HTTP refusal below 500 proves no fact; anything else needs a status check. */
-export function fieldOutcomeUnknown(error: unknown): boolean {
-  return !(error instanceof ApiError && error.kind === "http" && error.status !== undefined && error.status < 500);
-}
 
 function prepareCommand(token: string, proof: string, value: FieldCommand): FieldCommand {
   if (typeof token !== "string" || !token || typeof proof !== "string" || !proof || !record(value)) {

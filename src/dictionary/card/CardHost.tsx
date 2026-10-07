@@ -6,18 +6,21 @@ import type { OpenedAccess } from "../../app/openedAccess";
 import type { Language } from "../../i18n/language";
 import type { ManualPendingStore } from "../../learning/manualPending";
 import { useManualSelectionDocument, type ManualSelectionDocumentState } from "../../learning/useManualSelectionDocument";
+import { CardActions } from "../actions/CardActions";
+import type { CardActionApplied } from "../actions/cardActionsController";
+import { useCardActions } from "../actions/useCardActions";
 import { useDictionaryCardDocument } from "../useDictionaryCardDocument";
 import { cardFieldSlots } from "../editors/CardFieldSlots";
 import { useFieldEditors } from "../editors/useFieldEditors";
 import { useDictionaryIntervalContext } from "../useDictionaryIntervalContext";
-import type { CardOrigin } from "./cardOrigin";
+import { movesWrittenQuiz, type CardOrigin } from "./cardOrigin";
 import { CardScreen } from "./CardScreen";
 import type { ManualControl } from "./CardStudyBlock";
 
 export type CardContext = ReturnType<typeof useDictionaryIntervalContext>;
 /** Connection points of the packages that add their own controls to М12 (DESIGN M-CARD §7). */
 export type CardExtensions = {
-  /** M-ACTIONS: exclude/return/relearn by view.card_actions and «Что не так?». */
+  /** Further controls under the card's own study actions (M-ACTIONS renders those itself). */
   renderActions?(view: DictionaryCardView): ReactNode;
   /** M-INTV: the interval window of the open card context. */
   renderInterval?(view: DictionaryCardView, context: CardContext): ReactNode;
@@ -48,6 +51,8 @@ export type CardHostProps = {
   leaving?: boolean;
   /** The awaited close was started, or cannot follow any more (open refused or unresolved, access changed). */
   onClosed?(): void;
+  /** An accepted exclude/return/relearn of this card (M-ACTIONS): the source quiz may move on (TA:153). */
+  onStudyAction?(event: CardActionApplied): void;
 };
 
 type ManualDocument = ReturnType<typeof useManualSelectionDocument>;
@@ -133,11 +138,28 @@ export function CardHost(props: CardHostProps) {
     contextId: context.state.phase === "ready" ? context.state.context?.id ?? null : null,
     contextStateVersion: context.state.stateVersion, newId: props.newId,
     onChanged: () => { void card.refresh(); void context.actions.refresh(); }, onLeave: () => latestLeave.current() });
+  const latestProps = useRef(props); latestProps.current = props;
+  // Study actions and the complaint (M-ACTIONS): root decision, pending owner (Р11) — every accepted or refused command reads
+  // the card and its context again (they end the context's undo rights on the server, CT 2.3). root decision, pending owner (M-ACTIONS Р4): from the main
+  // written quiz an accepted exclude/relearn leaves the card the managed way — the quiz then moves on (К07-070, К07-079);
+  // from the dictionary and the oral quiz the card stays and shows its new state (К07-080).
+  const studyActions = useCardActions({ access: props.access, transport: props.transport, enabled: !leaving, cardId: props.cardId,
+    view: shown, stateVersion: shown ? previous!.state_version : null, newId: props.newId,
+    onApplied: event => {
+      const current = latestProps.current;
+      current.onStudyAction?.(event);
+      void card.refresh(); void context.actions.refresh();
+      if (movesWrittenQuiz(current.origin) && event.kind !== "card.return") editors.actions.requestLeave();
+    },
+    onChanged: () => { void card.refresh(); void context.actions.refresh(); } });
   if (leaving) return null;
 
   return <CardScreen language={props.language} phase={card.state.phase} problem={card.state.problem} view={shown}
     origin={props.origin} manual={manualControl(manual, props.cardId, card.state.phase === "ready")}
-    actions={shown && props.extensions?.renderActions?.(shown)}
+    actions={shown && <>
+      <CardActions language={props.language} lemma={shown.content.card.lemma} document={studyActions} />
+      {props.extensions?.renderActions?.(shown)}
+    </>}
     interval={shown && props.extensions?.renderInterval?.(shown, context)}
     fields={shown ? cardFieldSlots({ state: editors.state, actions: editors.actions, view: shown, language: props.language }) : undefined}
     onBack={editors.actions.requestLeave} onRetry={() => { void card.refresh(); }} />;

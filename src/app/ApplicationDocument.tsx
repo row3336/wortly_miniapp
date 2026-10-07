@@ -3,7 +3,7 @@ import type { LearningPreviewAddress } from "../api/generated";
 import type { HttpOptions } from "../api/http";
 import { sameId } from "../api/wireValidation";
 import { CardHost } from "../dictionary/card/CardHost";
-import { cardOrigin, type CardOrigin } from "../dictionary/card/cardOrigin";
+import { cardOrigin, movesWrittenQuiz, type CardOrigin } from "../dictionary/card/cardOrigin";
 import { DictionaryHost, type DictionaryVisit } from "../dictionary/DictionaryHost";
 import type { Language } from "../i18n/language";
 import { LearningPreviewCard } from "../learning/LearningPreviewCard";
@@ -237,7 +237,9 @@ export function ApplicationDocument(props: Props) {
   const written = useWrittenHost({ access: props.access, transport: props.transport, storage: props.storage, newId: props.newId,
     language: props.language, settings, minimumStateVersion: highest(floor?.version, writtenSelected?.version),
     initialSessionId: writtenSeed, route: at === "written" ? "written" : todayShown ? "today" : "hidden",
-    onWritten: () => navigate({ type: "open", screen: "written" }), onToday: today });
+    onWritten: () => navigate({ type: "open", screen: "written" }), onToday: today,
+    // «Уточнить поля» (M-ACTIONS): the answered card opens on top of the quiz and returns to it.
+    onOpenCard: (cardId, details) => navigate({ type: "push", screen: "card", subject: cardId, details }) });
   if (todayShown && (oral.blocksToday || written.blocksToday)) { hostRoute = "settings"; screen = loading; }
   // One host per opened card route (TA:86, К07-096): a fresh key per route object, so reopening a card while its
   // previous host still awaits a close starts a new host. The slot keeps one position, so leaving keeps the same host.
@@ -267,6 +269,8 @@ export function ApplicationDocument(props: Props) {
     {cardSlot && <CardHost key={cardSlot.key} access={props.access} transport={props.transport} language={props.language}
       pendingStore={manualPending} cardId={cardSlot.cardId} origin={cardSlot.origin} newId={props.newId}
       leaving={cardSlot !== activeCard} backSlot={cardBack}
+      // Only a card opened from the written quiz moves it on (M-ACTIONS Р4); dictionary and oral cards report nothing.
+      onStudyAction={movesWrittenQuiz(cardSlot.origin) ? written.cardActionApplied : undefined}
       onBack={close => { if (close === "after_open" && activeCard) setLeavingCard(activeCard); navigate({ type: "back" }); }}
       onClosed={() => setLeavingCard(current => current?.key === cardSlot.key ? null : current)} />}
     {dictionaryOpened && <DictionaryHost access={props.access} transport={props.transport} language={props.language} visit={visit}

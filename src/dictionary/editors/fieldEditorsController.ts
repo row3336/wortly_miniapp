@@ -1,7 +1,8 @@
 import type { FieldUndoTarget } from "../../api/generated";
 import { version } from "../../api/wireValidation";
+import { commandOutcomeUnknown } from "../../commands/commandOutcome";
 import {
-  caseRoles, copyFieldIntent, fieldOutcomeUnknown,
+  caseRoles, copyFieldIntent,
   type CaseRole, type FieldCommand, type FieldCommandReply, type FieldCommandStatus, type FieldCurrent, type FieldIntent,
   type FieldKey, type FieldLanguage, type FieldOrigin, type FieldSaveIntent, type FieldUndoIntent,
 } from "./fieldEditorApi";
@@ -393,7 +394,7 @@ export class FieldEditorsController {
     } catch (error) {
       if (this.disposed || this.entry !== entry) return;
       entry.busy = false;
-      if (fieldOutcomeUnknown(error)) {
+      if (commandOutcomeUnknown(error)) {
         entry.status = "unknown";
         this.marking(entry, "unknown");
         this.notify();

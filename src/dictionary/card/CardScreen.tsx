@@ -34,7 +34,7 @@ const retryable = new Set<DictionaryCardSnapshot["problem"]>(["load", "stale_res
 /**
  * The full card М12 (TA §4, §7; RA 6.1.9–6.1.11, 6.1.14). Content, study facts and rights are the server's.
  * root decision, pending owner (M-CARD Р6): no bottom navigation, the only exit is Back to the source.
- * root decision, pending owner (M-CARD Р1): no exclude/return/relearn or report buttons until M-ACTIONS.
+ * The study actions and «Сообщить об ошибке» (M-ACTIONS) come through `actions`, under the study block.
  * root decision, pending owner (M-CARD Р2, Q24): the two tense tables stay side by side in two columns at every width
  * (ReferenceConjugations; only font and gap shrink below 360px), no tense is hidden (RA:241).
  */

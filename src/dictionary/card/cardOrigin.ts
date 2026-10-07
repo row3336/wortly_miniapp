@@ -14,3 +14,11 @@ export function cardOrigin(source: ScreenId | null): CardOrigin {
   if (source === "oral") return { kind: "quiz", direction: "de-l1" };
   return { kind: "dictionary" };
 }
+
+/**
+ * The main written quiz moves on after an accepted exclude/relearn of its card (TA:153, К07-070, К07-079); a card of the
+ * dictionary or of the oral quiz does not (К07-080). Only such a card reports its study action to the written quiz.
+ */
+export function movesWrittenQuiz(origin: CardOrigin): boolean {
+  return origin.kind === "quiz" && origin.direction === "l1-de";
+}

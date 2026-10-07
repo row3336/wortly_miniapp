@@ -25,12 +25,24 @@ export type WrittenHostOptions = {
   onWritten(): void;
   /** Navigation only: a confirmed closure that shows no summary, or an explicit return. */
   onToday(): void | Promise<void>;
+  /**
+   * «Уточнить поля» (TA:115, К05-080): push the full card of the answered assignment; it returns to this quiz (M-CARD).
+   * Without it the result offers no such button.
+   */
+  onOpenCard?(cardId: string, details: { assignment: string }): void;
 };
+/** An accepted card study action of a card opened from this quiz (M-ACTIONS cardActionsController). */
+export type WrittenCardAction = { kind: "card.exclude" | "card.return" | "card.relearn"; cardId: string; stateVersion: string };
 export type WrittenHost = {
   /** Today waits for the first recovery and for own receipts or sessions it must show first. */
   blocksToday: boolean;
   canRequestStart: boolean;
   requestStart(bucket: "words" | "phrases"): void;
+  /**
+   * An exclude or relearn of the answered card moved the main written quiz on (TA:153, К07-070, К07-079): the quiz reads
+   * its session at least as new as that action and, back on its route, goes on to the next question or the summary.
+   */
+  cardActionApplied(event: WrittenCardAction): void;
   screen: ReactNode;
 };
 const copy = {
@@ -44,6 +56,10 @@ type Lifetime = {
   /** The owner's session before a consumed request, or false when no own start is awaited. */
   request: { bucket: "words" | "phrases"; access: OpenedAccess } | null; starting: boolean; awaitingStart: string | null | false;
   recovered: boolean; claimed: string | null; idleNotified: boolean; notified: Set<string>; answered: Set<string>; completed: Set<string>;
+  /** A confirmed exclude/relearn of the card on screen: «Дальше» once the session read after it is shown (M-ACTIONS Р4). */
+  advance: string | null;
+  /** The state version of that action: the session is read at least this new. Settings are not gated by it. */
+  actionFloor: string;
 };
 
 /** Route composition of the written owner: a Today tap is one explicit, cancellable start request. */
@@ -56,7 +72,7 @@ export function useWrittenHost(options: WrittenHostOptions): WrittenHost {
   if (!bound || bound.key !== access.key || bound.pair !== pair || bound.storage !== options.storage || bound.transport !== options.transport) {
     bound = { key: access.key, pair, storage: options.storage, transport: options.transport, floor: access.profile.state_version,
       request: null, starting: false, awaitingStart: false, recovered: false, claimed: null, idleNotified: false,
-      notified: new Set(), answered: new Set(), completed: new Set() };
+      notified: new Set(), answered: new Set(), completed: new Set(), advance: null, actionFloor: access.profile.state_version };
     lifetime.current = bound;
   }
   const confirmed = options.settings.confirmed;
@@ -70,7 +86,8 @@ export function useWrittenHost(options: WrittenHostOptions): WrittenHost {
     && BigInt(confirmed.state_version) >= BigInt(bound.floor);
   const enabled = route === "written" && gate;
   const { state, actions } = useWrittenDocument({ access, storage: options.storage, transport: options.transport, newId: options.newId,
-    transitionMode: confirmed?.settings.transition_mode.value ?? null, enabled, minimumStateVersion: bound.floor,
+    transitionMode: confirmed?.settings.transition_mode.value ?? null, enabled,
+    minimumStateVersion: BigInt(bound.actionFloor) > BigInt(bound.floor) ? bound.actionFloor : bound.floor,
     initialSessionId: options.initialSessionId });
   const latestState = useRef(state); latestState.current = state;
   if (state && state.phase !== "loading" && state.phase !== "disposed") bound.recovered = true;
@@ -144,6 +161,22 @@ export function useWrittenHost(options: WrittenHostOptions): WrittenHost {
     }
   }, [bound, state, route, claim, lanesPending, ownSummary]);
 
+  // root decision, pending owner (M-ACTIONS Р4): the quiz goes on by itself only from the result of that card, and only
+  // after a read at least as new as the action (canNext needs a fresh projection); any other step means it already moved.
+  useEffect(() => {
+    if (bound.advance === null || route !== "written" || !state) return;
+    if (state.phase === "result_correct" || state.phase === "result_wrong") {
+      // Only the result of the excluded or relearnt card moves on; another card's result is the user's own step.
+      if (state.resultCardId?.toLowerCase() !== bound.advance) { bound.advance = null; return; }
+      if (!state.canNext) return;
+      bound.advance = null;
+      void actions.next();
+      return;
+    }
+    if (["loading", "stale", "unknown", "changing_result", "undoing", "visible_unconfirmed", "submitting"].includes(state.phase)) return;
+    bound.advance = null;
+  }, [bound, route, state, actions]);
+
   const screenActions = useMemo<WrittenActions>(() => ({ ...actions, submit: flags => {
     const sessionId = latestState.current?.sessionId?.toLowerCase();
     if (sessionId) bound.answered.add(sessionId);
@@ -168,6 +201,15 @@ export function useWrittenHost(options: WrittenHostOptions): WrittenHost {
     if (route !== "written") options.onWritten();
     repaint();
   };
+  const cardActionApplied = (event: WrittenCardAction) => {
+    // «Вернуть в повторы» never changes a running quiz (К07-085).
+    if (event.kind === "card.return" || !/^[1-9][0-9]*$/.test(event.stateVersion)) return;
+    bound.advance = event.cardId.toLowerCase();
+    if (BigInt(event.stateVersion) > BigInt(bound.actionFloor)) bound.actionFloor = event.stateVersion;
+    repaint();
+  };
+  const openCard = options.onOpenCard
+    ? (cardId: string, assignment: string) => latest.current.onOpenCard?.(cardId, { assignment }) : undefined;
   const t = copy[options.language];
   // The document owner is created in an effect after the first written render and reads its projection before it is live.
   // Until then the refusal below would flash on every return from Settings. A prefetched question that waits for
@@ -178,6 +220,7 @@ export function useWrittenHost(options: WrittenHostOptions): WrittenHost {
     blocksToday: !bound.recovered || claim !== null,
     canRequestStart: gate,
     requestStart,
+    cardActionApplied,
     screen: route !== "written" ? null : !gate && !live && settling ? <section className="written-screen" aria-busy="true">
       <p role="status">{t.loading}</p>
     </section> : !gate && !live ? <section className="written-screen" aria-label={t.settings}>
@@ -185,6 +228,6 @@ export function useWrittenHost(options: WrittenHostOptions): WrittenHost {
       <button type="button" onClick={() => { void options.settings.actions.refresh(); }}>{t.refresh}</button>
       <button type="button" onClick={() => { void latest.current.onToday(); }}>{t.today}</button>
     </section> : state ? <WrittenScreen state={state} language={options.language} submitOnEnter actions={screenActions}
-      onToday={() => { void latest.current.onToday(); }} /> : null,
+      onToday={() => { void latest.current.onToday(); }} onRefineFields={openCard} /> : null,
   };
 }

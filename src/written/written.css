@@ -2,7 +2,7 @@
 .written-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; }
 .written-header h1 { font-size: 18px; margin: 0; }
 .written-screen > p { margin: 0; }
-.written-header button, .written-recovery button, .written-previous, .written-today, .written-summary button, .written-step-back { min-height: 48px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; color: var(--text); background: var(--surface); font: inherit; }
+.written-header button, .written-recovery button, .written-previous, .written-today, .written-summary button, .written-step-back, .written-refine { min-height: 48px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; color: var(--text); background: var(--surface); font: inherit; }
 .written-recovery { display: flex; flex-wrap: wrap; gap: 12px; }
 .written-screen button:disabled { opacity: .5; cursor: default; }
 .written-screen button:focus-visible { outline: 2px solid var(--text); outline-offset: 3px; }
@@ -15,5 +15,6 @@
 .written-summary dl div { display: grid; gap: 4px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; }
 .written-summary dt { font-size: 14px; color: var(--muted); }
 .written-summary dd { margin: 0; font-size: 24px; font-weight: 700; }
+.written-refine { justify-self: start; }
 .written-step-back { min-width: 48px; justify-self: start; font-size: 20px; line-height: 1; }
 .written-summary-actions { display: flex; flex-wrap: wrap; gap: 12px; }

@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { ApiError } from "../../api/http";
-import { createFieldEditorApi, fieldIntentHash, fieldOutcomeUnknown, type FieldCommand } from "./fieldEditorApi";
+import { createFieldEditorApi, fieldIntentHash, type FieldCommand } from "./fieldEditorApi";
 import {
   ACTION, CARD_ID, CONTEXT, fid, fieldFact, json, origin, pairOf, roleCurrent, saveIntent, scalarCurrent, undoIntent,
 } from "./fieldTestData.test-support";
@@ -125,15 +124,6 @@ describe("field command wire (core personal_fields, result_undo)", () => {
     expect((await client.status("token", "proof", save)).outcome).toBe("not_found");
     expect((await client.status("token", "proof", save)).outcome).toBe("mismatch");
     await expect(client.status("token", "proof", save)).rejects.toMatchObject({ kind: "invalid_response" });
-  });
-
-  it("A8 only an HTTP refusal below 500 proves that nothing was saved", () => {
-    expect(fieldOutcomeUnknown(new ApiError("network"))).toBe(true);
-    expect(fieldOutcomeUnknown(new ApiError("invalid_response"))).toBe(true);
-    expect(fieldOutcomeUnknown(new ApiError("http", 503, "MAINTENANCE"))).toBe(true);
-    expect(fieldOutcomeUnknown(new Error("closed_access"))).toBe(true);
-    expect(fieldOutcomeUnknown(new ApiError("http", 403, "FORBIDDEN"))).toBe(false);
-    expect(fieldOutcomeUnknown(new ApiError("http", 409, "CLIENT_INCOMPATIBLE"))).toBe(false);
   });
 
   it("A9 invalid intents fail before any request", async () => {

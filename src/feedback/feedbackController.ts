@@ -21,6 +21,8 @@ export type FeedbackSnapshot = {
 type Options = {
   api: FeedbackApi;
   pendingStore: FeedbackPendingStore;
+  /** A complaint about this card attaches it (К07-051); a general message has none (К07-099). */
+  cardId?: string;
   access(): OpenedAccess | null;
   newId(): string;
   onUpdate(snapshot: FeedbackSnapshot): void;
@@ -194,7 +196,9 @@ export class FeedbackController {
   send(): Promise<void> {
     if (!this.snapshot().canSend) return this.running ?? Promise.resolve();
     const source = this.access();
-    const intent: FeedbackIntent = { command_id: this.options.newId(), kind: "feedback.send", payload: { text: this.text } };
+    const cardId = this.options.cardId;
+    const intent: FeedbackIntent = { command_id: this.options.newId(), kind: "feedback.send",
+      payload: { text: this.text, ...(cardId === undefined ? {} : { card_id: cardId.toLowerCase() }) } };
     if (!validFeedbackIntent(intent)) throw new Error("invalid feedback intent");
     return this.run(async () => {
       this.confirmed = false;

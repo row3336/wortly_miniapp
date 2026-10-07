@@ -55,6 +55,11 @@ export type WrittenViewSnapshot = {
   canRetryPrimary: boolean;
   /** A prefetched question waits for the host to be enabled (confirmed settings); until then the view cannot leave "loading". */
   waitingForSettings: boolean;
+  /**
+   * The card of the answer on screen (К05-080 «Уточнить» for an answered card): only on the current result, whose
+   * assignment is still the shown question. root decision, pending owner (M-ACTIONS Р9): not on a previous result.
+   */
+  resultCardId: string | null;
 };
 const closeReason = (value: string | null | undefined): WrittenClosed["reason"] =>
   value === "stop" || value === "summary_home" ? value : value ? "other" : null;
@@ -113,7 +118,9 @@ export class WrittenViewController extends StudyView<WrittenDocumentCommands, Cu
       closed: live && this.is("closed") && this.closedFacts ? structuredClone(this.closedFacts) : null,
       canStart: live && interactive && commands.canBegin && !this.operation && !this.reading && !this.stopping && this.is("idle", "closed"),
       canStop: closing && !this.is("summary"), canSummaryHome: closing && this.is("summary"),
-      waitingForSettings: live && this.is("loading") && this.question?.status === "prefetched" && !this.enabled() };
+      waitingForSettings: live && this.is("loading") && this.question?.status === "prefetched" && !this.enabled(),
+      resultCardId: live && this.is("result_correct", "result_wrong") && this.question !== null && this.answer?.result
+        && sameId(this.answer.result.assignment_id, this.question.id) ? this.question.card_id : null };
   }
   /**
    * The summary of this owner's own Stop is the closed session projection itself (C-WSUM): the server counted every

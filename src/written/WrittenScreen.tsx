@@ -18,6 +18,8 @@ export type WrittenScreenProps = {
   actions: WrittenActions;
   /** Navigation only: leaves an already closed session of this owner for Today. */
   onToday(): void;
+  /** «Уточнить поля» (TA:115, К05-080): opens the full card of the answered assignment; the card returns to this quiz. */
+  onRefineFields?(cardId: string, assignmentId: string): void;
 };
 const copy = {
   ru: { words: "Слова: перевод на немецкий", phrases: "Фразы: перевод на немецкий", exit: "Выйти", loading: "Загружаем занятие…",
@@ -27,7 +29,8 @@ const copy = {
     captured: "Отправленный ответ", forgot: "Забыл…", today: "На Сегодня", summary: "Итог занятия",
     local: "Не удалось обновить данные на этом устройстве.", blocked: "Действие нельзя повторить. Проверь состояние занятия.",
     changed: "Задание изменилось. Обнови занятие.", noMaterial: "Сейчас нет доступных слов для этого занятия.", noPhrases: "Пока нет доступного материала",
-    busy: "Занятие открыто на другом устройстве", setup: "Для занятия нужно подтвердить настройки и текущую словарную пару." },
+    busy: "Занятие открыто на другом устройстве", setup: "Для занятия нужно подтвердить настройки и текущую словарную пару.",
+    refine: "Уточнить поля" },
   uk: { words: "Слова: переклад німецькою", phrases: "Фрази: переклад німецькою", exit: "Вийти", loading: "Завантажуємо заняття…",
     saving: "Зберігаємо відповідь…", present: "Підтверджуємо показ завдання…", unknown: "Перевіряємо, чи збереглася дія.",
     stop: "Завершуємо заняття…", closed: "Заняття завершено.", unavailable: "Заняття недоступне в цьому вікні.", stale: "Не вдалося оновити заняття.",
@@ -35,7 +38,8 @@ const copy = {
     captured: "Надіслана відповідь", forgot: "Не пам’ятаю…", today: "На Сьогодні", summary: "Підсумок заняття",
     local: "Не вдалося оновити дані на цьому пристрої.", blocked: "Дію не можна повторити. Перевір стан заняття.",
     changed: "Завдання змінилося. Онови заняття.", noMaterial: "Зараз немає доступних слів для цього заняття.", noPhrases: "Поки немає доступного матеріалу",
-    busy: "Заняття відкрито на іншому пристрої", setup: "Для заняття потрібно підтвердити налаштування та поточну словникову пару." },
+    busy: "Заняття відкрито на іншому пристрої", setup: "Для заняття потрібно підтвердити налаштування та поточну словникову пару.",
+    refine: "Уточнити поля" },
   en: { words: "Words: translate into German", phrases: "Phrases: translate into German", exit: "Exit", loading: "Loading your session…",
     saving: "Saving your answer…", present: "Confirming the displayed question…", unknown: "Checking whether the action was saved.",
     stop: "Ending the session…", closed: "The session has ended.", unavailable: "This session is unavailable in this window.", stale: "Could not refresh the session.",
@@ -43,11 +47,12 @@ const copy = {
     captured: "Submitted answer", forgot: "I forgot…", today: "Return to Today", summary: "Session summary",
     local: "Could not update data on this device.", blocked: "This action cannot be retried. Check session status.",
     changed: "The question has changed. Refresh the session.", noMaterial: "There are no words available for this session right now.", noPhrases: "No material is available yet",
-    busy: "A session is open on another device", setup: "Confirm session settings and the current dictionary pair to study." },
+    busy: "A session is open on another device", setup: "Confirm session settings and the current dictionary pair to study.",
+    refine: "Refine fields" },
 } as const;
 
 /** Connects the local display to the owner's exact capabilities; command identity and outcome are never invented here. */
-export function WrittenScreen({ state, language, submitOnEnter, actions, onToday }: WrittenScreenProps) {
+export function WrittenScreen({ state, language, submitOnEnter, actions, onToday, onRefineFields }: WrittenScreenProps) {
   const t = copy[language], composing = useRef(false), root = useRef<HTMLElement>(null);
   const primary = state.commands.primary, stop = state.commands.stop;
   const revising = primary.pendingIntent?.kind === "result.grade" || primary.pendingIntent?.kind === "result.correct";
@@ -78,6 +83,9 @@ export function WrittenScreen({ state, language, submitOnEnter, actions, onToday
   const pendingForgot = primary.pending && primary.outcome === null && primary.pendingIntent?.kind === "answer.submit"
     && "forgot" in primary.pendingIntent.payload;
   const canNext = state.canNext && !pendingResult;
+  // root decision, pending owner (M-ACTIONS Р9): only while no command of the quiz is unresolved, so the card never
+  // opens over a result whose grade or correction is still being saved. The text uk/en is a G05 working copy.
+  const refineCard = result && !pendingResult && !primary.pending && !stop.pending ? state.resultCardId : null;
   useEnterNext(root, composing, submitOnEnter, result, canNext, actions);
 
   // Waiting for the summary of the own Stop looks like the application start, never like a zero result.
@@ -113,6 +121,8 @@ export function WrittenScreen({ state, language, submitOnEnter, actions, onToday
     {result && <WrittenAnswerResult result={result} language={language} pending={pendingResult}
       grades={state.grades} canCorrect={state.canCorrect} canNext={canNext} timer={state.timer} example={answerExampleSource}
       onGrade={grade => { void actions.grade(grade); }} onCorrect={() => { void actions.correct(); }} onNext={() => { void actions.next(); }} />}
+    {result && refineCard !== null && onRefineFields && <button type="button" className="written-refine"
+      onClick={() => onRefineFields(refineCard, result.assignment_id)}>{t.refine}</button>}
     {result && state.canUndo && <StepBackButton className="written-step-back" language={language} onUndo={() => { void actions.undo(); }} />}
     {state.phase === "previous_result" && primary.pendingIntent?.kind === "assignment.present" && primary.outcome === null
       && <p role="status">{t.present}</p>}
