@@ -13,7 +13,9 @@ export type EntryState =
   // A newer window of this installation took the document over (decision 2.3). Terminal: this window closes
   // itself; where it cannot (outside Telegram) it shows the busy screen without buttons until Q54 is answered.
   | { kind: "replaced" }
-  | { kind: "remote_confirm"; targetId: string }
+  // changed: another session took the place of the one the user meant to end (decision 2.13.2). The same screen
+  // explains that and asks separately; the earlier tap never counts as the confirmation for the new target.
+  | { kind: "remote_confirm"; targetId: string; changed?: true }
   | { kind: "remote"; remote: RemoteStopSnapshot }
   | { kind: "opened" }
   | { kind: "expired" }

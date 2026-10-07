@@ -258,6 +258,11 @@ describe("QA remote stop", () => {
     command: { id: command.command_id, status: "rejected" }, error: { code: "SESSION_CLOSED" },
     current: { session_id: command.session_id, status: "closed", close_reason: "stop" } });
 
+  const acceptedReply = (command: SessionStopRemoteCommand): RemoteStopReply => ({ outcome: "accepted", state_version: "3",
+    command: { id: command.command_id, kind: command.kind, status: "applied", applied_at: "2026-10-06T12:00:00Z",
+      target_id: command.session_id, action_id: null, result_id: null, context_id: null, object_version: null },
+    current: { session_id: command.session_id, status: "closed", close_reason: "remote_stop" } });
+
   it("cancel of the confirmation sends nothing and keeps the same target", async () => {
     const f = remoteFixture(); const l = f.make(); await l.controller.start();
     l.controller.requestRemoteStop(); expect(l.latest()).toEqual({ kind: "remote_confirm", targetId: id(50) });
@@ -284,8 +289,97 @@ describe("QA remote stop", () => {
       f.state.target = id(51); f.state.version = 3; return closedRefusal(command);
     });
     l.controller.requestRemoteStop(); await l.controller.confirmRemoteStop();
+    // The refused tap is explained and never counts for the new session (decision 2.13.2).
+    expect(l.latest()).toEqual({ kind: "remote_confirm", targetId: id(51), changed: true });
+    expect(f.remoteApi.stop).toHaveBeenCalledOnce();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(f.remoteApi.stop).toHaveBeenCalledOnce();
+    vi.mocked(f.remoteApi.stop).mockImplementationOnce(async (_token, _proof, command) => {
+      f.state.busy = false; f.state.version = 4; return acceptedReply(command);
+    });
+    await l.controller.confirmRemoteStop();
+    expect(vi.mocked(f.remoteApi.stop).mock.calls[1][2].session_id).toBe(id(51));
+    expect(l.latest()).toEqual({ kind: "opened" });
+  });
+
+  it("cancelling the «session changed» question returns to the busy screen, and the next tap asks the plain question", async () => {
+    const f = remoteFixture(); const l = f.make(); await l.controller.start();
+    vi.mocked(f.remoteApi.stop).mockImplementationOnce(async (_token, _proof, command) => {
+      f.state.target = id(51); f.state.version = 3; return closedRefusal(command);
+    });
+    l.controller.requestRemoteStop(); await l.controller.confirmRemoteStop();
+    expect(l.latest()).toEqual({ kind: "remote_confirm", targetId: id(51), changed: true });
+    l.controller.cancelRemoteStop();
+    expect(l.latest()).toEqual({ kind: "busy", remoteTarget: id(51) });
+    l.controller.requestRemoteStop();
+    expect(l.latest()).toEqual({ kind: "remote_confirm", targetId: id(51) });
+    expect(f.remoteApi.stop).toHaveBeenCalledOnce();
+  });
+
+  it("«already closed» with the same session still occupying the account is not reported as a change", async () => {
+    const f = remoteFixture(); const l = f.make(); await l.controller.start();
+    vi.mocked(f.remoteApi.stop).mockImplementationOnce(async (_token, _proof, command) => {
+      f.state.version = 3; return closedRefusal(command);
+    });
+    l.controller.requestRemoteStop(); await l.controller.confirmRemoteStop();
+    expect(l.latest()).toEqual({ kind: "busy", remoteTarget: id(50) });
+  });
+
+  it("a later refresh does not repeat the change notice after the refused confirmation", async () => {
+    const f = remoteFixture(); const l = f.make(); await l.controller.start();
+    vi.mocked(f.remoteApi.stop).mockImplementationOnce(async (_token, _proof, command) => {
+      f.state.version = 3; return closedRefusal(command);
+    });
+    l.controller.requestRemoteStop(); await l.controller.confirmRemoteStop();
+    f.state.target = id(51); f.state.version = 4;
+    await l.controller.foreground();
+    expect(l.latest()).toEqual({ kind: "busy", remoteTarget: id(51) });
+  });
+
+  it("the change notice belongs only to the reopen right after the refusal: a refusal whose reopen never ran leaves nothing behind", async () => {
+    const f = remoteFixture(); const l = f.make(); await l.controller.start();
+    vi.mocked(f.remoteApi.stop).mockImplementationOnce(async (_token, _proof, command) => {
+      f.state.target = id(51); f.state.version = 3; return closedRefusal(command);
+    });
+    // The refusal is known, but forgetting the saved command fails: nothing reopens in this action.
+    const remove = f.storage.remove;
+    f.storage.remove = async () => { throw new Error("synthetic storage failure"); };
+    l.controller.requestRemoteStop(); await l.controller.confirmRemoteStop();
+    expect(l.latest()).toMatchObject({ kind: "remote", remote: { outcome: "rejected", problem: "storage" } });
+    expect(f.api.open).toHaveBeenCalledOnce();
+    f.storage.remove = remove;
+    // A later check settles the old refusal and reopens: the other session is shown as the plain busy screen.
+    await l.controller.checkRemoteStop();
     expect(l.latest()).toEqual({ kind: "busy", remoteTarget: id(51) });
     expect(f.remoteApi.stop).toHaveBeenCalledOnce();
+  });
+
+  it("a replacement session found after an accepted stop keeps the plain busy screen", async () => {
+    const f = remoteFixture(); const l = f.make(); await l.controller.start();
+    vi.mocked(f.remoteApi.stop).mockImplementationOnce(async (_token, _proof, command) => {
+      f.state.target = id(51); f.state.version = 3;
+      return acceptedReply(command);
+    });
+    l.controller.requestRemoteStop(); await l.controller.confirmRemoteStop();
+    expect(l.latest()).toEqual({ kind: "busy", remoteTarget: id(51) });
+  });
+
+  it("a tap kept during a refresh that finds another session explains the change and sends nothing", async () => {
+    const f = remoteFixture(); const l = f.make(); await l.controller.start();
+    let finish!: (value: Awaited<ReturnType<EntryApi["open"]>>) => void;
+    vi.mocked(f.api.open).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const refresh = l.controller.foreground();
+    await vi.waitFor(() => expect(f.api.open).toHaveBeenCalledTimes(2));
+    l.controller.requestRemoteStop();
+    expect(l.latest()).toEqual({ kind: "busy", remoteTarget: id(50) });
+    finish({ status: "SESSION_BUSY", profile: profile("3"), compatibility: { compatible: true, contract_version: "1" },
+      session: { status: "busy", stop_remote_target: id(51) } });
+    await refresh;
+    expect(l.latest()).toEqual({ kind: "remote_confirm", targetId: id(51), changed: true });
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(l.latest()).toEqual({ kind: "remote_confirm", targetId: id(51), changed: true });
+    expect(f.remoteApi.stop).not.toHaveBeenCalled();
+    expect(f.storage.values.has("wortly.pending.remote_stop")).toBe(false);
   });
 
   it("Н8: a tap on «end the session elsewhere» during a foreground refresh asks for confirmation once the refresh ends", async () => {

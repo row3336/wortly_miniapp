@@ -70,6 +70,9 @@ export class EntryController {
   private busySequence = 0;
   private remote: RemoteStopController | null = null;
   private observedStateVersion: string | null = null;
+  // The target of a confirmed stop that the core refused (for example SESSION_CLOSED). The reopen that follows
+  // compares it with the session now occupying the account: a different one is explained, not silently offered.
+  private refusedTarget: string | null = null;
 
   constructor(private readonly options: EntryControllerOptions) {}
 
@@ -396,6 +399,8 @@ export class EntryController {
     const timeZone = this.options.timeZone();
     if (!timeZone) throw new Error("Time zone unavailable");
     this.documentId ??= this.options.newId();
+    const refused = this.refusedTarget;
+    this.refusedTarget = null;
     if (this.options.remote && (!await this.prepareRemote(token, generation) || !this.current(generation))) return;
     // After DOCUMENT_STALE an open of this document would make it live again, taking it from the newer window
     // (question 2.30 is open). Only a foreground may ask until an answer confirms the document.
@@ -426,6 +431,10 @@ export class EntryController {
     this.claimLock(`${opened.profile.profile_id}:${installation.clientInstanceId}`);
     if (opened.status === "SESSION_BUSY") {
       const { stop_remote_target: target } = opened.session;
+      if (this.remote && target && refused && refused !== target) {
+        this.emit({ kind: "remote_confirm", targetId: target, changed: true }, opened.profile);
+        return;
+      }
       this.emit({ kind: "busy", ...(this.remote && target ? { remoteTarget: target } : {}) }, opened.profile);
       return;
     }
@@ -493,17 +502,25 @@ export class EntryController {
 
   requestRemoteStop(): void {
     if (this.state.kind !== "busy" || !this.state.remoteTarget) return;
+    this.requestRemoteStopFor(this.state.remoteTarget);
+  }
+
+  /** `tapped` is the target the user saw when pressing the button: a refreshed answer may name another session. */
+  private requestRemoteStopFor(tapped: string): void {
     if (this.running) {
       // The busy screen and its button stay visible while a refresh settles occupancy. Keep the tap,
       // as foreground() keeps an event during startup, and ask once the current task has finished.
       this.queuedRemoteRequest ??= this.running.then(() => {
         this.queuedRemoteRequest = null;
-        this.requestRemoteStop();
+        this.requestRemoteStopFor(tapped);
       });
       return;
     }
-    if (!this.remote) return;
-    this.emit({ kind: "remote_confirm", targetId: this.state.remoteTarget }, this.session?.profile);
+    if (this.state.kind !== "busy" || !this.state.remoteTarget || !this.remote) return;
+    // The tap was for another session: it is no confirmation for this one, so say so and ask separately.
+    const changed = this.state.remoteTarget !== tapped;
+    this.emit({ kind: "remote_confirm", targetId: this.state.remoteTarget, ...(changed ? { changed: true as const } : {}) },
+      this.session?.profile);
   }
 
   cancelRemoteStop(): void {
@@ -524,7 +541,10 @@ export class EntryController {
       if (phase === "idle" || phase === "settled") await this.open(token, generation);
     }).catch((error: unknown) => {
       if (this.current(generation)) this.fail(error);
-    }).finally(() => { if (this.running === task) this.running = null; });
+    }).finally(() => {
+      this.refusedTarget = null; // Only the reopen right after this action may use it.
+      if (this.running === task) this.running = null;
+    });
     this.running = task;
     return task;
   }
@@ -532,7 +552,10 @@ export class EntryController {
   confirmRemoteStop(): Promise<void> {
     if (this.state.kind !== "remote_confirm") return this.running ?? Promise.resolve();
     const target = this.state.targetId;
-    return this.remoteAction(remote => remote.confirm(target));
+    return this.remoteAction(async remote => {
+      await remote.confirm(target);
+      if (remote.snapshot().outcome === "rejected") this.refusedTarget = target;
+    });
   }
 
   checkRemoteStop(): Promise<void> {

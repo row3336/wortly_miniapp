@@ -14,6 +14,8 @@ const copy = {
     storageDetail: "Не удалось сохранить состояние запроса на устройстве. Попробуй проверить ещё раз.",
     accepted: "Занятие завершено", rejected: "Запрос не принят", check: "Проверить результат",
     retry: "Повторить завершение", mismatch: "Не удалось подтвердить этот запрос. Повторная отправка недоступна.",
+    changed: "Занятие сменилось", changedDetail: "Пока ты подтверждал, на другом устройстве началось новое занятие. Завершить и его?",
+    yesChanged: "Завершить новое занятие",
   },
   uk: {
     busy: "Заняття на іншому пристрої", busyDetail: "Ти можеш завершити його тут. Навчальний прогрес збережеться.",
@@ -26,6 +28,8 @@ const copy = {
     storageDetail: "Не вдалося зберегти стан запиту на пристрої. Спробуй перевірити ще раз.",
     accepted: "Заняття завершено", rejected: "Запит не прийнято", check: "Перевірити результат",
     retry: "Повторити завершення", mismatch: "Не вдалося підтвердити цей запит. Повторне надсилання недоступне.",
+    changed: "Заняття змінилося", changedDetail: "Поки ти підтверджував, на іншому пристрої почалося нове заняття. Завершити і його?",
+    yesChanged: "Завершити нове заняття",
   },
   en: {
     busy: "Session on another device", busyDetail: "You can end it here. Your learning progress will be saved.",
@@ -38,6 +42,8 @@ const copy = {
     storageDetail: "The request state could not be saved on this device. Try checking again.",
     accepted: "Session ended", rejected: "Request not accepted", check: "Check result",
     retry: "Retry ending the session", mismatch: "This request could not be confirmed. Resending is unavailable.",
+    changed: "The session has changed", changedDetail: "While you were confirming, a new session started on the other device. End it too?",
+    yesChanged: "End the new session",
   },
 } as const;
 
@@ -68,10 +74,12 @@ export function RemoteStopScreen({ state, language, onRequest, onCancel, onConfi
   useEffect(() => { if (state.kind === "remote_confirm") cancel.current?.focus(); }, [state.kind]);
   const remote = state.kind === "remote" ? state.remote : null;
   const working = remote !== null && ["loading", "checking", "sending", "settled"].includes(remote.phase);
-  const title = state.kind === "busy" ? text.busy : state.kind === "remote_confirm" ? text.confirm
+  const changed = state.kind === "remote_confirm" && state.changed === true;
+  const title = state.kind === "busy" ? text.busy : changed ? text.changed : state.kind === "remote_confirm" ? text.confirm
     : working ? remote?.phase === "sending" ? text.sending : text.checking
     : remote?.outcome === "accepted" ? text.accepted : remote?.outcome === "rejected" ? text.rejected : text.unknown;
-  const detail = state.kind === "busy" ? text.busyDetail : state.kind === "remote_confirm" ? text.confirmDetail
+  const detail = state.kind === "busy" ? text.busyDetail : changed ? text.changedDetail
+    : state.kind === "remote_confirm" ? text.confirmDetail
     : working ? text.wait : remote?.outcome || remote?.problem === "storage" ? text.storageDetail
     : remote?.problem === "mismatch" ? text.mismatch : text.unknownDetail;
   return <main className="app-shell">
@@ -81,7 +89,7 @@ export function RemoteStopScreen({ state, language, onRequest, onCancel, onConfi
       {state.kind === "busy" && state.remoteTarget && onRequest &&
         <button type="button" className="primary-action" onClick={onRequest}>{text.request}</button>}
       {state.kind === "remote_confirm" && <>
-        {onConfirm && <button type="button" className="primary-action" onClick={onConfirm}>{text.yes}</button>}
+        {onConfirm && <button type="button" className="primary-action" onClick={onConfirm}>{changed ? text.yesChanged : text.yes}</button>}
         {onCancel && <button ref={cancel} type="button" className="secondary-action" onClick={onCancel}>{text.cancel}</button>}
       </>}
       {state.kind === "remote" && !working && <>

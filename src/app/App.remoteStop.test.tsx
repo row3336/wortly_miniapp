@@ -15,7 +15,7 @@ const today: TodayResponse = { state_version: "20", pair: "ru-de", local_date: "
   conjugation: { ready: 1, openable: 1, next_due_date: null }, next_repeat_date: null };
 
 function fixture() {
-  const state = { busy: true, target: id(50), version: 1, lose: "none" as "none" | "before" | "after", replace: false,
+  const state = { busy: true, target: id(50), version: 1, lose: "none" as "none" | "before" | "after", replace: false, refuseWithNew: false,
     dictionary: "ru" as "ru" | "en" };
   const readToday = vi.fn(async () => json({ ...today, state_version: String(state.version), pair: `${state.dictionary}-de` }));
   const commands: SessionStopRemoteCommand[] = [];
@@ -45,6 +45,13 @@ function fixture() {
       expect(init?.headers).toMatchObject({ Authorization: "Bearer synthetic-token", "X-Origin-Proof": "synthetic-proof" });
       commands.push(body);
       if (state.lose === "before") { state.lose = "none"; throw new TypeError("synthetic loss before commit"); }
+      if (state.refuseWithNew) {
+        // The core refuses a stop of a session that is already closed, while another one occupies the account.
+        state.refuseWithNew = false; state.target = id(51); state.version += 1;
+        return new Response(JSON.stringify({ command: { id: body.command_id, status: "rejected" },
+          error: { code: "SESSION_CLOSED" }, state_version: String(state.version),
+          current: { session_id: body.session_id, status: "closed", close_reason: "stop" } }), { status: 409 });
+      }
       facts.set(body.command_id, body); state.version += 1;
       state.busy = state.replace;
       if (state.replace) state.target = id(51);
@@ -213,5 +220,32 @@ describe("remote stop through the actual App and HTTP client", () => {
     f.state.replace = false; await confirm();
     await screen.findByRole("heading", { name: "Сегодня", level: 1 });
     expect(f.commands[1].session_id).toBe(id(51)); expect(f.commands[1].command_id).not.toBe(f.commands[0].command_id);
+  });
+
+  it("explains that the session changed after «already closed» and asks separately for the new one", async () => {
+    const f = fixture(); f.state.refuseWithNew = true; render(<App />);
+    await confirm();
+    await screen.findByRole("heading", { name: "Занятие сменилось" });
+    expect(screen.getByText("Пока ты подтверждал, на другом устройстве началось новое занятие. Завершить и его?")).toBeTruthy();
+    expect(f.commands).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "Отмена" }));
+    await screen.findByRole("button", { name: "Завершить занятие на другом устройстве" });
+    expect(screen.queryByRole("heading", { name: "Занятие сменилось" })).toBeNull();
+    // The plain question comes back for the same session; only the refused tap carried the explanation.
+    fireEvent.click(screen.getByRole("button", { name: "Завершить занятие на другом устройстве" }));
+    expect(screen.getByRole("heading", { name: "Завершить занятие?" })).toBeTruthy();
+    expect(f.commands).toHaveLength(1);
+  });
+
+  it("answers the «session changed» question for the new session only after its own button", async () => {
+    const f = fixture(); f.state.refuseWithNew = true; render(<App />);
+    await confirm();
+    await screen.findByRole("heading", { name: "Занятие сменилось" });
+    f.state.busy = false;
+    fireEvent.click(screen.getByRole("button", { name: "Завершить новое занятие" }));
+    await screen.findByRole("heading", { name: "Сегодня", level: 1 });
+    expect(f.commands).toHaveLength(2);
+    expect(f.commands[1].session_id).toBe(id(51));
+    expect(f.commands[1].command_id).not.toBe(f.commands[0].command_id);
   });
 });

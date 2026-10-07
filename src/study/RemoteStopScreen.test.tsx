@@ -25,6 +25,26 @@ describe("remote stop entry screens", () => {
     fireEvent.click(screen.getByRole("button", { name: yes })); expect(confirm).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    ["ru", "Занятие сменилось", "Пока ты подтверждал, на другом устройстве началось новое занятие. Завершить и его?",
+      "Завершить новое занятие", "Отмена"],
+    ["uk", "Заняття змінилося", "Поки ти підтверджував, на іншому пристрої почалося нове заняття. Завершити і його?",
+      "Завершити нове заняття", "Скасувати"],
+    ["en", "The session has changed", "While you were confirming, a new session started on the other device. End it too?",
+      "End the new session", "Cancel"],
+  ] as const)("explains a changed session and asks separately in %s", (language, title, detail, yes, cancel) => {
+    const confirm = vi.fn(), dismiss = vi.fn();
+    render(<EntryScreen language={language} state={{ kind: "remote_confirm", targetId, changed: true }}
+      onRemoteConfirm={confirm} onRemoteCancel={dismiss} />);
+    expect(screen.getByRole("heading", { name: title })).toBeTruthy();
+    expect(screen.getByText(detail)).toBeTruthy();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: cancel }));
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    expect(dismiss).toHaveBeenCalledOnce(); expect(confirm).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: yes })); expect(confirm).toHaveBeenCalledOnce();
+    expect(document.body.textContent).not.toContain(targetId);
+  });
+
   it("only displays the remote action for a server-provided target", () => {
     const request = vi.fn();
     const view = render(<EntryScreen language="ru" state={{ kind: "busy" }} onRemoteRequest={request} />);
