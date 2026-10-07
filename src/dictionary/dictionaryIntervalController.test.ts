@@ -66,7 +66,10 @@ function server(start = 41n, written: Written = SAVED()) {
     const right = s.right && s.right.context === contextId && s.right.status === "available"
       ? { action_id: s.right.action, kind: "interval.increase", version: String(s.right.version), context_id: contextId } : null;
     return { status: "open", context: reference, view: view(context.card), interval,
-      capabilities: { interval_increase: interval && options.length ? { direction: "l1-de" } : null, undo_target: right } };
+      // This fake server shows the offer already opened (core C-INTV-OFFER); open/close is M-INTV.
+      capabilities: { interval_increase: interval && options.length ? { direction: "l1-de" } : null,
+        undo_offer: right ? { action_id: right.action_id, context_id: contextId, status: "offered", version: "2" } : null,
+        undo_target: right } };
   };
   const reply = (command: unknown, contextId: string | null, extra: Record<string, unknown> = {}, status = 200) =>
     json({ command, current: contextId ? project(contextId) : { status: "unavailable" }, state_version: String(s.state), ...extra }, status);

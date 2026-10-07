@@ -120,7 +120,7 @@ export type DictionaryCardView = { "status": "available"; "content": DictionaryV
 
 export type DictionaryCardViewResponse = { "state_version": string; "current": (DictionaryCardView | UnavailableCurrent); };
 
-export type DictionaryContextCapabilities = { "interval_increase": (DictionaryIntervalCapability | null); "undo_target": (DictionaryUndoTarget | null); };
+export type DictionaryContextCapabilities = { "interval_increase": (DictionaryIntervalCapability | null); "undo_offer": (DictionaryUndoOffer | null); "undo_target": (DictionaryUndoTarget | null); };
 
 export type DictionaryContextCommandResponse = { "command": (SavedCommandFact | RejectedCommandFact); "current": (OpenDictionaryContext | ClosedDictionaryContext | UnavailableCurrent); "state_version": string; "error"?: (ErrorDetail | null); };
 
@@ -169,6 +169,8 @@ export type DictionarySimilarItem = { "card_id": string; "revision": string; "le
 export type DictionaryStudyDirection = { "direction": "l1-de" | "de-l1"; "introduced": boolean; "progress_present": boolean; "progress_version": (string | null); "schedule": (DictionaryReviewSchedule | null); "interval_preview": (Array<DictionaryIntervalOption> | null); };
 
 export type DictionaryStudyFacts = { "common_translation_present": boolean; "exclusion": DictionaryExclusion; "manual": DictionaryManualSelection; "learning": DictionaryLearningFacts; "non_learning_history": boolean; };
+
+export type DictionaryUndoOffer = { "action_id": string; "context_id": string; "status": "pending" | "offered"; "version": string; };
 
 export type DictionaryUndoTarget = { "action_id": string; "kind": "interval.increase"; "version": string; "context_id": string; };
 
@@ -469,6 +471,8 @@ export type TopicsMaterial = { "mode": "topics"; "topic_ids": Array<string>; };
 export type UnavailableCurrent = { "status": "unavailable"; };
 
 export type UnavailableSession = { "session_id": string; "status": "not_found" | "unavailable"; };
+
+export type UndoOfferCommand = { "command_id": string; "kind": "action.undo_offer.open" | "action.undo_offer.close"; "client_instance_id": string; "document_id": string; "context_id": string; "action_id": string; "expected_offer_version": string; "payload": EmptyPayload; };
 
 export type WrittenAction = { "action_id": string; "kind": "answer.submit"; "version": string; "status": "active" | "undone"; };
 

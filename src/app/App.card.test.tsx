@@ -39,7 +39,7 @@ function cardApp() {
       return response({ command: { id: body.command_id, kind: body.kind, status: "applied", applied_at: "2026-10-07T09:00:00Z", target_id: CARD,
         action_id: null, result_id: null, context_id: contextId, object_version: null },
         current: body.kind === "context.open" ? { status: "open", context: reference, view, interval: null,
-          capabilities: { interval_increase: null, undo_target: null } } : { status: "closed", context: reference },
+          capabilities: { interval_increase: null, undo_offer: null, undo_target: null } } : { status: "closed", context: reference },
         state_version: String(state) });
     }
     return base(url, init);

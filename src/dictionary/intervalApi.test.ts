@@ -70,8 +70,13 @@ function open(): OpenDictionaryContext {
       current_schedule: { interval_days: 10, next_due_date: "2026-10-05", persisted: true },
       expected_progress_version: largeVersion, options: choices(ladder), default_option_id: 5,
     },
-    capabilities: { interval_increase: { direction: "l1-de" }, undo_target: null },
+    capabilities: { interval_increase: { direction: "l1-de" }, undo_offer: null, undo_target: null },
   };
+}
+
+/** The live undo offer of actionId in this context (core C-INTV-OFFER, CT 2.1.2). */
+function undoOffer(status: "pending" | "offered", offerVersion = status === "pending" ? "1" : "2") {
+  return { action_id: actionId, context_id: contextId, status, version: offerVersion };
 }
 
 /** The written direction without a saved row (ILC A01): due today, null version. */
@@ -84,8 +89,11 @@ function initialOpen(): OpenDictionaryContext {
   return value;
 }
 
-/** After l1-de option 2 from A01 (bridge A30): a saved row I3, version "1", with undo of this action. */
-function afterInitialIncrease(undoVersion = "1"): OpenDictionaryContext {
+/**
+ * After l1-de option 2 from A01 (bridge A30): a saved row I3, version "1". The increase reply carries a
+ * pending offer; once action.undo_offer.open is confirmed it is offered with undo of this action.
+ */
+function afterInitialIncrease(undoVersion = "1", offer: "pending" | "offered" = "offered"): OpenDictionaryContext {
   const value = open();
   const study = (value.view as DictionaryCardView).study;
   const steps: Array<[number, number, string]> = [[1, 5, "2026-10-04"], [2, 8, "2026-10-07"]];
@@ -95,7 +103,9 @@ function afterInitialIncrease(undoVersion = "1"): OpenDictionaryContext {
   Object.assign(value.interval!, { expected_progress_version: "1",
     current_schedule: { interval_days: 3, next_due_date: "2026-10-02", persisted: true },
     options: choices(steps), default_option_id: 2 });
-  value.capabilities.undo_target = { action_id: actionId, kind: "interval.increase", version: undoVersion, context_id: contextId };
+  value.capabilities.undo_offer = undoOffer(offer);
+  value.capabilities.undo_target = offer === "pending" ? null
+    : { action_id: actionId, kind: "interval.increase", version: undoVersion, context_id: contextId };
   return value;
 }
 
@@ -200,7 +210,7 @@ describe("dictionary context commands over the real JSON transport", () => {
   it("increases the A01 written direction with a null version and accepts the saved row as version 1 (B9)", async () => {
     const intent = dictionaryIncreaseIntent(initialOpen(), commandId, { option_id: 2 });
     const accepted = fact("interval.increase", { action_id: actionId, object_version: "1" });
-    const { api, fetcher } = transport({ status: 200, body: reply(accepted, afterInitialIncrease()) });
+    const { api, fetcher } = transport({ status: 200, body: reply(accepted, afterInitialIncrease("1", "pending")) });
     const result = await api.increase(token, proof, command(intent));
     expect(sent(fetcher).body).toEqual({
       command_id: commandId, kind: "interval.increase", client_instance_id: clientId, document_id: documentId,
@@ -212,7 +222,9 @@ describe("dictionary context commands over the real JSON transport", () => {
     if (result.current.status !== "open") throw new Error("open context expected");
     expect(result.current.interval).toMatchObject({ direction: "l1-de", expected_progress_version: "1", default_option_id: 2,
       current_schedule: { interval_days: 3, next_due_date: "2026-10-02", persisted: true } });
-    expect(result.current.capabilities.undo_target).toEqual({ action_id: actionId, kind: "interval.increase", version: "1", context_id: contextId });
+    // CT 2.1.2 p.1: the reply names the pending offer; there is no undo until it is opened.
+    expect(result.current.capabilities.undo_offer).toEqual(undoOffer("pending"));
+    expect(result.current.capabilities.undo_target).toBeNull();
   });
 
   it("keeps an int64 progress version as an exact string (B10)", async () => {
@@ -365,9 +377,11 @@ describe("contextual read", () => {
       directions: [{ direction: "l1-de", applicable: true, current_schedule: open().interval!.current_schedule,
         expected_progress_version: largeVersion, options: choices(ladder) },
       { direction: "de-l1", applicable: false, current_schedule: null, expected_progress_version: null, options: [] }] },
-      capabilities: { interval_increase: { directions: ["l1-de"] }, undo_target: null } }, state_version: "3" }],
-    ["oral capability", { current: { ...open(), capabilities: { interval_increase: { direction: "de-l1" }, undo_target: null } },
-      state_version: "3" }],
+      capabilities: { interval_increase: { directions: ["l1-de"] }, undo_offer: null, undo_target: null } }, state_version: "3" }],
+    ["oral capability", { current: { ...open(), capabilities: { interval_increase: { direction: "de-l1" }, undo_offer: null,
+      undo_target: null } }, state_version: "3" }],
+    ["capabilities without the undo offer", { current: { ...open(), capabilities: { interval_increase: { direction: "l1-de" },
+      undo_target: null } }, state_version: "3" }],
   ])("rejects %s", async (_name, body) => {
     const { api } = transport({ status: 200, body });
     await expect(api.readContext(token, proof, address)).rejects.toMatchObject({ kind: "invalid_response" });
@@ -451,13 +465,35 @@ describe("context validator (B8)", () => {
     ["open without view", (value: any) => { delete value.view; }],
     ["view of another card", (value: any) => { value.view.content.card.id = value.view.study.card_id = otherCardId; }],
     ["undo target of another context", (value: any) => {
+      value.capabilities.undo_offer = undoOffer("offered");
       value.capabilities.undo_target = { action_id: actionId, kind: "interval.increase", version: "1", context_id: otherContextId };
     }],
     ["numeric undo version", (value: any) => {
+      value.capabilities.undo_offer = undoOffer("offered");
       value.capabilities.undo_target = { action_id: actionId, kind: "interval.increase", version: 1, context_id: contextId };
     }],
     ["undo of another kind", (value: any) => {
+      value.capabilities.undo_offer = undoOffer("offered");
       value.capabilities.undo_target = { action_id: actionId, kind: "answer.submit", version: "1", context_id: contextId };
+    }],
+    ["missing undo offer key", (value: any) => { delete value.capabilities.undo_offer; }],
+    ["undo target without an offer", (value: any) => {
+      value.capabilities.undo_target = { action_id: actionId, kind: "interval.increase", version: "1", context_id: contextId };
+    }],
+    ["undo target of a pending offer", (value: any) => {
+      value.capabilities.undo_offer = undoOffer("pending");
+      value.capabilities.undo_target = { action_id: actionId, kind: "interval.increase", version: "1", context_id: contextId };
+    }],
+    ["offered offer without an undo target", (value: any) => { value.capabilities.undo_offer = undoOffer("offered"); }],
+    ["undo target of another action than the offer", (value: any) => {
+      value.capabilities.undo_offer = { ...undoOffer("offered"), action_id: otherContextId };
+    }, () => afterInitialIncrease()],
+    ["offer of another context", (value: any) => { value.capabilities.undo_offer = { ...undoOffer("pending"), context_id: otherContextId }; }],
+    ["closed offer status", (value: any) => { value.capabilities.undo_offer = undoOffer("closed" as any); }],
+    ["numeric offer version", (value: any) => { value.capabilities.undo_offer = { ...undoOffer("pending"), version: 1 }; }],
+    ["extra key in offer", (value: any) => { value.capabilities.undo_offer = { ...undoOffer("pending"), deadline: "2026-10-05T12:00:03Z" }; }],
+    ["offer without an action", (value: any) => {
+      const { action_id: _, ...rest } = undoOffer("pending"); value.capabilities.undo_offer = rest;
     }],
     ["numeric progress version", (value: any) => { value.interval.expected_progress_version = Number(largeVersion); }],
     ["null version with persisted=true", (value: any) => { value.interval.expected_progress_version = null; }],
@@ -470,8 +506,14 @@ describe("context validator (B8)", () => {
     ["oral capability", (value: any) => { value.capabilities.interval_increase = { direction: "de-l1" }; }],
     ["empty capability instead of an explicit direction", (value: any) => { value.capabilities.interval_increase = {}; }],
     ["missing capability with options", (value: any) => { value.capabilities.interval_increase = null; }],
-  ])("rejects %s", (_name, change) => {
-    expect(valid(mutated(change))).toBe(false);
+  ])("rejects %s", (_name, change, base?: () => OpenDictionaryContext) => {
+    expect(valid(mutated(change, base))).toBe(false);
+  });
+
+  it("accepts a pending offer without undo and an offered one with its undo target", () => {
+    expect(valid(afterInitialIncrease("1", "pending"))).toBe(true);
+    expect(valid(afterInitialIncrease())).toBe(true);
+    expect(valid(mutated(value => { value.capabilities.undo_offer = undoOffer("pending", "9007199254740993"); }))).toBe(true);
   });
 
   it.each([

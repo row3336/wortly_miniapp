@@ -36,7 +36,7 @@ function server(initial: () => DictionaryCardView = cardView) {
     const status = s.contexts.get(contextId);
     const reference = { id: contextId, kind: "dictionary", card_id: CARD };
     return status === "open" ? { status, context: reference, view: view(null), interval: null,
-      capabilities: { interval_increase: null, undo_target: null } } : status === "closed" ? { status, context: reference } : { status: "unavailable" };
+      capabilities: { interval_increase: null, undo_offer: null, undo_target: null } } : status === "closed" ? { status, context: reference } : { status: "unavailable" };
   };
   const fact = (body: Record<string, any>, contextId: string | null, status = "applied") => ({ id: body.command_id, kind: body.kind, status,
     applied_at: "2026-10-07T09:00:00Z", target_id: body.payload.card_id ?? CARD, action_id: null, result_id: null, context_id: contextId,

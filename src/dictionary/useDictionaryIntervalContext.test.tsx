@@ -52,6 +52,9 @@ function server() {
         : { current_schedule: { interval_days: 1, next_due_date: TODAY, persisted: false }, expected_progress_version: null,
           options: A01.map(([o, d]) => option(o, d)), default_option_id: 4 }) },
       capabilities: { interval_increase: s.saved ? null : { direction: "l1-de" },
+        // This fake server shows the offer already opened (core C-INTV-OFFER); open/close is M-INTV.
+        undo_offer: s.right && s.right.context === contextId
+          ? { action_id: s.right.action, context_id: contextId, status: "offered", version: "2" } : null,
         undo_target: s.right && s.right.context === contextId
           ? { action_id: s.right.action, kind: "interval.increase", version: "1", context_id: contextId } : null } };
   };

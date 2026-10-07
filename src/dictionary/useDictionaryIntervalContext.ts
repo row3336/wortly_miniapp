@@ -82,7 +82,7 @@ function binding(current: DictionaryIntervalContextOptions, bound: Owner | null,
 }
 function masked(phase: DictionaryIntervalSnapshot["phase"], cardId: string): DictionaryIntervalSnapshot {
   return { phase, cardId: cardId.toLowerCase(), context: null, view: null, interval: null,
-    capabilities: { interval_increase: null, undo_target: null }, pending: null, problem: null, stateVersion: null,
+    capabilities: { interval_increase: null, undo_offer: null, undo_target: null }, pending: null, problem: null, stateVersion: null,
     canIncrease: false, canUndo: false, canRetry: false };
 }
 function raise(floors: Map<string, string>, profileId: string, observed: string | null | undefined): void {

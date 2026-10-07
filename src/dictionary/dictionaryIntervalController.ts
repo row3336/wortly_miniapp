@@ -82,7 +82,7 @@ type Options = {
 type Entry = { command: DictionaryIntervalCommand; status: "sending" | "unknown"; busy: boolean };
 type Closing = Entry & { contextId: string; done: boolean };
 
-const none: DictionaryContextCapabilities = { interval_increase: null, undo_target: null };
+const none: DictionaryContextCapabilities = { interval_increase: null, undo_offer: null, undo_target: null };
 const same = (left: string | null, right: string | null) => left !== null && right !== null && left.toLowerCase() === right.toLowerCase();
 
 function refusal(error: unknown): DictionaryIntervalProblem {
@@ -139,6 +139,8 @@ export class DictionaryIntervalController {
       interval: this.setupMissing ? null : current.interval,
       capabilities: {
         interval_increase: this.setupMissing ? null : current.capabilities.interval_increase,
+        // The undo offer (core C-INTV-OFFER) is hidden together with its undo; M-INTV sends open/close.
+        undo_offer: this.undoDropped ? null : current.capabilities.undo_offer,
         undo_target: this.undoDropped ? null : current.capabilities.undo_target,
       } };
   }

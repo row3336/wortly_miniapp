@@ -138,17 +138,29 @@ function validInterval(value: unknown, view: DictionaryCardView | UnavailableCur
 }
 
 function validCapabilities(value: unknown, interval: DictionaryContextInterval | null, contextId: string): boolean {
-  if (!record(value) || !exactKeys(value, ["interval_increase", "undo_target"])) return false;
+  if (!record(value) || !exactKeys(value, ["interval_increase", "undo_offer", "undo_target"])) return false;
   // K07-063: offered only with steps of the written direction; at its top step there is no operation.
   const offered = interval !== null && interval.options.length > 0;
   const increase = value.interval_increase;
   if (!offered) {
     if (increase !== null) return false;
   } else if (!record(increase) || !exactKeys(increase, ["direction"]) || increase.direction !== written) return false;
-  const undo = value.undo_target;
-  return undo === null || (record(undo) && exactKeys(undo, ["action_id", "kind", "version", "context_id"])
-    && uuid(undo.action_id) && undo.kind === "interval.increase" && version(undo.version)
-    && sameId(undo.context_id, contextId));
+  return validUndo(value.undo_offer, value.undo_target, contextId);
+}
+
+/**
+ * CT 2.1.2 (core C-INTV-OFFER): the live one-time offer of this context's increase. undo_target
+ * exists exactly while that same offer is offered; a pending offer is not undoable yet.
+ */
+function validUndo(offer: unknown, undo: unknown, contextId: string): boolean {
+  if (offer === null) return undo === null;
+  if (!record(offer) || !exactKeys(offer, ["action_id", "context_id", "status", "version"])
+    || !uuid(offer.action_id) || !sameId(offer.context_id, contextId) || !version(offer.version)
+    || (offer.status !== "pending" && offer.status !== "offered")) return false;
+  if (offer.status === "pending") return undo === null;
+  return record(undo) && exactKeys(undo, ["action_id", "kind", "version", "context_id"])
+    && sameId(undo.action_id, offer.action_id as string) && undo.kind === "interval.increase" && version(undo.version)
+    && sameId(undo.context_id, contextId);
 }
 
 /**
