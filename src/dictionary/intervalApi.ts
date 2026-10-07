@@ -8,9 +8,10 @@ import { ApiError, createJsonTransport, errorCode, httpError, type HttpOptions }
 import { count, date, eventTime, exactKeys, oneOf, record, sameId, uuid, version } from "../api/wireValidation";
 import { validDictionaryView } from "./viewApi";
 
-type Direction = "l1-de" | "de-l1";
+// Only the main written L1->De of a word is increased (core C-INTV, CON:94, K07-062).
+type Direction = "l1-de";
 type Pair = "ru-de" | "uk-de" | "en-de";
-const directions: Direction[] = ["l1-de", "de-l1"];
+const written: Direction = "l1-de";
 const pairs: Pair[] = ["ru-de", "uk-de", "en-de"];
 // Command integers are PositiveInteger on the wire (core api/models.py).
 const maxInteger = 2147483647;
@@ -21,13 +22,10 @@ export type DictionaryContextRead = { current: DictionaryContextCurrent; state_v
 /** Intents follow the service fingerprint; card_id of close/undo only binds the reply, it is not sent. */
 export type ContextOpenIntent = { kind: "context.open"; command_id: string; card_id: string };
 export type ContextCloseIntent = { kind: "context.close"; command_id: string; context_id: string; card_id: string };
-export type IntervalSelectionIntent = {
-  direction: Direction; expected_progress_version: string | null;
-  option_id: number; interval_days: number; next_due_date: string;
-};
 export type IntervalIncreaseIntent = {
   kind: "interval.increase"; command_id: string; context_id: string; card_id: string;
-  expected_pair: Pair; expected_local_date: string; selections: IntervalSelectionIntent[];
+  expected_pair: Pair; expected_local_date: string; direction: Direction; expected_progress_version: string | null;
+  option_id: number; interval_days: number; next_due_date: string;
 };
 export type ActionUndoIntent = {
   kind: "action.undo"; command_id: string; context_id: string; card_id: string;
@@ -37,7 +35,8 @@ export type DictionaryIntervalIntent = ContextOpenIntent | ContextCloseIntent | 
 export type DictionaryOrigin = { client_instance_id: string; document_id: string };
 export type DictionaryIntervalCommand<T extends DictionaryIntervalIntent = DictionaryIntervalIntent> = T & DictionaryOrigin;
 export type DictionaryContextAddress = DictionaryOrigin & { context_id: string; card_id: string };
-export type IntervalChoice = { direction: Direction; option_id: number };
+/** One offered step of the written direction; the slider starts at interval.default_option_id. */
+export type IntervalChoice = { option_id: number };
 
 export type DictionaryCommandReply = DictionaryContextRead & (
   | { outcome: "accepted"; command: SavedCommandFact }
@@ -75,12 +74,6 @@ function addDays(day: string, days: number): string {
 function unavailable(value: unknown): value is UnavailableCurrent {
   return record(value) && exactKeys(value, ["status"]) && value.status === "unavailable";
 }
-function listOf<T>(value: unknown, valid: (item: unknown) => item is T): value is T[] {
-  if (!Array.isArray(value)) return false;
-  // Unlike Array.every, iteration visits holes.
-  for (const item of value) if (!valid(item)) return false;
-  return true;
-}
 
 const optionKeys = ["option_id", "interval_days", "next_due_date"];
 
@@ -99,13 +92,12 @@ function validOptions(value: unknown, currentDays: number, localDate: string): b
   return true;
 }
 
-/** Same facts as the accepted E06.8 view (core dictionary_interval._interval_direction). */
-function validDirection(value: unknown, index: number, study: DictionaryCardStudy, localDate: string): boolean {
-  const fact = study.directions[index];
-  if (!record(value) || !exactKeys(value, ["direction", "applicable", "current_schedule", "expected_progress_version", "options"])
-    || value.direction !== directions[index] || fact.direction !== directions[index]
-    || !Array.isArray(value.options)) return false;
-  const suppressed = study.facts.exclusion.excluded || study.facts.learning.current !== null;
+/** Same facts as the accepted E06.8 view (core dictionary_interval._interval_state). */
+function validWritten(value: Record<string, unknown>, study: DictionaryCardStudy, localDate: string): boolean {
+  const fact = study.directions[0];
+  if (fact.direction !== written || !Array.isArray(value.options)) return false;
+  // A phrase, an excluded card or current Learning never has the operation (K07-064).
+  const suppressed = study.card_type === "phrase" || study.facts.exclusion.excluded || study.facts.learning.current !== null;
   const applicable = fact.introduced && !suppressed;
   if (value.applicable !== applicable) return false;
   if (!applicable) {
@@ -130,29 +122,29 @@ function validDirection(value: unknown, index: number, study: DictionaryCardStud
     && options[position].interval_days === step.interval_days && options[position].next_due_date === step.next_due_date);
 }
 
+/** One written direction; the oral direction has no interval state (core C-INTV). */
 function validInterval(value: unknown, view: DictionaryCardView | UnavailableCurrent): value is DictionaryContextInterval | null {
   if (view.status !== "available" || view.study.local_date === null) return value === null;
   const study = view.study;
   const localDate = study.local_date as string;
-  if (!record(value) || !exactKeys(value, ["local_date", "expected_pair", "directions"])
-    || value.local_date !== localDate || value.expected_pair !== study.pair
-    || !Array.isArray(value.directions) || value.directions.length !== 2) return false;
-  for (let index = 0; index < 2; index += 1) {
-    if (!validDirection(value.directions[index], index, study, localDate)) return false;
-  }
-  return true;
+  if (!record(value) || !exactKeys(value, ["local_date", "expected_pair", "direction", "applicable", "current_schedule",
+    "expected_progress_version", "options", "default_option_id"])
+    || value.local_date !== localDate || value.expected_pair !== study.pair || value.direction !== written
+    || !validWritten(value, study, localDate)) return false;
+  // K07-066: the initial position is one of the offered steps; none without steps. The choice rule is the server's.
+  const options = value.options as Array<{ option_id: number }>;
+  return options.length === 0 ? value.default_option_id === null
+    : options.some(option => option.option_id === value.default_option_id);
 }
 
 function validCapabilities(value: unknown, interval: DictionaryContextInterval | null, contextId: string): boolean {
   if (!record(value) || !exactKeys(value, ["interval_increase", "undo_target"])) return false;
-  // K07-063: only directions with offered steps; none means no operation at all.
-  const offered = (interval?.directions ?? []).filter(item => item.options.length > 0).map(item => item.direction);
+  // K07-063: offered only with steps of the written direction; at its top step there is no operation.
+  const offered = interval !== null && interval.options.length > 0;
   const increase = value.interval_increase;
-  if (offered.length === 0) {
+  if (!offered) {
     if (increase !== null) return false;
-  } else if (!record(increase) || !exactKeys(increase, ["directions"]) || !Array.isArray(increase.directions)
-    || increase.directions.length !== offered.length
-    || offered.some((direction, index) => (increase.directions as unknown[])[index] !== direction)) return false;
+  } else if (!record(increase) || !exactKeys(increase, ["direction"]) || increase.direction !== written) return false;
   const undo = value.undo_target;
   return undo === null || (record(undo) && exactKeys(undo, ["action_id", "kind", "version", "context_id"])
     && uuid(undo.action_id) && undo.kind === "interval.increase" && version(undo.version)
@@ -179,13 +171,6 @@ export function validDictionaryContextCurrent(
     && validCapabilities(value.capabilities, value.interval as DictionaryContextInterval | null, value.context.id);
 }
 
-function validSelection(value: unknown): value is IntervalSelectionIntent {
-  return record(value) && exactKeys(value, ["direction", "expected_progress_version", "option_id", "interval_days", "next_due_date"])
-    && oneOf(value.direction, directions)
-    && (value.expected_progress_version === null || version(value.expected_progress_version))
-    && positive(value.option_id) && positive(value.interval_days) && calendarDate(value.next_due_date);
-}
-
 export function validDictionaryIntervalIntent(value: unknown): value is DictionaryIntervalIntent {
   if (!record(value) || !uuid(value.command_id)) return false;
   switch (value.kind) {
@@ -196,13 +181,13 @@ export function validDictionaryIntervalIntent(value: unknown): value is Dictiona
     case "action.undo":
       return exactKeys(value, ["kind", "command_id", "context_id", "card_id", "action_id", "expected_action_version"])
         && uuid(value.context_id) && uuid(value.card_id) && uuid(value.action_id) && version(value.expected_action_version);
-    case "interval.increase": {
-      if (!exactKeys(value, ["kind", "command_id", "context_id", "card_id", "expected_pair", "expected_local_date", "selections"])
-        || !uuid(value.context_id) || !uuid(value.card_id) || !oneOf(value.expected_pair, pairs)
-        || !calendarDate(value.expected_local_date) || !listOf(value.selections, validSelection)
-        || value.selections.length < 1 || value.selections.length > 2) return false;
-      return new Set(value.selections.map(selection => selection.direction)).size === value.selections.length;
-    }
+    case "interval.increase":
+      return exactKeys(value, ["kind", "command_id", "context_id", "card_id", "expected_pair", "expected_local_date",
+        "direction", "expected_progress_version", "option_id", "interval_days", "next_due_date"])
+        && uuid(value.context_id) && uuid(value.card_id) && oneOf(value.expected_pair, pairs)
+        && calendarDate(value.expected_local_date) && value.direction === written
+        && (value.expected_progress_version === null || version(value.expected_progress_version))
+        && positive(value.option_id) && positive(value.interval_days) && calendarDate(value.next_due_date);
     default:
       return false;
   }
@@ -223,13 +208,12 @@ function copyIntent(value: DictionaryIntervalIntent): DictionaryIntervalIntent {
     case "interval.increase":
       return { kind: value.kind, command_id: id(value.command_id), context_id: id(value.context_id),
         card_id: id(value.card_id), expected_pair: value.expected_pair, expected_local_date: value.expected_local_date,
-        selections: value.selections.map(selection => ({ direction: selection.direction,
-          expected_progress_version: selection.expected_progress_version, option_id: selection.option_id,
-          interval_days: selection.interval_days, next_due_date: selection.next_due_date })) };
+        direction: value.direction, expected_progress_version: value.expected_progress_version,
+        option_id: value.option_id, interval_days: value.interval_days, next_due_date: value.next_due_date };
   }
 }
 
-/** Service payload of core DictionaryIntervalService: values as strings, selections ordered by direction. */
+/** Service payload of core DictionaryIntervalService: values as strings, the one selection in a list. */
 function fingerprintPayload(intent: DictionaryIntervalIntent): Record<string, unknown> {
   switch (intent.kind) {
     case "context.open":
@@ -242,10 +226,9 @@ function fingerprintPayload(intent: DictionaryIntervalIntent): Record<string, un
     case "interval.increase":
       return { context_id: intent.context_id, card_id: intent.card_id, expected_pair: intent.expected_pair,
         expected_local_date: intent.expected_local_date,
-        selections: [...intent.selections].sort((a, b) => (a.direction < b.direction ? -1 : 1)).map(selection => ({
-          direction: selection.direction, expected_progress_version: selection.expected_progress_version,
-          option_id: String(selection.option_id), interval_days: String(selection.interval_days),
-          next_due_date: selection.next_due_date })) };
+        selections: [{ direction: intent.direction, expected_progress_version: intent.expected_progress_version,
+          option_id: String(intent.option_id), interval_days: String(intent.interval_days),
+          next_due_date: intent.next_due_date }] };
   }
 }
 
@@ -268,28 +251,19 @@ export async function dictionaryIntervalIntentHash(value: DictionaryIntervalInte
 
 /** The confirmed increase is built only from the server's offer; versions and dates are never computed. */
 export function dictionaryIncreaseIntent(
-  current: DictionaryContextCurrent, commandId: string, choices: IntervalChoice[],
+  current: DictionaryContextCurrent, commandId: string, choice: IntervalChoice,
 ): IntervalIncreaseIntent {
   if (current.status !== "open" || current.interval === null || current.capabilities.interval_increase === null) {
     throw new Error("interval increase is not offered");
   }
   const interval = current.interval;
-  const offered = current.capabilities.interval_increase.directions;
-  if (!Array.isArray(choices) || choices.length < 1 || choices.length > 2) throw new Error("invalid interval choice");
-  const seen = new Set<string>();
-  const selections = choices.map(choice => {
-    if (!record(choice) || !exactKeys(choice, ["direction", "option_id"]) || !offered.includes(choice.direction)
-      || seen.has(choice.direction)) throw new Error("direction is not offered");
-    seen.add(choice.direction);
-    const direction = interval.directions.find(item => item.direction === choice.direction);
-    const option = direction?.options.find(item => item.option_id === choice.option_id);
-    if (!direction || !option) throw new Error("option is not offered");
-    return { direction: direction.direction, expected_progress_version: direction.expected_progress_version,
-      option_id: option.option_id, interval_days: option.interval_days, next_due_date: option.next_due_date };
-  });
+  if (!record(choice) || !exactKeys(choice, ["option_id"])) throw new Error("invalid interval choice");
+  const option = interval.options.find(item => item.option_id === choice.option_id);
+  if (!option) throw new Error("option is not offered");
   return copyIntent({ kind: "interval.increase", command_id: commandId, context_id: current.context.id,
-    card_id: current.context.card_id, expected_pair: interval.expected_pair,
-    expected_local_date: interval.local_date, selections }) as IntervalIncreaseIntent;
+    card_id: current.context.card_id, expected_pair: interval.expected_pair, expected_local_date: interval.local_date,
+    direction: interval.direction, expected_progress_version: interval.expected_progress_version,
+    option_id: option.option_id, interval_days: option.interval_days, next_due_date: option.next_due_date }) as IntervalIncreaseIntent;
 }
 
 /** Undo addresses exactly the server's current undo_target of this open context. */
@@ -336,14 +310,10 @@ function wireBody(command: DictionaryIntervalCommand): object {
       return { ...head, context_id: command.context_id, action_id: command.action_id,
         expected_action_version: command.expected_action_version, payload: {} };
     case "interval.increase":
-      return { ...head, context_id: command.context_id,
-        expected_progress_versions: command.selections.map(selection => ({
-          direction: selection.direction, version: selection.expected_progress_version })),
+      return { ...head, context_id: command.context_id, expected_progress_version: command.expected_progress_version,
         payload: { card_id: command.card_id, expected_pair: command.expected_pair,
-          expected_local_date: command.expected_local_date,
-          selections: command.selections.map(selection => ({ direction: selection.direction,
-            option_id: selection.option_id, interval_days: selection.interval_days,
-            next_due_date: selection.next_due_date })) } };
+          expected_local_date: command.expected_local_date, direction: command.direction,
+          option_id: command.option_id, interval_days: command.interval_days, next_due_date: command.next_due_date } };
   }
 }
 

@@ -21,13 +21,12 @@ const addDays = (day: string, days: number) => {
 };
 
 type Route = (path: string, init: RequestInit) => Response | Promise<Response> | undefined;
-/** Core-shaped dictionary context server: A01 directions, accepted facts, idempotent replay, status with profile. */
+/** Core-shaped dictionary context server: the A01 written direction (core C-INTV), accepted facts, idempotent replay, status with profile. */
 function server() {
-  const s = { state: 9007199254740993n, saved: new Set<string>(), contexts: new Map<string, "open" | "closed">(),
+  const s = { state: 9007199254740993n, saved: false, contexts: new Map<string, "open" | "closed">(),
     commands: new Map<string, Record<string, unknown>>(), routes: [] as Route[], next: 500,
     right: null as null | { action: string; context: string } };
-  const A01 = { "l1-de": [[2, 3], [3, 5], [4, 8]], "de-l1": [[2, 3], [3, 4], [4, 6]] } as const;
-  const dirs = ["l1-de", "de-l1"] as const;
+  const A01: Array<[number, number]> = [[2, 3], [3, 5], [4, 8]];
   const project = (contextId: string) => {
     const status = s.contexts.get(contextId);
     if (!status) return { status: "unavailable" };
@@ -42,15 +41,17 @@ function server() {
         study: { status: "available", card_id: CARD, card_revision: "3", pair: "ru-de", card_type: "noun", local_date: TODAY,
           facts: { common_translation_present: true, exclusion: { excluded: false, version: null }, manual: { selected: false, selection_version: "1" },
             learning: { ever_selected: true, finished_or_skipped: true, current: null }, non_learning_history: false },
-          directions: dirs.map(direction => s.saved.has(direction)
-            ? { direction, introduced: true, progress_present: true, progress_version: "1", schedule: { interval_days: 3, next_due_date: addDays(TODAY, 3) }, interval_preview: [] }
-            : { direction, introduced: true, progress_present: false, progress_version: null, schedule: null, interval_preview: null }) },
+          directions: [s.saved
+            ? { direction: "l1-de", introduced: true, progress_present: true, progress_version: "1", schedule: { interval_days: 3, next_due_date: addDays(TODAY, 3) }, interval_preview: [] }
+            : { direction: "l1-de", introduced: true, progress_present: false, progress_version: null, schedule: null, interval_preview: null },
+            { direction: "de-l1", introduced: true, progress_present: false, progress_version: null, schedule: null, interval_preview: null }] },
         card_actions: { exclude: true, return: false, relearn: true } },
-      interval: { local_date: TODAY, expected_pair: "ru-de", directions: dirs.map(direction => s.saved.has(direction)
-        ? { direction, applicable: true, current_schedule: { interval_days: 3, next_due_date: addDays(TODAY, 3), persisted: true }, expected_progress_version: "1", options: [] }
-        : { direction, applicable: true, current_schedule: { interval_days: 1, next_due_date: TODAY, persisted: false }, expected_progress_version: null,
-          options: A01[direction].map(([o, d]) => option(o, d)) }) },
-      capabilities: { interval_increase: dirs.some(d => !s.saved.has(d)) ? { directions: dirs.filter(d => !s.saved.has(d)) } : null,
+      interval: { local_date: TODAY, expected_pair: "ru-de", direction: "l1-de", applicable: true, ...(s.saved
+        ? { current_schedule: { interval_days: 3, next_due_date: addDays(TODAY, 3), persisted: true }, expected_progress_version: "1", options: [],
+          default_option_id: null }
+        : { current_schedule: { interval_days: 1, next_due_date: TODAY, persisted: false }, expected_progress_version: null,
+          options: A01.map(([o, d]) => option(o, d)), default_option_id: 4 }) },
+      capabilities: { interval_increase: s.saved ? null : { direction: "l1-de" },
         undo_target: s.right && s.right.context === contextId
           ? { action_id: s.right.action, kind: "interval.increase", version: "1", context_id: contextId } : null } };
   };
@@ -66,7 +67,7 @@ function server() {
       if (body.kind === "context.open") { for (const key of s.contexts.keys()) s.contexts.set(key, "closed"); contextId = id(s.next++); s.contexts.set(contextId, "open"); s.right = null; }
       else if (body.kind === "context.close") { s.contexts.set(contextId, "closed"); s.right = null; }
       else if (body.kind === "interval.increase") {
-        for (const item of body.payload.selections) s.saved.add(item.direction);
+        s.saved = body.payload.direction === "l1-de";
         const action = id(s.next++); fields = { action_id: action, object_version: "1" }; s.right = { action, context: contextId };
       }
       s.state++;
@@ -171,7 +172,7 @@ describe("dictionary interval context hook with real access, controller and API"
     const f = fixture(), { ui } = mount(f);
     await ready(ui);
     f.srv.routes.push((path, init) => { f.srv.handle(path, init); throw new TypeError("reply lost"); }, () => { throw new TypeError("offline"); });
-    await act(() => ui.result.current.actions.increase([{ direction: "de-l1", option_id: 2 }]));
+    await act(() => ui.result.current.actions.increase({ option_id: 2 }));
     expect(state(ui)).toMatchObject({ pending: { kind: "interval.increase", status: "unknown" }, canRetry: true });
     visible("hidden"); document.dispatchEvent(new Event("visibilitychange")); visible("visible");
     await flush();
@@ -182,7 +183,7 @@ describe("dictionary interval context hook with real access, controller and API"
     expect(f.calls().slice(count)).toEqual([`GET /api/v1/commands/${id(101)}`, `GET /api/v1/dictionary/contexts/${id(500)}`]);
     expect(f.auth()).toBe("Bearer synthetic-interval-token-2");
     expect(f.posts()).toHaveLength(2);
-    expect(state(ui).interval!.directions[1]).toMatchObject({ expected_progress_version: "1" });
+    expect(state(ui).interval!).toMatchObject({ expected_progress_version: "1" });
   });
 
   it("another document opens its own context", async () => {
@@ -242,7 +243,7 @@ describe("F1: an interrupted render never becomes the current binding", () => {
     expect(view.container.querySelector("[data-fallback]")).toBeNull();
     const held = deferred<Response>(); f.srv.routes.push(() => held.promise);
     let sending!: Promise<void>;
-    act(() => { sending = ref.committed!.actions.increase([{ direction: "de-l1", option_id: 2 }]); });
+    act(() => { sending = ref.committed!.actions.increase({ option_id: 2 }); });
     await waitFor(() => expect(f.posts()).toHaveLength(2));
     expect(f.auth()).toBe("Bearer synthetic-interval-token-1");
     await act(async () => { held.resolve(json({ error: { code: "AUTH_INVALID" } }, 401)); await sending; });
@@ -276,7 +277,7 @@ describe("commit→passive window without act (real React scheduler)", () => {
           journal.push(`layout:${name}`);
           if (name !== "A2") return;
           seen.mark = f.srv.fetcher.mock.calls.length;
-          windowCalls.push(first.current.increase([{ direction: "de-l1", option_id: 2 }]), first.current.undo(),
+          windowCalls.push(first.current.increase({ option_id: 2 }), first.current.undo(),
             first.current.retry(), first.current.refresh());
           // close() in this window is a managed exit (no resume, new context): see the CP5 F-H1 regression.
           let n = 0;
@@ -300,7 +301,7 @@ describe("commit→passive window without act (real React scheduler)", () => {
         `${init!.method} ${new URL(String(url), "http://local").pathname} ${(init!.headers as Record<string, string>).Authorization}`);
       expect(after).toEqual([`GET /api/v1/dictionary/contexts/${id(500)} Bearer synthetic-interval-token-sibling`]);
       expect(a1.access.isLive()).toBe(true);
-      await seen.actions!.increase([{ direction: "de-l1", option_id: 2 }]);
+      await seen.actions!.increase({ option_id: 2 });
       expect(f.auth()).toBe("Bearer synthetic-interval-token-sibling");
       expect(f.posts().map(body => body.kind)).toEqual(["context.open", "interval.increase"]);
     } finally {
@@ -314,7 +315,7 @@ describe("CP5 F-H1: a managed close without a live binding ends the old undo for
   it("close while the handle is suspended sends nothing through it; the next binding of the same document opens a new context", async () => {
     const f = fixture(), { ui } = mount(f);
     await ready(ui);
-    await act(() => ui.result.current.actions.increase([{ direction: "de-l1", option_id: 2 }]));
+    await act(() => ui.result.current.actions.increase({ option_id: 2 }));
     expect(state(ui)).toMatchObject({ canUndo: true, context: { id: id(500) } });
     visible("hidden"); document.dispatchEvent(new Event("visibilitychange")); visible("visible");
     await flush();
@@ -352,7 +353,7 @@ describe("CP5 F-H1: a managed close without a live binding ends the old undo for
     }
     const view = render(createElement(Host, { options: f.options }));
     await waitFor(() => expect(latest!.state).toMatchObject({ phase: "ready", canIncrease: true }));
-    await act(() => latest!.actions.increase([{ direction: "de-l1", option_id: 2 }]));
+    await act(() => latest!.actions.increase({ option_id: 2 }));
     expect(latest!.state.canUndo).toBe(true);
     captured = latest!.actions;
     const count = f.calls().length;

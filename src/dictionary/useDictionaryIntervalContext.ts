@@ -28,7 +28,7 @@ export type DictionaryIntervalContextOptions = {
 };
 export type DictionaryIntervalContextActions = {
   /** Throws synchronously for a choice outside the current offer; a second tap while pending does nothing. */
-  increase(choices: IntervalChoice[]): Promise<void>;
+  increase(choice: IntervalChoice): Promise<void>;
   undo(): Promise<void>;
   /** The same unresolved command, only when state.canRetry. */
   retry(): Promise<void>;
@@ -174,7 +174,7 @@ export function useDictionaryIntervalContext(options: DictionaryIntervalContextO
   }, [options.minimumStateVersion]);
 
   const actions = useMemo<DictionaryIntervalContextActions>(() => ({
-    increase: choices => find.current()?.controller.increase(choices) ?? Promise.resolve(),
+    increase: choice => find.current()?.controller.increase(choice) ?? Promise.resolve(),
     undo: () => find.current()?.controller.undo() ?? Promise.resolve(),
     retry: () => find.current()?.controller.retry() ?? Promise.resolve(),
     close: () => {

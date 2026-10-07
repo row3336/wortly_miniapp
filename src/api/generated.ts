@@ -124,7 +124,7 @@ export type DictionaryContextCapabilities = { "interval_increase": (DictionaryIn
 
 export type DictionaryContextCommandResponse = { "command": (SavedCommandFact | RejectedCommandFact); "current": (OpenDictionaryContext | ClosedDictionaryContext | UnavailableCurrent); "state_version": string; "error"?: (ErrorDetail | null); };
 
-export type DictionaryContextInterval = { "local_date": string; "expected_pair": "ru-de" | "uk-de" | "en-de"; "directions": Array<DictionaryIntervalDirection>; };
+export type DictionaryContextInterval = { "local_date": string; "expected_pair": "ru-de" | "uk-de" | "en-de"; "direction": "l1-de"; "applicable": boolean; "current_schedule": (DictionaryIntervalSchedule | null); "expected_progress_version": (string | null); "options": Array<DictionaryIntervalChoice>; "default_option_id": (number | null); };
 
 export type DictionaryContextReference = { "id": string; "kind": "dictionary"; "card_id": string; };
 
@@ -142,11 +142,9 @@ export type DictionaryHistoryItem = { "card_id": string; "opened_at": string; };
 
 export type DictionaryHistoryResponse = { "state_version": string; "items": Array<DictionaryHistoryItem>; };
 
-export type DictionaryIntervalCapability = { "directions": Array<"l1-de" | "de-l1">; };
+export type DictionaryIntervalCapability = { "direction": "l1-de"; };
 
 export type DictionaryIntervalChoice = { "option_id": number; "interval_days": number; "next_due_date": string; };
-
-export type DictionaryIntervalDirection = { "direction": "l1-de" | "de-l1"; "applicable": boolean; "current_schedule": (DictionaryIntervalSchedule | null); "expected_progress_version": (string | null); "options": Array<DictionaryIntervalChoice>; };
 
 export type DictionaryIntervalOption = { "step_id": number; "interval_days": number; "next_due_date": string; };
 
@@ -184,8 +182,6 @@ export type ErrorDetail = { "code": string; "estimated_end_at"?: (string | null)
 
 export type ErrorResponse = { "error": ErrorDetail; };
 
-export type ExpectedProgressVersion = { "direction": "l1-de" | "de-l1"; "version": (string | null); };
-
 export type FeedbackCommand = { "command_id": string; "kind": "feedback.send"; "client_instance_id": string; "document_id": string; "payload": FeedbackPayload; };
 
 export type FeedbackCommandResponse = { "command": (SavedCommandFact | RejectedCommandFact); "current": (FeedbackCurrent | UnavailableCurrent); "state_version": string; "error"?: (ErrorDetail | null); };
@@ -216,11 +212,9 @@ export type IncompatibleClient = { "status": "incompatible"; "client_instance_id
 
 export type InitialAnswerCheck = { "correct": boolean; "variant_index": (number | null); "correct_answer": string; "other_answers": Array<string>; "matched_spans": Array<MatchedSpan>; "input_errors"?: (Array<MatchedSpan> | null); "answer_errors"?: (Array<MatchedSpan> | null); "span_unit": "unicode_code_point"; "span_bounds": "start_inclusive_end_exclusive"; };
 
-export type IntervalIncreaseCommand = { "command_id": string; "kind": "interval.increase"; "client_instance_id": string; "document_id": string; "context_id": string; "expected_progress_versions": Array<ExpectedProgressVersion>; "payload": IntervalIncreasePayload; };
+export type IntervalIncreaseCommand = { "command_id": string; "kind": "interval.increase"; "client_instance_id": string; "document_id": string; "context_id": string; "expected_progress_version": (string | null); "payload": IntervalIncreasePayload; };
 
-export type IntervalIncreasePayload = { "card_id": string; "expected_pair": "ru-de" | "uk-de" | "en-de"; "expected_local_date": string; "selections": Array<IntervalSelection>; };
-
-export type IntervalSelection = { "direction": "l1-de" | "de-l1"; "option_id": number; "interval_days": number; "next_due_date": string; };
+export type IntervalIncreasePayload = { "card_id": string; "expected_pair": "ru-de" | "uk-de" | "en-de"; "expected_local_date": string; "direction": "l1-de"; "option_id": number; "interval_days": number; "next_due_date": string; };
 
 export type JsonValue = unknown;
 

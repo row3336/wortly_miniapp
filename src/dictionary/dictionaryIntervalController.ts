@@ -259,10 +259,10 @@ export class DictionaryIntervalController {
     await this.read();
   }
 
-  /** Only the server's offered directions and options; anything else throws before a request (N26). */
-  increase(choices: IntervalChoice[]): Promise<void> {
+  /** Only an offered step of the written direction; anything else throws before a request (N26). */
+  increase(choice: IntervalChoice): Promise<void> {
     if (!this.live() || this.pending) return Promise.resolve();
-    const intent = dictionaryIncreaseIntent(this.offer(), this.options.newId(), choices);
+    const intent = dictionaryIncreaseIntent(this.offer(), this.options.newId(), choice);
     return this.start({ ...intent, ...this.options.port.origin });
   }
 

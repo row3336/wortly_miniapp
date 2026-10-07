@@ -5,12 +5,13 @@ import { createDictionaryIntervalApi } from "./intervalApi";
 
 // Synthetic server shaped after core dictionary_interval.py / coordinator.py (fact fields, refusal codes,
 // state bump only on acceptance, version+1 on undo, A01 row insert/delete). Steps: CORE_HANDOFF_CP2 §5.
+// Core C-INTV: one interval state, the written L1->De; the oral direction is never increased.
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const CARD = id(1), OTHER_CARD = id(2), CLIENT = id(3), DOCUMENT = id(4), PROFILE = id(5);
 const TODAY = "2026-09-29";
 const BIG = 9007199254740993n;
 const LADDER: Array<[number, number]> = [[1, 15], [2, 23], [3, 36], [4, 58], [5, 94], [6, 155], [7, 259], [8, 438]];
-const A01_REVERSE: Array<[number, number]> = [[2, 3], [3, 4], [4, 6]];
+const A01_FORWARD: Array<[number, number]> = [[2, 3], [3, 5], [4, 8]];
 const addDays = (day: string, days: number) => {
   const date = new Date(`${day}T00:00:00.000Z`); date.setUTCDate(date.getUTCDate() + days); return date.toISOString().slice(0, 10);
 };
@@ -18,20 +19,22 @@ const json = (value: unknown, status = 200) => new Response(JSON.stringify(value
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; }
 const settle = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
 
-type Direction = { version: bigint | null; days: number; due: string; options: Array<[number, number]> };
+type Written = { version: bigint | null; days: number; due: string; options: Array<[number, number]> };
+const SAVED = (): Written => ({ version: BIG, days: 10, due: "2026-10-05", options: LADDER });
+const A01 = (): Written => ({ version: null, days: 1, due: TODAY, options: A01_FORWARD });
+// Core default_option_id: +5, the last when fewer (synthetic server copy of the server rule).
+const defaultOption = (options: Array<{ option_id: number }>) =>
+  options.filter(option => option.option_id <= 5).at(-1)?.option_id ?? options[0]?.option_id ?? null;
 type Route = (path: string, init: RequestInit) => Response | Promise<Response> | undefined;
 
-function server(start = 41n) {
+function server(start = 41n, written: Written = SAVED()) {
   const s = {
-    state: start, zone: true as boolean,
-    dirs: { "l1-de": { version: BIG, days: 10, due: "2026-10-05", options: LADDER } as Direction,
-      "de-l1": { version: null, days: 1, due: TODAY, options: A01_REVERSE } as Direction },
+    state: start, zone: true as boolean, written,
     contexts: new Map<string, { card: string; status: "open" | "closed" }>(),
-    right: null as null | { action: string; context: string; version: bigint; status: "available" | "used" | "expired"; before: Record<string, Direction> },
+    right: null as null | { action: string; context: string; version: bigint; status: "available" | "used" | "expired"; before: Written },
     commands: new Map<string, { semantic: string; fact: Record<string, unknown> }>(),
     routes: [] as Route[], next: 500,
   };
-  const directions = ["l1-de", "de-l1"] as const;
   const view = (card: string): DictionaryCardView => ({
     status: "available",
     content: { pair: "ru-de", card: { id: card, revision: "3", lemma: "Haus", type: "noun", cefr: "A1" },
@@ -40,14 +43,14 @@ function server(start = 41n) {
     study: { status: "available", card_id: card, card_revision: "3", pair: "ru-de", card_type: "noun", local_date: s.zone ? TODAY : null,
       facts: { common_translation_present: true, exclusion: { excluded: false, version: null }, manual: { selected: false, selection_version: "1" },
         learning: { ever_selected: true, finished_or_skipped: true, current: null }, non_learning_history: false },
-      directions: directions.map(direction => {
-        const d = s.dirs[direction];
-        return d.version === null
-          ? { direction, introduced: true, progress_present: false, progress_version: null, schedule: null, interval_preview: null }
-          : { direction, introduced: true, progress_present: true, progress_version: String(d.version),
-            schedule: { interval_days: d.days, next_due_date: d.due },
-            interval_preview: s.zone ? d.options.map(([step_id, days]) => ({ step_id, interval_days: days, next_due_date: addDays(TODAY, days) })) : null };
-      }) },
+      directions: [
+        s.written.version === null
+          ? { direction: "l1-de", introduced: true, progress_present: false, progress_version: null, schedule: null, interval_preview: null }
+          : { direction: "l1-de", introduced: true, progress_present: true, progress_version: String(s.written.version),
+            schedule: { interval_days: s.written.days, next_due_date: s.written.due },
+            interval_preview: s.zone ? s.written.options.map(([step_id, days]) => ({ step_id, interval_days: days, next_due_date: addDays(TODAY, days) })) : null },
+        { direction: "de-l1", introduced: true, progress_present: false, progress_version: null, schedule: null, interval_preview: null },
+      ] },
     card_actions: { exclude: true, return: false, relearn: true },
   });
   const project = (contextId: string) => {
@@ -55,18 +58,15 @@ function server(start = 41n) {
     if (!context) return { status: "unavailable" };
     const reference = { id: contextId, kind: "dictionary", card_id: context.card };
     if (context.status === "closed") return { status: "closed", context: reference };
-    const interval = s.zone ? { local_date: TODAY, expected_pair: "ru-de", directions: directions.map(direction => {
-      const d = s.dirs[direction], options = d.options.map(([option_id, days]) => ({ option_id, interval_days: days, next_due_date: addDays(TODAY, days) }));
-      return d.version === null
-        ? { direction, applicable: true, current_schedule: { interval_days: 1, next_due_date: TODAY, persisted: false }, expected_progress_version: null, options }
-        : { direction, applicable: true, current_schedule: { interval_days: d.days, next_due_date: d.due, persisted: true },
-          expected_progress_version: String(d.version), options };
-    }) } : null;
-    const offered = interval ? interval.directions.filter(d => d.options.length > 0).map(d => d.direction) : [];
+    const w = s.written, options = w.options.map(([option_id, days]) => ({ option_id, interval_days: days, next_due_date: addDays(TODAY, days) }));
+    const interval = s.zone ? { local_date: TODAY, expected_pair: "ru-de", direction: "l1-de", applicable: true,
+      current_schedule: w.version === null ? { interval_days: 1, next_due_date: TODAY, persisted: false }
+        : { interval_days: w.days, next_due_date: w.due, persisted: true },
+      expected_progress_version: w.version === null ? null : String(w.version), options, default_option_id: defaultOption(options) } : null;
     const right = s.right && s.right.context === contextId && s.right.status === "available"
       ? { action_id: s.right.action, kind: "interval.increase", version: String(s.right.version), context_id: contextId } : null;
     return { status: "open", context: reference, view: view(context.card), interval,
-      capabilities: { interval_increase: offered.length ? { directions: offered } : null, undo_target: right } };
+      capabilities: { interval_increase: interval && options.length ? { direction: "l1-de" } : null, undo_target: right } };
   };
   const reply = (command: unknown, contextId: string | null, extra: Record<string, unknown> = {}, status = 200) =>
     json({ command, current: contextId ? project(contextId) : { status: "unavailable" }, state_version: String(s.state), ...extra }, status);
@@ -91,28 +91,23 @@ function server(start = 41n) {
     if (body.kind === "interval.increase") {
       if (!s.zone) return refuse(body.command_id, "SETUP_REQUIRED", contextId);
       if (body.payload.expected_local_date !== TODAY) return refuse(body.command_id, "VERSION_CONFLICT", contextId);
-      for (const selection of body.payload.selections) {
-        const d = s.dirs[selection.direction as "l1-de"], expected = body.expected_progress_versions.find((v: any) => v.direction === selection.direction).version;
-        const option = d.options.find(([option_id]) => option_id === selection.option_id);
-        if ((d.version === null ? expected !== null : expected !== String(d.version)) || !option || option[1] !== selection.interval_days
-          || addDays(TODAY, option[1]) !== selection.next_due_date) return refuse(body.command_id, "VERSION_CONFLICT", contextId);
-      }
-      const before = structuredClone(s.dirs);
-      for (const selection of body.payload.selections) {
-        const d = s.dirs[selection.direction as "l1-de"];
-        s.dirs[selection.direction as "l1-de"] = { version: (d.version ?? 0n) + 1n, days: selection.interval_days, due: selection.next_due_date, options: [] };
-      }
+      const payload = body.payload, expected = body.expected_progress_version, w = s.written;
+      if (payload.direction !== "l1-de") return refuse(body.command_id, "VALIDATION_FAILED", contextId);
+      const option = w.options.find(([option_id]) => option_id === payload.option_id);
+      if ((w.version === null ? expected !== null : expected !== String(w.version)) || !option || option[1] !== payload.interval_days
+        || addDays(TODAY, option[1]) !== payload.next_due_date) return refuse(body.command_id, "VERSION_CONFLICT", contextId);
+      const before = structuredClone(w);
+      // The longer steps stay offered, renumbered from the new state.
+      s.written = { version: (w.version ?? 0n) + 1n, days: payload.interval_days, due: payload.next_due_date,
+        options: w.options.filter(([, days]) => days > payload.interval_days).map(([, days], index) => [index + 1, days]) };
       const action = id(s.next++); s.right = { action, context: contextId!, version: 1n, status: "available", before };
       s.state++; return remember(body, fact(body, { action_id: action, object_version: "1" }), contextId);
     }
     const right = s.right;
     if (!right || right.action !== body.action_id || right.status !== "available" || right.context !== contextId) return refuse(body.command_id, "CAPABILITY_EXPIRED", contextId);
     if (String(right.version) !== body.expected_action_version) return refuse(body.command_id, "VERSION_CONFLICT", contextId);
-    for (const direction of directions) {
-      const was = right.before[direction];
-      if (JSON.stringify(was, (_k, v) => typeof v === "bigint" ? String(v) : v) === JSON.stringify(s.dirs[direction], (_k, v) => typeof v === "bigint" ? String(v) : v)) continue;
-      s.dirs[direction] = was.version === null ? was : { ...was, version: s.dirs[direction].version! + 1n };
-    }
+    const was = right.before;
+    s.written = was.version === null ? was : { ...was, version: s.written.version! + 1n };
     right.status = "used"; right.version += 1n;
     s.state++; return remember(body, fact(body, { action_id: right.action, object_version: String(right.version) }), contextId);
   };
@@ -149,8 +144,8 @@ function server(start = 41n) {
   return Object.assign(s, { fetcher, handle, project });
 }
 
-function fixture(start?: bigint, minimum?: () => string | null) {
-  const srv = server(start);
+function fixture(start?: bigint, minimum?: () => string | null, written?: Written) {
+  const srv = server(start, written);
   let next = 100;
   const newId = vi.fn(() => id(next++));
   const seen: DictionaryIntervalSnapshot[] = [];
@@ -175,22 +170,25 @@ const lost = (s: ReturnType<typeof server>, apply: boolean): Route => (path, ini
 
 describe("B1/B9: open, increase and undo from the server offer", () => {
   it("one POST per action; A01 sends version null and then shows the saved row as version 1", async () => {
-    const f = fixture();
+    const f = fixture(undefined, undefined, A01());
     await ready(f);
-    await f.controller.increase([{ direction: "de-l1", option_id: 2 }]);
+    expect(f.controller.snapshot().interval).toMatchObject({ direction: "l1-de", expected_progress_version: null, default_option_id: 4 });
+    await f.controller.increase({ option_id: 2 });
     expect(f.posts().map(body => body.kind)).toEqual(["context.open", "interval.increase"]);
-    expect(f.posts()[1]).toMatchObject({ expected_progress_versions: [{ direction: "de-l1", version: null }],
-      payload: { selections: [{ direction: "de-l1", option_id: 2, interval_days: 3, next_due_date: "2026-10-02" }] } });
+    expect(f.posts()[1]).toMatchObject({ expected_progress_version: null,
+      payload: { direction: "l1-de", option_id: 2, interval_days: 3, next_due_date: "2026-10-02" } });
+    expect(f.posts()[1]).not.toHaveProperty("expected_progress_versions");
+    expect(f.posts()[1].payload).not.toHaveProperty("selections");
     const after = f.controller.snapshot();
     expect(after).toMatchObject({ phase: "ready", canUndo: true, problem: null,
       capabilities: { undo_target: { kind: "interval.increase", version: "1" } } });
-    expect(after.interval!.directions[1]).toMatchObject({ expected_progress_version: "1",
+    expect(after.interval!).toMatchObject({ expected_progress_version: "1",
       current_schedule: { interval_days: 3, next_due_date: "2026-10-02", persisted: true } });
     await f.controller.undo();
     expect(f.posts()).toHaveLength(3);
     expect(f.posts()[2]).toMatchObject({ kind: "action.undo", expected_action_version: "1" });
     expect(f.controller.snapshot()).toMatchObject({ canUndo: false, capabilities: { undo_target: null } });
-    expect(f.controller.snapshot().interval!.directions[1].current_schedule).toEqual({ interval_days: 1, next_due_date: TODAY, persisted: false });
+    expect(f.controller.snapshot().interval!.current_schedule).toEqual({ interval_days: 1, next_due_date: TODAY, persisted: false });
     expect(f.calls().filter(call => call.startsWith("GET"))).toEqual([]);
   });
 });
@@ -201,9 +199,9 @@ describe("B2: one pending intent", () => {
     await ready(f);
     const held = deferred<void>();
     f.srv.routes.push(async (path, init) => { await held.promise; return f.srv.handle(path, init); });
-    const first = f.controller.increase([{ direction: "de-l1", option_id: 2 }]);
+    const first = f.controller.increase({ option_id: 2 });
     expect(f.controller.snapshot()).toMatchObject({ pending: { kind: "interval.increase", status: "sending" }, canIncrease: false, canUndo: false });
-    await f.controller.increase([{ direction: "l1-de", option_id: 1 }]);
+    await f.controller.increase({ option_id: 1 });
     await f.controller.undo();
     held.resolve(); await first;
     expect(f.posts().map(body => body.kind)).toEqual(["context.open", "interval.increase"]);
@@ -215,7 +213,7 @@ describe("B3: unknown outcome is resolved by one status and only an explicit ret
     const f = fixture();
     await ready(f);
     f.srv.routes.push(lost(f.srv, true));
-    await f.controller.increase([{ direction: "de-l1", option_id: 2 }]);
+    await f.controller.increase({ option_id: 2 });
     expect(f.calls().slice(-2)).toEqual(["POST /api/v1/commands", `GET /api/v1/commands/${id(101)}`]);
     expect(f.posts()).toHaveLength(2);
     expect(f.controller.snapshot()).toMatchObject({ pending: null, problem: null, canUndo: true });
@@ -226,7 +224,7 @@ describe("B3: unknown outcome is resolved by one status and only an explicit ret
     await ready(f);
     const shown = f.controller.snapshot();
     f.srv.routes.push(lost(f.srv, false));
-    await f.controller.increase([{ direction: "de-l1", option_id: 2 }]);
+    await f.controller.increase({ option_id: 2 });
     const waiting = f.controller.snapshot();
     expect(waiting).toMatchObject({ pending: { kind: "interval.increase", commandId: id(101), status: "unknown" },
       problem: { reason: "not_found" }, canRetry: true, canIncrease: false, canUndo: false, context: shown.context });
@@ -243,7 +241,7 @@ describe("B3: unknown outcome is resolved by one status and only an explicit ret
     const f = fixture();
     await ready(f);
     f.srv.routes.push(lost(f.srv, true), () => { throw new TypeError("still offline"); });
-    await f.controller.increase([{ direction: "de-l1", option_id: 2 }]);
+    await f.controller.increase({ option_id: 2 });
     expect(f.controller.snapshot()).toMatchObject({ pending: { status: "unknown" }, problem: { reason: "network" }, canRetry: true });
     const count = f.calls().length;
     await f.controller.refresh();
@@ -256,7 +254,7 @@ describe("B3: unknown outcome is resolved by one status and only an explicit ret
     const f = fixture();
     await ready(f);
     f.srv.routes.push(() => json({ error: { code: "WRITE_UNAVAILABLE" } }, 503));
-    await f.controller.increase([{ direction: "de-l1", option_id: 2 }]);
+    await f.controller.increase({ option_id: 2 });
     expect(f.calls().at(-1)).toBe(`GET /api/v1/commands/${id(101)}`);
     expect(f.controller.snapshot()).toMatchObject({ canRetry: true, problem: { reason: "not_found" } });
     await f.controller.retry();
@@ -271,18 +269,18 @@ describe("B4 and refusals: no automatic command", () => {
   it("VERSION_CONFLICT: exactly one context read, the new preview, and the choice is not applied silently", async () => {
     const f = fixture();
     await ready(f);
-    f.srv.dirs["l1-de"] = { ...f.srv.dirs["l1-de"], version: BIG + 1n }; // another installation answered
-    await f.controller.increase([{ direction: "l1-de", option_id: 1 }]);
+    f.srv.written = { ...f.srv.written, version: BIG + 1n }; // another installation answered
+    await f.controller.increase({ option_id: 1 });
     expect(f.calls().slice(-2)).toEqual(["POST /api/v1/commands", `GET /api/v1/dictionary/contexts/${id(500)}`]);
     expect(f.posts()).toHaveLength(2);
     expect(f.controller.snapshot()).toMatchObject({ problem: { reason: "rejected", code: "VERSION_CONFLICT" }, pending: null, canIncrease: true });
-    expect(f.controller.snapshot().interval!.directions[0].expected_progress_version).toBe("9007199254740994");
+    expect(f.controller.snapshot().interval!.expected_progress_version).toBe("9007199254740994");
   });
 
   it("CAPABILITY_EXPIRED: undo disappears and the context is read once", async () => {
     const f = fixture();
     await ready(f);
-    await f.controller.increase([{ direction: "de-l1", option_id: 2 }]);
+    await f.controller.increase({ option_id: 2 });
     f.srv.right!.status = "expired"; // the next accepted action elsewhere ended it
     await f.controller.undo();
     expect(f.calls().slice(-2)).toEqual(["POST /api/v1/commands", `GET /api/v1/dictionary/contexts/${id(500)}`]);
@@ -293,7 +291,7 @@ describe("B4 and refusals: no automatic command", () => {
     const f = fixture();
     await ready(f);
     f.srv.contexts.get(id(500))!.status = "closed";
-    await f.controller.increase([{ direction: "de-l1", option_id: 2 }]);
+    await f.controller.increase({ option_id: 2 });
     expect(f.calls().at(-1)).toBe(`GET /api/v1/dictionary/contexts/${id(500)}`);
     expect(f.controller.snapshot()).toMatchObject({ phase: "closed", problem: { code: "DOCUMENT_STALE" }, canIncrease: false, canUndo: false });
   });
@@ -302,11 +300,11 @@ describe("B4 and refusals: no automatic command", () => {
     const f = fixture();
     await ready(f);
     f.srv.zone = false;
-    await f.controller.increase([{ direction: "de-l1", option_id: 2 }]);
+    await f.controller.increase({ option_id: 2 });
     expect(f.calls().at(-1)).toBe("POST /api/v1/commands");
     expect(f.controller.snapshot()).toMatchObject({ problem: { reason: "setup_required", code: "SETUP_REQUIRED" }, interval: null,
       canIncrease: false, canRetry: false, capabilities: { interval_increase: null } });
-    expect(() => f.controller.increase([{ direction: "de-l1", option_id: 2 }])).toThrow("interval increase is not offered");
+    expect(() => f.controller.increase({ option_id: 2 })).toThrow("interval increase is not offered");
     expect(f.posts()).toHaveLength(2);
   });
 
@@ -323,10 +321,10 @@ describe("B5/B10: no response older than a known state replaces it", () => {
   it("a read sent before increase+undo and answered after them keeps the undone state (BigInt floor)", async () => {
     // The late read carries 9007199254740996, the undo 9007199254740997: both are the same Number
     // (9007199254740996), so only the BigInt floor sees the read as older.
-    const f = fixture(9007199254740994n);
+    const f = fixture(9007199254740994n, undefined, A01());
     await ready(f);
     expect(f.controller.snapshot().stateVersion).toBe("9007199254740995");
-    await f.controller.increase([{ direction: "de-l1", option_id: 2 }]);
+    await f.controller.increase({ option_id: 2 });
     const held = deferred<void>();
     let early!: Response;
     f.srv.routes.push(async (path, init) => { early = f.srv.handle(path, init); await held.promise; return early; });
@@ -337,15 +335,15 @@ describe("B5/B10: no response older than a known state replaces it", () => {
     held.resolve(); await reading;
     const after = f.controller.snapshot();
     expect(after).toMatchObject({ stateVersion: "9007199254740997", canUndo: false, capabilities: { undo_target: null } });
-    expect(after.interval!.directions[1].current_schedule).toEqual({ interval_days: 1, next_due_date: TODAY, persisted: false });
+    expect(after.interval!.current_schedule).toEqual({ interval_days: 1, next_due_date: TODAY, persisted: false });
   });
 
   it("int64 progress versions are sent as exact strings", async () => {
     const f = fixture();
     await ready(f);
-    await f.controller.increase([{ direction: "l1-de", option_id: 1 }]);
-    expect(JSON.stringify(f.posts()[1].expected_progress_versions)).toBe('[{"direction":"l1-de","version":"9007199254740993"}]');
-    expect(f.controller.snapshot().interval!.directions[0].expected_progress_version).toBe("9007199254740994");
+    await f.controller.increase({ option_id: 1 });
+    expect(JSON.stringify(f.posts()[1].expected_progress_version)).toBe('"9007199254740993"');
+    expect(f.controller.snapshot().interval!.expected_progress_version).toBe("9007199254740994");
   });
 });
 
@@ -353,7 +351,7 @@ describe("B6: close and dispose", () => {
   it("close during a pending undo hides undo at once; the late undo reply does not bring it back", async () => {
     const f = fixture();
     await ready(f);
-    await f.controller.increase([{ direction: "de-l1", option_id: 2 }]);
+    await f.controller.increase({ option_id: 2 });
     const held = deferred<void>();
     f.srv.routes.push(async (path, init) => { await held.promise; return f.srv.handle(path, init); });
     const undoing = f.controller.undo();
@@ -371,7 +369,7 @@ describe("B6: close and dispose", () => {
     await ready(f);
     const held = deferred<void>();
     f.srv.routes.push(async (path, init) => { await held.promise; return f.srv.handle(path, init); });
-    const sending = f.controller.increase([{ direction: "de-l1", option_id: 2 }]);
+    const sending = f.controller.increase({ option_id: 2 });
     const count = f.calls().length, updates = f.seen.length;
     f.controller.dispose();
     await f.controller.close(); await f.controller.refresh(); await f.controller.retry(); await f.controller.open(CARD);
@@ -387,12 +385,18 @@ describe("B7: only the server offer, checked before any request", () => {
     const f = fixture();
     await ready(f);
     const count = f.calls().length;
-    expect(() => f.controller.increase([{ direction: "de-l1", option_id: 1 }])).toThrow("option is not offered");
-    expect(() => f.controller.increase([])).toThrow("invalid interval choice");
+    expect(() => f.controller.increase({ option_id: 9 })).toThrow("option is not offered");
+    expect(() => f.controller.increase([] as any)).toThrow("invalid interval choice");
+    // CON:94: no oral direction and no batch of choices.
+    expect(() => f.controller.increase({ direction: "de-l1", option_id: 1 } as any)).toThrow("invalid interval choice");
+    expect(() => f.controller.increase([{ option_id: 1 }, { option_id: 2 }] as any)).toThrow("invalid interval choice");
     expect(() => f.controller.undo()).toThrow("undo is not offered");
     expect(() => f.controller.open("not-a-card")).toThrow("dictionary card ID required");
-    await f.controller.increase([{ direction: "l1-de", option_id: 8 }]);
-    expect(() => f.controller.increase([{ direction: "l1-de", option_id: 1 }])).toThrow("direction is not offered");
+    // K07-063: the top step leaves nothing to offer.
+    await f.controller.increase({ option_id: 8 });
+    expect(f.controller.snapshot()).toMatchObject({ canIncrease: false, capabilities: { interval_increase: null } });
+    expect(f.controller.snapshot().interval).toMatchObject({ options: [], default_option_id: null });
+    expect(() => f.controller.increase({ option_id: 1 })).toThrow("interval increase is not offered");
     expect(f.calls()).toHaveLength(count + 1);
   });
 });
@@ -405,7 +409,7 @@ describe("CP5 F-L1: an own late reply below a state already shown is not a stale
     const held = deferred<void>();
     // The server applies the increase at once (sv 43); its reply is delivered late.
     f.srv.routes.push(async (path, init) => { const early = f.srv.handle(path, init); await held.promise; return early; });
-    const sending = f.controller.increase([{ direction: "de-l1", option_id: 2 }]);
+    const sending = f.controller.increase({ option_id: 2 });
     await settle();
     f.srv.state++; // a neutral action elsewhere (A34): state 44, the same projection
     await f.controller.refresh();
@@ -422,10 +426,10 @@ describe("CP5 F-L1: an own late reply below a state already shown is not a stale
   it("a refusal problem is kept when the own reply is older than the shown state", async () => {
     const f = fixture();
     await ready(f);
-    f.srv.dirs["l1-de"] = { ...f.srv.dirs["l1-de"], version: BIG + 1n };
+    f.srv.written = { ...f.srv.written, version: BIG + 1n };
     const held = deferred<void>();
     f.srv.routes.push(async (path, init) => { const early = f.srv.handle(path, init); await held.promise; return early; });
-    const sending = f.controller.increase([{ direction: "l1-de", option_id: 1 }]);
+    const sending = f.controller.increase({ option_id: 1 });
     await settle();
     f.srv.state++;
     await f.controller.refresh();
