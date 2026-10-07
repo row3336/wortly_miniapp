@@ -186,7 +186,7 @@ export type IntervalSelection = { "direction": "l1-de" | "de-l1"; "option_id": n
 
 export type JsonValue = unknown;
 
-export type LearningAnswerCapabilities = { "answer_target": (string | null); "grades": (LearningGradeCapability | null); "correct_target": (LearningResultTarget | null); "undo_target": null; "stop": boolean; "summary_home": boolean; };
+export type LearningAnswerCapabilities = { "answer_target": (string | null); "grades": (LearningGradeCapability | null); "correct_target": (LearningResultTarget | null); "undo_target": (WrittenUndoTarget | null); "stop": boolean; "summary_home": boolean; };
 
 export type LearningAnswerResponse = { "action": (WrittenAction | null); "result": (WrittenResult | null); "step": (LearningSessionProjection | UnavailableSession | UnavailableCurrent); "capabilities": LearningAnswerCapabilities; "command": (SavedCommandFact | RejectedCommandFact); "state_version": string; "error"?: (ErrorDetail | null); };
 

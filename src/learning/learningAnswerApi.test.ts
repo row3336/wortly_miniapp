@@ -397,11 +397,11 @@ describe("undo_target of the answer capabilities", () => {
     return validAnswerCapabilities({ ...v.caps, undo_target }, v.step, v.action, v.result, address, allow);
   };
 
-  it("takes null always and the exact written shape only when the written contract asks for it", () => {
+  it("takes null always and the exact shape only when the caller's contract has the undo right", () => {
     expect(check(null, false)).toBe(true);
     expect(check(null, true)).toBe(true);
     expect(check(undo, true)).toBe(true);
-    // The Learning contract has no undo right: core still sends null there, so an address is not this contract.
+    // A contract without the undo right refuses an address there.
     expect(check(undo, false)).toBe(false);
   });
 
@@ -428,8 +428,11 @@ describe("undo_target of the answer capabilities", () => {
     expect(validAnswerCapabilities({ ...v.caps, undo_target: undo, stop: false }, v.step, v.action, v.result, address, true)).toBe(true);
   });
 
-  it("is refused by the Learning HTTP boundary even in the written shape", async () => {
+  it("is accepted by the Learning HTTP boundary in the exact shape, and a foreign one is still refused", async () => {
     const value = response(); value.capabilities = { ...value.capabilities, undo_target: undo } as never;
-    await expect(fixture(value).api.send("token", "proof", command())).rejects.toMatchObject({ kind: "invalid_response" });
+    const accepted = await fixture(value).api.send("token", "proof", command());
+    expect(accepted.capabilities.undo_target).toEqual(undo);
+    const foreign = response(); foreign.capabilities = { ...foreign.capabilities, undo_target: { ...undo, action_id: id(99) } } as never;
+    await expect(fixture(foreign).api.send("token", "proof", command())).rejects.toMatchObject({ kind: "invalid_response" });
   });
 });

@@ -104,7 +104,8 @@ export function validSavedAnswer(action: Record<string, unknown>, result: Record
 }
 /**
  * The rights over that answer. A revision right addresses exactly this live result of this open session. The undo right
- * exists only in the written contract (`allowUndoTarget`); the Learning contract still always carries null there.
+ * has the same shape in the written and the Learning contract; a caller whose contract has no undo right passes
+ * `allowUndoTarget=false`.
  */
 export function validAnswerCapabilities(caps: Record<string, unknown>, step: { status: string; assignment?: { id: string; status: string } | null },
   action: unknown, result: unknown, address: ResultAddress, allowUndoTarget = false): boolean {
@@ -122,7 +123,7 @@ export function validAnswerCapabilities(caps: Record<string, unknown>, step: { s
       && [3, 4, 5].every(item => values.includes(item)) : grade === 2;
   };
   // Transitional until M-UNDO adds the undo button: the shape is accepted so that core's new right does not break the
-  // written mode, but nothing in the client reads it yet. Any live grade can be undone, so there is no grade condition.
+  // written or the Learning mode, but nothing in the client reads it yet. Any live grade can be undone, so there is no grade condition.
   const validUndoTarget = (value: unknown): boolean => allowUndoTarget && liveAddress(value, ["action_id", "kind"])
     && sameId(value.action_id, (action as Record<string, unknown>).action_id as string)
     && value.kind === "answer.submit";
@@ -146,7 +147,7 @@ function current(value: Record<string, unknown>, command: { session_id: string; 
   if (action !== null && result !== null) {
     if (unavailable || !record(action) || !record(result) || !validSavedAnswer(action, result, command, step.status === "closed")) return null;
   }
-  if (!validAnswerCapabilities(caps, step, action, result, command)) return null;
+  if (!validAnswerCapabilities(caps, step, action, result, command, true)) return null;
   return { action, result, step, capabilities: caps } as Current;
 }
 
