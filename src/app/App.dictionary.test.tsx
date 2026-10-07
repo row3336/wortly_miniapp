@@ -12,7 +12,7 @@ const cardId = (n: number) => `00000000-0000-4000-8000-${String(700 + n).padStar
 function content(n: number): DictionaryCardContent {
   return { pair: "ru-de", card: { id: cardId(n), revision: "1", lemma: `Karte${n}`, type: "noun", cefr: "A1" },
     translations: { common: [`карта${n}`], personal: null }, grammar: null, reference_conjugations: [],
-    examples: { common: [], personal: null }, association: null, hint: null };
+    examples: { common: [], personal: null }, association: null };
 }
 
 /** The real App with the dictionary routes of the synthetic server: search, history and card text. */

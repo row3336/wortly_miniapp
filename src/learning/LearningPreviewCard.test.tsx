@@ -11,7 +11,7 @@ function content(): LearningPreviewContent {
     grammar: { infinitive: "gehen", infinitive_status: "applicable", preterite: "ging", preterite_status: "applicable",
       participle_ii: "gegangen", participle_ii_status: "applicable", auxiliary: "sein", auxiliary_status: "applicable", separability: "inseparable" },
     translations: { common: ["идти", "ходить"], personal: null },
-    association: { value: "reference-only association", version: "3" }, hint: { value: "private hint", version: "1" },
+    association: { value: "reference-only association", version: "3" },
     reference_conjugations: [{ tense: "present", forms: (["ich", "du", "er_sie_es", "wir", "ihr", "sie_sie"] as const).map(pronoun_group =>
       ({ pronoun_group, value: "reference-only conjugation", status: "applicable" })) }],
     examples: { common: [1, 2, 3, 4].map(index => ({ id: id.replace(/7$/, String(index)), text: `Satz ${index}.`,

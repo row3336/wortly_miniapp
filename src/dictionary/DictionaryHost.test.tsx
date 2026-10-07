@@ -16,7 +16,7 @@ const card = (n: number) => ({ card_id: id(n), revision: "1", lemma: `Wort${n}`,
 function content(n: number, text = `карта${n}`): DictionaryCardContent {
   return { pair: "ru-de", card: { id: id(n), revision: "1", lemma: `Karte${n}`, type: "noun", cefr: "A2" },
     translations: { common: [text], personal: null }, grammar: null, reference_conjugations: [],
-    examples: { common: [], personal: null }, association: null, hint: null };
+    examples: { common: [], personal: null }, association: null };
 }
 
 beforeEach(() => { visible("visible"); vi.spyOn(window, "scrollTo").mockImplementation(() => {}); });

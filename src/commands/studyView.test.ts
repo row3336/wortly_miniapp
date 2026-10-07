@@ -9,7 +9,7 @@ const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")
 const SESSION = id(3);
 const assignment = (n: number, status: "prefetched" | "presented"): PublicAssignment => ({ id: id(n), card_id: id(n + 50),
   status, kind: "original", prompt: { text: "дом", language: "ru", translations: ["дом"], personal_translation_version: null,
-    hint: null, hint_version: null, conjunction_hint: null }, answer_spec: { kind: "word", labels: ["word"], part_count: 1, case_sensitive: true } });
+    conjunction_hint: null }, answer_spec: { kind: "word", labels: ["word"], part_count: 1, case_sensitive: true } });
 const current = (item: PublicAssignment | null, status: StudyCurrent["status"] = "active"): StudyCurrent =>
   ({ session_id: SESSION, status, pair: "ru-de", close_reason: null, assignment: item });
 const target = (version: string) => ({ session_id: SESSION, assignment_id: id(6), result_id: id(7), expected_result_version: version });

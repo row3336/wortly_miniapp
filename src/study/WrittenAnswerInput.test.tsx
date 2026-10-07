@@ -22,12 +22,12 @@ function Controlled({ source }: { source: WrittenAnswerInputProps }) {
 const field = () => screen.getByRole("textbox") as HTMLTextAreaElement;
 
 describe("one written answer field", () => {
-  it("shows conjunction context and the independent personal hint before sending any answer", () => {
-    const p = props(); p.assignment.prompt = { ...p.assignment.prompt, hint: "личная подсказка",
+  it("shows conjunction context and no legacy personal hint before sending any answer", () => {
+    const p = props(); p.assignment.prompt = { ...p.assignment.prompt,
       conjunction_hint: { meaning_category: "konditional", verb_position: "Verb am Ende" } };
     const { container, rerender } = render(<WrittenAnswerInput {...p} />);
     expect(screen.getByText("konditional").lang).toBe("de"); expect(screen.getByText("Verb am Ende").lang).toBe("de");
-    expect(screen.getByText("личная подсказка")).toBeTruthy();
+    expect(container.querySelectorAll(".written-hint")).toHaveLength(1);
     expect(p.onSubmit).not.toHaveBeenCalled(); expect(p.onChange).not.toHaveBeenCalled();
     rerender(<WrittenAnswerInput {...p} assignment={{ ...p.assignment, id: "another",
       prompt: { ...p.assignment.prompt, conjunction_hint: null } }} />);

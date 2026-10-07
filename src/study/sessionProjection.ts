@@ -16,10 +16,9 @@ function validAssignment(value: unknown, pair: string, mode: "learning" | "writt
     || !(mode === "learning" ? value.kind === "learning" : oneOf(value.kind, ["original", "drill"]))
     || !oneOf(value.status, ["prefetched", "presented"]) || !record(value.prompt) || !record(value.answer_spec)) return false;
   const prompt = value.prompt, spec = value.answer_spec;
-  return exactKeys(prompt, ["text", "language", "translations", "personal_translation_version", "hint", "hint_version", "conjunction_hint"])
+  return exactKeys(prompt, ["text", "language", "translations", "personal_translation_version", "conjunction_hint"])
     && typeof prompt.text === "string" && prompt.language === pair.split("-")[0] && textArray(prompt.translations)
-    && nullableVersion(prompt.personal_translation_version) && nullableVersion(prompt.hint_version)
-    && (prompt.hint === null || typeof prompt.hint === "string")
+    && nullableVersion(prompt.personal_translation_version)
     && validConjunctionHint(prompt.conjunction_hint)
     && exactKeys(spec, ["kind", "labels", "part_count", "case_sensitive"])
     && (mode === "learning" ? oneOf(spec.kind, ["word", "forms", "phrase"])

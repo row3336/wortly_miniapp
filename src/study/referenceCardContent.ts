@@ -1,4 +1,4 @@
-import type { CardExamples, DictionaryCardContent } from "../api/generated";
+import type { CardExamples, DictionaryCardContent, DictionaryViewContent } from "../api/generated";
 import { exactKeys, oneOf, record, sameId, uuid, version } from "../api/wireValidation";
 
 const states = ["applicable", "not_applicable", "unknown"];
@@ -72,10 +72,26 @@ export function validCardExamples(value: unknown): value is CardExamples {
     && singleWechselRoles(value.common);
 }
 
-/** Public reference content only. Common and personal examples stay distinct; no display policy here. */
+const contentKeys = ["pair", "card", "translations", "grammar", "reference_conjugations", "examples", "association"];
+const editableFields = ["translation", "example", "association"];
+
+/** Public reference content only. Common and personal examples stay distinct; no display policy here.
+ * There is no personal hint (K07-125) and no editor versions: the card read and Learning use this. */
 export function validReferenceCardContent(value: unknown, cardId: string, pair: string): value is DictionaryCardContent {
-  if (!record(value) || !exactKeys(value, ["pair", "card", "translations", "grammar", "reference_conjugations", "examples", "association", "hint"])
-    || value.pair !== pair || !oneOf(value.pair, ["ru-de", "uk-de", "en-de"]) || !record(value.card)) return false;
+  return record(value) && exactKeys(value, contentKeys) && validContent(value, cardId, pair);
+}
+
+/** The card view's content: the same reference content plus the required expected version of
+ * each own field, also when it has no value (the editor's expected_field_version). */
+export function validDictionaryViewContent(value: unknown, cardId: string, pair: string): value is DictionaryViewContent {
+  if (!record(value) || !exactKeys(value, [...contentKeys, "field_versions"])) return false;
+  const versions = value.field_versions;
+  return record(versions) && exactKeys(versions, editableFields) && editableFields.every(field => version(versions[field]))
+    && validContent(value, cardId, pair);
+}
+
+function validContent(value: Record<string, unknown>, cardId: string, pair: string): boolean {
+  if (value.pair !== pair || !oneOf(value.pair, ["ru-de", "uk-de", "en-de"]) || !record(value.card)) return false;
   const card = value.card, translations = value.translations;
   if (!exactKeys(card, ["id", "revision", "lemma", "type", "cefr"]) || !sameId(card.id, cardId) || !version(card.revision)
     || typeof card.lemma !== "string" || !oneOf(card.type, ["noun", "verb", "phrase", "adjective", "pronoun", "adverb", "preposition", "conjunction", "particle"])
@@ -84,5 +100,5 @@ export function validReferenceCardContent(value: unknown, cardId: string, pair: 
     && translations.common.every(item => typeof item === "string") && personal(translations.personal)
     && grammar(value.grammar, card.type as string) && conjugations(value.reference_conjugations, card.type as string)
     && validCardExamples(value.examples)
-    && personal(value.association) && personal(value.hint);
+    && personal(value.association);
 }

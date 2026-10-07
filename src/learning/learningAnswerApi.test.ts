@@ -8,7 +8,7 @@ const command = (): AnswerSubmitCommand => ({ command_id: id(1), client_instance
 const step = (): LearningSessionProjection => ({ session_id: id(4), status: "active", mode: "learning", pair: "ru-de",
   local_date: "2026-09-30", close_reason: null, group: { id: id(6), version: "3", status: "active", total: 1, preview_position: 1 },
   preview: null, assignment: { id: id(7), card_id: id(8), status: "prefetched", kind: "learning",
-    prompt: { text: "привет", language: "ru", translations: ["привет"], personal_translation_version: null, hint: null, hint_version: null, conjunction_hint: null },
+    prompt: { text: "привет", language: "ru", translations: ["привет"], personal_translation_version: null, conjunction_hint: null },
     answer_spec: { kind: "word", labels: ["word"], part_count: 1, case_sensitive: true } } });
 const response = (): LearningAnswerResponse => ({
   command: { id: id(1), kind: "answer.submit", status: "applied", applied_at: "2026-09-30T12:00:00Z",

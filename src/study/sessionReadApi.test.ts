@@ -10,7 +10,7 @@ function written(): SessionProjection {
   return { session_id: id(3), mode: "written", status: "active", pair: "ru-de", direction: "l1-de",
     local_date: "2026-09-30", bucket: "words", close_reason: null, progress: { completed: 0, total: 2, correct: 0, wrong: 0 }, summary: null,
     assignment: { id: id(6), card_id: id(7), status: "presented", kind: "original",
-      prompt: { text: "дом", language: "ru", translations: ["дом"], personal_translation_version: null, hint: null, hint_version: null, conjunction_hint: null },
+      prompt: { text: "дом", language: "ru", translations: ["дом"], personal_translation_version: null, conjunction_hint: null },
       answer_spec: { kind: "word", labels: ["word"], part_count: 1, case_sensitive: true } } };
 }
 function fixture(current: unknown = written(), stateVersion: unknown = "3", status = 200) {
@@ -126,8 +126,7 @@ describe("stored-mode session read", () => {
     ["already answered", x => { x.assignment.status = "answered"; }],
     ["answer in prompt", x => { x.assignment.prompt.answer = "Haus"; }],
     ["wrong language", x => { x.assignment.prompt.language = "en"; }],
-    ["untyped hint", x => { x.assignment.prompt.hint = 4; }],
-    ["invalid hint version", x => { x.assignment.prompt.hint_version = "0"; }],
+    ["legacy hint", x => { x.assignment.prompt.hint = null; }],
     ["untyped translation", x => { x.assignment.prompt.translations = [3]; }],
     ["correct variants", x => { x.assignment.answer_spec.variants = [["Haus"]]; }],
     ["phrase in words", x => { x.assignment.answer_spec.kind = "phrase"; }],

@@ -51,6 +51,12 @@ describe("written adapter against recorded core replies", () => {
     }
   });
 
+  it("no real question carries the legacy personal hint (K07-125)", () => {
+    const prompts = JSON.stringify(exchanges.map(item => item.response)).match(/"prompt":\{[^}]*/g) ?? [];
+    expect(prompts.length).toBeGreaterThan(0);
+    for (const prompt of prompts) expect(prompt).not.toMatch(/"hint(_version)?":/);
+  });
+
   it("sends the same requests the server accepted and accepts every real reply of one session", async () => {
     const { api, fetcher } = replay();
     const start = await api.send("token", "proof", command("start"));

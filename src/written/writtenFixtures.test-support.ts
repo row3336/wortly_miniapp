@@ -20,8 +20,8 @@ export const pending = (intent: WrittenIntent) => ({ schemaVersion: 1, profileId
 export function assignment(n: number, status: "prefetched" | "presented", kind: "original" | "drill" = "original",
   attempt = 0): PublicAssignment {
   return { id: id((kind === "drill" ? 900 + n : n) + 10000 * attempt), card_id: id(100 + n), status, kind,
-    prompt: { text: `слово ${n}`, language: "ru", translations: [`слово ${n}`], personal_translation_version: null, hint: null,
-      hint_version: null, conjunction_hint: null },
+    prompt: { text: `слово ${n}`, language: "ru", translations: [`слово ${n}`], personal_translation_version: null,
+      conjunction_hint: null },
     answer_spec: { kind: "word", labels: ["word"], part_count: 1, case_sensitive: true } };
 }
 

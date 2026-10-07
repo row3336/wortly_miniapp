@@ -15,7 +15,6 @@ function content(): DictionaryCardContent {
     id: id(index + 2), text: "<b>Wenn</b> er kommt.", role: role as null | "general" | "wechsel_location" | "wechsel_direction",
     highlighted_parts: ["Wenn", [0, 4], { legacy: [null, true, 1] }] })), personal: { value: "Mein Beispiel.", version: "8" } };
   value.association = { value: "моя ассоциация", version: "9" };
-  value.hint = { value: "моя подсказка", version: "10" };
   return value;
 }
 const body = (): DictionaryCardResponse => ({ state_version: "9007199254740993", current: content() });
@@ -86,7 +85,7 @@ describe("dictionary card read", () => {
     ["phrase with unrelated grammar", x => { x.current.grammar = { category: { id: id(9), name: "Wechsel" }, cases: [] }; }],
     ["phrase with conjugations", x => { x.current.reference_conjugations = [{ tense: "present", forms: [] }]; }],
     ["unversioned association", x => { x.current.association = { value: "text" }; }],
-    ["missing hint", x => { delete x.current.hint; }],
+    ["legacy hint", x => { x.current.hint = null; }],
     ["unavailable leaks a pair", x => { x.current = { status: "unavailable", pair: "ru-de" }; }],
     ["unavailable leaks an ID", x => { x.current = { status: "unavailable", card_id: id(1) }; }],
     ["unavailable with content", x => { x.current.status = "unavailable"; }],

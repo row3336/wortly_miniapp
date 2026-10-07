@@ -46,7 +46,7 @@
       "wrong": 0
      },
      "assignment": {
-      "id": "68d2a2d0-37ea-41c8-83ca-16bc6bab7d13",
+      "id": "e9d4a73a-07cf-4a09-bc81-b7c0c99bb42a",
       "card_id": "00000000-0000-4000-8000-000000000010",
       "status": "prefetched",
       "kind": "original",
@@ -57,8 +57,6 @@
         "Добрый день"
        ],
        "personal_translation_version": null,
-       "hint": null,
-       "hint_version": null,
        "conjunction_hint": null
       },
       "answer_spec": {
@@ -89,7 +87,7 @@
     "document_id": "00000000-0000-4000-8000-000000000002",
     "session_id": "00000000-0000-4000-8000-000000000004",
     "kind": "assignment.present",
-    "assignment_id": "68d2a2d0-37ea-41c8-83ca-16bc6bab7d13",
+    "assignment_id": "e9d4a73a-07cf-4a09-bc81-b7c0c99bb42a",
     "payload": {}
    },
    "status": 200,
@@ -99,7 +97,7 @@
      "kind": "assignment.present",
      "status": "applied",
      "applied_at": "2026-09-29T12:00:00Z",
-     "target_id": "68d2a2d0-37ea-41c8-83ca-16bc6bab7d13",
+     "target_id": "e9d4a73a-07cf-4a09-bc81-b7c0c99bb42a",
      "action_id": null,
      "result_id": null,
      "context_id": null,
@@ -121,7 +119,7 @@
       "wrong": 0
      },
      "assignment": {
-      "id": "68d2a2d0-37ea-41c8-83ca-16bc6bab7d13",
+      "id": "e9d4a73a-07cf-4a09-bc81-b7c0c99bb42a",
       "card_id": "00000000-0000-4000-8000-000000000010",
       "status": "presented",
       "kind": "original",
@@ -132,8 +130,6 @@
         "Добрый день"
        ],
        "personal_translation_version": null,
-       "hint": null,
-       "hint_version": null,
        "conjunction_hint": null
       },
       "answer_spec": {
@@ -164,7 +160,7 @@
     "document_id": "00000000-0000-4000-8000-000000000002",
     "session_id": "00000000-0000-4000-8000-000000000004",
     "kind": "answer.submit",
-    "assignment_id": "68d2a2d0-37ea-41c8-83ca-16bc6bab7d13",
+    "assignment_id": "e9d4a73a-07cf-4a09-bc81-b7c0c99bb42a",
     "payload": {
      "text": "Guten Tag"
     }
@@ -172,14 +168,14 @@
    "status": 200,
    "response": {
     "action": {
-     "action_id": "d35a441f-73c7-4382-b7d3-af167a2979d9",
+     "action_id": "269bc989-b147-45ff-ba11-700c4522837e",
      "kind": "answer.submit",
      "version": "1",
      "status": "active"
     },
     "result": {
-     "result_id": "c1e84a40-8b07-4503-9c23-b96d7ac3f914",
-     "assignment_id": "68d2a2d0-37ea-41c8-83ca-16bc6bab7d13",
+     "result_id": "30585262-8128-4a17-ad31-bcb530fbe039",
+     "assignment_id": "e9d4a73a-07cf-4a09-bc81-b7c0c99bb42a",
      "version": "1",
      "grade": 4,
      "correct": true,
@@ -237,7 +233,7 @@
       "wrong": 0
      },
      "assignment": {
-      "id": "18bf9c72-1ff3-427c-aec9-b056e85b5740",
+      "id": "307fed41-922d-4733-95d7-9cb35821d943",
       "card_id": "00000000-0000-4000-8000-000000000011",
       "status": "prefetched",
       "kind": "original",
@@ -248,8 +244,6 @@
         "Большое спасибо"
        ],
        "personal_translation_version": null,
-       "hint": null,
-       "hint_version": null,
        "conjunction_hint": null
       },
       "answer_spec": {
@@ -281,8 +275,8 @@
      "answer_target": null,
      "grades": {
       "session_id": "00000000-0000-4000-8000-000000000004",
-      "assignment_id": "68d2a2d0-37ea-41c8-83ca-16bc6bab7d13",
-      "result_id": "c1e84a40-8b07-4503-9c23-b96d7ac3f914",
+      "assignment_id": "e9d4a73a-07cf-4a09-bc81-b7c0c99bb42a",
+      "result_id": "30585262-8128-4a17-ad31-bcb530fbe039",
       "expected_result_version": "1",
       "values": [
        3,
@@ -293,10 +287,10 @@
      "correct_target": null,
      "undo_target": {
       "session_id": "00000000-0000-4000-8000-000000000004",
-      "assignment_id": "68d2a2d0-37ea-41c8-83ca-16bc6bab7d13",
-      "result_id": "c1e84a40-8b07-4503-9c23-b96d7ac3f914",
+      "assignment_id": "e9d4a73a-07cf-4a09-bc81-b7c0c99bb42a",
+      "result_id": "30585262-8128-4a17-ad31-bcb530fbe039",
       "expected_result_version": "1",
-      "action_id": "d35a441f-73c7-4382-b7d3-af167a2979d9",
+      "action_id": "269bc989-b147-45ff-ba11-700c4522837e",
       "kind": "answer.submit"
      },
      "stop": true,
@@ -307,9 +301,9 @@
      "kind": "answer.submit",
      "status": "applied",
      "applied_at": "2026-09-29T12:00:00Z",
-     "target_id": "68d2a2d0-37ea-41c8-83ca-16bc6bab7d13",
-     "action_id": "d35a441f-73c7-4382-b7d3-af167a2979d9",
-     "result_id": "c1e84a40-8b07-4503-9c23-b96d7ac3f914",
+     "target_id": "e9d4a73a-07cf-4a09-bc81-b7c0c99bb42a",
+     "action_id": "269bc989-b147-45ff-ba11-700c4522837e",
+     "result_id": "30585262-8128-4a17-ad31-bcb530fbe039",
      "context_id": null,
      "object_version": "1"
     },
@@ -327,20 +321,20 @@
     "client_instance_id": "00000000-0000-4000-8000-000000000001",
     "document_id": "00000000-0000-4000-8000-000000000002",
     "session_id": "00000000-0000-4000-8000-000000000004",
-    "expected_intent_hash": "0c78f73bc5195c21132ed27301a3cc34e2eb8ac4abdcca935f244c917e9d4e30"
+    "expected_intent_hash": "96eedb7f5dd064f8e3a74fbe2c77116fc30f3cedad058ea51c48157b56c36565"
    },
    "body": null,
    "status": 200,
    "response": {
     "action": {
-     "action_id": "d35a441f-73c7-4382-b7d3-af167a2979d9",
+     "action_id": "269bc989-b147-45ff-ba11-700c4522837e",
      "kind": "answer.submit",
      "version": "1",
      "status": "active"
     },
     "result": {
-     "result_id": "c1e84a40-8b07-4503-9c23-b96d7ac3f914",
-     "assignment_id": "68d2a2d0-37ea-41c8-83ca-16bc6bab7d13",
+     "result_id": "30585262-8128-4a17-ad31-bcb530fbe039",
+     "assignment_id": "e9d4a73a-07cf-4a09-bc81-b7c0c99bb42a",
      "version": "1",
      "grade": 4,
      "correct": true,
@@ -398,7 +392,7 @@
       "wrong": 0
      },
      "assignment": {
-      "id": "18bf9c72-1ff3-427c-aec9-b056e85b5740",
+      "id": "307fed41-922d-4733-95d7-9cb35821d943",
       "card_id": "00000000-0000-4000-8000-000000000011",
       "status": "prefetched",
       "kind": "original",
@@ -409,8 +403,6 @@
         "Большое спасибо"
        ],
        "personal_translation_version": null,
-       "hint": null,
-       "hint_version": null,
        "conjunction_hint": null
       },
       "answer_spec": {
@@ -442,8 +434,8 @@
      "answer_target": null,
      "grades": {
       "session_id": "00000000-0000-4000-8000-000000000004",
-      "assignment_id": "68d2a2d0-37ea-41c8-83ca-16bc6bab7d13",
-      "result_id": "c1e84a40-8b07-4503-9c23-b96d7ac3f914",
+      "assignment_id": "e9d4a73a-07cf-4a09-bc81-b7c0c99bb42a",
+      "result_id": "30585262-8128-4a17-ad31-bcb530fbe039",
       "expected_result_version": "1",
       "values": [
        3,
@@ -454,10 +446,10 @@
      "correct_target": null,
      "undo_target": {
       "session_id": "00000000-0000-4000-8000-000000000004",
-      "assignment_id": "68d2a2d0-37ea-41c8-83ca-16bc6bab7d13",
-      "result_id": "c1e84a40-8b07-4503-9c23-b96d7ac3f914",
+      "assignment_id": "e9d4a73a-07cf-4a09-bc81-b7c0c99bb42a",
+      "result_id": "30585262-8128-4a17-ad31-bcb530fbe039",
       "expected_result_version": "1",
-      "action_id": "d35a441f-73c7-4382-b7d3-af167a2979d9",
+      "action_id": "269bc989-b147-45ff-ba11-700c4522837e",
       "kind": "answer.submit"
      },
      "stop": true,
@@ -468,14 +460,14 @@
      "kind": "answer.submit",
      "status": "already_applied",
      "applied_at": "2026-09-29T12:00:00Z",
-     "target_id": "68d2a2d0-37ea-41c8-83ca-16bc6bab7d13",
-     "action_id": "d35a441f-73c7-4382-b7d3-af167a2979d9",
-     "result_id": "c1e84a40-8b07-4503-9c23-b96d7ac3f914",
+     "target_id": "e9d4a73a-07cf-4a09-bc81-b7c0c99bb42a",
+     "action_id": "269bc989-b147-45ff-ba11-700c4522837e",
+     "result_id": "30585262-8128-4a17-ad31-bcb530fbe039",
      "context_id": null,
      "object_version": "1"
     },
     "state_version": "6",
-    "verified_intent_hash": "0c78f73bc5195c21132ed27301a3cc34e2eb8ac4abdcca935f244c917e9d4e30"
+    "verified_intent_hash": "96eedb7f5dd064f8e3a74fbe2c77116fc30f3cedad058ea51c48157b56c36565"
    },
    "schema": [
     "WrittenStatusResponse"
@@ -492,7 +484,7 @@
     "document_id": "00000000-0000-4000-8000-000000000002",
     "session_id": "00000000-0000-4000-8000-000000000004",
     "kind": "assignment.present",
-    "assignment_id": "18bf9c72-1ff3-427c-aec9-b056e85b5740",
+    "assignment_id": "307fed41-922d-4733-95d7-9cb35821d943",
     "payload": {}
    },
    "status": 200,
@@ -502,7 +494,7 @@
      "kind": "assignment.present",
      "status": "applied",
      "applied_at": "2026-09-29T12:00:00Z",
-     "target_id": "18bf9c72-1ff3-427c-aec9-b056e85b5740",
+     "target_id": "307fed41-922d-4733-95d7-9cb35821d943",
      "action_id": null,
      "result_id": null,
      "context_id": null,
@@ -524,7 +516,7 @@
       "wrong": 0
      },
      "assignment": {
-      "id": "18bf9c72-1ff3-427c-aec9-b056e85b5740",
+      "id": "307fed41-922d-4733-95d7-9cb35821d943",
       "card_id": "00000000-0000-4000-8000-000000000011",
       "status": "presented",
       "kind": "original",
@@ -535,8 +527,6 @@
         "Большое спасибо"
        ],
        "personal_translation_version": null,
-       "hint": null,
-       "hint_version": null,
        "conjunction_hint": null
       },
       "answer_spec": {
@@ -561,8 +551,8 @@
    "method": "GET",
    "path": "/api/v1/sessions/00000000-0000-4000-8000-000000000004",
    "query": {
-    "assignment_id": "68d2a2d0-37ea-41c8-83ca-16bc6bab7d13",
-    "result_id": "c1e84a40-8b07-4503-9c23-b96d7ac3f914",
+    "assignment_id": "e9d4a73a-07cf-4a09-bc81-b7c0c99bb42a",
+    "result_id": "30585262-8128-4a17-ad31-bcb530fbe039",
     "client_instance_id": "00000000-0000-4000-8000-000000000001",
     "document_id": "00000000-0000-4000-8000-000000000002"
    },
@@ -570,14 +560,14 @@
    "status": 200,
    "response": {
     "action": {
-     "action_id": "d35a441f-73c7-4382-b7d3-af167a2979d9",
+     "action_id": "269bc989-b147-45ff-ba11-700c4522837e",
      "kind": "answer.submit",
      "version": "1",
      "status": "active"
     },
     "result": {
-     "result_id": "c1e84a40-8b07-4503-9c23-b96d7ac3f914",
-     "assignment_id": "68d2a2d0-37ea-41c8-83ca-16bc6bab7d13",
+     "result_id": "30585262-8128-4a17-ad31-bcb530fbe039",
+     "assignment_id": "e9d4a73a-07cf-4a09-bc81-b7c0c99bb42a",
      "version": "1",
      "grade": 4,
      "correct": true,
@@ -635,7 +625,7 @@
       "wrong": 0
      },
      "assignment": {
-      "id": "18bf9c72-1ff3-427c-aec9-b056e85b5740",
+      "id": "307fed41-922d-4733-95d7-9cb35821d943",
       "card_id": "00000000-0000-4000-8000-000000000011",
       "status": "presented",
       "kind": "original",
@@ -646,8 +636,6 @@
         "Большое спасибо"
        ],
        "personal_translation_version": null,
-       "hint": null,
-       "hint_version": null,
        "conjunction_hint": null
       },
       "answer_spec": {
@@ -676,11 +664,11 @@
      }
     },
     "capabilities": {
-     "answer_target": "18bf9c72-1ff3-427c-aec9-b056e85b5740",
+     "answer_target": "307fed41-922d-4733-95d7-9cb35821d943",
      "grades": {
       "session_id": "00000000-0000-4000-8000-000000000004",
-      "assignment_id": "68d2a2d0-37ea-41c8-83ca-16bc6bab7d13",
-      "result_id": "c1e84a40-8b07-4503-9c23-b96d7ac3f914",
+      "assignment_id": "e9d4a73a-07cf-4a09-bc81-b7c0c99bb42a",
+      "result_id": "30585262-8128-4a17-ad31-bcb530fbe039",
       "expected_result_version": "1",
       "values": [
        3,
@@ -691,10 +679,10 @@
      "correct_target": null,
      "undo_target": {
       "session_id": "00000000-0000-4000-8000-000000000004",
-      "assignment_id": "68d2a2d0-37ea-41c8-83ca-16bc6bab7d13",
-      "result_id": "c1e84a40-8b07-4503-9c23-b96d7ac3f914",
+      "assignment_id": "e9d4a73a-07cf-4a09-bc81-b7c0c99bb42a",
+      "result_id": "30585262-8128-4a17-ad31-bcb530fbe039",
       "expected_result_version": "1",
-      "action_id": "d35a441f-73c7-4382-b7d3-af167a2979d9",
+      "action_id": "269bc989-b147-45ff-ba11-700c4522837e",
       "kind": "answer.submit"
      },
      "stop": true,
@@ -717,8 +705,8 @@
     "document_id": "00000000-0000-4000-8000-000000000002",
     "session_id": "00000000-0000-4000-8000-000000000004",
     "kind": "result.grade",
-    "assignment_id": "68d2a2d0-37ea-41c8-83ca-16bc6bab7d13",
-    "result_id": "c1e84a40-8b07-4503-9c23-b96d7ac3f914",
+    "assignment_id": "e9d4a73a-07cf-4a09-bc81-b7c0c99bb42a",
+    "result_id": "30585262-8128-4a17-ad31-bcb530fbe039",
     "expected_result_version": "1",
     "payload": {
      "grade": 5
@@ -727,14 +715,14 @@
    "status": 200,
    "response": {
     "action": {
-     "action_id": "d35a441f-73c7-4382-b7d3-af167a2979d9",
+     "action_id": "269bc989-b147-45ff-ba11-700c4522837e",
      "kind": "answer.submit",
      "version": "2",
      "status": "active"
     },
     "result": {
-     "result_id": "c1e84a40-8b07-4503-9c23-b96d7ac3f914",
-     "assignment_id": "68d2a2d0-37ea-41c8-83ca-16bc6bab7d13",
+     "result_id": "30585262-8128-4a17-ad31-bcb530fbe039",
+     "assignment_id": "e9d4a73a-07cf-4a09-bc81-b7c0c99bb42a",
      "version": "2",
      "grade": 5,
      "correct": true,
@@ -792,7 +780,7 @@
       "wrong": 0
      },
      "assignment": {
-      "id": "18bf9c72-1ff3-427c-aec9-b056e85b5740",
+      "id": "307fed41-922d-4733-95d7-9cb35821d943",
       "card_id": "00000000-0000-4000-8000-000000000011",
       "status": "presented",
       "kind": "original",
@@ -803,8 +791,6 @@
         "Большое спасибо"
        ],
        "personal_translation_version": null,
-       "hint": null,
-       "hint_version": null,
        "conjunction_hint": null
       },
       "answer_spec": {
@@ -833,11 +819,11 @@
      }
     },
     "capabilities": {
-     "answer_target": "18bf9c72-1ff3-427c-aec9-b056e85b5740",
+     "answer_target": "307fed41-922d-4733-95d7-9cb35821d943",
      "grades": {
       "session_id": "00000000-0000-4000-8000-000000000004",
-      "assignment_id": "68d2a2d0-37ea-41c8-83ca-16bc6bab7d13",
-      "result_id": "c1e84a40-8b07-4503-9c23-b96d7ac3f914",
+      "assignment_id": "e9d4a73a-07cf-4a09-bc81-b7c0c99bb42a",
+      "result_id": "30585262-8128-4a17-ad31-bcb530fbe039",
       "expected_result_version": "2",
       "values": [
        3,
@@ -848,10 +834,10 @@
      "correct_target": null,
      "undo_target": {
       "session_id": "00000000-0000-4000-8000-000000000004",
-      "assignment_id": "68d2a2d0-37ea-41c8-83ca-16bc6bab7d13",
-      "result_id": "c1e84a40-8b07-4503-9c23-b96d7ac3f914",
+      "assignment_id": "e9d4a73a-07cf-4a09-bc81-b7c0c99bb42a",
+      "result_id": "30585262-8128-4a17-ad31-bcb530fbe039",
       "expected_result_version": "2",
-      "action_id": "d35a441f-73c7-4382-b7d3-af167a2979d9",
+      "action_id": "269bc989-b147-45ff-ba11-700c4522837e",
       "kind": "answer.submit"
      },
      "stop": true,
@@ -862,9 +848,9 @@
      "kind": "result.grade",
      "status": "applied",
      "applied_at": "2026-09-29T12:00:00Z",
-     "target_id": "68d2a2d0-37ea-41c8-83ca-16bc6bab7d13",
-     "action_id": "d35a441f-73c7-4382-b7d3-af167a2979d9",
-     "result_id": "c1e84a40-8b07-4503-9c23-b96d7ac3f914",
+     "target_id": "e9d4a73a-07cf-4a09-bc81-b7c0c99bb42a",
+     "action_id": "269bc989-b147-45ff-ba11-700c4522837e",
+     "result_id": "30585262-8128-4a17-ad31-bcb530fbe039",
      "context_id": null,
      "object_version": "2"
     },
@@ -901,7 +887,7 @@
       "wrong": 0
      },
      "assignment": {
-      "id": "18bf9c72-1ff3-427c-aec9-b056e85b5740",
+      "id": "307fed41-922d-4733-95d7-9cb35821d943",
       "card_id": "00000000-0000-4000-8000-000000000011",
       "status": "presented",
       "kind": "original",
@@ -912,8 +898,6 @@
         "Большое спасибо"
        ],
        "personal_translation_version": null,
-       "hint": null,
-       "hint_version": null,
        "conjunction_hint": null
       },
       "answer_spec": {
@@ -944,7 +928,7 @@
     "document_id": "00000000-0000-4000-8000-000000000002",
     "session_id": "00000000-0000-4000-8000-000000000004",
     "kind": "answer.submit",
-    "assignment_id": "18bf9c72-1ff3-427c-aec9-b056e85b5740",
+    "assignment_id": "307fed41-922d-4733-95d7-9cb35821d943",
     "payload": {
      "text": "falsch"
     }
@@ -952,14 +936,14 @@
    "status": 200,
    "response": {
     "action": {
-     "action_id": "408d7597-5437-46b6-949c-41b459685513",
+     "action_id": "496087aa-bf8b-4f6b-bff3-80e4281321bb",
      "kind": "answer.submit",
      "version": "1",
      "status": "active"
     },
     "result": {
-     "result_id": "30e74178-4d51-41ff-9f53-1e75aa53f419",
-     "assignment_id": "18bf9c72-1ff3-427c-aec9-b056e85b5740",
+     "result_id": "6b78e711-6484-4202-8537-0a33740e70d3",
+     "assignment_id": "307fed41-922d-4733-95d7-9cb35821d943",
      "version": "1",
      "grade": 2,
      "correct": false,
@@ -1034,7 +1018,7 @@
       "wrong": 1
      },
      "assignment": {
-      "id": "cdb38cea-44e0-47ba-8df1-3f464b15b649",
+      "id": "6638c998-c45d-42d9-927f-6c6e936ea110",
       "card_id": "00000000-0000-4000-8000-000000000011",
       "status": "prefetched",
       "kind": "drill",
@@ -1045,8 +1029,6 @@
         "Большое спасибо"
        ],
        "personal_translation_version": null,
-       "hint": null,
-       "hint_version": null,
        "conjunction_hint": null
       },
       "answer_spec": {
@@ -1079,16 +1061,16 @@
      "grades": null,
      "correct_target": {
       "session_id": "00000000-0000-4000-8000-000000000004",
-      "assignment_id": "18bf9c72-1ff3-427c-aec9-b056e85b5740",
-      "result_id": "30e74178-4d51-41ff-9f53-1e75aa53f419",
+      "assignment_id": "307fed41-922d-4733-95d7-9cb35821d943",
+      "result_id": "6b78e711-6484-4202-8537-0a33740e70d3",
       "expected_result_version": "1"
      },
      "undo_target": {
       "session_id": "00000000-0000-4000-8000-000000000004",
-      "assignment_id": "18bf9c72-1ff3-427c-aec9-b056e85b5740",
-      "result_id": "30e74178-4d51-41ff-9f53-1e75aa53f419",
+      "assignment_id": "307fed41-922d-4733-95d7-9cb35821d943",
+      "result_id": "6b78e711-6484-4202-8537-0a33740e70d3",
       "expected_result_version": "1",
-      "action_id": "408d7597-5437-46b6-949c-41b459685513",
+      "action_id": "496087aa-bf8b-4f6b-bff3-80e4281321bb",
       "kind": "answer.submit"
      },
      "stop": true,
@@ -1099,9 +1081,9 @@
      "kind": "answer.submit",
      "status": "applied",
      "applied_at": "2026-09-29T12:00:00Z",
-     "target_id": "18bf9c72-1ff3-427c-aec9-b056e85b5740",
-     "action_id": "408d7597-5437-46b6-949c-41b459685513",
-     "result_id": "30e74178-4d51-41ff-9f53-1e75aa53f419",
+     "target_id": "307fed41-922d-4733-95d7-9cb35821d943",
+     "action_id": "496087aa-bf8b-4f6b-bff3-80e4281321bb",
+     "result_id": "6b78e711-6484-4202-8537-0a33740e70d3",
      "context_id": null,
      "object_version": "1"
     },
@@ -1122,22 +1104,22 @@
     "document_id": "00000000-0000-4000-8000-000000000002",
     "session_id": "00000000-0000-4000-8000-000000000004",
     "kind": "result.correct",
-    "assignment_id": "18bf9c72-1ff3-427c-aec9-b056e85b5740",
-    "result_id": "30e74178-4d51-41ff-9f53-1e75aa53f419",
+    "assignment_id": "307fed41-922d-4733-95d7-9cb35821d943",
+    "result_id": "6b78e711-6484-4202-8537-0a33740e70d3",
     "expected_result_version": "1",
     "payload": {}
    },
    "status": 200,
    "response": {
     "action": {
-     "action_id": "408d7597-5437-46b6-949c-41b459685513",
+     "action_id": "496087aa-bf8b-4f6b-bff3-80e4281321bb",
      "kind": "answer.submit",
      "version": "2",
      "status": "active"
     },
     "result": {
-     "result_id": "30e74178-4d51-41ff-9f53-1e75aa53f419",
-     "assignment_id": "18bf9c72-1ff3-427c-aec9-b056e85b5740",
+     "result_id": "6b78e711-6484-4202-8537-0a33740e70d3",
+     "assignment_id": "307fed41-922d-4733-95d7-9cb35821d943",
      "version": "2",
      "grade": 4,
      "correct": true,
@@ -1240,8 +1222,8 @@
      "answer_target": null,
      "grades": {
       "session_id": "00000000-0000-4000-8000-000000000004",
-      "assignment_id": "18bf9c72-1ff3-427c-aec9-b056e85b5740",
-      "result_id": "30e74178-4d51-41ff-9f53-1e75aa53f419",
+      "assignment_id": "307fed41-922d-4733-95d7-9cb35821d943",
+      "result_id": "6b78e711-6484-4202-8537-0a33740e70d3",
       "expected_result_version": "2",
       "values": [
        3,
@@ -1252,10 +1234,10 @@
      "correct_target": null,
      "undo_target": {
       "session_id": "00000000-0000-4000-8000-000000000004",
-      "assignment_id": "18bf9c72-1ff3-427c-aec9-b056e85b5740",
-      "result_id": "30e74178-4d51-41ff-9f53-1e75aa53f419",
+      "assignment_id": "307fed41-922d-4733-95d7-9cb35821d943",
+      "result_id": "6b78e711-6484-4202-8537-0a33740e70d3",
       "expected_result_version": "2",
-      "action_id": "408d7597-5437-46b6-949c-41b459685513",
+      "action_id": "496087aa-bf8b-4f6b-bff3-80e4281321bb",
       "kind": "answer.submit"
      },
      "stop": true,
@@ -1266,9 +1248,9 @@
      "kind": "result.correct",
      "status": "applied",
      "applied_at": "2026-09-29T12:00:00Z",
-     "target_id": "18bf9c72-1ff3-427c-aec9-b056e85b5740",
-     "action_id": "408d7597-5437-46b6-949c-41b459685513",
-     "result_id": "30e74178-4d51-41ff-9f53-1e75aa53f419",
+     "target_id": "307fed41-922d-4733-95d7-9cb35821d943",
+     "action_id": "496087aa-bf8b-4f6b-bff3-80e4281321bb",
+     "result_id": "6b78e711-6484-4202-8537-0a33740e70d3",
      "context_id": null,
      "object_version": "2"
     },
@@ -1286,20 +1268,20 @@
     "client_instance_id": "00000000-0000-4000-8000-000000000001",
     "document_id": "00000000-0000-4000-8000-000000000002",
     "session_id": "00000000-0000-4000-8000-000000000004",
-    "expected_intent_hash": "9ab22cf1f98f795109b76a92d4e28b770470d15b08e5b56f798d2deb10221e2c"
+    "expected_intent_hash": "4c4044498f985e64526cde01e9b93f205240a0f895d5644f7de32d1443bcd5e3"
    },
    "body": null,
    "status": 200,
    "response": {
     "action": {
-     "action_id": "408d7597-5437-46b6-949c-41b459685513",
+     "action_id": "496087aa-bf8b-4f6b-bff3-80e4281321bb",
      "kind": "answer.submit",
      "version": "2",
      "status": "active"
     },
     "result": {
-     "result_id": "30e74178-4d51-41ff-9f53-1e75aa53f419",
-     "assignment_id": "18bf9c72-1ff3-427c-aec9-b056e85b5740",
+     "result_id": "6b78e711-6484-4202-8537-0a33740e70d3",
+     "assignment_id": "307fed41-922d-4733-95d7-9cb35821d943",
      "version": "2",
      "grade": 4,
      "correct": true,
@@ -1402,8 +1384,8 @@
      "answer_target": null,
      "grades": {
       "session_id": "00000000-0000-4000-8000-000000000004",
-      "assignment_id": "18bf9c72-1ff3-427c-aec9-b056e85b5740",
-      "result_id": "30e74178-4d51-41ff-9f53-1e75aa53f419",
+      "assignment_id": "307fed41-922d-4733-95d7-9cb35821d943",
+      "result_id": "6b78e711-6484-4202-8537-0a33740e70d3",
       "expected_result_version": "2",
       "values": [
        3,
@@ -1414,10 +1396,10 @@
      "correct_target": null,
      "undo_target": {
       "session_id": "00000000-0000-4000-8000-000000000004",
-      "assignment_id": "18bf9c72-1ff3-427c-aec9-b056e85b5740",
-      "result_id": "30e74178-4d51-41ff-9f53-1e75aa53f419",
+      "assignment_id": "307fed41-922d-4733-95d7-9cb35821d943",
+      "result_id": "6b78e711-6484-4202-8537-0a33740e70d3",
       "expected_result_version": "2",
-      "action_id": "408d7597-5437-46b6-949c-41b459685513",
+      "action_id": "496087aa-bf8b-4f6b-bff3-80e4281321bb",
       "kind": "answer.submit"
      },
      "stop": true,
@@ -1428,14 +1410,14 @@
      "kind": "result.correct",
      "status": "already_applied",
      "applied_at": "2026-09-29T12:00:00Z",
-     "target_id": "18bf9c72-1ff3-427c-aec9-b056e85b5740",
-     "action_id": "408d7597-5437-46b6-949c-41b459685513",
-     "result_id": "30e74178-4d51-41ff-9f53-1e75aa53f419",
+     "target_id": "307fed41-922d-4733-95d7-9cb35821d943",
+     "action_id": "496087aa-bf8b-4f6b-bff3-80e4281321bb",
+     "result_id": "6b78e711-6484-4202-8537-0a33740e70d3",
      "context_id": null,
      "object_version": "2"
     },
     "state_version": "10",
-    "verified_intent_hash": "9ab22cf1f98f795109b76a92d4e28b770470d15b08e5b56f798d2deb10221e2c"
+    "verified_intent_hash": "4c4044498f985e64526cde01e9b93f205240a0f895d5644f7de32d1443bcd5e3"
    },
    "schema": [
     "WrittenStatusResponse"
@@ -1549,8 +1531,8 @@
    "method": "GET",
    "path": "/api/v1/sessions/00000000-0000-4000-8000-000000000004",
    "query": {
-    "assignment_id": "18bf9c72-1ff3-427c-aec9-b056e85b5740",
-    "result_id": "30e74178-4d51-41ff-9f53-1e75aa53f419",
+    "assignment_id": "307fed41-922d-4733-95d7-9cb35821d943",
+    "result_id": "6b78e711-6484-4202-8537-0a33740e70d3",
     "client_instance_id": "00000000-0000-4000-8000-000000000001",
     "document_id": "00000000-0000-4000-8000-000000000002"
    },
@@ -1558,14 +1540,14 @@
    "status": 200,
    "response": {
     "action": {
-     "action_id": "408d7597-5437-46b6-949c-41b459685513",
+     "action_id": "496087aa-bf8b-4f6b-bff3-80e4281321bb",
      "kind": "answer.submit",
      "version": "2",
      "status": "active"
     },
     "result": {
-     "result_id": "30e74178-4d51-41ff-9f53-1e75aa53f419",
-     "assignment_id": "18bf9c72-1ff3-427c-aec9-b056e85b5740",
+     "result_id": "6b78e711-6484-4202-8537-0a33740e70d3",
+     "assignment_id": "307fed41-922d-4733-95d7-9cb35821d943",
      "version": "2",
      "grade": 4,
      "correct": true,
@@ -1645,7 +1627,7 @@
      "status": "not_found"
     },
     "current": {
-     "profile_id": "92e06774-d4fb-4950-ae75-4a2dfba0a06e",
+     "profile_id": "591288e0-3d6d-48e9-8c12-de6e6c55e23d",
      "access": {
       "status": "admitted",
       "version": "1",
@@ -1770,7 +1752,7 @@
       "wrong": 0
      },
      "assignment": {
-      "id": "626c0998-18a0-4d8b-8163-3c67a4bb3f35",
+      "id": "299374a8-8440-4d36-a2e0-5cc1a2d44017",
       "card_id": "00000000-0000-4000-8000-000000000012",
       "status": "prefetched",
       "kind": "original",
@@ -1781,8 +1763,6 @@
         "До завтра"
        ],
        "personal_translation_version": null,
-       "hint": null,
-       "hint_version": null,
        "conjunction_hint": null
       },
       "answer_spec": {
@@ -1813,7 +1793,7 @@
     "document_id": "00000000-0000-4000-8000-000000000002",
     "session_id": "00000000-0000-4000-8000-000000000005",
     "kind": "assignment.present",
-    "assignment_id": "626c0998-18a0-4d8b-8163-3c67a4bb3f35",
+    "assignment_id": "299374a8-8440-4d36-a2e0-5cc1a2d44017",
     "payload": {}
    },
    "status": 200,
@@ -1823,7 +1803,7 @@
      "kind": "assignment.present",
      "status": "applied",
      "applied_at": "2026-09-29T12:00:00Z",
-     "target_id": "626c0998-18a0-4d8b-8163-3c67a4bb3f35",
+     "target_id": "299374a8-8440-4d36-a2e0-5cc1a2d44017",
      "action_id": null,
      "result_id": null,
      "context_id": null,
@@ -1845,7 +1825,7 @@
       "wrong": 0
      },
      "assignment": {
-      "id": "626c0998-18a0-4d8b-8163-3c67a4bb3f35",
+      "id": "299374a8-8440-4d36-a2e0-5cc1a2d44017",
       "card_id": "00000000-0000-4000-8000-000000000012",
       "status": "presented",
       "kind": "original",
@@ -1856,8 +1836,6 @@
         "До завтра"
        ],
        "personal_translation_version": null,
-       "hint": null,
-       "hint_version": null,
        "conjunction_hint": null
       },
       "answer_spec": {
@@ -1888,7 +1866,7 @@
     "document_id": "00000000-0000-4000-8000-000000000002",
     "session_id": "00000000-0000-4000-8000-000000000005",
     "kind": "answer.submit",
-    "assignment_id": "626c0998-18a0-4d8b-8163-3c67a4bb3f35",
+    "assignment_id": "299374a8-8440-4d36-a2e0-5cc1a2d44017",
     "payload": {
      "text": "falsch"
     }
@@ -1896,14 +1874,14 @@
    "status": 200,
    "response": {
     "action": {
-     "action_id": "61adae53-f9f7-4f04-a53e-ff218cc56d7a",
+     "action_id": "ad91f9cc-aede-48a8-8b6c-d9d3749e26bc",
      "kind": "answer.submit",
      "version": "1",
      "status": "active"
     },
     "result": {
-     "result_id": "aec0cb13-3a1a-4bc4-aef5-5c246be5bab9",
-     "assignment_id": "626c0998-18a0-4d8b-8163-3c67a4bb3f35",
+     "result_id": "a6627879-ea45-4236-adbb-ccaafba03115",
+     "assignment_id": "299374a8-8440-4d36-a2e0-5cc1a2d44017",
      "version": "1",
      "grade": 2,
      "correct": false,
@@ -1974,7 +1952,7 @@
       "wrong": 1
      },
      "assignment": {
-      "id": "e284ca7f-fb9a-4488-a0ef-0134a76bbab8",
+      "id": "c9a68ca8-73ee-40c5-9113-e75634f47f1b",
       "card_id": "00000000-0000-4000-8000-000000000012",
       "status": "prefetched",
       "kind": "drill",
@@ -1985,8 +1963,6 @@
         "До завтра"
        ],
        "personal_translation_version": null,
-       "hint": null,
-       "hint_version": null,
        "conjunction_hint": null
       },
       "answer_spec": {
@@ -2019,16 +1995,16 @@
      "grades": null,
      "correct_target": {
       "session_id": "00000000-0000-4000-8000-000000000005",
-      "assignment_id": "626c0998-18a0-4d8b-8163-3c67a4bb3f35",
-      "result_id": "aec0cb13-3a1a-4bc4-aef5-5c246be5bab9",
+      "assignment_id": "299374a8-8440-4d36-a2e0-5cc1a2d44017",
+      "result_id": "a6627879-ea45-4236-adbb-ccaafba03115",
       "expected_result_version": "1"
      },
      "undo_target": {
       "session_id": "00000000-0000-4000-8000-000000000005",
-      "assignment_id": "626c0998-18a0-4d8b-8163-3c67a4bb3f35",
-      "result_id": "aec0cb13-3a1a-4bc4-aef5-5c246be5bab9",
+      "assignment_id": "299374a8-8440-4d36-a2e0-5cc1a2d44017",
+      "result_id": "a6627879-ea45-4236-adbb-ccaafba03115",
       "expected_result_version": "1",
-      "action_id": "61adae53-f9f7-4f04-a53e-ff218cc56d7a",
+      "action_id": "ad91f9cc-aede-48a8-8b6c-d9d3749e26bc",
       "kind": "answer.submit"
      },
      "stop": true,
@@ -2039,9 +2015,9 @@
      "kind": "answer.submit",
      "status": "applied",
      "applied_at": "2026-09-29T12:00:00Z",
-     "target_id": "626c0998-18a0-4d8b-8163-3c67a4bb3f35",
-     "action_id": "61adae53-f9f7-4f04-a53e-ff218cc56d7a",
-     "result_id": "aec0cb13-3a1a-4bc4-aef5-5c246be5bab9",
+     "target_id": "299374a8-8440-4d36-a2e0-5cc1a2d44017",
+     "action_id": "ad91f9cc-aede-48a8-8b6c-d9d3749e26bc",
+     "result_id": "a6627879-ea45-4236-adbb-ccaafba03115",
      "context_id": null,
      "object_version": "1"
     },
@@ -2062,22 +2038,22 @@
     "document_id": "00000000-0000-4000-8000-000000000002",
     "session_id": "00000000-0000-4000-8000-000000000005",
     "kind": "result.undo",
-    "assignment_id": "626c0998-18a0-4d8b-8163-3c67a4bb3f35",
-    "result_id": "aec0cb13-3a1a-4bc4-aef5-5c246be5bab9",
+    "assignment_id": "299374a8-8440-4d36-a2e0-5cc1a2d44017",
+    "result_id": "a6627879-ea45-4236-adbb-ccaafba03115",
     "expected_result_version": "1",
     "payload": {}
    },
    "status": 200,
    "response": {
     "action": {
-     "action_id": "61adae53-f9f7-4f04-a53e-ff218cc56d7a",
+     "action_id": "ad91f9cc-aede-48a8-8b6c-d9d3749e26bc",
      "kind": "answer.submit",
      "version": "2",
      "status": "undone"
     },
     "result": {
-     "result_id": "aec0cb13-3a1a-4bc4-aef5-5c246be5bab9",
-     "assignment_id": "626c0998-18a0-4d8b-8163-3c67a4bb3f35",
+     "result_id": "a6627879-ea45-4236-adbb-ccaafba03115",
+     "assignment_id": "299374a8-8440-4d36-a2e0-5cc1a2d44017",
      "version": "2",
      "grade": 2,
      "correct": false,
@@ -2102,7 +2078,7 @@
       "wrong": 0
      },
      "assignment": {
-      "id": "03a78032-4949-407a-a408-5296d66da92c",
+      "id": "8bd44968-7cc0-4146-b384-edc1abf24d4d",
       "card_id": "00000000-0000-4000-8000-000000000012",
       "status": "prefetched",
       "kind": "original",
@@ -2113,8 +2089,6 @@
         "До завтра"
        ],
        "personal_translation_version": null,
-       "hint": null,
-       "hint_version": null,
        "conjunction_hint": null
       },
       "answer_spec": {
@@ -2155,9 +2129,9 @@
      "kind": "result.undo",
      "status": "applied",
      "applied_at": "2026-09-29T12:00:00Z",
-     "target_id": "626c0998-18a0-4d8b-8163-3c67a4bb3f35",
-     "action_id": "61adae53-f9f7-4f04-a53e-ff218cc56d7a",
-     "result_id": "aec0cb13-3a1a-4bc4-aef5-5c246be5bab9",
+     "target_id": "299374a8-8440-4d36-a2e0-5cc1a2d44017",
+     "action_id": "ad91f9cc-aede-48a8-8b6c-d9d3749e26bc",
+     "result_id": "a6627879-ea45-4236-adbb-ccaafba03115",
      "context_id": null,
      "object_version": "2"
     },
@@ -2175,20 +2149,20 @@
     "client_instance_id": "00000000-0000-4000-8000-000000000001",
     "document_id": "00000000-0000-4000-8000-000000000002",
     "session_id": "00000000-0000-4000-8000-000000000005",
-    "expected_intent_hash": "fbd1f6303e944db61a9ed5a5fe761bbd857d51b8c8e3cfbb6c92183fbeb748d9"
+    "expected_intent_hash": "d47872bf122a135d4aa6e8acad9be1762f73f6e41b33e031a03abd2495573af8"
    },
    "body": null,
    "status": 200,
    "response": {
     "action": {
-     "action_id": "61adae53-f9f7-4f04-a53e-ff218cc56d7a",
+     "action_id": "ad91f9cc-aede-48a8-8b6c-d9d3749e26bc",
      "kind": "answer.submit",
      "version": "2",
      "status": "undone"
     },
     "result": {
-     "result_id": "aec0cb13-3a1a-4bc4-aef5-5c246be5bab9",
-     "assignment_id": "626c0998-18a0-4d8b-8163-3c67a4bb3f35",
+     "result_id": "a6627879-ea45-4236-adbb-ccaafba03115",
+     "assignment_id": "299374a8-8440-4d36-a2e0-5cc1a2d44017",
      "version": "2",
      "grade": 2,
      "correct": false,
@@ -2213,7 +2187,7 @@
       "wrong": 0
      },
      "assignment": {
-      "id": "03a78032-4949-407a-a408-5296d66da92c",
+      "id": "8bd44968-7cc0-4146-b384-edc1abf24d4d",
       "card_id": "00000000-0000-4000-8000-000000000012",
       "status": "prefetched",
       "kind": "original",
@@ -2224,8 +2198,6 @@
         "До завтра"
        ],
        "personal_translation_version": null,
-       "hint": null,
-       "hint_version": null,
        "conjunction_hint": null
       },
       "answer_spec": {
@@ -2266,14 +2238,14 @@
      "kind": "result.undo",
      "status": "already_applied",
      "applied_at": "2026-09-29T12:00:00Z",
-     "target_id": "626c0998-18a0-4d8b-8163-3c67a4bb3f35",
-     "action_id": "61adae53-f9f7-4f04-a53e-ff218cc56d7a",
-     "result_id": "aec0cb13-3a1a-4bc4-aef5-5c246be5bab9",
+     "target_id": "299374a8-8440-4d36-a2e0-5cc1a2d44017",
+     "action_id": "ad91f9cc-aede-48a8-8b6c-d9d3749e26bc",
+     "result_id": "a6627879-ea45-4236-adbb-ccaafba03115",
      "context_id": null,
      "object_version": "2"
     },
     "state_version": "16",
-    "verified_intent_hash": "fbd1f6303e944db61a9ed5a5fe761bbd857d51b8c8e3cfbb6c92183fbeb748d9"
+    "verified_intent_hash": "d47872bf122a135d4aa6e8acad9be1762f73f6e41b33e031a03abd2495573af8"
    },
    "schema": [
     "WrittenStatusResponse"
@@ -2290,7 +2262,7 @@
     "document_id": "00000000-0000-4000-8000-000000000002",
     "session_id": "00000000-0000-4000-8000-000000000005",
     "kind": "assignment.present",
-    "assignment_id": "03a78032-4949-407a-a408-5296d66da92c",
+    "assignment_id": "8bd44968-7cc0-4146-b384-edc1abf24d4d",
     "payload": {}
    },
    "status": 200,
@@ -2300,7 +2272,7 @@
      "kind": "assignment.present",
      "status": "applied",
      "applied_at": "2026-09-29T12:00:00Z",
-     "target_id": "03a78032-4949-407a-a408-5296d66da92c",
+     "target_id": "8bd44968-7cc0-4146-b384-edc1abf24d4d",
      "action_id": null,
      "result_id": null,
      "context_id": null,
@@ -2322,7 +2294,7 @@
       "wrong": 0
      },
      "assignment": {
-      "id": "03a78032-4949-407a-a408-5296d66da92c",
+      "id": "8bd44968-7cc0-4146-b384-edc1abf24d4d",
       "card_id": "00000000-0000-4000-8000-000000000012",
       "status": "presented",
       "kind": "original",
@@ -2333,8 +2305,6 @@
         "До завтра"
        ],
        "personal_translation_version": null,
-       "hint": null,
-       "hint_version": null,
        "conjunction_hint": null
       },
       "answer_spec": {

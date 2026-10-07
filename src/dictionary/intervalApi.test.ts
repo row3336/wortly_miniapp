@@ -38,7 +38,7 @@ function view(): DictionaryCardView {
     content: {
       pair: "uk-de", card: { id: cardId, revision: "5", lemma: "Haus", type: "noun", cefr: "A1" },
       translations: { common: ["будинок"], personal: null }, grammar: null,
-      reference_conjugations: [], examples: { common: [], personal: null }, association: null, hint: null,
+      reference_conjugations: [], examples: { common: [], personal: null }, association: null, field_versions: { translation: "1", example: "1", association: "1" },
     },
     study: {
       status: "available", card_id: cardId, card_revision: "5", pair: "uk-de", card_type: "noun", local_date: today,

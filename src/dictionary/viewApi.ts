@@ -4,7 +4,7 @@ import type {
 } from "../api/generated";
 import { ApiError, createJsonTransport, httpError, type HttpOptions } from "../api/http";
 import { count, date, exactKeys, oneOf, record, sameId, uuid, version } from "../api/wireValidation";
-import { validReferenceCardContent } from "../study/referenceCardContent";
+import { validDictionaryViewContent } from "../study/referenceCardContent";
 
 export interface DictionaryViewApi {
   read(token: string, cardId: string): Promise<DictionaryCardViewResponse>;
@@ -91,7 +91,7 @@ export function validDictionaryView(value: unknown, cardId: string): value is Di
   if (current.status === "unavailable") return exactKeys(current, ["status"]);
   if (current.status !== "available" || !exactKeys(current, ["status", "content", "study"])
     || !record(current.content) || typeof current.content.pair !== "string"
-    || !validReferenceCardContent(current.content, cardId, current.content.pair)) return false;
+    || !validDictionaryViewContent(current.content, cardId, current.content.pair)) return false;
   return validStudy(current.study, current.content);
 }
 

@@ -65,7 +65,6 @@ export function WrittenAnswerInput(props: WrittenAnswerInputProps | (Omit<Writte
     <h2 id={`${name}-question`} className="written-question" lang={prompt?.language}>
       {prompt === null ? "heading" in props && props.heading : prompt.text}
     </h2>
-    {prompt?.hint && <p className="written-hint">{prompt.hint}</p>}
     {prompt && <ConjunctionHint hint={prompt.conjunction_hint} language={props.language} />}
     <div className="written-answer-parts">
       <p id={`${name}-parts`} className="written-parts" aria-label={t.parts} lang="de">

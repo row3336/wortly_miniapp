@@ -22,7 +22,7 @@ function question(): LearningSessionProjection {
   return { ...preview(), preview: null, group: { ...preview().group, status: "active", preview_position: 2 },
     assignment: { id: id(6), card_id: id(11), kind: "learning", status: "prefetched",
       prompt: { text: "дом", language: "ru", translations: ["дом"], personal_translation_version: null,
-        hint: null, hint_version: null, conjunction_hint: null }, answer_spec: { kind: "word", labels: ["word"], part_count: 1, case_sensitive: true } } };
+        conjunction_hint: null }, answer_spec: { kind: "word", labels: ["word"], part_count: 1, case_sensitive: true } } };
 }
 const profile: Profile = { profile_id: id(50), role: "user", ui_language: "ru", dictionary_language: "ru",
   time_zone: "UTC", state_version: "3", access: { status: "admitted", version: "1", reason: null } };

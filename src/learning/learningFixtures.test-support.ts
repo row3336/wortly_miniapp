@@ -14,7 +14,7 @@ function current(sessionId = id(3)): LearningSessionProjection {
   return { session_id: sessionId, mode: "learning", status: "active", pair: "ru-de", local_date: "2026-09-30", close_reason: null,
     group: { id: id(10), status: "active", version: "1", preview_position: 1, total: 1 }, preview: null,
     assignment: { id: id(6), card_id: id(11), kind: "learning", status: "presented", prompt: { text: "дом", language: "ru",
-      translations: ["дом"], personal_translation_version: null, hint: null, hint_version: null, conjunction_hint: null },
+      translations: ["дом"], personal_translation_version: null, conjunction_hint: null },
       answer_spec: { kind: "word", labels: ["word"], part_count: 1, case_sensitive: true } } };
 }
 const closed = (): LearningSessionProjection => ({ ...current(), status: "closed", close_reason: "stop", assignment: null });

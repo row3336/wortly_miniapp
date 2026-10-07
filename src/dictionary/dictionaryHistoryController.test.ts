@@ -16,7 +16,7 @@ const flush = async () => { for (let i = 0; i < 20; i++) await Promise.resolve()
 function content(n: number, pair: Pair = "ru-de"): DictionaryCardContent {
   return { pair, card: { id: id(n), revision: "1", lemma: `Wort${n}`, type: "noun", cefr: "A1" },
     translations: { common: [`слово${n}`], personal: null }, grammar: null, reference_conjugations: [],
-    examples: { common: [], personal: null }, association: null, hint: null };
+    examples: { common: [], personal: null }, association: null };
 }
 const list = (cards: number[], version = "1"): DictionaryHistoryResponse =>
   ({ state_version: version, items: cards.map((n, index) => ({ card_id: id(n), opened_at: at(index) })) });

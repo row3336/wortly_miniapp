@@ -93,7 +93,7 @@ describe("Learning preview reference data", () => {
     ["inapplicable form with value", x => { x.reference_conjugations[0].forms[0] = { pronoun_group: "ich", value: "gehe", status: "not_applicable" }; }],
     ["reference tables for particle", x => { x.card.type = "particle"; x.grammar = null; }],
     ["missing association", x => { delete x.association; }],
-    ["unversioned hint", x => { x.hint = { value: "hint" }; }],
+    ["legacy hint", x => { x.hint = null; }],
   ];
   it.each(malformed)("rejects unsafe or inconsistent content: %s", (_name, change) => {
     const value = content(); change(value);

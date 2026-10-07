@@ -15,7 +15,7 @@ function view(cardId: string, state_version = "1", pair: Pair = "ru-de"): Dictio
     content: {
       pair, card: { id: cardId, revision: "1", lemma: "Haus", type: "noun", cefr: "A1" },
       translations: { common: ["дом"], personal: null }, grammar: null,
-      reference_conjugations: [], examples: { common: [], personal: null }, association: null, hint: null,
+      reference_conjugations: [], examples: { common: [], personal: null }, association: null, field_versions: { translation: "1", example: "1", association: "1" },
     },
     study: {
       status: "available", card_id: cardId, card_revision: "1", pair, card_type: "noun", local_date: "2026-10-01",

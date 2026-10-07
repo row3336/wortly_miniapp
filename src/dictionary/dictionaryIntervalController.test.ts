@@ -36,7 +36,7 @@ function server(start = 41n) {
     status: "available",
     content: { pair: "ru-de", card: { id: card, revision: "3", lemma: "Haus", type: "noun", cefr: "A1" },
       translations: { common: ["дом"], personal: null }, grammar: null, reference_conjugations: [],
-      examples: { common: [], personal: null }, association: null, hint: null },
+      examples: { common: [], personal: null }, association: null, field_versions: { translation: "1", example: "1", association: "1" } },
     study: { status: "available", card_id: card, card_revision: "3", pair: "ru-de", card_type: "noun", local_date: s.zone ? TODAY : null,
       facts: { common_translation_present: true, exclusion: { excluded: false, version: null }, manual: { selected: false, selection_version: "1" },
         learning: { ever_selected: true, finished_or_skipped: true, current: null }, non_learning_history: false },

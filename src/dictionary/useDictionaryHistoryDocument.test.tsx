@@ -13,7 +13,7 @@ const flush = () => act(async () => { for (let i = 0; i < 30; i++) await Promise
 function content(n: number, pair: string): DictionaryCardContent {
   return { pair: pair as DictionaryCardContent["pair"], card: { id: id(n), revision: "1", lemma: `Wort${n}`, type: "noun", cefr: null },
     translations: { common: [`слово${n}`], personal: null }, grammar: null, reference_conjugations: [],
-    examples: { common: [], personal: null }, association: null, hint: null };
+    examples: { common: [], personal: null }, association: null };
 }
 afterEach(() => { cleanup(); visible("visible"); vi.restoreAllMocks(); });
 
