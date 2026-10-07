@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { chooseInitialLanguage, languageStorageKey, readSavedLanguage } from "../i18n/language";
 import type { Language } from "../i18n/language";
 import { createEntryApi } from "../api/entryApi";
@@ -15,6 +15,7 @@ import type { BusyAccess } from "./busyAccess";
 import { BusyTodayHost } from "./TodayHost";
 import { createTodayApi } from "../today/todayApi";
 import { ApplicationDocument } from "./ApplicationDocument";
+import { LaunchHost } from "./LaunchScreen";
 import { useBackLayer } from "./navigationBack";
 import { SettingsPendingStore } from "../settings/settingsPending";
 import { RemoteStopPendingStore } from "../study/remoteStopPending";
@@ -23,6 +24,9 @@ import type { SettingsObservation } from "../settings/useSettingsDocument";
 import { OralSessionPendingStore, OralStopPendingStore } from "../oral/oralPending";
 import type { OralStores } from "./OralHost";
 import packageJson from "../../package.json";
+
+/** The entry is still being decided: the launch screen keeps waiting (М20). Every other state is an answer, success or refusal. */
+const undecided: ReadonlySet<EntryState["kind"]> = new Set(["checking", "opening", "reapplying"]);
 
 /** The single identity source for entry and study commands. */
 const newId = () => window.crypto.randomUUID();
@@ -167,33 +171,37 @@ export function App() {
   const remoteConfirm = language !== null && entryState.kind === "remote_confirm" ? controller : null;
   useBackLayer("overlay", remoteConfirm ? () => remoteConfirm.cancelRemoteStop() : null);
 
-  if (language === null) {
+  const content = (): ReactNode => {
+    if (language === null) {
+      return (
+        <EntryScreen
+          state={{ kind: "checking" }}
+          language={chooseInitialLanguage(null, telegramLanguage(window), window.navigator.language)}
+        />
+      );
+    }
+    if (entryState.kind === "opened" && access && transport && pendingStore && storage && oralStores) {
+      return <ApplicationDocument key={access.key} access={access} transport={transport} pendingStore={pendingStore}
+        storage={storage} oralStores={oralStores} newId={newId} language={language} foreground={foreground} onCurrent={observeSettings} />;
+    }
+    if (entryState.kind === "busy" && busyAccess && transport && controller) {
+      return <BusyTodayHost access={busyAccess} transport={transport} language={language}
+        onRequest={() => controller.requestRemoteStop()} onRefresh={() => { void controller.foreground(); }} />;
+    }
     return (
       <EntryScreen
-        state={{ kind: "checking" }}
-        language={chooseInitialLanguage(null, telegramLanguage(window), window.navigator.language)}
+        state={entryState}
+        language={language}
+        onRetry={controller && entryState.kind === "unavailable" ? () => { void controller.retry(); } : undefined}
+        onReapply={controller && entryState.kind === "rejected" ? () => { void controller.reapply(); } : undefined}
+        onRemoteRequest={controller ? () => controller.requestRemoteStop() : undefined}
+        onRemoteCancel={controller ? () => controller.cancelRemoteStop() : undefined}
+        onRemoteConfirm={controller ? () => { void controller.confirmRemoteStop(); } : undefined}
+        onRemoteCheck={controller ? () => { void controller.checkRemoteStop(); } : undefined}
+        onRemoteRetry={controller ? () => { void controller.retryRemoteStop(); } : undefined}
       />
     );
-  }
-  if (entryState.kind === "opened" && access && transport && pendingStore && storage && oralStores) {
-    return <ApplicationDocument key={access.key} access={access} transport={transport} pendingStore={pendingStore}
-      storage={storage} oralStores={oralStores} newId={newId} language={language} foreground={foreground} onCurrent={observeSettings} />;
-  }
-  if (entryState.kind === "busy" && busyAccess && transport && controller) {
-    return <BusyTodayHost access={busyAccess} transport={transport} language={language}
-      onRequest={() => controller.requestRemoteStop()} onRefresh={() => { void controller.foreground(); }} />;
-  }
-  return (
-    <EntryScreen
-      state={entryState}
-      language={language}
-      onRetry={controller && entryState.kind === "unavailable" ? () => { void controller.retry(); } : undefined}
-      onReapply={controller && entryState.kind === "rejected" ? () => { void controller.reapply(); } : undefined}
-      onRemoteRequest={controller ? () => controller.requestRemoteStop() : undefined}
-      onRemoteCancel={controller ? () => controller.cancelRemoteStop() : undefined}
-      onRemoteConfirm={controller ? () => { void controller.confirmRemoteStop(); } : undefined}
-      onRemoteCheck={controller ? () => { void controller.checkRemoteStop(); } : undefined}
-      onRemoteRetry={controller ? () => { void controller.retryRemoteStop(); } : undefined}
-    />
-  );
+  };
+  // The launch screen lies over the application from the first frame; the entry above runs independently of it.
+  return <LaunchHost ready={language !== null && !undecided.has(entryState.kind)}>{content()}</LaunchHost>;
 }

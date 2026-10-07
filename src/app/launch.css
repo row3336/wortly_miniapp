@@ -1,0 +1,78 @@
+/* М20 launch screen (TA:44, RA §6.1.5). The choreography is the accepted prototype's (appearance.js, 980x470 units):
+   every offset below is that unit divided by the logo box, so the logo scales as one picture. The exit length comes
+   from LAUNCH_EXIT_MS through --launch-exit-ms; the assembly ends inside LAUNCH_BUILD_MS. */
+.launch-host { min-width: 0; }
+.launch-host--entering { animation: launch-host-in var(--launch-exit-ms) cubic-bezier(.22, 1, .36, 1) both; }
+
+.launch {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  padding:
+    calc(24px + var(--safe-top, env(safe-area-inset-top, 0px)))
+    calc(24px + var(--safe-right, env(safe-area-inset-right, 0px)))
+    calc(24px + var(--safe-bottom, env(safe-area-inset-bottom, 0px)))
+    calc(24px + var(--safe-left, env(safe-area-inset-left, 0px)));
+  background: var(--bg);
+  overflow: hidden;
+}
+.launch--leaving {
+  animation: launch-out var(--launch-exit-ms) cubic-bezier(.22, 1, .36, 1) both;
+}
+.launch--leaving .launch-logo {
+  animation: launch-logo-out var(--launch-exit-ms) cubic-bezier(.22, 1, .36, 1) both;
+}
+
+.launch-logo { position: relative; width: min(100%, 342px); aspect-ratio: 980 / 470; flex: 0 0 auto; }
+.launch-books {
+  position: absolute;
+  inset: 0;
+  /* 300 units to the right until the word makes room: 300 / 980 of the box. */
+  animation: launch-books-shift 650ms cubic-bezier(.42, 0, .58, 1) 760ms both;
+}
+.launch-book {
+  position: absolute;
+  left: 5.102%;
+  top: 17.021%;
+  width: 24.286%;
+  height: 57.447%;
+  user-select: none;
+  animation:
+    launch-book-fade 220ms cubic-bezier(.42, 0, .58, 1) calc(var(--launch-book) * 150ms) both,
+    launch-book-rise 550ms cubic-bezier(.215, .61, .355, 1) calc(var(--launch-book) * 150ms) both;
+}
+/* The word is a mask painted with the theme text colour; the books keep their own colours in both themes. */
+.launch-word {
+  position: absolute;
+  left: 31.122%;
+  top: 23.404%;
+  width: 61.531%;
+  height: 58.511%;
+  background: var(--text);
+  -webkit-mask: url("/launch/word.png") center / 100% 100% no-repeat;
+  mask: url("/launch/word.png") center / 100% 100% no-repeat;
+  animation: launch-word-in 500ms cubic-bezier(.42, 0, .58, 1) 1160ms both;
+}
+.launch .launch-loader {
+  margin: 0;
+  flex: 0 0 30px;
+  /* The spinner joins the picture at 1660 ms, once the word is in. */
+  animation: launch-loader-show 1ms linear 1660ms both;
+}
+
+/* After the rules above, so it wins at equal specificity. Reduced motion: the finished picture (books in place, word in, spinner shown) with every animation off. */
+.launch--still .launch-books, .launch--still .launch-book, .launch--still .launch-word, .launch--still .launch-loader { animation: none; }
+
+@keyframes launch-book-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes launch-book-rise { from { transform: translateY(22.222%); } to { transform: translateY(0); } }
+@keyframes launch-books-shift { from { transform: translateX(30.612%); } to { transform: translateX(0); } }
+@keyframes launch-word-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes launch-loader-show { from { visibility: hidden; } to { visibility: visible; } }
+@keyframes launch-out { from { opacity: 1; } to { opacity: 0; } }
+@keyframes launch-logo-out { from { transform: scale(1); opacity: 1; } to { transform: scale(.72); opacity: 0; } }
+@keyframes launch-host-in { from { transform: scale(1.12); opacity: 0; } to { transform: scale(1); opacity: 1; } }
