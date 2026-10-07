@@ -20,6 +20,7 @@
 .settings-options label { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 8px 12px; cursor: pointer; }
 .settings-options input { width: 20px; height: 20px; accent-color: var(--text); }
 .settings-options label:has(input:disabled) { cursor: default; }
+.settings-field-muted > h3, .settings-field-muted .settings-options { opacity: .55; }
 .settings-primary, .settings-secondary { min-height: 44px; padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px; font: inherit; }
 .settings-primary { background: var(--text); color: var(--bg); font-weight: 700; }
 .settings-secondary { background: var(--surface); color: var(--text); }

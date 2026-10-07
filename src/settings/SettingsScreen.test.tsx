@@ -1,4 +1,5 @@
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SettingsResponse, Topic } from "../api/generated";
 import type { SettingsDraft } from "./settingsController";
@@ -418,5 +419,69 @@ describe("review error mode, learning content and Mix explanation (M-SET)", () =
     const mixRadio = field("Перемешивать темы новых слов").getAllByRole("radio")[0];
     expect(document.getElementById(mixRadio.getAttribute("aria-describedby")!.split(" ")[0])?.textContent)
       .toMatch(/темы идут по порядку/);
+  });
+});
+
+describe("Mix with the material chosen by CEFR level (M-SET-MIX-LEVEL, 2.21г)", () => {
+  const level = { mode: "level", selected_level: "A1", topic_ids: [] };
+  function levelFixture(mix: boolean | null, material: unknown = level) {
+    const f = fixture(); f.snapshot.data!.settings.material.value = material as never;
+    f.snapshot.data!.settings.learning_mix.value = mix; return f;
+  }
+  const mixRadios = () => field("Перемешивать темы новых слов").getAllByRole("radio") as HTMLInputElement[];
+
+  it("disables and mutes the stored Mix choice, explains why and keeps the value", async () => {
+    const f = levelFixture(true), { container } = render(<SettingsScreen {...f} />); openAdditional(container);
+    // A real click, as the browser does it: it must not reach the handler of a disabled radio.
+    await userEvent.click(mixRadios()[1]);
+    expect(f.actions.edit).not.toHaveBeenCalled();
+    expect(mixRadios().every(r => r.disabled)).toBe(true);
+    expect(mixRadios().map(r => r.checked)).toEqual([true, false]);
+    expect(field("Перемешивать темы новых слов").getByText(/перемешивание тем не применяется\. Значение сохранено/)).toBeDefined();
+    expect(screen.getByRole("group", { name: "Перемешивать темы новых слов", hidden: true }).className).toContain("settings-field-muted");
+    expect(f.actions.edit).not.toHaveBeenCalled();
+  });
+
+  it("stays settable while no Mix value is stored, because the core still requires it (pending C-LSEL-LEVEL-RANDOM)", () => {
+    const f = levelFixture(null), { container } = render(<SettingsScreen {...f} />); openAdditional(container);
+    expect(mixRadios().some(r => r.disabled)).toBe(false);
+    expect(field("Перемешивать темы новых слов").getByText(/нужно задать, чтобы начать занятие/)).toBeDefined();
+    fireEvent.click(mixRadios()[0]);
+    expect(f.actions.edit).toHaveBeenCalledWith("learning_mix", true);
+  });
+
+  it("follows the saved material, not an unsaved draft of it", () => {
+    const topics = { mode: "topics", selected_level: null, topic_ids: [id(8)] };
+    // Saved topics, draft level: Mix stays usable.
+    const a = levelFixture(true, topics); a.snapshot.drafts.material = draft(level);
+    const first = render(<SettingsScreen {...a} />); openAdditional(first.container);
+    expect(mixRadios().some(r => r.disabled)).toBe(false);
+    first.unmount();
+    // Saved level, draft topics: Mix stays locked.
+    const b = levelFixture(true); b.snapshot.drafts.material = draft(topics);
+    const second = render(<SettingsScreen {...b} />); openAdditional(second.container);
+    expect(mixRadios().every(r => r.disabled)).toBe(true);
+  });
+
+  it("does not mute Mix for topics or for an unset material", () => {
+    for (const material of [{ mode: "topics", selected_level: null, topic_ids: [id(8)] }, null]) {
+      const f = levelFixture(true, material), { container, unmount } = render(<SettingsScreen {...f} />); openAdditional(container);
+      expect(mixRadios().some(r => r.disabled)).toBe(false);
+      expect(field("Перемешивать темы новых слов").getByText(/темы идут по порядку/)).toBeDefined();
+      expect(screen.getByRole("group", { name: "Перемешивать темы новых слов", hidden: true }).className).not.toContain("muted");
+      unmount();
+    }
+  });
+
+  it.each([["uk", /перемішування тем не застосовується/], ["en", /topic mixing does not apply/]] as const)("explains in %s", (language, text) => {
+    const f = levelFixture(false); f.language = language;
+    const { container } = render(<SettingsScreen {...f} />); openAdditional(container);
+    expect(screen.getAllByText(text).length).toBeGreaterThan(0);
+  });
+
+  it("links the note to the radios", () => {
+    const f = levelFixture(true), { container } = render(<SettingsScreen {...f} />); openAdditional(container);
+    const ids = mixRadios()[0].getAttribute("aria-describedby")!.split(" ");
+    expect(ids.map(item => document.getElementById(item)?.textContent).join(" ")).toMatch(/Значение сохранено/);
   });
 });

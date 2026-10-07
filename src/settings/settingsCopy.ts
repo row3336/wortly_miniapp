@@ -16,12 +16,14 @@ type Copy = {
   normal: string; accelerated: string;
   reviewModes: Record<string, string>; learningContents: Record<string, string>;
   hints: Partial<Record<SettingKey, string>>;
+  /** Why Mix is muted while the material is chosen by CEFR level (2.21г): locked, or still active because a value is required. */
+  mixByLevel: { locked: string; unset: string };
   fields: Record<SettingKey, string>;
   problems: Record<NonNullable<SettingsSnapshot["problem"]>["reason"], string>;
 };
 
 // Working copy for G05: the owner fixes final wording. Hints follow TA:126 (Mix), TA:160 and K04-102 (strict mode),
-// K04-105 (Learning content); modes and contents are labelled by the server's enum values.
+// K04-105 (Learning content), 2.21г (Mix is not applied for a CEFR level); modes and contents are labelled by the server's enum values.
 export const settingsCopy: Record<Language, Copy> = {
   ru: {
     title: "Настройки", today: "Сегодня", dictionary: "Словарь", navigation: "Основная навигация",
@@ -47,6 +49,10 @@ export const settingsCopy: Record<Language, Copy> = {
       review_error_mode: "Строгий: после ошибки интервалы начинаются заново, повтор завтра. Мягкий: по прежней формуле бота. Это не проверка регистра. Режим действует со следующего занятия для письменных слов, фраз и в оцениваемых спряжениях; уже назначенные даты не меняются. Устные повторы всегда мягкие, Learning идёт по своему правилу. Строгий режим можно выбрать, если слова забываются на длинных интервалах; выбор остаётся за тобой.",
       learning_content: "Состав влияет на следующий автоматический набор, а не на текущую группу. Изученное остаётся в повторах.",
       learning_mix: "Выключено: темы идут по порядку. Включено: выбранные темы смешиваются. Это не меняет выбор слов или фраз и уже начатую группу.",
+    },
+    mixByLevel: {
+      locked: "При выборе по уровням CEFR слова берутся из уровня случайно, перемешивание тем не применяется. Значение сохранено и не меняется.",
+      unset: "При выборе по уровням CEFR перемешивание тем не применяется. Значение пока нужно задать, чтобы начать занятие; на выбор слов оно не влияет.",
     },
     fields: {
       ui_language: "Язык интерфейса", dictionary_language: "Язык словаря", material: "Учебный материал",
@@ -98,6 +104,10 @@ export const settingsCopy: Record<Language, Copy> = {
       learning_content: "Склад впливає на наступний автоматичний набір, а не на поточну групу. Вивчене залишається в повтореннях.",
       learning_mix: "Вимкнено: теми йдуть по порядку. Увімкнено: вибрані теми змішуються. Це не змінює вибір слів чи фраз і вже розпочату групу.",
     },
+    mixByLevel: {
+      locked: "Коли матеріал вибрано за рівнем CEFR, слова беруться з рівня випадково, перемішування тем не застосовується. Значення збережено й не змінюється.",
+      unset: "Коли матеріал вибрано за рівнем CEFR, перемішування тем не застосовується. Значення поки потрібно задати, щоб почати заняття; на вибір слів воно не впливає.",
+    },
     fields: {
       ui_language: "Мова інтерфейсу", dictionary_language: "Мова словника", material: "Навчальний матеріал",
       learning_group_size: "Нових слів у групі", transition_mode: "Режим переходу",
@@ -147,6 +157,10 @@ export const settingsCopy: Record<Language, Copy> = {
       review_error_mode: "Strict: after a mistake the intervals start over, with a review tomorrow. Soft: the bot's earlier formula. This is not the letter-case check. The mode applies from the next session to written words, phrases and graded conjugations; dates already set do not change. Spoken reviews are always soft; Learning follows its own rule. You can choose strict if words are forgotten at long intervals; the choice is yours.",
       learning_content: "The content affects the next automatic set, not the current group. Learned items stay in reviews.",
       learning_mix: "Off: topics go in order. On: the selected topics are mixed. This does not change the choice of words or phrases or a group already started.",
+    },
+    mixByLevel: {
+      locked: "With the material chosen by CEFR level, words are picked from the level at random and topic mixing does not apply. The saved value stays unchanged.",
+      unset: "With the material chosen by CEFR level, topic mixing does not apply. A value must still be set to start a session; it does not affect which words are picked.",
     },
     fields: {
       ui_language: "Interface language", dictionary_language: "Dictionary language", material: "Learning material",

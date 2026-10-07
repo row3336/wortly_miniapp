@@ -75,13 +75,20 @@ function SettingField({ setting, ...props }: SettingsScreenProps & { setting: Se
   const outcome = snapshot.outcome?.key === setting ? snapshot.outcome : null;
   const help = bounds(rule, language);
   const hint = t.hints[setting];
+  // 2.21г: a CEFR level picks words at random, so Mix is muted. It is locked only once a value is stored: the core still
+  // requires Mix to start a group in level mode (learning_selection.py:43, pending C-LSEL-LEVEL-RANDOM).
+  const mixByLevel = setting === "learning_mix" && materialParts(data.settings.material.value).mode === "level";
+  const mixStored = typeof current.value === "boolean";
+  const mixLocked = mixByLevel && mixStored && !draft;
+  const mixNote = mixByLevel ? (mixStored ? t.mixByLevel.locked : t.mixByLevel.unset) : null;
+  const describedBy = `${hint ? `${id}-hint ` : ""}${mixNote ? `${id}-mix-note ` : ""}${id}-help ${id}-error`;
   // Fixed two or three way switches are shown as radios; the options still come from the server constraint.
   const radioChoice = rule.type === "enum" && (setting === "review_error_mode" || setting === "learning_content");
   const change = (next: unknown) => actions.edit(setting, next);
   const inputProps = { id: `${id}-input`, disabled: !snapshot.canEdit,
-    "aria-labelledby": `${id}-title`, "aria-describedby": `${hint ? `${id}-hint ` : ""}${id}-help ${id}-error`, "aria-invalid": draft?.valid === false };
+    "aria-labelledby": `${id}-title`, "aria-describedby": describedBy, "aria-invalid": draft?.valid === false };
 
-  return <section className="settings-field" role="group" aria-labelledby={`${id}-title`}>
+  return <section className={mixByLevel ? "settings-field settings-field-muted" : "settings-field"} role="group" aria-labelledby={`${id}-title`}>
     <h3 id={`${id}-title`}>{title}</h3>
     {rule.type === "integer" && <input {...inputProps} type="text" inputMode="numeric"
       value={typeof value === "number" || typeof value === "string" ? value : ""}
@@ -97,14 +104,14 @@ function SettingField({ setting, ...props }: SettingsScreenProps & { setting: Se
       {[...(typeof value === "string" && value && !choices.includes(value) ? [value] : []), ...choices].map(item => <label key={item}>
         <input type="radio" name={`${id}-choice`} value={item} checked={value === item}
           disabled={!snapshot.canEdit || !choices.includes(item)} onChange={() => change(item)}
-          aria-describedby={`${hint ? `${id}-hint ` : ""}${id}-help ${id}-error`} />
+          aria-describedby={describedBy} />
         {displayValue(item, setting, language)}
       </label>)}
     </div>}
     {rule.type === "boolean" && <div className="settings-options">
       {[true, false].map(choice => <label key={String(choice)}>
-        <input type="radio" name={`${id}-boolean`} checked={value === choice} disabled={!snapshot.canEdit}
-          onChange={() => change(choice)} aria-describedby={`${hint ? `${id}-hint ` : ""}${id}-help ${id}-error`} />
+        <input type="radio" name={`${id}-boolean`} checked={value === choice} disabled={!snapshot.canEdit || mixLocked}
+          onChange={() => change(choice)} aria-describedby={describedBy} />
         {choice ? t.on : t.off}
       </label>)}
     </div>}
@@ -126,6 +133,7 @@ function SettingField({ setting, ...props }: SettingsScreenProps & { setting: Se
     {rule.type === "exclusive_choice" && <MaterialEditor input={value} constraint={rule} catalog={catalog}
       language={language} disabled={!snapshot.canEdit} id={id} onChange={change} onReload={onReloadTopics} />}
     {hint && <p id={`${id}-hint`} className="settings-help">{hint}</p>}
+    {mixNote && <p id={`${id}-mix-note`} className="settings-help">{mixNote}</p>}
     <p id={`${id}-help`} className="settings-help">{help}{current.value === null && !draft ? ` ${t.notSet}` : ""}</p>
     <div id={`${id}-error`} className="settings-error" aria-live="polite">
       {draft?.error === "invalid" && <p>{t.invalid}</p>}
