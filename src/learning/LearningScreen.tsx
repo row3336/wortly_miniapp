@@ -4,6 +4,7 @@ import { CommandRecovery } from "../commands/CommandRecovery";
 import { StepBackButton, stepBackCopy } from "../commands/StepBackButton";
 import { useEnterNext } from "../commands/useEnterNext";
 import type { Language } from "../i18n/language";
+import { answerExampleSource } from "../study/answerExample";
 import { WrittenAnswerInput } from "../study/WrittenAnswerInput";
 import { WrittenAnswerResult } from "../study/WrittenAnswerResult";
 import type { LearningViewController, LearningViewSnapshot } from "./learningViewController";
@@ -43,7 +44,11 @@ const copy = {
     changed: "The question has changed. Refresh the session.", resultChanged: "The result has changed. Refresh the session.", noMaterial: "There are no words available for this session right now." },
 } as const;
 
-/** Connect local display to the owner's exact capabilities; no command identity or outcome is invented here. */
+/**
+ * Connect local display to the owner's exact capabilities; no command identity or outcome is invented here.
+ * The Learning answer is the shared written input (М08): its result shows one example of the answered card by the same
+ * rule as the written quiz (К05-126, К05-127; selectAnswerExample). root decision, pending owner (M-LEARN-FIN Р6).
+ */
 export function LearningScreen({ state, language, submitOnEnter, actions, renderPreview }: LearningScreenProps) {
   const t = copy[language], composing = useRef(false), root = useRef<HTMLElement>(null);
   const primary = state.commands.primary, stop = state.commands.stop;
@@ -96,7 +101,7 @@ export function LearningScreen({ state, language, submitOnEnter, actions, render
       <p role="status">{t.unknown}</p>
     </section>}
     {result && <WrittenAnswerResult result={result} language={language} pending={pendingResult}
-      grades={state.grades} canCorrect={state.canCorrect} canNext={state.canNext} timer={state.timer}
+      grades={state.grades} canCorrect={state.canCorrect} canNext={state.canNext} timer={state.timer} example={answerExampleSource}
       onGrade={grade => { void actions.grade(grade); }} onCorrect={() => { void actions.correct(); }} onNext={() => { void actions.next(); }} />}
     {result && state.canUndo && <StepBackButton className="learning-step-back" language={language} onUndo={() => { void actions.undo(); }} />}
     {state.canPrevious && <button type="button" className="learning-previous" onClick={() => actions.previousResult()}>{t.previous}</button>}

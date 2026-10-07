@@ -12,6 +12,8 @@ export type LearningUndoOptions = {
   refuseUndo?: { code: string; status?: number };
   /** A correction of an error finishes the phase: its summary replaces the shown next card (К05-151). */
   correctionEndsPhase?: boolean;
+  /** The summary is the completed group (the last stage of its last card, IL Л03), not only a finished round. */
+  completesGroup?: boolean;
 };
 
 /** The second issue of card n after an undo has a new assignment ID (+10000). */
@@ -27,6 +29,7 @@ export function learningUndoServer(options: LearningUndoOptions = {}) {
   function step(): LearningSessionProjection {
     const item = state.queue[state.index], base = current();
     return { ...base, status: state.status, close_reason: state.status === "closed" ? "stop" : null,
+      group: options.completesGroup && state.status === "summary" ? { ...base.group, status: "completed" } : base.group,
       assignment: state.status === "active" && state.assignment && item
         ? { ...base.assignment!, id: issued(item), card_id: id(100 + item.n), status: state.assignment } : null };
   }

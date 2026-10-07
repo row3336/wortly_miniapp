@@ -11,6 +11,8 @@ type Options = Omit<OwnerOptions, "onUpdate"> & {
   transitionMode(): "normal" | "accelerated" | null;
   /** Route/configuration gate; independent of Stop and read-only pending recovery. */
   enabled?(): boolean;
+  /** The accepted milestone «Learning completed» (К09-004); the host turns it into a haptic signal (К09-007). */
+  onLearningComplete?(): void;
   onUpdate(snapshot: LearningViewSnapshot): void;
 };
 export type LearningViewSnapshot = {
@@ -40,9 +42,11 @@ export type LearningViewSnapshot = {
 
 /** Presentation is local; only document commands can establish a saved answer or presentation. */
 export class LearningViewController extends StudyView<LearningDocumentCommands, LearningSessionProjection, Answer, LearningViewSnapshot> {
+  private readonly onLearningComplete: (() => void) | undefined;
   constructor(options: Options) {
     super(options, { ignoreUnboundUnavailable: false, keepClosedAfterRead: false },
       onUpdate => new LearningDocumentCommands({ ...options, onUpdate }));
+    this.onLearningComplete = options.onLearningComplete;
   }
   /** Learning keeps no closure facts: a closed session clears its answer and shows no summary of its own. */
   protected close(): void {
@@ -58,6 +62,24 @@ export class LearningViewController extends StudyView<LearningDocumentCommands, 
     return state.primary.pendingIntent?.session_id ?? state.primary.resolved?.sessionId ?? null;
   }
   protected activeAssignment(): PublicAssignment | null { return this.current?.assignment ?? null; }
+  /**
+   * TA:50, К09-004: Learning is completed by this client's own accepted answer whose step is the summary of a completed
+   * group (IL Л03: success on the last stage completes it; the answer carries no member stage, the group status is the
+   * observable fact). A correction that completes it counts too (К05-151); a grade, an undo, «Уже знаю», a read, Stop
+   * and an automatic closure do not. consume() takes each command once, so a duplicate reply of the same command_id
+   * never repeats the signal; an outcome first confirmed by its check still gives it.
+   * root decision, pending owner (M-LEARN-FIN Р1–Р5).
+   */
+  protected consume(): boolean {
+    const consumed = super.consume();
+    const kind = this.commands.snapshot().primary.resolved?.kind;
+    if (consumed && (kind === "answer.submit" || kind === "result.correct")
+      && this.current?.status === "summary" && this.current.group.status === "completed") {
+      // An unavailable haptic API never changes the screen (TA:50).
+      try { this.onLearningComplete?.(); } catch { /* the signal is optional */ }
+    }
+    return consumed;
+  }
   protected chooseOther(current: LearningSessionProjection): boolean {
     if (!current.preview) return false;
     this.phase = "preview";

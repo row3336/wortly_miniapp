@@ -3,6 +3,7 @@ import type { Language } from "../i18n/language";
 import { CommandRecovery } from "../commands/CommandRecovery";
 import { StepBackButton, stepBackCopy } from "../commands/StepBackButton";
 import { useEnterNext } from "../commands/useEnterNext";
+import { answerExampleSource } from "../study/answerExample";
 import { WrittenAnswerInput } from "../study/WrittenAnswerInput";
 import { WrittenAnswerResult } from "../study/WrittenAnswerResult";
 import type { WrittenActions } from "./useWrittenDocument";
@@ -44,8 +45,6 @@ const copy = {
     changed: "The question has changed. Refresh the session.", noMaterial: "There are no words available for this session right now.", noPhrases: "No material is available yet",
     busy: "A session is open on another device", setup: "Confirm session settings and the current dictionary pair to study." },
 } as const;
-/** The written quiz shows one example after the answer (К05-126); Learning and conjugation do not pass it. */
-const answerExample = { random: () => Math.random() };
 
 /** Connects the local display to the owner's exact capabilities; command identity and outcome are never invented here. */
 export function WrittenScreen({ state, language, submitOnEnter, actions, onToday }: WrittenScreenProps) {
@@ -112,7 +111,7 @@ export function WrittenScreen({ state, language, submitOnEnter, actions, onToday
       <p role="status">{t.unknown}</p>
     </section>}
     {result && <WrittenAnswerResult result={result} language={language} pending={pendingResult}
-      grades={state.grades} canCorrect={state.canCorrect} canNext={canNext} timer={state.timer} example={answerExample}
+      grades={state.grades} canCorrect={state.canCorrect} canNext={canNext} timer={state.timer} example={answerExampleSource}
       onGrade={grade => { void actions.grade(grade); }} onCorrect={() => { void actions.correct(); }} onNext={() => { void actions.next(); }} />}
     {result && state.canUndo && <StepBackButton className="written-step-back" language={language} onUndo={() => { void actions.undo(); }} />}
     {state.phase === "previous_result" && primary.pendingIntent?.kind === "assignment.present" && primary.outcome === null

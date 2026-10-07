@@ -66,6 +66,9 @@ export function selectAnswerExample(candidates: AnswerExampleCandidates, random:
   return { kind: "none" };
 }
 
+/** The randomness of the example after an answer: the written quiz and Learning share the one М08 result (К05-126). */
+export const answerExampleSource: { random(): number } = { random: () => Math.random() };
+
 /** What the reference card shows (М07 and М12 share the rule, TA §6, §7). */
 export type ReferenceExamples =
   | ({ kind: "personal_pair" } & PersonalExamplePair)

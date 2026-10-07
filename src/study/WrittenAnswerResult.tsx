@@ -18,7 +18,7 @@ export type WrittenAnswerResultProps = {
   onGrade(grade: 3 | 4 | 5): void;
   onCorrect(): void;
   onNext(): void;
-  /** Only the written quiz shows one example after the answer (К05-126); its source of randomness is injectable. */
+  /** The written quiz and Learning show one example after the answer (К05-126); its source of randomness is injectable. */
   example?: { random(): number };
 };
 const copy = {
