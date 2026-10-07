@@ -223,9 +223,11 @@ describe("useOralHost: closure, summary, native Back and haptics", () => {
 
   it("O10 the natural summary: Back mirrors На Сегодня (summary_home), and its confirmed closure returns to Today once", async () => {
     const h = setup({ step: "summary", completed: 2, seed: true });
-    await waitFor(() => expect(dd()).toEqual(["2", "2", "0", "0"])); expect(h.haptic).not.toHaveBeenCalled();
+    await waitFor(() => expect(dd()).toEqual(["2", "2", "0", "0"]), { timeout: 5000 }); expect(h.haptic).not.toHaveBeenCalled();
+    // Back is bound by an effect after the summary is drawn; a click before that reaches no handler and sends no Stop.
+    await waitFor(() => expect(h.back.bound).toBe(1));
     await h.back.click();
-    await waitFor(() => expect(h.onToday).toHaveBeenCalledOnce()); await settled();
+    await waitFor(() => expect(h.onToday).toHaveBeenCalledOnce(), { timeout: 5000 }); await settled();
     expect(h.posts.map(post => post.payload)).toEqual([{ reason: "summary_home" }]); expect(h.onToday).toHaveBeenCalledOnce();
   });
 

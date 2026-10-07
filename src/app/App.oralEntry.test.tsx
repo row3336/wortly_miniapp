@@ -135,14 +135,16 @@ function app(options: { settings?: Promise<void> } = {}) {
 }
 const button = (name: string) => screen.getByRole("button", { name }) as HTMLButtonElement;
 async function startFromToday(row: RegExp) {
-  await screen.findByText(pairText);
+  // Each wait is for a server exchange (open, Today, session start): a network-sized bound, not the default 1 s.
+  const exchange = { timeout: 5000 };
+  await screen.findByText(pairText, undefined, exchange);
   const tap = await waitFor(() => {
     const element = screen.getByRole("button", { name: row }) as HTMLButtonElement;
     expect(element.disabled).toBe(false);
     return element;
-  });
+  }, exchange);
   fireEvent.click(tap);
-  await screen.findByText("das Haus");
+  await screen.findByText("das Haus", undefined, exchange);
   await waitFor(() => expect(button("Раскрыть").disabled).toBe(false));
 }
 

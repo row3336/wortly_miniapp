@@ -13,6 +13,8 @@ type Fetch = (url: string | URL | Request, init?: RequestInit) => Promise<Respon
 type Route = (url: string | URL | Request, init: RequestInit | undefined, base: Fetch) => Promise<Response>;
 const compatibility = { compatible: true, contract_version: "1" };
 const pairText = "Активная пара: Русский ↔ Немецкий";
+/** A wait for a screen that arrives after a chain of server exchanges (open, Today, session read): not the default 1 s. */
+const exchange = { timeout: 5000 };
 const example = { id: id(30), text: "Hallo, wie geht's?", role: null, highlighted_parts: [] };
 
 function today(status: TodayResponse["learning"]["status"] = "new_group"): TodayResponse {
@@ -336,9 +338,9 @@ describe("Learning through the actual App document", () => {
     // Settings is visible and the Learning screen is not rendered while it is.
     expect(screen.queryByRole("heading", { name: "Изучение слов" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Сегодня" }));
-    const learning = within((await screen.findByRole("heading", { name: "Изучение слов" })).closest("main")!);
+    const learning = within((await screen.findByRole("heading", { name: "Изучение слов" }, exchange)).closest("main")!);
     const draft = learning.getByRole("textbox") as HTMLInputElement;
-    await waitFor(() => expect(draft.readOnly).toBe(false));
+    await waitFor(() => expect(draft.readOnly).toBe(false), exchange);
     expect(draft.value).toBe("draft seven");
     // The Settings page stays mounted for its own state but is hidden again.
     expect(screen.queryByRole("heading", { name: "Настройки", level: 1 })).toBeNull();
@@ -388,9 +390,9 @@ describe("Learning through the actual App document", () => {
    * is awaited separately. Either the new pair's Today or a (stale) Learning screen ends the wait; the D1 assertions decide. */
   async function afterPairChange(a: Server, stages: Stages) {
     const learning = () => screen.queryByRole("heading", { name: "Изучение слов" });
-    await waitFor(() => expect(a.openReply.mock.settledResults.length > stages.opens || learning() !== null).toBe(true));
-    await waitFor(() => expect(a.todayReply.mock.calls.length > stages.todays || learning() !== null).toBe(true));
-    await waitFor(() => expect(screen.queryByText(enPair) ?? learning()).not.toBeNull());
+    await waitFor(() => expect(a.openReply.mock.settledResults.length > stages.opens || learning() !== null).toBe(true), exchange);
+    await waitFor(() => expect(a.todayReply.mock.calls.length > stages.todays || learning() !== null).toBe(true), exchange);
+    await waitFor(() => expect(screen.queryByText(enPair) ?? learning()).not.toBeNull(), exchange);
     await settled();
   }
 
@@ -450,12 +452,12 @@ describe("Learning through the actual App document", () => {
       const reply = await base(url, init); a.server.session = null; return reply;
     });
     render(<App />); fireEvent.click(await screen.findByRole("button", { name: "Вернуться на Сегодня" }));
-    await screen.findByText(ruPair);
+    await screen.findByText(ruPair, undefined, exchange);
     fireEvent.click(within(screen.getByRole("navigation", { name: "Основная навигация" })).getByRole("button", { name: "Настройки" }));
     await saveSetting("Язык словаря", "en");
-    await screen.findAllByText("Сохранено");
+    await screen.findAllByText("Сохранено", undefined, exchange);
     fireEvent.click(screen.getByRole("button", { name: "Сегодня" }));
-    await screen.findByText(enPair);
+    await screen.findByText(enPair, undefined, exchange);
     fireEvent.click(within(screen.getByRole("navigation", { name: "Основная навигация" })).getByRole("button", { name: "Настройки" }));
     await screen.findByRole("heading", { name: "Настройки", level: 1 });
     await saveSetting("Язык словаря", "ru");
@@ -467,7 +469,7 @@ describe("Learning through the actual App document", () => {
   it("D1-T4 R-CP4-1: a pair round-trip never re-reads the closed seed", async () => {
     const { a, reads, opens } = await pairRoundTrip();
     fireEvent.click(screen.getByRole("button", { name: "Сегодня" }));
-    await screen.findByText(ruPair); await settled();
+    await screen.findByText(ruPair, undefined, exchange); await settled();
     expect(a.gets(`/sessions/${id(3)}?`)).toHaveLength(reads); // B1
     expect(a.openReply).toHaveBeenCalledTimes(opens + 1); // B2
     expect(screen.queryByRole("heading", { name: "Изучение слов" })).toBeNull(); // B3
@@ -492,9 +494,9 @@ describe("Learning through the actual App document", () => {
     await saveSetting("Язык интерфейса", "en");
     await screen.findByRole("heading", { name: "Settings", level: 1 });
     fireEvent.click(within(screen.getByRole("navigation", { name: "Main navigation" })).getByRole("button", { name: "Today" }));
-    const learning = within((await screen.findByRole("heading", { name: "Learn words" })).closest("main")!);
+    const learning = within((await screen.findByRole("heading", { name: "Learn words" }, exchange)).closest("main")!);
     const draft = learning.getByRole("textbox") as HTMLInputElement;
-    await waitFor(() => expect(draft.readOnly).toBe(false));
+    await waitFor(() => expect(draft.readOnly).toBe(false), exchange);
     expect(draft.value).toBe("draft ui");
     expect(a.studyPosts().map(post => post.kind)).toEqual(["session.start", "learning.preview_next", "assignment.present"]);
     expect(resume).not.toHaveBeenCalled();

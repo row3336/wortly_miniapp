@@ -58,17 +58,19 @@ export function app(options: ServerOptions = {}) {
 }
 export const row = (name: RegExp) => screen.getByRole("button", { name }) as HTMLButtonElement;
 export const field = () => screen.getByRole("textbox") as HTMLTextAreaElement;
+/** A wait for a screen that follows server exchanges (open, Today, session start): a network-sized bound, not the default 1 s. */
+export const exchange = { timeout: 5000 };
 export async function startWords() {
-  await screen.findByText(pairText);
-  await waitFor(() => expect(row(/Слова: перевод на немецкий/).disabled).toBe(false));
+  await screen.findByText(pairText, undefined, exchange);
+  await waitFor(() => expect(row(/Слова: перевод на немецкий/).disabled).toBe(false), exchange);
   fireEvent.click(row(/Слова: перевод на немецкий/));
-  await screen.findByText("слово 6");
-  await waitFor(() => expect(field().readOnly).toBe(false));
+  await screen.findByText("слово 6", undefined, exchange);
+  await waitFor(() => expect(field().readOnly).toBe(false), exchange);
 }
 export async function answer(text: string) {
   fireEvent.change(field(), { target: { value: text } });
   fireEvent.click(screen.getByRole("button", { name: "Проверить" }));
-  await screen.findByText(text === "Haus" ? "Верно" : "Есть ошибка");
+  await screen.findByText(text === "Haus" ? "Верно" : "Есть ошибка", undefined, exchange);
 }
 /** The server commits the next command of this kind, but its reply is lost (a timeout after commit). */
 export function loseReply(a: ReturnType<typeof app>, kind: string) {

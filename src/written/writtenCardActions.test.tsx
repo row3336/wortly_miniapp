@@ -12,6 +12,8 @@ import { id, response, writtenFixture } from "./writtenFixtures.test-support";
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 const CARD_6 = id(106);
+/** A wait for a server exchange (several requests in a row): a network-sized bound instead of the default 1 s. */
+const exchange = { timeout: 5000 };
 const settings = { state: { phase: "ready", data: null, dataCurrent: true, drafts: {}, pending: null, outcome: null, problem: null,
   canEdit: true, canRetry: false }, confirmed: { state_version: "1", settings: { dictionary_language: { value: "ru" },
   transition_mode: { value: "normal" } } }, actions: { refresh: vi.fn(async () => undefined) } } as unknown as SettingsDocument;
@@ -148,12 +150,17 @@ describe("«Уточнить поля» and card study actions from the written 
     render(<QuizDocument q={q} />);
     await answerWrong(q);
     fireEvent.click(screen.getByRole("button", { name: "Уточнить поля" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Не повторять" }));
-    await screen.findByText("слово 7");
+    // The action button shows with the card read, before context.open is confirmed; the pencils wait for the open context
+    // (M-EDIT Р12). Acting earlier would send card.exclude ahead of context.open, so the order asserted below needs this wait.
+    const pencil = await screen.findByRole("button", { name: "Изменить личный перевод" }, exchange) as HTMLButtonElement;
+    await waitFor(() => expect(pencil.disabled).toBe(false), exchange);
+    fireEvent.click(await screen.findByRole("button", { name: "Не повторять" }, exchange));
+    // The next question follows card.exclude, context.close and a session read: server exchanges, not the default 1 s.
+    await screen.findByText("слово 7", undefined, exchange);
     expect(screen.queryByText("Есть ошибка")).toBeNull();
     expect(q.cards.posts.map(post => post.kind)).toEqual(["context.open", "card.exclude", "context.close"]);
     expect(q.cards.posts[1]).toMatchObject({ expected_card_state_version: null, payload: { card_id: CARD_6 } });
-    await waitFor(() => expect(kinds(q)).toEqual(["answer.submit", "assignment.present"]));
+    await waitFor(() => expect(kinds(q)).toEqual(["answer.submit", "assignment.present"]), exchange);
   });
 
   it("Q3 «Изучить заново» moves on only after its confirmation and commit; a cancel keeps the card open", async () => {

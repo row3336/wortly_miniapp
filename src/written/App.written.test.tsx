@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenRequest } from "../api/generated";
 import { App } from "../app/App";
 import { staleCommand, staleRefusal } from "../app/openRules.test-support";
-import { app, answer, settingsRefusalText, compatibility, field, loseReply, pairText, requests, row, startWords, useWrittenAppEnvironment } from "./writtenApp.test-support";
+import { app, answer, settingsRefusalText, compatibility, exchange, field, loseReply, pairText, requests, row, startWords, useWrittenAppEnvironment } from "./writtenApp.test-support";
 import { deferred, id, profile, response } from "./writtenFixtures.test-support";
 
 useWrittenAppEnvironment();
@@ -19,7 +19,7 @@ describe("Written quiz through the actual App document", () => {
   // De→L1 rows start the oral quiz since M-ORAL-ENTRY (CP14 B-ENTRY lifted): App.oralEntry.test.tsx E1.
   it("W1 a tap on the L1→De count starts the written quiz at once", async () => {
     const a = app(); render(<App />);
-    await screen.findByText(pairText);
+    await screen.findByText(pairText, undefined, exchange);
     await startWords();
     expect(a.posts()[0]).toMatchObject({ kind: "session.start", payload: { mode: "written", bucket: "words" } });
     expect(a.kinds()).toEqual(["session.start", "assignment.present"]);

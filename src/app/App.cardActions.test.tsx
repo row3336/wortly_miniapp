@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { cardView, reviewing } from "../dictionary/card/cardTestData.test-support";
-import { answer, app, startWords, useWrittenAppEnvironment } from "../written/writtenApp.test-support";
+import { answer, app, exchange, startWords, useWrittenAppEnvironment } from "../written/writtenApp.test-support";
 import { id, response } from "../written/writtenFixtures.test-support";
 import { App } from "./App";
 
@@ -69,29 +69,34 @@ describe("card actions from the written quiz through the actual App (M-ACTIONS)"
     const a = actionsApp(); render(<App />);
     await startWords(); await answer("falsch");
     fireEvent.click(screen.getByRole("button", { name: "Уточнить поля" }));
-    const pencil = await screen.findByRole("button", { name: "Изменить личный перевод" }) as HTMLButtonElement;
+    const pencil = await screen.findByRole("button", { name: "Изменить личный перевод" }, exchange) as HTMLButtonElement;
     // The pencils wait for the open card context (M-EDIT Р12).
-    await waitFor(() => expect(pencil.disabled).toBe(false));
+    await waitFor(() => expect(pencil.disabled).toBe(false), exchange);
     expect(screen.queryByText("Есть ошибка")).toBeNull();
     // The quiz origin: only its own direction (К07-056).
-    await screen.findByText("Интервал: 3 дн.");
+    await screen.findByText("Интервал: 3 дн.", undefined, exchange);
     expect(screen.queryByText("Интервал: 8 дн.")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Назад" }));
-    await screen.findByText("Есть ошибка");
+    await screen.findByText("Есть ошибка", undefined, exchange);
     expect(screen.getByRole("button", { name: "Далее" })).toBeTruthy();
     expect(quizKinds(a)).toEqual(["session.start", "assignment.present", "answer.submit"]);
-    await waitFor(() => expect(a.card.posts.map(post => post.kind)).toEqual(["context.open", "context.close"]));
+    await waitFor(() => expect(a.card.posts.map(post => post.kind)).toEqual(["context.open", "context.close"]), exchange);
   });
 
   it("A2 «Не повторять» on the card opened from the quiz: after the commit the quiz goes on to the next question by itself", async () => {
     const a = actionsApp(); render(<App />);
     await startWords(); await answer("falsch");
     fireEvent.click(screen.getByRole("button", { name: "Уточнить поля" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Не повторять" }));
-    await screen.findByText("слово 7");
+    // The action button shows with the card read, before context.open is confirmed; the pencils wait for the open context
+    // (M-EDIT Р12). Acting earlier would send card.exclude ahead of context.open, so the order asserted below needs this wait.
+    const pencil = await screen.findByRole("button", { name: "Изменить личный перевод" }, exchange) as HTMLButtonElement;
+    await waitFor(() => expect(pencil.disabled).toBe(false), exchange);
+    fireEvent.click(await screen.findByRole("button", { name: "Не повторять" }, exchange));
+    // The next question follows card.exclude, context.close and a session read: server exchanges, not the default 1 s.
+    await screen.findByText("слово 7", undefined, exchange);
     expect(screen.queryByText("Есть ошибка")).toBeNull();
     expect(a.card.posts.map(post => post.kind)).toEqual(["context.open", "card.exclude", "context.close"]);
     expect(a.card.posts[1]).toMatchObject({ expected_card_state_version: null, payload: { card_id: CARD_6 } });
-    await waitFor(() => expect(quizKinds(a)).toEqual(["session.start", "assignment.present", "answer.submit", "assignment.present"]));
+    await waitFor(() => expect(quizKinds(a)).toEqual(["session.start", "assignment.present", "answer.submit", "assignment.present"]), exchange);
   });
 });

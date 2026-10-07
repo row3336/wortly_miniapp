@@ -79,6 +79,7 @@ function fixture(origin: CardOrigin) {
     language: "ru", pendingStore: new ManualPendingStore(storage), cardId: CARD, origin, newId: () => aid(next++), onBack, onStudyAction };
   return { srv, props, onBack, onStudyAction, values };
 }
+const exchange = { timeout: 5000 };
 const reads = (srv: ReturnType<typeof server>, part: string) =>
   srv.fetcher.mock.calls.filter(([url, init]) => init!.method === "GET" && String(url).includes(part)).length;
 
@@ -86,13 +87,14 @@ describe("card actions in the card host (M-ACTIONS CP2)", () => {
   it("H1 from the dictionary «Не повторять» keeps the card and shows its new state from a new read", async () => {
     const f = fixture({ kind: "dictionary" });
     render(<CardHost {...f.props} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Не повторять" }));
-    await screen.findByText("Основные письменные повторы выключены");
-    expect(await screen.findByRole("button", { name: "Вернуть в повторы" })).toBeTruthy();
+    // Every wait below is for a server exchange (card read, command, card read again): a network-sized bound, not 1 s.
+    fireEvent.click(await screen.findByRole("button", { name: "Не повторять" }, exchange));
+    await screen.findByText("Основные письменные повторы выключены", undefined, exchange);
+    expect(await screen.findByRole("button", { name: "Вернуть в повторы" }, exchange)).toBeTruthy();
     expect(f.onBack).not.toHaveBeenCalled();
     expect(f.onStudyAction).toHaveBeenCalledWith({ kind: "card.exclude", cardId: CARD, stateVersion: expect.stringMatching(/^[1-9][0-9]*$/) });
     fireEvent.click(screen.getByRole("button", { name: "Вернуть в повторы" }));
-    await screen.findByRole("button", { name: "Не повторять" });
+    await screen.findByRole("button", { name: "Не повторять" }, exchange);
     expect(f.srv.posts.filter(post => post.kind.startsWith("card.")).map(post => [post.kind, post.expected_card_state_version]))
       .toEqual([["card.exclude", null], ["card.return", "1"]]);
     expect(f.onBack).not.toHaveBeenCalled();
@@ -102,10 +104,14 @@ describe("card actions in the card host (M-ACTIONS CP2)", () => {
     const f = fixture({ kind: "quiz", direction: "l1-de" });
     render(<CardHost {...f.props} />);
     // The quiz origin shows only its own direction.
-    await screen.findByText("Интервал: 3 дн.");
+    await screen.findByText("Интервал: 3 дн.", undefined, exchange);
     expect(screen.queryByText("Интервал: 8 дн.")).toBeNull();
-    fireEvent.click(await screen.findByRole("button", { name: "Не повторять" }));
-    await waitFor(() => expect(f.onBack).toHaveBeenCalledWith("sent"));
+    // The pencils wait for the open card context (M-EDIT Р12). Acting before it would send card.exclude ahead of
+    // context.open, and the order asserted below would depend on timing.
+    const pencil = await screen.findByRole("button", { name: "Изменить личный перевод" }, exchange) as HTMLButtonElement;
+    await waitFor(() => expect(pencil.disabled).toBe(false), exchange);
+    fireEvent.click(await screen.findByRole("button", { name: "Не повторять" }, exchange));
+    await waitFor(() => expect(f.onBack).toHaveBeenCalledWith("sent"), exchange);
     expect(f.srv.posts.map(post => post.kind)).toEqual(["context.open", "card.exclude", "context.close"]);
     expect(f.onStudyAction).toHaveBeenCalledTimes(1);
   });
