@@ -52,6 +52,12 @@ export type CommandFact = { "id": string; "status": "applied" | "already_applied
 
 export type CommandStatusResponse = { "command": (StoredCommandFact | MissingCommandFact); "current": (Profile | ModeState | UnavailableCurrent | SettingsProjection | SessionProjection | LearningSessionProjection | OralSessionProjection | ConjugationSessionProjection | UnavailableSession | RemoteSessionProjection | LearningCurrentProjection | ConjugationCatalog | FeedbackCurrent | OnboardingProjection); "state_version": string; "closed_session"?: (ClosedSessionBoundary | null); "verified_intent_hash"?: (string | null); };
 
+export type CommonFieldSavePayload = { "card_id": string; "field_name": ("translation" | "gender" | "singular" | "plural" | "article" | "infinitive" | "preterite" | "participle_ii" | "auxiliary" | "separability" | "positive" | "comparative" | "superlative"); "scope": "common"; "language": ("uk" | "en" | "ru" | null); "value": (Array<string> | CommonGrammarForm | "separable" | "inseparable" | "unknown"); };
+
+export type CommonFieldsCurrent = { "status": "available"; "scope": "common"; "card_id": string; "card_type": "noun" | "verb" | "phrase" | "adjective" | "pronoun" | "adverb" | "preposition" | "conjunction" | "particle"; "card_revision": string; "language": "uk" | "en" | "ru"; "translations": Array<string>; "grammar": (ReferenceNoun | ReferenceVerb | ReferenceAdjective | null); };
+
+export type CommonGrammarForm = { "status": "applicable" | "not_applicable" | "unknown"; "value": (string | null); };
+
 export type CommonPrepositionPair = { "source": "common"; "akkusativ": CardExample; "dativ": CardExample; };
 
 export type Compatibility = { "compatible": boolean; "contract_version": string; };
@@ -192,13 +198,13 @@ export type FeedbackCurrent = { "inbox_id": string; "card_id": (string | null); 
 
 export type FeedbackPayload = { "text": string; "card_id"?: (string | null); };
 
-export type FieldCommandResponse = { "command": (SavedCommandFact | RejectedCommandFact); "current": (PersonalFieldCurrent | PrepositionExampleCurrent | UnavailableCurrent); "state_version": string; "error"?: (ErrorDetail | null); };
+export type FieldCommandResponse = { "command": (SavedCommandFact | RejectedCommandFact); "current": (PersonalFieldCurrent | PrepositionExampleCurrent | CommonFieldsCurrent | UnavailableCurrent); "state_version": string; "error"?: (ErrorDetail | null); };
 
-export type FieldSaveCommand = { "command_id": string; "kind": "field.save"; "client_instance_id": string; "document_id": string; "context_id": string; "expected_field_version": string; "payload": FieldSavePayload; };
+export type FieldSaveCommand = { "command_id": string; "kind": "field.save"; "client_instance_id": string; "document_id": string; "context_id": string; "expected_field_version": string; "payload": (FieldSavePayload | CommonFieldSavePayload); };
 
 export type FieldSavePayload = { "card_id": string; "field_name": "translation" | "example" | "association"; "scope": "personal"; "language": "uk" | "en" | "ru"; "value": (string | null); "case_role"?: ("akkusativ" | "dativ" | null); };
 
-export type FieldStatusResponse = { "command": StoredCommandFact; "current": (PersonalFieldCurrent | PrepositionExampleCurrent | UnavailableCurrent); "state_version": string; "verified_intent_hash"?: (string | null); };
+export type FieldStatusResponse = { "command": StoredCommandFact; "current": (PersonalFieldCurrent | PrepositionExampleCurrent | CommonFieldsCurrent | UnavailableCurrent); "state_version": string; "verified_intent_hash"?: (string | null); };
 
 export type FieldUndoCommand = { "command_id": string; "kind": "field.undo"; "client_instance_id": string; "document_id": string; "context_id": string; "action_id": string; "expected_action_version": string; "expected_field_version": string; "payload": FieldUndoPayload; };
 
