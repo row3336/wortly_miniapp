@@ -4,10 +4,10 @@ import type {
 import { ApiError } from "../api/http";
 import { uuid, version } from "../api/wireValidation";
 import {
-  commandOutcomeUnknown, dictionaryIncreaseIntent, dictionaryUndoIntent,
+  commandOutcomeUnknown, dictionaryIncreaseIntent, dictionaryUndoIntent, dictionaryUndoOfferIntent,
   type DictionaryCommandReply, type DictionaryCommandStatus, type DictionaryContextAddress, type DictionaryContextCurrent,
   type DictionaryContextRead, type DictionaryIntervalApi, type DictionaryIntervalCommand, type DictionaryIntervalIntent,
-  type DictionaryOrigin, type IntervalChoice,
+  type DictionaryOrigin, type IntervalChoice, type UndoOfferIntent,
 } from "./intervalApi";
 
 /**
@@ -29,6 +29,8 @@ export function sendDictionaryIntervalCommand(
     case "context.close": return api.closeContext(token, proof, command);
     case "interval.increase": return api.increase(token, proof, command);
     case "action.undo": return api.undo(token, proof, command);
+    case "action.undo_offer.open":
+    case "action.undo_offer.close": return api.undoOffer(token, proof, command);
   }
 }
 
@@ -48,6 +50,24 @@ export type DictionaryIntervalProblem = {
     | "invalid" | "load" | "stale_response";
   code?: string;
 };
+/** CT 2.1.2 p.3, К07-122: the visible window of the one undo offer, counted from the first confirmed open. */
+export const UNDO_OFFER_MS = 3000;
+
+/** Monotonic time and timers of the live document (performance.now: a wall-clock change never moves the deadline). */
+export type IntervalClock = {
+  now(): number;
+  setTimeout(run: () => void, ms: number): unknown;
+  clearTimeout(handle: unknown): void;
+};
+const systemClock: IntervalClock = {
+  now: () => performance.now(),
+  setTimeout: (run, ms) => globalThis.setTimeout(run, ms),
+  clearTimeout: handle => globalThis.clearTimeout(handle as ReturnType<typeof setTimeout>),
+};
+
+/** An accepted own increase or undo, with the state version of its reply: the host reads the card again (К07-122). */
+export type DictionaryIntervalApplied = { kind: "interval.increase" | "action.undo"; commandId: string; stateVersion: string };
+
 export type DictionaryIntervalSnapshot = {
   phase: "idle" | "opening" | "ready" | "closed" | "unavailable" | "failed" | "disposed";
   cardId: string | null;
@@ -55,8 +75,8 @@ export type DictionaryIntervalSnapshot = {
   view: OpenDictionaryContext["view"] | null;
   interval: DictionaryContextInterval | null;
   capabilities: DictionaryContextCapabilities;
-  /** The one unresolved intent; it blocks every other intent. */
-  pending: { kind: DictionaryIntervalIntent["kind"]; commandId: string; status: "sending" | "unknown" } | null;
+  /** The one unresolved intent; it blocks every other intent. busy: its request or its status check is on the way. */
+  pending: { kind: DictionaryIntervalIntent["kind"]; commandId: string; status: "sending" | "unknown"; busy: boolean } | null;
   problem: DictionaryIntervalProblem | null;
   /** state_version of the shown context, never lower than an observed one. */
   stateVersion: string | null;
@@ -64,12 +84,31 @@ export type DictionaryIntervalSnapshot = {
   canUndo: boolean;
   /** Only after an unknown outcome: the same command, by an explicit user action. */
   canRetry: boolean;
+  /** «Отменить увеличение» with its draining bar: shown only before the local deadline (CT 2.1.2 p.3–4). */
+  undoOffer: { remainingMs: number; durationMs: number } | null;
+  /** The last accepted own increase or undo of this controller. */
+  applied: DictionaryIntervalApplied | null;
 };
 /**
  * What a following binding of the same document and card may continue; memory only.
  * contextId is null only while the initial context.open itself is unresolved (CON:149: the same intent continues).
  */
-export type DictionaryIntervalHandoff = { cardId: string; contextId: string | null; pending: DictionaryIntervalCommand | null };
+export type DictionaryIntervalHandoff = {
+  cardId: string; contextId: string | null; pending: DictionaryIntervalCommand | null;
+  /** The undo offer of an own increase in this same document: its deadline is never extended by a new handle. */
+  offer?: DictionaryUndoOfferHandoff | null;
+};
+type OfferPhase = "opening" | "shown" | "undo" | "closing" | "done";
+type ServiceEntry = { command: DictionaryIntervalCommand<UndoOfferIntent>; status: "sending" | "unknown"; busy: boolean; resent: boolean };
+/**
+ * CT 2.1.2: the one offer of an own increase. opening → (first confirmed open) shown → a click before the deadline
+ * (undo, through the ordinary pending) or the deadline (closing, a hidden close). done: nothing more is sent or shown.
+ */
+type Offer = { actionId: string; phase: OfferPhase; deadline: number | null; open: ServiceEntry | null; close: ServiceEntry | null };
+export type DictionaryUndoOfferHandoff = {
+  actionId: string; phase: "opening" | "shown" | "closing"; deadline: number | null;
+  open: DictionaryIntervalCommand<UndoOfferIntent> | null; close: DictionaryIntervalCommand<UndoOfferIntent> | null;
+};
 
 type Options = {
   port: DictionaryIntervalPort;
@@ -78,6 +117,7 @@ type Options = {
   /** A confirmed version observed elsewhere in this document; it only raises the floor. */
   minimumStateVersion?(): string | null;
   onUpdate(snapshot: DictionaryIntervalSnapshot): void;
+  clock?: IntervalClock;
 };
 type Entry = { command: DictionaryIntervalCommand; status: "sending" | "unknown"; busy: boolean };
 type Closing = Entry & { contextId: string; done: boolean };
@@ -112,8 +152,16 @@ export class DictionaryIntervalController {
   private problem: DictionaryIntervalProblem | null = null;
   private reads = 0;
   private disposed = false;
+  /** The action of the last accepted own increase: only its offer is opened (CT 2.1.2 p.2). */
+  private own: string | null = null;
+  private undoOffer: Offer | null = null;
+  private timer: { handle: unknown } | null = null;
+  private applied: DictionaryIntervalApplied | null = null;
+  private readonly clock: IntervalClock;
 
-  constructor(private readonly options: Options) {}
+  constructor(private readonly options: Options) {
+    this.clock = options.clock ?? systemClock;
+  }
 
   private live(): boolean { return !this.disposed && this.options.isLive(); }
 
@@ -150,7 +198,7 @@ export class DictionaryIntervalController {
     if (!this.live()) {
       const disposed: DictionaryIntervalSnapshot = { phase: "disposed", cardId: this.cardId, context: null, view: null,
         interval: null, capabilities: none, pending: null, problem: null, stateVersion: null,
-        canIncrease: false, canUndo: false, canRetry: false };
+        canIncrease: false, canUndo: false, canRetry: false, undoOffer: null, applied: null };
       return structuredClone(disposed);
     }
     const current = this.current, stale = this.stale();
@@ -163,6 +211,7 @@ export class DictionaryIntervalController {
     const open = offer.status === "open" ? offer : null;
     const shown = current !== null && current.status !== "unavailable" ? current : null;
     const free = pending === null && phase === "ready";
+    const strip = this.visibleOffer();
     const snapshot: DictionaryIntervalSnapshot = {
       phase, cardId: this.cardId,
       context: shown ? shown.context : null,
@@ -170,12 +219,14 @@ export class DictionaryIntervalController {
       interval: open ? open.interval : null,
       capabilities: open ? open.capabilities : none,
       pending: pending ? { kind: pending.command.kind, commandId: pending.command.command_id,
-        status: pending.status === "sending" && pending.busy ? "sending" : "unknown" } : null,
+        status: pending.status === "sending" && pending.busy ? "sending" : "unknown", busy: pending.busy } : null,
       problem: this.problem ?? (stale ? { reason: "stale_response" } : null),
       stateVersion: this.currentVersion,
       canIncrease: free && open !== null && open.interval !== null && open.capabilities.interval_increase !== null,
-      canUndo: free && open !== null && open.capabilities.undo_target !== null,
+      canUndo: free && strip !== null,
       canRetry: pending !== null && pending.status === "unknown" && !pending.busy && !this.closeRequested,
+      undoOffer: strip,
+      applied: this.applied,
     };
     return structuredClone(snapshot);
   }
@@ -203,6 +254,7 @@ export class DictionaryIntervalController {
     this.currentVersion = reply.state_version;
     this.undoDropped = false;
     this.setupMissing = false;
+    this.syncOffer();
     return true;
   }
 
@@ -244,12 +296,14 @@ export class DictionaryIntervalController {
     this.cardId = handoff.cardId.toLowerCase();
     // The context being opened is known only from the open's own fact.
     this.contextId = opening ? null : handoff.contextId!.toLowerCase();
+    if (handoff.offer && this.contextId !== null) this.restoreOffer(handoff.offer);
     if (handoff.pending) {
       const entry: Entry = { command: structuredClone(handoff.pending), status: "unknown", busy: false };
       this.pending = entry;
       await this.check(entry);
     }
     await this.read();
+    await this.continueOffer();
     const cardId = this.cardId;
     if (this.live() && this.pending === null && this.current?.status === "unavailable" && cardId !== null) await this.open(cardId);
   }
@@ -259,6 +313,7 @@ export class DictionaryIntervalController {
     const entry = this.pending;
     if (entry && entry.status === "unknown" && !entry.busy) await this.check(entry);
     await this.read();
+    await this.continueOffer();
   }
 
   /** Only an offered step of the written direction; anything else throws before a request (N26). */
@@ -268,10 +323,22 @@ export class DictionaryIntervalController {
     return this.start({ ...intent, ...this.options.port.origin });
   }
 
-  /** Only the current undo_target of this open context. */
+  /**
+   * Only the shown offer, strictly before its deadline (CT 2.1.2 p.4): one action.undo of the current undo_target, and the
+   * offer's close is never created. At or after the deadline the click is not taken: the offer hides and closes.
+   */
   undo(): Promise<void> {
     if (!this.live() || this.pending) return Promise.resolve();
+    const offer = this.undoOffer;
+    if (offer === null || offer.phase !== "shown" || offer.deadline === null) return Promise.resolve();
+    if (this.clock.now() >= offer.deadline) {
+      this.expire();
+      return Promise.resolve();
+    }
+    if (this.visibleOffer() === null) return Promise.resolve();
     const intent = dictionaryUndoIntent(this.offer(), this.options.newId());
+    offer.phase = "undo";
+    this.cancelTimer();
     return this.start({ ...intent, ...this.options.port.origin });
   }
 
@@ -286,6 +353,8 @@ export class DictionaryIntervalController {
   close(): Promise<void> {
     if (!this.live()) return Promise.resolve();
     this.closeRequested = true;
+    // Leaving the context ends the offer on the server (CT 2.3): no open or close of it follows.
+    this.endOffer();
     this.notify();
     return this.sendClose();
   }
@@ -297,12 +366,13 @@ export class DictionaryIntervalController {
     // An unresolved open continues as the same command; its context is not known yet.
     if (pending?.kind === "context.open") return { cardId: this.cardId, contextId: null, pending };
     if (this.contextId === null) return null;
-    return { cardId: this.cardId, contextId: this.contextId, pending };
+    return { cardId: this.cardId, contextId: this.contextId, pending, offer: this.offerHandoff() };
   }
 
   /** No request: an open context stays on the server until close or the next open. */
   dispose(): void {
     this.disposed = true;
+    this.cancelTimer();
     this.reads += 1;
     this.pending = null;
     this.closing = null;
@@ -348,7 +418,10 @@ export class DictionaryIntervalController {
   private async settle(command: DictionaryIntervalCommand, reply: DictionaryCommandReply): Promise<void> {
     if (reply.outcome === "accepted") {
       if (command.kind === "context.open") this.contextId = reply.command.context_id;
+      this.accepted(command, reply.command.action_id, reply.state_version);
       this.problem = this.unadopted(this.adopt(reply));
+      // A newer read may already show the offer of this increase: it is opened even when this reply is older.
+      this.syncOffer();
       this.notify();
       if (command.kind === "context.open" && this.closeRequested) await this.sendClose();
       return;
@@ -386,7 +459,10 @@ export class DictionaryIntervalController {
     if (status.outcome === "accepted") {
       this.pending = null;
       if (entry.command.kind === "context.open") this.contextId = status.command.context_id;
+      this.accepted(entry.command, status.command.action_id, status.state_version);
       this.problem = this.unadopted(this.adopt(status));
+      // A newer read may already show the offer of this increase: it is opened even when this reply is older.
+      this.syncOffer();
       this.notify();
       if (entry.command.kind === "context.open" && this.closeRequested) await this.sendClose();
       return;
@@ -459,5 +535,204 @@ export class DictionaryIntervalController {
       closing.busy = false;
     }
     this.notify();
+  }
+
+  /** Bookkeeping of an accepted own command before its projection is adopted. */
+  private accepted(command: DictionaryIntervalCommand, actionId: string | null, stateVersion: string): void {
+    if (command.kind !== "interval.increase" && command.kind !== "action.undo") return;
+    // The reply and every status check of an increase name the same offer, never a new one (CT 2.1.2 p.1).
+    if (command.kind === "interval.increase" && actionId !== null) this.own = actionId.toLowerCase();
+    this.applied = { kind: command.kind, commandId: command.command_id, stateVersion };
+  }
+
+  /** The strip the user may press now: the offer this controller opened, still offered by the server, before its deadline. */
+  private visibleOffer(): DictionaryIntervalSnapshot["undoOffer"] {
+    const offer = this.undoOffer;
+    if (!this.live() || offer === null || offer.phase !== "shown" || offer.deadline === null) return null;
+    const remaining = offer.deadline - this.clock.now();
+    const shown = this.offer();
+    if (remaining <= 0 || shown.status !== "open") return null;
+    const { undo_offer: live, undo_target: target } = shown.capabilities;
+    if (live === null || live.status !== "offered" || !same(live.action_id, offer.actionId)
+      || target === null || !same(target.action_id, offer.actionId)) return null;
+    return { remainingMs: remaining, durationMs: UNDO_OFFER_MS };
+  }
+
+  /**
+   * Follow the server's offer after every adopted projection. An offer it no longer names is over (next action, closed
+   * context, new document, consumed): nothing is opened or closed for it. A pending offer of the own increase is opened once.
+   */
+  private syncOffer(): void {
+    const current = this.current;
+    const live = current?.status === "open" ? current.capabilities.undo_offer : null;
+    const offer = this.undoOffer;
+    if (offer !== null && offer.phase !== "done" && (live === null || !same(live.action_id, offer.actionId))) this.endOffer();
+    if (live === null || live.status !== "pending" || !same(live.action_id, this.own) || this.closeRequested) return;
+    if (this.undoOffer !== null && same(this.undoOffer.actionId, live.action_id)) return;
+    this.endOffer();
+    this.undoOffer = { actionId: live.action_id.toLowerCase(), phase: "opening", deadline: null, open: null, close: null };
+    queueMicrotask(() => { void this.continueOffer(); });
+  }
+
+  private endOffer(): void {
+    if (this.undoOffer !== null && this.undoOffer.phase !== "undo") this.undoOffer.phase = "done";
+    this.cancelTimer();
+  }
+
+  private cancelTimer(): void {
+    if (this.timer !== null) this.clock.clearTimeout(this.timer.handle);
+    this.timer = null;
+  }
+
+  private scheduleExpiry(offer: Offer): void {
+    this.cancelTimer();
+    if (offer.phase !== "shown" || offer.deadline === null || !this.live()) return;
+    const timer = { handle: null as unknown };
+    timer.handle = this.clock.setTimeout(() => {
+      if (this.timer === timer) this.timer = null;
+      this.expire();
+    }, Math.max(0, offer.deadline - this.clock.now()));
+    this.timer = timer;
+  }
+
+  /** At or after the deadline without a click: hide the strip and send the hidden close (CT 2.1.2 p.4). */
+  private expire(): void {
+    const offer = this.undoOffer;
+    if (!this.live() || offer === null || offer.phase !== "shown" || offer.deadline === null) return;
+    if (this.clock.now() < offer.deadline) {
+      this.scheduleExpiry(offer);
+      return;
+    }
+    offer.phase = "closing";
+    this.cancelTimer();
+    this.notify();
+    void this.continueOffer();
+  }
+
+  /**
+   * The next step of the offer lane: open or close once, an unknown outcome checked by status of the same ID.
+   * Service commands never wait for the ordinary pending and never block it (CT 2.1.2 p.2, p.5).
+   */
+  private async continueOffer(): Promise<void> {
+    const offer = this.undoOffer;
+    if (offer === null || !this.live()) return;
+    if (offer.phase === "shown") {
+      if (offer.deadline !== null && this.clock.now() >= offer.deadline) this.expire();
+      else this.scheduleExpiry(offer);
+      return;
+    }
+    if (offer.phase !== "opening" && offer.phase !== "closing") return;
+    if (this.closeRequested) { this.endOffer(); return; }
+    const opening = offer.phase === "opening";
+    let entry = opening ? offer.open : offer.close;
+    if (entry === null) {
+      let intent: UndoOfferIntent;
+      try {
+        intent = dictionaryUndoOfferIntent(this.offer(), this.options.newId(),
+          opening ? "action.undo_offer.open" : "action.undo_offer.close", offer.actionId);
+      } catch {
+        // The shown projection names no live offer any more: it is over, nothing to open or close.
+        this.endOffer();
+        this.notify();
+        return;
+      }
+      entry = { command: { ...intent, ...this.options.port.origin }, status: "sending", busy: false, resent: false };
+      if (opening) offer.open = entry; else offer.close = entry;
+      await this.sendService(offer, entry);
+      return;
+    }
+    if (entry.busy) return;
+    entry.resent = false;
+    await this.checkService(offer, entry);
+  }
+
+  /** An ended offer (done, or its context closed) sends nothing more: no status, no repeat of open or close (CT 2.3). */
+  private serviceLive(offer: Offer, entry: ServiceEntry): boolean {
+    return this.live() && !this.closeRequested && this.undoOffer === offer && offer.phase !== "done"
+      && (offer.open === entry || offer.close === entry);
+  }
+
+  private async sendService(offer: Offer, entry: ServiceEntry): Promise<void> {
+    entry.busy = true;
+    entry.status = "sending";
+    let reply: DictionaryCommandReply;
+    try {
+      reply = await this.options.port.send(entry.command);
+    } catch (error) {
+      if (!this.serviceLive(offer, entry)) return;
+      entry.busy = false;
+      if (commandOutcomeUnknown(error)) {
+        entry.status = "unknown";
+        await this.checkService(offer, entry);
+        return;
+      }
+      // An HTTP refusal without a fact: this offer is not shown or closed by the client any more.
+      this.serviceDone(offer, entry, false);
+      return;
+    }
+    if (!this.serviceLive(offer, entry)) {
+      if (this.live()) { this.adopt(reply); this.notify(); }
+      return;
+    }
+    entry.busy = false;
+    this.adopt(reply);
+    this.serviceDone(offer, entry, reply.outcome === "accepted");
+  }
+
+  /** root decision, pending owner (M-INTV Р4): one status of the same ID; not_found sends the same ID once more. */
+  private async checkService(offer: Offer, entry: ServiceEntry): Promise<void> {
+    if (entry.busy || !this.serviceLive(offer, entry)) return;
+    entry.busy = true;
+    let status: DictionaryCommandStatus;
+    try {
+      status = await this.options.port.status(entry.command);
+    } catch {
+      // Still unknown: the strip stays hidden; the next refresh or a new handle checks the same ID again.
+      if (this.serviceLive(offer, entry)) entry.busy = false;
+      return;
+    }
+    if (!this.serviceLive(offer, entry)) return;
+    entry.busy = false;
+    if (status.outcome === "accepted") {
+      this.adopt(status);
+      this.serviceDone(offer, entry, true);
+      return;
+    }
+    if (status.outcome === "not_found") {
+      this.raise(status.state_version);
+      if (entry.resent) return;
+      entry.resent = true;
+      await this.sendService(offer, entry);
+      return;
+    }
+    this.serviceDone(offer, entry, false);
+  }
+
+  /** The first confirmed open sets the deadline once (CT 2.1.2 p.3); anything else ends the offer for this client. */
+  private serviceDone(offer: Offer, entry: ServiceEntry, accepted: boolean): void {
+    if (entry === offer.open && accepted && offer.phase === "opening") {
+      if (offer.deadline === null) offer.deadline = this.clock.now() + UNDO_OFFER_MS;
+      offer.phase = "shown";
+      this.scheduleExpiry(offer);
+    } else if (offer.phase === "opening" || offer.phase === "closing") {
+      offer.phase = "done";
+    }
+    this.notify();
+  }
+
+  private offerHandoff(): DictionaryUndoOfferHandoff | null {
+    const offer = this.undoOffer;
+    if (offer === null || (offer.phase !== "opening" && offer.phase !== "shown" && offer.phase !== "closing")) return null;
+    return { actionId: offer.actionId, phase: offer.phase, deadline: offer.deadline,
+      open: offer.open ? structuredClone(offer.open.command) : null, close: offer.close ? structuredClone(offer.close.command) : null };
+  }
+
+  /** Continue the offer of the same document: a command on the way when the old handle ended is unknown now. */
+  private restoreOffer(handoff: DictionaryUndoOfferHandoff): void {
+    const entry = (command: DictionaryIntervalCommand<UndoOfferIntent> | null): ServiceEntry | null =>
+      command ? { command: structuredClone(command), status: "unknown", busy: false, resent: false } : null;
+    this.own = handoff.actionId.toLowerCase();
+    this.undoOffer = { actionId: this.own, phase: handoff.phase, deadline: handoff.deadline,
+      open: entry(handoff.open), close: entry(handoff.close) };
   }
 }

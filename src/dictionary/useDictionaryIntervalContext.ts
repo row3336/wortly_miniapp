@@ -4,7 +4,7 @@ import { uuid, version } from "../api/wireValidation";
 import { ClosedAccessError, type OpenedAccess } from "../app/openedAccess";
 import {
   DictionaryIntervalController, sendDictionaryIntervalCommand,
-  type DictionaryIntervalHandoff, type DictionaryIntervalPort, type DictionaryIntervalSnapshot,
+  type DictionaryIntervalHandoff, type DictionaryIntervalPort, type DictionaryIntervalSnapshot, type IntervalClock,
 } from "./dictionaryIntervalController";
 import { createDictionaryIntervalApi, type DictionaryIntervalApi, type IntervalChoice } from "./intervalApi";
 
@@ -14,7 +14,8 @@ import { createDictionaryIntervalApi, type DictionaryIntervalApi, type IntervalC
  * - enabled while the dictionary card screen (M12) of cardId is open, after the card is ready; enabled=false does no IO;
  * - call actions.close() on a managed exit from that card (Back or route change); closing the interval window or
  *   another editor inside the card does not call it (CON:147); unmount and access change only dispose, without a request;
- * - render from state only: canIncrease/canUndo/canRetry, problem.code as text; never compute versions or dates;
+ * - render from state only: canIncrease/canUndo/canRetry, undoOffer, problem.code as text; never compute versions or dates;
+ * - state.applied names the last accepted own increase or undo: read the card again (К07-122);
  * - one hook per installation and card at a time (a new context closes the previous one on the server).
  */
 export type DictionaryIntervalContextOptions = {
@@ -25,6 +26,8 @@ export type DictionaryIntervalContextOptions = {
   /** A confirmed version observed elsewhere in this document, such as the card's own read. */
   minimumStateVersion?: string;
   newId?(): string;
+  /** Monotonic time and timers of the 3 second undo offer; tests replace them. Read when a binding starts. */
+  clock?: IntervalClock;
 };
 export type DictionaryIntervalContextActions = {
   /** Throws synchronously for a choice outside the current offer; a second tap while pending does nothing. */
@@ -83,7 +86,7 @@ function binding(current: DictionaryIntervalContextOptions, bound: Owner | null,
 function masked(phase: DictionaryIntervalSnapshot["phase"], cardId: string): DictionaryIntervalSnapshot {
   return { phase, cardId: cardId.toLowerCase(), context: null, view: null, interval: null,
     capabilities: { interval_increase: null, undo_offer: null, undo_target: null }, pending: null, problem: null, stateVersion: null,
-    canIncrease: false, canUndo: false, canRetry: false };
+    canIncrease: false, canUndo: false, canRetry: false, undoOffer: null, applied: null };
 }
 function raise(floors: Map<string, string>, profileId: string, observed: string | null | undefined): void {
   if (observed === null || observed === undefined) return;
@@ -135,6 +138,7 @@ export function useDictionaryIntervalContext(options: DictionaryIntervalContextO
       isLive: live,
       newId: () => latest.current.newId?.() ?? window.crypto.randomUUID(),
       minimumStateVersion: () => floors.current.get(profileId) ?? null,
+      clock: current.clock,
       onUpdate(snapshot) {
         if (!live()) return;
         raise(floors.current, profileId, snapshot.stateVersion);

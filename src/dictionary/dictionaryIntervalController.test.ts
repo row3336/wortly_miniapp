@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { DictionaryCardView } from "../api/generated";
-import { DictionaryIntervalController, dictionaryIntervalPort, type DictionaryIntervalSnapshot } from "./dictionaryIntervalController";
+import {
+  DictionaryIntervalController, dictionaryIntervalPort, type DictionaryIntervalSnapshot, type IntervalClock,
+} from "./dictionaryIntervalController";
 import { createDictionaryIntervalApi } from "./intervalApi";
 
 // Synthetic server shaped after core dictionary_interval.py / coordinator.py (fact fields, refusal codes,
@@ -17,7 +19,13 @@ const addDays = (day: string, days: number) => {
 };
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status });
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; }
-const settle = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
+// Enough for a command, its status check (the intent hash is WebCrypto, a macrotask) and the automatic offer command behind it.
+const settle = async () => {
+  for (let round = 0; round < 6; round++) {
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    await new Promise(done => setTimeout(done, 0));
+  }
+};
 
 type Written = { version: bigint | null; days: number; due: string; options: Array<[number, number]> };
 const SAVED = (): Written => ({ version: BIG, days: 10, due: "2026-10-05", options: LADDER });
@@ -31,7 +39,8 @@ function server(start = 41n, written: Written = SAVED()) {
   const s = {
     state: start, zone: true as boolean, written,
     contexts: new Map<string, { card: string; status: "open" | "closed" }>(),
-    right: null as null | { action: string; context: string; version: bigint; status: "available" | "used" | "expired"; before: Written },
+    right: null as null | { action: string; context: string; version: bigint; status: "available" | "used" | "expired"; before: Written;
+      offer: { status: "pending" | "offered" | "closed" | "consumed"; version: bigint } },
     commands: new Map<string, { semantic: string; fact: Record<string, unknown> }>(),
     routes: [] as Route[], next: 500,
   };
@@ -63,13 +72,14 @@ function server(start = 41n, written: Written = SAVED()) {
       current_schedule: w.version === null ? { interval_days: 1, next_due_date: TODAY, persisted: false }
         : { interval_days: w.days, next_due_date: w.due, persisted: true },
       expected_progress_version: w.version === null ? null : String(w.version), options, default_option_id: defaultOption(options) } : null;
-    const right = s.right && s.right.context === contextId && s.right.status === "available"
-      ? { action_id: s.right.action, kind: "interval.increase", version: String(s.right.version), context_id: contextId } : null;
+    // Core C-INTV-OFFER: a live offer is pending until action.undo_offer.open; undo_target only while offered.
+    const live = s.right && s.right.context === contextId && s.right.status === "available"
+      && (s.right.offer.status === "pending" || s.right.offer.status === "offered") ? s.right : null;
+    const undo_offer = live ? { action_id: live.action, context_id: contextId, status: live.offer.status, version: String(live.offer.version) } : null;
+    const undo_target = live && live.offer.status === "offered"
+      ? { action_id: live.action, kind: "interval.increase", version: String(live.version), context_id: contextId } : null;
     return { status: "open", context: reference, view: view(context.card), interval,
-      // This fake server shows the offer already opened (core C-INTV-OFFER); open/close is M-INTV.
-      capabilities: { interval_increase: interval && options.length ? { direction: "l1-de" } : null,
-        undo_offer: right ? { action_id: right.action_id, context_id: contextId, status: "offered", version: "2" } : null,
-        undo_target: right } };
+      capabilities: { interval_increase: interval && options.length ? { direction: "l1-de" } : null, undo_offer, undo_target } };
   };
   const reply = (command: unknown, contextId: string | null, extra: Record<string, unknown> = {}, status = 200) =>
     json({ command, current: contextId ? project(contextId) : { status: "unavailable" }, state_version: String(s.state), ...extra }, status);
@@ -103,15 +113,27 @@ function server(start = 41n, written: Written = SAVED()) {
       // The longer steps stay offered, renumbered from the new state.
       s.written = { version: (w.version ?? 0n) + 1n, days: payload.interval_days, due: payload.next_due_date,
         options: w.options.filter(([, days]) => days > payload.interval_days).map(([, days], index) => [index + 1, days]) };
-      const action = id(s.next++); s.right = { action, context: contextId!, version: 1n, status: "available", before };
+      const action = id(s.next++);
+      s.right = { action, context: contextId!, version: 1n, status: "available", before, offer: { status: "pending", version: 1n } };
       s.state++; return remember(body, fact(body, { action_id: action, object_version: "1" }), contextId);
     }
     const right = s.right;
+    if (body.kind === "action.undo_offer.open" || body.kind === "action.undo_offer.close") {
+      const offer = right?.offer;
+      if (!right || right.action !== body.action_id || right.status !== "available" || right.context !== contextId
+        || !offer || (offer.status !== "pending" && offer.status !== "offered")) return refuse(body.command_id, "CAPABILITY_EXPIRED", contextId);
+      if (String(offer.version) !== body.expected_offer_version
+        || body.kind === "action.undo_offer.open" && offer.status !== "pending") return refuse(body.command_id, "VERSION_CONFLICT", contextId);
+      offer.version++; offer.status = body.kind === "action.undo_offer.open" ? "offered" : "closed";
+      if (offer.status === "closed") right.status = "expired";
+      s.state++; return remember(body, fact(body, { target_id: right.action, object_version: String(offer.version) }), contextId);
+    }
     if (!right || right.action !== body.action_id || right.status !== "available" || right.context !== contextId) return refuse(body.command_id, "CAPABILITY_EXPIRED", contextId);
+    if (right.offer.status !== "offered") return refuse(body.command_id, "CAPABILITY_EXPIRED", contextId);
     if (String(right.version) !== body.expected_action_version) return refuse(body.command_id, "VERSION_CONFLICT", contextId);
     const was = right.before;
     s.written = was.version === null ? was : { ...was, version: s.written.version! + 1n };
-    right.status = "used"; right.version += 1n;
+    right.status = "used"; right.version += 1n; right.offer.status = "consumed";
     s.state++; return remember(body, fact(body, { action_id: right.action, object_version: String(right.version) }), contextId);
   };
   function remember(body: any, stored: Record<string, unknown>, contextId: string | null): Response {
@@ -147,20 +169,45 @@ function server(start = 41n, written: Written = SAVED()) {
   return Object.assign(s, { fetcher, handle, project });
 }
 
+/** Monotonic test time: timers run only when the test moves the time (CT 2.1.2 p.3). */
+function manualClock() {
+  let time = 1000;
+  const timers = new Map<number, { at: number; run(): void }>();
+  let serial = 0;
+  const clock: IntervalClock = {
+    now: () => time,
+    setTimeout: (run, ms) => { const handle = ++serial; timers.set(handle, { at: time + ms, run }); return handle; },
+    clearTimeout: handle => { timers.delete(handle as number); },
+  };
+  /** run=false moves the time only: a click may land exactly at the deadline before its callback runs. */
+  const advance = (ms: number, run = true) => {
+    time += ms;
+    if (!run) return;
+    for (const [handle, timer] of [...timers]) if (timer.at <= time) { timers.delete(handle); timer.run(); }
+  };
+  return { clock, advance, pending: () => timers.size };
+}
+
 function fixture(start?: bigint, minimum?: () => string | null, written?: Written) {
   const srv = server(start, written);
   let next = 100;
   const newId = vi.fn(() => id(next++));
   const seen: DictionaryIntervalSnapshot[] = [];
   let live = true;
+  const time = manualClock();
   const api = createDictionaryIntervalApi({ fetcher: srv.fetcher, timeoutMs: 5000, maxResponseBytes: 1_000_000 });
   const controller = new DictionaryIntervalController({
     port: dictionaryIntervalPort(api, "synthetic-token", "synthetic-proof", { client_instance_id: CLIENT, document_id: DOCUMENT }),
-    isLive: () => live, newId, minimumStateVersion: minimum, onUpdate: snapshot => { seen.push(snapshot); },
+    isLive: () => live, newId, minimumStateVersion: minimum, onUpdate: snapshot => { seen.push(snapshot); }, clock: time.clock,
   });
   const calls = () => srv.fetcher.mock.calls.map(([url, init]) => `${init!.method} ${new URL(String(url), "http://local").pathname}`);
   const posts = () => srv.fetcher.mock.calls.filter(([, init]) => init!.method === "POST").map(([, init]) => JSON.parse(String(init!.body)));
-  return { srv, controller, newId, seen, calls, posts, end: () => { live = false; } };
+  return { srv, controller, newId, seen, calls, posts, time, end: () => { live = false; } };
+}
+/** An accepted increase and its one automatic action.undo_offer.open (CT 2.1.2 p.2). */
+async function increased(f: ReturnType<typeof fixture>, option_id: number) {
+  await f.controller.increase({ option_id });
+  await settle();
 }
 async function ready(f: ReturnType<typeof fixture>) {
   await f.controller.open(CARD);
@@ -176,8 +223,9 @@ describe("B1/B9: open, increase and undo from the server offer", () => {
     const f = fixture(undefined, undefined, A01());
     await ready(f);
     expect(f.controller.snapshot().interval).toMatchObject({ direction: "l1-de", expected_progress_version: null, default_option_id: 4 });
-    await f.controller.increase({ option_id: 2 });
-    expect(f.posts().map(body => body.kind)).toEqual(["context.open", "interval.increase"]);
+    await increased(f, 2);
+    expect(f.posts().map(body => body.kind)).toEqual(["context.open", "interval.increase", "action.undo_offer.open"]);
+    expect(f.posts()[2]).toMatchObject({ context_id: id(500), expected_offer_version: "1", payload: {} });
     expect(f.posts()[1]).toMatchObject({ expected_progress_version: null,
       payload: { direction: "l1-de", option_id: 2, interval_days: 3, next_due_date: "2026-10-02" } });
     expect(f.posts()[1]).not.toHaveProperty("expected_progress_versions");
@@ -188,8 +236,8 @@ describe("B1/B9: open, increase and undo from the server offer", () => {
     expect(after.interval!).toMatchObject({ expected_progress_version: "1",
       current_schedule: { interval_days: 3, next_due_date: "2026-10-02", persisted: true } });
     await f.controller.undo();
-    expect(f.posts()).toHaveLength(3);
-    expect(f.posts()[2]).toMatchObject({ kind: "action.undo", expected_action_version: "1" });
+    expect(f.posts()).toHaveLength(4);
+    expect(f.posts()[3]).toMatchObject({ kind: "action.undo", expected_action_version: "1" });
     expect(f.controller.snapshot()).toMatchObject({ canUndo: false, capabilities: { undo_target: null } });
     expect(f.controller.snapshot().interval!.current_schedule).toEqual({ interval_days: 1, next_due_date: TODAY, persisted: false });
     expect(f.calls().filter(call => call.startsWith("GET"))).toEqual([]);
@@ -206,8 +254,8 @@ describe("B2: one pending intent", () => {
     expect(f.controller.snapshot()).toMatchObject({ pending: { kind: "interval.increase", status: "sending" }, canIncrease: false, canUndo: false });
     await f.controller.increase({ option_id: 1 });
     await f.controller.undo();
-    held.resolve(); await first;
-    expect(f.posts().map(body => body.kind)).toEqual(["context.open", "interval.increase"]);
+    held.resolve(); await first; await settle();
+    expect(f.posts().map(body => body.kind)).toEqual(["context.open", "interval.increase", "action.undo_offer.open"]);
   });
 });
 
@@ -216,9 +264,10 @@ describe("B3: unknown outcome is resolved by one status and only an explicit ret
     const f = fixture();
     await ready(f);
     f.srv.routes.push(lost(f.srv, true));
-    await f.controller.increase({ option_id: 2 });
-    expect(f.calls().slice(-2)).toEqual(["POST /api/v1/commands", `GET /api/v1/commands/${id(101)}`]);
-    expect(f.posts()).toHaveLength(2);
+    await increased(f, 2);
+    // The status check names the same offer; it is opened once, as after a delivered reply (CT 2.1.2 p.1).
+    expect(f.calls().slice(-3)).toEqual(["POST /api/v1/commands", `GET /api/v1/commands/${id(101)}`, "POST /api/v1/commands"]);
+    expect(f.posts().map(body => body.kind)).toEqual(["context.open", "interval.increase", "action.undo_offer.open"]);
     expect(f.controller.snapshot()).toMatchObject({ pending: null, problem: null, canUndo: true });
   });
 
@@ -233,10 +282,11 @@ describe("B3: unknown outcome is resolved by one status and only an explicit ret
       problem: { reason: "not_found" }, canRetry: true, canIncrease: false, canUndo: false, context: shown.context });
     expect(waiting.view).toEqual(shown.view);
     expect(f.posts()).toHaveLength(2);
-    await f.controller.retry();
-    expect(f.posts()).toHaveLength(3);
+    await f.controller.retry(); await settle();
+    expect(f.posts()).toHaveLength(4);
     expect(f.posts()[2]).toEqual(f.posts()[1]);
-    expect(f.newId).toHaveBeenCalledTimes(2);
+    expect(f.posts()[3].kind).toBe("action.undo_offer.open");
+    expect(f.newId).toHaveBeenCalledTimes(3);
     expect(f.controller.snapshot()).toMatchObject({ pending: null, canUndo: true, canRetry: false });
   });
 
@@ -247,9 +297,10 @@ describe("B3: unknown outcome is resolved by one status and only an explicit ret
     await f.controller.increase({ option_id: 2 });
     expect(f.controller.snapshot()).toMatchObject({ pending: { status: "unknown" }, problem: { reason: "network" }, canRetry: true });
     const count = f.calls().length;
-    await f.controller.refresh();
-    expect(f.calls().slice(count)).toEqual([`GET /api/v1/commands/${id(101)}`, `GET /api/v1/dictionary/contexts/${id(500)}`]);
-    expect(f.posts()).toHaveLength(2);
+    await f.controller.refresh(); await settle();
+    expect(f.calls().slice(count)).toEqual([`GET /api/v1/commands/${id(101)}`, "POST /api/v1/commands",
+      `GET /api/v1/dictionary/contexts/${id(500)}`]);
+    expect(f.posts().map(body => body.kind)).toEqual(["context.open", "interval.increase", "action.undo_offer.open"]);
     expect(f.controller.snapshot()).toMatchObject({ pending: null, canUndo: true });
   });
 
@@ -260,7 +311,7 @@ describe("B3: unknown outcome is resolved by one status and only an explicit ret
     await f.controller.increase({ option_id: 2 });
     expect(f.calls().at(-1)).toBe(`GET /api/v1/commands/${id(101)}`);
     expect(f.controller.snapshot()).toMatchObject({ canRetry: true, problem: { reason: "not_found" } });
-    await f.controller.retry();
+    await f.controller.retry(); await settle();
     f.srv.routes.push(() => json({ error: { code: "VALIDATION_FAILED" } }, 422));
     await f.controller.undo();
     expect(f.calls().at(-1)).toBe("POST /api/v1/commands");
@@ -283,7 +334,7 @@ describe("B4 and refusals: no automatic command", () => {
   it("CAPABILITY_EXPIRED: undo disappears and the context is read once", async () => {
     const f = fixture();
     await ready(f);
-    await f.controller.increase({ option_id: 2 });
+    await increased(f, 2);
     f.srv.right!.status = "expired"; // the next accepted action elsewhere ended it
     await f.controller.undo();
     expect(f.calls().slice(-2)).toEqual(["POST /api/v1/commands", `GET /api/v1/dictionary/contexts/${id(500)}`]);
@@ -324,10 +375,10 @@ describe("B5/B10: no response older than a known state replaces it", () => {
   it("a read sent before increase+undo and answered after them keeps the undone state (BigInt floor)", async () => {
     // The late read carries 9007199254740996, the undo 9007199254740997: both are the same Number
     // (9007199254740996), so only the BigInt floor sees the read as older.
-    const f = fixture(9007199254740994n, undefined, A01());
+    const f = fixture(9007199254740993n, undefined, A01());
     await ready(f);
-    expect(f.controller.snapshot().stateVersion).toBe("9007199254740995");
-    await f.controller.increase({ option_id: 2 });
+    expect(f.controller.snapshot().stateVersion).toBe("9007199254740994");
+    await increased(f, 2); // increase 9007199254740995, its offer open 9007199254740996
     const held = deferred<void>();
     let early!: Response;
     f.srv.routes.push(async (path, init) => { early = f.srv.handle(path, init); await held.promise; return early; });
@@ -354,17 +405,18 @@ describe("B6: close and dispose", () => {
   it("close during a pending undo hides undo at once; the late undo reply does not bring it back", async () => {
     const f = fixture();
     await ready(f);
-    await f.controller.increase({ option_id: 2 });
+    await increased(f, 2);
     const held = deferred<void>();
     f.srv.routes.push(async (path, init) => { await held.promise; return f.srv.handle(path, init); });
     const undoing = f.controller.undo();
     const closing = f.controller.close();
     expect(f.controller.snapshot()).toMatchObject({ phase: "closed", canUndo: false, canIncrease: false, capabilities: { undo_target: null, interval_increase: null } });
     held.resolve(); await undoing; await closing;
-    expect(f.posts().map(body => body.kind)).toEqual(["context.open", "interval.increase", "action.undo", "context.close"]);
+    expect(f.posts().map(body => body.kind)).toEqual(["context.open", "interval.increase", "action.undo_offer.open", "action.undo",
+      "context.close"]);
     expect(f.controller.snapshot()).toMatchObject({ phase: "closed", canUndo: false, canIncrease: false });
     await f.controller.close();
-    expect(f.posts()).toHaveLength(4);
+    expect(f.posts()).toHaveLength(5);
   });
 
   it("dispose sends nothing and drops a late reply", async () => {
@@ -393,14 +445,16 @@ describe("B7: only the server offer, checked before any request", () => {
     // CON:94: no oral direction and no batch of choices.
     expect(() => f.controller.increase({ direction: "de-l1", option_id: 1 } as any)).toThrow("invalid interval choice");
     expect(() => f.controller.increase([{ option_id: 1 }, { option_id: 2 }] as any)).toThrow("invalid interval choice");
-    expect(() => f.controller.undo()).toThrow("undo is not offered");
+    // No shown offer: the click does nothing and sends nothing (CT 2.1.2 p.4).
+    await f.controller.undo();
     expect(() => f.controller.open("not-a-card")).toThrow("dictionary card ID required");
     // K07-063: the top step leaves nothing to offer.
-    await f.controller.increase({ option_id: 8 });
+    await increased(f, 8);
     expect(f.controller.snapshot()).toMatchObject({ canIncrease: false, capabilities: { interval_increase: null } });
     expect(f.controller.snapshot().interval).toMatchObject({ options: [], default_option_id: null });
     expect(() => f.controller.increase({ option_id: 1 })).toThrow("interval increase is not offered");
-    expect(f.calls()).toHaveLength(count + 1);
+    expect(f.posts().slice(-2).map(body => body.kind)).toEqual(["interval.increase", "action.undo_offer.open"]);
+    expect(f.calls()).toHaveLength(count + 2);
   });
 });
 
@@ -418,12 +472,14 @@ describe("CP5 F-L1: an own late reply below a state already shown is not a stale
     await f.controller.refresh();
     expect(f.controller.snapshot()).toMatchObject({ stateVersion: "44", pending: { kind: "interval.increase" } });
     held.resolve(); await sending;
-    expect(f.controller.snapshot()).toMatchObject({ stateVersion: "44", pending: null, problem: null, canUndo: true, canIncrease: true });
+    expect(f.controller.snapshot()).toMatchObject({ stateVersion: "44", pending: null, problem: null, canIncrease: true });
+    await settle(); // the offer's open: state 45
+    expect(f.controller.snapshot()).toMatchObject({ stateVersion: "45", pending: null, problem: null, canUndo: true, canIncrease: true });
     // A confirmed version above the shown one: the offer is masked and the problem is reported.
-    floor = "45";
+    floor = "46";
     expect(f.controller.snapshot()).toMatchObject({ problem: { reason: "stale_response" }, canUndo: false, canIncrease: false,
-      capabilities: { undo_target: null, interval_increase: null } });
-    expect(f.posts().map(body => body.kind)).toEqual(["context.open", "interval.increase"]);
+      undoOffer: null, capabilities: { undo_target: null, interval_increase: null } });
+    expect(f.posts().map(body => body.kind)).toEqual(["context.open", "interval.increase", "action.undo_offer.open"]);
   });
 
   it("a refusal problem is kept when the own reply is older than the shown state", async () => {
@@ -508,3 +564,363 @@ describe("CP6 Q1: an unresolved initial open continues as the same command after
     held.resolve(); await settle();
   });
 });
+
+describe("M-INTV: the one undo offer of an increase (CT 2.1.2, К07-122, Т83)", () => {
+  const kinds = (f: ReturnType<typeof fixture>) => f.posts().map(body => body.kind);
+  /** The next binding of the same live document: same origin, server, IDs and monotonic clock. */
+  function rebound(f: ReturnType<typeof fixture>) {
+    const api = createDictionaryIntervalApi({ fetcher: f.srv.fetcher, timeoutMs: 5000, maxResponseBytes: 1_000_000 });
+    return new DictionaryIntervalController({
+      port: dictionaryIntervalPort(api, "synthetic-token-2", "synthetic-proof-2", { client_instance_id: CLIENT, document_id: DOCUMENT }),
+      isLive: () => true, newId: f.newId, onUpdate: () => undefined, clock: f.time.clock,
+    });
+  }
+
+  it("pending offer: no undo before the open is confirmed; then 3 s from that confirmation, a click before it sends one undo", async () => {
+    const f = fixture();
+    await ready(f);
+    const held = deferred<void>();
+    f.srv.routes.push(undefined as unknown as Route, async (path, init) => { await held.promise; return f.srv.handle(path, init); });
+    await f.controller.increase({ option_id: 2 });
+    await settle();
+    expect(kinds(f)).toEqual(["context.open", "interval.increase", "action.undo_offer.open"]);
+    expect(f.controller.snapshot()).toMatchObject({ capabilities: { undo_offer: { status: "pending", version: "1" }, undo_target: null },
+      undoOffer: null, canUndo: false, applied: { kind: "interval.increase", commandId: id(101) } });
+    await f.controller.undo(); // not shown yet: nothing
+    // A delayed open confirmation does not eat the window (Т83): the deadline starts at the confirmation.
+    f.time.advance(10_000);
+    held.resolve(); await settle();
+    expect(f.controller.snapshot()).toMatchObject({ undoOffer: { remainingMs: 3000, durationMs: 3000 }, canUndo: true,
+      capabilities: { undo_offer: { status: "offered", version: "2" }, undo_target: { action_id: id(501) } } });
+    f.time.advance(2999);
+    expect(f.controller.snapshot().undoOffer).toEqual({ remainingMs: 1, durationMs: 3000 });
+    await f.controller.undo();
+    expect(kinds(f)).toEqual(["context.open", "interval.increase", "action.undo_offer.open", "action.undo"]);
+    expect(f.controller.snapshot()).toMatchObject({ undoOffer: null, applied: { kind: "action.undo", commandId: id(103) },
+      capabilities: { undo_offer: null, undo_target: null } });
+    f.time.advance(10_000); await settle();
+    // An undo is never followed by a close: two intents never coexist (CT 2.1.2 p.4).
+    expect(kinds(f)).toHaveLength(4);
+    expect(f.time.pending()).toBe(0);
+  });
+
+  it("no click: at the deadline the strip hides and one hidden close of the current offer version goes; the increase stays", async () => {
+    const f = fixture();
+    await ready(f);
+    await increased(f, 2);
+    f.time.advance(3000);
+    await settle();
+    expect(kinds(f)).toEqual(["context.open", "interval.increase", "action.undo_offer.open", "action.undo_offer.close"]);
+    expect(f.posts()[3]).toMatchObject({ action_id: id(501), expected_offer_version: "2", payload: {} });
+    expect(f.controller.snapshot()).toMatchObject({ undoOffer: null, canUndo: false, capabilities: { undo_offer: null, undo_target: null } });
+    expect(f.controller.snapshot().interval!.current_schedule).toMatchObject({ interval_days: 23 });
+    await f.controller.refresh(); await f.controller.undo();
+    expect(kinds(f)).toHaveLength(4);
+    expect(f.controller.snapshot().undoOffer).toBeNull();
+  });
+
+  it("a click exactly at the deadline is not taken: it hides the strip and closes instead of undoing", async () => {
+    const f = fixture();
+    await ready(f);
+    await increased(f, 2);
+    f.time.advance(3000, false);
+    expect(f.controller.snapshot()).toMatchObject({ undoOffer: null, canUndo: false });
+    await f.controller.undo();
+    await settle();
+    expect(kinds(f).slice(3)).toEqual(["action.undo_offer.close"]);
+    f.time.advance(0); await settle();
+    expect(kinds(f).slice(3)).toEqual(["action.undo_offer.close"]);
+  });
+
+  it("a read, a status or a repeated refresh never extends the deadline", async () => {
+    const f = fixture();
+    await ready(f);
+    await increased(f, 2);
+    f.time.advance(2000);
+    await f.controller.refresh();
+    expect(f.controller.snapshot().undoOffer).toEqual({ remainingMs: 1000, durationMs: 3000 });
+    f.time.advance(1000); await settle();
+    expect(kinds(f).at(-1)).toBe("action.undo_offer.close");
+  });
+
+  it("unknown open: the status of the same ID allows the first showing; not_found sends the same ID once more", async () => {
+    const applied = fixture();
+    await ready(applied);
+    applied.srv.routes.push(undefined as unknown as Route, lost(applied.srv, true));
+    await increased(applied, 2);
+    expect(applied.calls().slice(-2)).toEqual(["POST /api/v1/commands", `GET /api/v1/commands/${id(102)}`]);
+    expect(applied.controller.snapshot()).toMatchObject({ undoOffer: { remainingMs: 3000 }, canUndo: true });
+
+    const missing = fixture();
+    await ready(missing);
+    missing.srv.routes.push(undefined as unknown as Route, lost(missing.srv, false));
+    await increased(missing, 2);
+    expect(missing.posts().slice(2).map(body => body.command_id)).toEqual([id(102), id(102)]);
+    expect(missing.posts()[3]).toEqual(missing.posts()[2]);
+    expect(missing.controller.snapshot()).toMatchObject({ undoOffer: { remainingMs: 3000 }, canUndo: true });
+  });
+
+  it("an open whose status also fails stays hidden; the next refresh checks the same ID and only then counts 3 s", async () => {
+    const f = fixture();
+    await ready(f);
+    f.srv.routes.push(undefined as unknown as Route, lost(f.srv, true), () => { throw new TypeError("offline"); });
+    await increased(f, 2);
+    expect(f.controller.snapshot()).toMatchObject({ undoOffer: null, canUndo: false, pending: null });
+    f.time.advance(60_000);
+    await f.controller.refresh(); await settle();
+    expect(f.calls().filter(call => call === `GET /api/v1/commands/${id(102)}`)).toHaveLength(2);
+    expect(f.controller.snapshot().undoOffer).toEqual({ remainingMs: 3000, durationMs: 3000 });
+    expect(kinds(f)).toEqual(["context.open", "interval.increase", "action.undo_offer.open"]);
+  });
+
+  it("an open refused by the server (the offer already ended) shows nothing and closes nothing", async () => {
+    const f = fixture();
+    await ready(f);
+    f.srv.routes.push(undefined as unknown as Route, (path, init) => { f.srv.right!.status = "expired"; return f.srv.handle(path, init); });
+    await increased(f, 2);
+    expect(kinds(f)).toEqual(["context.open", "interval.increase", "action.undo_offer.open"]);
+    expect(f.controller.snapshot()).toMatchObject({ undoOffer: null, canUndo: false, problem: null });
+    f.time.advance(5000); await settle();
+    expect(kinds(f)).toHaveLength(3);
+  });
+
+  it("unknown close: hidden, checked by status, the same ID once more; the strip never comes back", async () => {
+    const f = fixture();
+    await ready(f);
+    await increased(f, 2);
+    f.srv.routes.push(lost(f.srv, false));
+    f.time.advance(3000); await settle();
+    const closes = f.posts().filter(body => body.kind === "action.undo_offer.close");
+    expect(closes.map(body => body.command_id)).toEqual([id(103), id(103)]);
+    expect(f.calls()).toContain(`GET /api/v1/commands/${id(103)}`);
+    expect(f.srv.right!.offer.status).toBe("closed");
+    await f.controller.refresh();
+    expect(f.controller.snapshot()).toMatchObject({ undoOffer: null, canUndo: false });
+  });
+
+  it("an offer the server no longer names (another action ended it) hides at once, without a close", async () => {
+    const f = fixture();
+    await ready(f);
+    await increased(f, 2);
+    f.srv.right!.status = "expired";
+    await f.controller.refresh();
+    expect(f.controller.snapshot()).toMatchObject({ undoOffer: null, canUndo: false });
+    f.time.advance(5000); await settle();
+    expect(kinds(f)).toEqual(["context.open", "interval.increase", "action.undo_offer.open"]);
+  });
+
+  it("leaving the context: context.close only; no offer close follows", async () => {
+    const f = fixture();
+    await ready(f);
+    await increased(f, 2);
+    await f.controller.close();
+    f.time.advance(5000); await settle();
+    expect(kinds(f)).toEqual(["context.open", "interval.increase", "action.undo_offer.open", "context.close"]);
+    expect(f.controller.handoff()).toBeNull();
+  });
+
+  it("a second increase while the strip is shown replaces the offer: the new one is opened, the old one is not closed", async () => {
+    const f = fixture();
+    await ready(f);
+    await increased(f, 1);
+    f.time.advance(1000);
+    await increased(f, 1);
+    expect(kinds(f)).toEqual(["context.open", "interval.increase", "action.undo_offer.open", "interval.increase", "action.undo_offer.open"]);
+    expect(f.posts()[4]).toMatchObject({ action_id: id(502), expected_offer_version: "1" });
+    expect(f.controller.snapshot().undoOffer).toEqual({ remainingMs: 3000, durationMs: 3000 });
+    f.time.advance(3000); await settle();
+    expect(kinds(f).at(-1)).toBe("action.undo_offer.close");
+    expect(f.posts().at(-1)).toMatchObject({ action_id: id(502) });
+  });
+
+  it("foreground: a new handle of the same document keeps the same deadline; it is not shown again after it passed", async () => {
+    const f = fixture();
+    await ready(f);
+    await increased(f, 2);
+    f.time.advance(1000);
+    const handoff = f.controller.handoff()!;
+    expect(handoff.offer).toMatchObject({ actionId: id(501), phase: "shown", deadline: 4000 });
+    f.end(); f.controller.dispose();
+    const next = rebound(f);
+    await next.resume(handoff);
+    expect(next.snapshot().undoOffer).toEqual({ remainingMs: 2000, durationMs: 3000 });
+    expect(kinds(f)).toEqual(["context.open", "interval.increase", "action.undo_offer.open"]);
+    f.time.advance(2000); await settle();
+    expect(kinds(f).at(-1)).toBe("action.undo_offer.close");
+
+    const late = fixture();
+    await ready(late);
+    await increased(late, 2);
+    const away = late.controller.handoff()!;
+    late.end(); late.controller.dispose();
+    late.time.advance(60_000); // in the background the deadline passed
+    const back = rebound(late);
+    await back.resume(away); await settle();
+    expect(back.snapshot()).toMatchObject({ undoOffer: null, canUndo: false });
+    expect(kinds(late).at(-1)).toBe("action.undo_offer.close");
+  });
+
+  it("an unknown increase resolved on a new handle opens its offer there once", async () => {
+    const f = fixture();
+    await ready(f);
+    f.srv.routes.push(lost(f.srv, true), () => { throw new TypeError("offline"); });
+    await f.controller.increase({ option_id: 2 });
+    const handoff = f.controller.handoff()!;
+    expect(handoff).toMatchObject({ pending: { kind: "interval.increase" }, offer: null });
+    f.end(); f.controller.dispose();
+    const next = rebound(f);
+    await next.resume(handoff); await settle();
+    expect(kinds(f)).toEqual(["context.open", "interval.increase", "action.undo_offer.open"]);
+    expect(next.snapshot()).toMatchObject({ undoOffer: { remainingMs: 3000 }, canUndo: true, applied: { kind: "interval.increase" } });
+  });
+});
+
+describe("M-INTV after QA (M-INTV-QA REPORT: QA-O, QA-O2, QA-T, QA-L, QA-U)", () => {
+  const kinds = (f: ReturnType<typeof fixture>) => f.posts().map(body => body.kind);
+  async function shown(f: ReturnType<typeof fixture>) {
+    await ready(f);
+    await increased(f, 2);
+    expect(f.controller.snapshot().undoOffer).not.toBeNull();
+  }
+  /** Hold the next request until released; the server handles it only then. */
+  function held(f: ReturnType<typeof fixture>) {
+    const gate = deferred<void>();
+    return { gate, route: (async (path, init) => { await gate.promise; return f.srv.handle(path, init); }) as Route };
+  }
+
+  it("one open per own increase: refreshes while shown, the undo and a refresh after it add none", async () => {
+    const f = fixture();
+    await shown(f);
+    await f.controller.refresh(); await settle();
+    await f.controller.refresh(); await settle();
+    await f.controller.undo(); await settle();
+    await f.controller.refresh(); await settle();
+    expect(kinds(f)).toEqual(["context.open", "interval.increase", "action.undo_offer.open", "action.undo"]);
+    expect(f.controller.snapshot().undoOffer).toBeNull();
+  });
+
+  it("after the deadline's close a refresh opens nothing again", async () => {
+    const f = fixture();
+    await shown(f);
+    f.time.advance(3000); await settle();
+    await f.controller.refresh(); await settle();
+    expect(kinds(f)).toEqual(["context.open", "interval.increase", "action.undo_offer.open", "action.undo_offer.close"]);
+  });
+
+  it("an open fact naming an action of its own is no confirmation: no strip and no undo", async () => {
+    const f = fixture();
+    await ready(f);
+    const forged: Route = async (path, init) => {
+      const reply = await f.srv.handle(path, init).json();
+      reply.command.action_id = reply.command.target_id;
+      return json(reply);
+    };
+    f.srv.routes.push(undefined as unknown as Route, forged, forged);
+    await increased(f, 2);
+    expect(f.controller.snapshot()).toMatchObject({ undoOffer: null, canUndo: false });
+    expect(kinds(f)).not.toContain("action.undo");
+  });
+
+  it("a read while the open is on the way (the server still says pending) sends no second open", async () => {
+    const f = fixture();
+    await ready(f);
+    const late = held(f);
+    f.srv.routes.push(undefined as unknown as Route, late.route);
+    await f.controller.increase({ option_id: 2 }); await settle();
+    await f.controller.refresh(); await settle();
+    late.gate.resolve(); await settle();
+    await f.controller.refresh(); await settle();
+    expect(kinds(f).filter(kind => kind === "action.undo_offer.open")).toHaveLength(1);
+    expect(f.controller.snapshot().undoOffer).not.toBeNull();
+  });
+
+  it("a click 1 ms before the deadline sends only the undo; a click past it (timer not run yet) only the close", async () => {
+    const early = fixture();
+    await shown(early);
+    early.time.advance(2999, false);
+    expect(early.controller.snapshot().undoOffer?.remainingMs).toBe(1);
+    await early.controller.undo(); await settle();
+    early.time.advance(5000); await settle();
+    expect(kinds(early).slice(3)).toEqual(["action.undo"]);
+
+    const late = fixture();
+    await shown(late);
+    late.time.advance(3500, false);
+    await late.controller.undo(); await settle();
+    expect(kinds(late).slice(3)).toEqual(["action.undo_offer.close"]);
+  });
+
+  it("foreground at +2 s: the new handle shows the remaining 1 s, then closes; still one open", async () => {
+    const f = fixture();
+    await shown(f);
+    f.time.advance(2000, false);
+    const handoff = f.controller.handoff()!;
+    f.end(); f.controller.dispose();
+    const api = createDictionaryIntervalApi({ fetcher: f.srv.fetcher, timeoutMs: 5000, maxResponseBytes: 1_000_000 });
+    const next = new DictionaryIntervalController({
+      port: dictionaryIntervalPort(api, "synthetic-token-2", "synthetic-proof-2", { client_instance_id: CLIENT, document_id: DOCUMENT }),
+      isLive: () => true, newId: f.newId, onUpdate: () => undefined, clock: f.time.clock });
+    await next.resume(handoff); await settle();
+    expect(next.snapshot().undoOffer?.remainingMs).toBe(1000);
+    f.time.advance(1000); await settle();
+    expect(next.snapshot().undoOffer).toBeNull();
+    expect(kinds(f).filter(kind => kind === "action.undo_offer.open")).toHaveLength(1);
+    expect(kinds(f).at(-1)).toBe("action.undo_offer.close");
+  });
+
+  it("an unknown open whose status comes after the user left: nothing follows context.close (Н2)", async () => {
+    const f = fixture();
+    await ready(f);
+    const late = held(f);
+    f.srv.routes.push(undefined as unknown as Route, lost(f.srv, false), late.route);
+    await f.controller.increase({ option_id: 2 }); await settle();
+    expect(kinds(f)).toEqual(["context.open", "interval.increase", "action.undo_offer.open"]);
+    await f.controller.close(); await settle();
+    late.gate.resolve(); await settle();
+    expect(kinds(f).slice(kinds(f).indexOf("context.close") + 1)).toEqual([]);
+  });
+
+  it("an unknown close whose status comes after the user left: no second close after context.close (Н2)", async () => {
+    const f = fixture();
+    await shown(f);
+    const late = held(f);
+    f.srv.routes.push(lost(f.srv, false), late.route);
+    f.time.advance(3000); await settle();
+    expect(kinds(f).at(-1)).toBe("action.undo_offer.close");
+    await f.controller.close(); await settle();
+    late.gate.resolve(); await settle();
+    expect(kinds(f).slice(kinds(f).indexOf("context.close") + 1)).toEqual([]);
+  });
+
+  it("a refused undo hides the strip and sends no close: the server ends the offer with the next action (Н3)", async () => {
+    // root decision, pending owner (M-INTV Н3): CT 2.1.2 p.4 describes only the click before the deadline.
+    const f = fixture();
+    await shown(f);
+    f.srv.routes.push((_path, init) => {
+      const body = JSON.parse(String(init.body));
+      return json({ command: { id: body.command_id, status: "rejected" }, current: f.srv.project(body.context_id),
+        state_version: String(f.srv.state), error: { code: "VERSION_CONFLICT" } }, 409);
+    });
+    await f.controller.undo(); await settle();
+    f.time.advance(5000); await settle();
+    expect(kinds(f)).toEqual(["context.open", "interval.increase", "action.undo_offer.open", "action.undo"]);
+    expect(f.srv.right).toMatchObject({ status: "available", offer: { status: "offered" } });
+    expect(f.controller.snapshot()).toMatchObject({ undoOffer: null, problem: { code: "VERSION_CONFLICT" } });
+  });
+
+  it("Н7: the server ended the offer (a read shows none) while the open's status is on the way: not_found sends no open again", async () => {
+    const f = fixture();
+    await ready(f);
+    const late = held(f);
+    f.srv.routes.push(undefined as unknown as Route, lost(f.srv, false), late.route);
+    await f.controller.increase({ option_id: 2 }); await settle();
+    expect(kinds(f)).toEqual(["context.open", "interval.increase", "action.undo_offer.open"]);
+    f.srv.right!.status = "expired"; // another action ended it on the server
+    await f.controller.refresh(); await settle();
+    expect(f.controller.snapshot().capabilities.undo_offer).toBeNull();
+    late.gate.resolve(); await settle();
+    expect(kinds(f)).toEqual(["context.open", "interval.increase", "action.undo_offer.open"]);
+    expect(f.controller.snapshot()).toMatchObject({ undoOffer: null, canUndo: false });
+  });
+});
+

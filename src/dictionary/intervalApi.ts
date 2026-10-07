@@ -32,7 +32,13 @@ export type ActionUndoIntent = {
   kind: "action.undo"; command_id: string; context_id: string; card_id: string;
   action_id: string; expected_action_version: string;
 };
-export type DictionaryIntervalIntent = ContextOpenIntent | ContextCloseIntent | IntervalIncreaseIntent | ActionUndoIntent;
+/** CT 2.1.2: the one-time undo offer of an own increase; addressed by the increase action (core C-INTV-OFFER Р1). */
+export type UndoOfferIntent = {
+  kind: "action.undo_offer.open" | "action.undo_offer.close"; command_id: string; context_id: string; card_id: string;
+  action_id: string; expected_offer_version: string;
+};
+export type DictionaryIntervalIntent = ContextOpenIntent | ContextCloseIntent | IntervalIncreaseIntent | ActionUndoIntent
+  | UndoOfferIntent;
 export type DictionaryOrigin = { client_instance_id: string; document_id: string };
 export type DictionaryIntervalCommand<T extends DictionaryIntervalIntent = DictionaryIntervalIntent> = T & DictionaryOrigin;
 export type DictionaryContextAddress = DictionaryOrigin & { context_id: string; card_id: string };
@@ -57,6 +63,7 @@ export interface DictionaryIntervalApi {
   closeContext(token: string, proof: string, command: DictionaryIntervalCommand<ContextCloseIntent>): Promise<DictionaryCommandReply>;
   increase(token: string, proof: string, command: DictionaryIntervalCommand<IntervalIncreaseIntent>): Promise<DictionaryCommandReply>;
   undo(token: string, proof: string, command: DictionaryIntervalCommand<ActionUndoIntent>): Promise<DictionaryCommandReply>;
+  undoOffer(token: string, proof: string, command: DictionaryIntervalCommand<UndoOfferIntent>): Promise<DictionaryCommandReply>;
   readContext(token: string, proof: string, address: DictionaryContextAddress): Promise<DictionaryContextRead>;
   commandStatus(token: string, proof: string, command: DictionaryIntervalCommand): Promise<DictionaryCommandStatus>;
 }
@@ -194,6 +201,10 @@ export function validDictionaryIntervalIntent(value: unknown): value is Dictiona
     case "action.undo":
       return exactKeys(value, ["kind", "command_id", "context_id", "card_id", "action_id", "expected_action_version"])
         && uuid(value.context_id) && uuid(value.card_id) && uuid(value.action_id) && version(value.expected_action_version);
+    case "action.undo_offer.open":
+    case "action.undo_offer.close":
+      return exactKeys(value, ["kind", "command_id", "context_id", "card_id", "action_id", "expected_offer_version"])
+        && uuid(value.context_id) && uuid(value.card_id) && uuid(value.action_id) && version(value.expected_offer_version);
     case "interval.increase":
       return exactKeys(value, ["kind", "command_id", "context_id", "card_id", "expected_pair", "expected_local_date",
         "direction", "expected_progress_version", "option_id", "interval_days", "next_due_date"])
@@ -218,6 +229,10 @@ function copyIntent(value: DictionaryIntervalIntent): DictionaryIntervalIntent {
     case "action.undo":
       return { kind: value.kind, command_id: id(value.command_id), context_id: id(value.context_id),
         card_id: id(value.card_id), action_id: id(value.action_id), expected_action_version: value.expected_action_version };
+    case "action.undo_offer.open":
+    case "action.undo_offer.close":
+      return { kind: value.kind, command_id: id(value.command_id), context_id: id(value.context_id),
+        card_id: id(value.card_id), action_id: id(value.action_id), expected_offer_version: value.expected_offer_version };
     case "interval.increase":
       return { kind: value.kind, command_id: id(value.command_id), context_id: id(value.context_id),
         card_id: id(value.card_id), expected_pair: value.expected_pair, expected_local_date: value.expected_local_date,
@@ -236,6 +251,10 @@ function fingerprintPayload(intent: DictionaryIntervalIntent): Record<string, un
     case "action.undo":
       return { context_id: intent.context_id, action_id: intent.action_id,
         expected_action_version: intent.expected_action_version };
+    case "action.undo_offer.open":
+    case "action.undo_offer.close":
+      return { context_id: intent.context_id, action_id: intent.action_id,
+        expected_offer_version: intent.expected_offer_version };
     case "interval.increase":
       return { context_id: intent.context_id, card_id: intent.card_id, expected_pair: intent.expected_pair,
         expected_local_date: intent.expected_local_date,
@@ -266,6 +285,16 @@ export function dictionaryIncreaseIntent(
     card_id: current.context.card_id, expected_pair: interval.expected_pair, expected_local_date: interval.local_date,
     direction: interval.direction, expected_progress_version: interval.expected_progress_version,
     option_id: option.option_id, interval_days: option.interval_days, next_due_date: option.next_due_date }) as IntervalIncreaseIntent;
+}
+
+/** Open or close exactly the server's current undo offer of this open context, at its current version (CT 2.1.2). */
+export function dictionaryUndoOfferIntent(
+  current: DictionaryContextCurrent, commandId: string, kind: UndoOfferIntent["kind"], actionId: string,
+): UndoOfferIntent {
+  const offer = current.status === "open" ? current.capabilities.undo_offer : null;
+  if (current.status !== "open" || offer === null || !sameId(offer.action_id, actionId)) throw new Error("undo offer is not live");
+  return copyIntent({ kind, command_id: commandId, context_id: current.context.id, card_id: current.context.card_id,
+    action_id: offer.action_id, expected_offer_version: offer.version }) as UndoOfferIntent;
 }
 
 /** Undo addresses exactly the server's current undo_target of this open context. */
@@ -311,6 +340,10 @@ function wireBody(command: DictionaryIntervalCommand): object {
     case "action.undo":
       return { ...head, context_id: command.context_id, action_id: command.action_id,
         expected_action_version: command.expected_action_version, payload: {} };
+    case "action.undo_offer.open":
+    case "action.undo_offer.close":
+      return { ...head, context_id: command.context_id, action_id: command.action_id,
+        expected_offer_version: command.expected_offer_version, payload: {} };
     case "interval.increase":
       return { ...head, context_id: command.context_id, expected_progress_version: command.expected_progress_version,
         payload: { card_id: command.card_id, expected_pair: command.expected_pair,
@@ -324,8 +357,13 @@ const factKeys = ["id", "kind", "status", "applied_at", "target_id", "action_id"
 /** Fact references per kind (core coordinator._fact and DictionaryIntervalService handlers). */
 function acceptedFact(value: unknown, intent: DictionaryIntervalIntent, statuses: string[]): value is SavedCommandFact {
   if (!record(value) || !exactKeys(value, factKeys) || !sameId(value.id, intent.command_id) || value.kind !== intent.kind
-    || !oneOf(value.status, statuses) || !eventTime(value.applied_at) || value.result_id !== null
-    || !sameId(value.target_id, intent.card_id)) return false;
+    || !oneOf(value.status, statuses) || !eventTime(value.applied_at) || value.result_id !== null) return false;
+  if (intent.kind === "action.undo_offer.open" || intent.kind === "action.undo_offer.close") {
+    // The offer, addressed by its increase action, is the changed object; the service command has no action of its own.
+    return sameId(value.target_id, intent.action_id) && sameId(value.context_id, intent.context_id) && value.action_id === null
+      && value.object_version === String(BigInt(intent.expected_offer_version) + 1n);
+  }
+  if (!sameId(value.target_id, intent.card_id)) return false;
   switch (intent.kind) {
     case "context.open":
       return uuid(value.context_id) && value.action_id === null && value.object_version === null;
@@ -386,6 +424,9 @@ export function createDictionaryIntervalApi(options: HttpOptions): DictionaryInt
     closeContext: (token, proof, command) => send(token, proof, command, "context.close"),
     increase: (token, proof, command) => send(token, proof, command, "interval.increase"),
     undo: (token, proof, command) => send(token, proof, command, "action.undo"),
+    // Only the two offer kinds pass: any other kind fails the check in prepareCommand before a request.
+    undoOffer: (token, proof, command) => send(token, proof, command,
+      command?.kind === "action.undo_offer.close" ? "action.undo_offer.close" : "action.undo_offer.open"),
 
     async readContext(token, proof, original) {
       const address = prepareAddress(token, proof, original);

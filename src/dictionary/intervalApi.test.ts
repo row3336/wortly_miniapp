@@ -3,7 +3,8 @@ import type { DictionaryCardView, OpenDictionaryContext } from "../api/generated
 import { ApiError, clientContractVersion } from "../api/http";
 import {
   commandOutcomeUnknown, createDictionaryIntervalApi, dictionaryIncreaseIntent, dictionaryIntervalIntentHash,
-  dictionaryUndoIntent, validDictionaryContextCurrent, type DictionaryIntervalCommand, type DictionaryIntervalIntent,
+  dictionaryUndoIntent, dictionaryUndoOfferIntent, validDictionaryContextCurrent, type DictionaryIntervalCommand,
+  type DictionaryIntervalIntent,
 } from "./intervalApi";
 
 // Wire forms follow core api/models.py (Dictionary*Context*, *CommandFact), coordinator._fact and
@@ -641,5 +642,91 @@ describe("controller seam: intents from the server offer", () => {
     expect(() => dictionaryUndoIntent(open(), commandId)).toThrow("undo is not offered");
     expect(dictionaryUndoIntent(afterInitialIncrease(), commandId)).toEqual({ kind: "action.undo", command_id: commandId,
       context_id: contextId, card_id: cardId, action_id: actionId, expected_action_version: "1" });
+  });
+});
+
+describe("M-INTV: action.undo_offer.open / close (core C-INTV-OFFER, CT 2.1.2)", () => {
+  const offerFact = (kind: string, fields: Record<string, unknown> = {}) =>
+    fact(kind, { target_id: actionId, action_id: null, object_version: "2", ...fields });
+
+  it("builds the intent from the live offer at its version; another action or no offer throws", () => {
+    const pending = afterInitialIncrease("1", "pending");
+    expect(dictionaryUndoOfferIntent(pending, commandId, "action.undo_offer.open", actionId.toUpperCase())).toEqual({
+      kind: "action.undo_offer.open", command_id: commandId, context_id: contextId, card_id: cardId, action_id: actionId,
+      expected_offer_version: "1" });
+    expect(dictionaryUndoOfferIntent(afterInitialIncrease(), commandId, "action.undo_offer.close", actionId))
+      .toMatchObject({ kind: "action.undo_offer.close", expected_offer_version: "2" });
+    expect(() => dictionaryUndoOfferIntent(open(), commandId, "action.undo_offer.open", actionId)).toThrow("undo offer is not live");
+    expect(() => dictionaryUndoOfferIntent(pending, commandId, "action.undo_offer.open", otherCardId)).toThrow("undo offer is not live");
+    expect(() => dictionaryUndoOfferIntent({ status: "unavailable" }, commandId, "action.undo_offer.open", actionId)).toThrow();
+  });
+
+  it("sends the exact wire body without time fields and accepts the offer fact (target = action, no own action)", async () => {
+    const intent = dictionaryUndoOfferIntent(afterInitialIncrease("1", "pending"), commandId, "action.undo_offer.open", actionId);
+    const accepted = offerFact("action.undo_offer.open");
+    const { api, fetcher } = transport({ status: 200, body: reply(accepted, afterInitialIncrease()) });
+    expect(await api.undoOffer(token, proof, command(intent))).toMatchObject({ outcome: "accepted", command: accepted });
+    expect(sent(fetcher).body).toEqual({ command_id: commandId, kind: "action.undo_offer.open", client_instance_id: clientId,
+      document_id: documentId, context_id: contextId, action_id: actionId, expected_offer_version: "1", payload: {} });
+    expect(sent(fetcher).url).toMatch(/\/api\/v1\/commands$/);
+  });
+
+  it("closes from the offered version; a refusal is a known refusal with the context", async () => {
+    const intent = dictionaryUndoOfferIntent(afterInitialIncrease(), commandId, "action.undo_offer.close", actionId);
+    const closed = open();
+    const { api, fetcher } = transport(
+      { status: 200, body: reply(offerFact("action.undo_offer.close", { object_version: "3" }), closed) },
+      { status: 409, body: rejected("CAPABILITY_EXPIRED", closed) },
+    );
+    expect(await api.undoOffer(token, proof, command(intent))).toMatchObject({ outcome: "accepted" });
+    expect(sent(fetcher).body).toMatchObject({ kind: "action.undo_offer.close", expected_offer_version: "2" });
+    expect(await api.undoOffer(token, proof, command(intent))).toMatchObject({ outcome: "rejected", error: { code: "CAPABILITY_EXPIRED" } });
+  });
+
+  it.each([
+    ["card as target", offerFact("action.undo_offer.open", { target_id: cardId })],
+    ["own action", offerFact("action.undo_offer.open", { action_id: actionId })],
+    ["same version", offerFact("action.undo_offer.open", { object_version: "1" })],
+    ["foreign context", offerFact("action.undo_offer.open", { context_id: otherContextId })],
+    ["other kind", offerFact("action.undo_offer.close")],
+  ])("never treats a foreign offer fact as acceptance: %s", async (_name, wrong) => {
+    const intent = dictionaryUndoOfferIntent(afterInitialIncrease("1", "pending"), commandId, "action.undo_offer.open", actionId);
+    const { api } = transport({ status: 200, body: reply(wrong, afterInitialIncrease()) });
+    const error = await failure(api.undoOffer(token, proof, command(intent)));
+    expect(error).toMatchObject({ kind: "invalid_response" });
+    expect(commandOutcomeUnknown(error)).toBe(true);
+  });
+
+  it("refuses another kind or a time field before any request", async () => {
+    const { api, fetcher } = transport();
+    const intent = dictionaryUndoOfferIntent(afterInitialIncrease("1", "pending"), commandId, "action.undo_offer.open", actionId);
+    await expect(api.undoOffer(token, proof, { ...command(intent), kind: "action.undo" } as any)).rejects.toThrow();
+    await expect(api.undoOffer(token, proof, { ...command(intent), clicked_at: 1 } as any)).rejects.toThrow();
+    await expect(api.undoOffer(token, proof, { ...command(intent), expected_offer_version: 2 } as any)).rejects.toThrow();
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it.each(["action.undo_offer.open", "action.undo_offer.close"] as const)("%s fingerprint matches core _offer_command", async kind => {
+    const intent: DictionaryIntervalIntent = { kind, command_id: commandId, context_id: contextId.toUpperCase(), card_id: cardId,
+      action_id: actionId, expected_offer_version: largeVersion };
+    expect(await dictionaryIntervalIntentHash(intent)).toBe(await sha256(
+      `{"kind":"${kind}","payload":{"action_id":"${actionId}","context_id":"${contextId}","expected_offer_version":"${largeVersion}"}}`));
+  });
+
+  it("status of an offer command: the verified hash and the stored fact", async () => {
+    const intent = dictionaryUndoOfferIntent(afterInitialIncrease("1", "pending"), commandId, "action.undo_offer.open", actionId);
+    const hash = await dictionaryIntervalIntentHash(intent);
+    const { api } = transport({ status: 200, body: reply(offerFact("action.undo_offer.open", { status: "already_applied" }),
+      afterInitialIncrease(), { verified_intent_hash: hash }) });
+    expect(await api.commandStatus(token, proof, command(intent))).toMatchObject({ outcome: "accepted" });
+  });
+
+  it("literal hashes of core intent_hash for open v1 and close v2, upper-case IDs normalised (M-INTV-QA probes/core_offer_hash.py)", async () => {
+    const base = { command_id: commandId, context_id: "00000000-0000-4000-8000-0000000001F4", card_id: cardId,
+      action_id: "00000000-0000-4000-8000-0000000001F5" };
+    expect(await dictionaryIntervalIntentHash({ ...base, kind: "action.undo_offer.open", expected_offer_version: "1" }))
+      .toBe("ec2e4c92c988282d9ea99e5cca7f3e7fe57225446fcd820bebec028ac25c1fb9");
+    expect(await dictionaryIntervalIntentHash({ ...base, kind: "action.undo_offer.close", expected_offer_version: "2" }))
+      .toBe("1a335cd9a9e1b13e033b91040cc326513b318a98245cd9999974b05aaadec516");
   });
 });

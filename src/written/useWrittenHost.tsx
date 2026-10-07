@@ -31,8 +31,13 @@ export type WrittenHostOptions = {
    */
   onOpenCard?(cardId: string, details: { assignment: string }): void;
 };
-/** An accepted card study action of a card opened from this quiz (M-ACTIONS cardActionsController). */
-export type WrittenCardAction = { kind: "card.exclude" | "card.return" | "card.relearn"; cardId: string; stateVersion: string };
+/**
+ * An accepted card study action of a card opened from this quiz (M-ACTIONS cardActionsController), or its manual interval
+ * increase and that increase's undo (M-INTV).
+ */
+export type WrittenCardAction = {
+  kind: "card.exclude" | "card.return" | "card.relearn" | "interval.increase" | "action.undo"; cardId: string; stateVersion: string;
+};
 export type WrittenHost = {
   /** Today waits for the first recovery and for own receipts or sessions it must show first. */
   blocksToday: boolean;
@@ -41,6 +46,8 @@ export type WrittenHost = {
   /**
    * An exclude or relearn of the answered card moved the main written quiz on (TA:153, К07-070, К07-079): the quiz reads
    * its session at least as new as that action and, back on its route, goes on to the next question or the summary.
+   * An increase or its undo only makes the session read at least that new: the increase ended the correction of the
+   * earlier answer on the server (Т08, RA:181), the quiz shows that and stays on its step.
    */
   cardActionApplied(event: WrittenCardAction): void;
   screen: ReactNode;
@@ -204,7 +211,9 @@ export function useWrittenHost(options: WrittenHostOptions): WrittenHost {
   const cardActionApplied = (event: WrittenCardAction) => {
     // «Вернуть в повторы» never changes a running quiz (К07-085).
     if (event.kind === "card.return" || !/^[1-9][0-9]*$/.test(event.stateVersion)) return;
-    bound.advance = event.cardId.toLowerCase();
+    // root decision, pending owner (M-INTV Р2): no «Дальше» after an increase or its undo, only a fresh session read.
+    const moves = event.kind === "card.exclude" || event.kind === "card.relearn";
+    if (moves) bound.advance = event.cardId.toLowerCase();
     if (BigInt(event.stateVersion) > BigInt(bound.actionFloor)) bound.actionFloor = event.stateVersion;
     repaint();
   };

@@ -25,7 +25,7 @@ type Route = (path: string, init: RequestInit) => Response | Promise<Response> |
 function server() {
   const s = { state: 9007199254740993n, saved: false, contexts: new Map<string, "open" | "closed">(),
     commands: new Map<string, Record<string, unknown>>(), routes: [] as Route[], next: 500,
-    right: null as null | { action: string; context: string } };
+    right: null as null | { action: string; context: string; offer: "pending" | "offered" | "closed"; version: number } };
   const A01: Array<[number, number]> = [[2, 3], [3, 5], [4, 8]];
   const project = (contextId: string) => {
     const status = s.contexts.get(contextId);
@@ -52,10 +52,10 @@ function server() {
         : { current_schedule: { interval_days: 1, next_due_date: TODAY, persisted: false }, expected_progress_version: null,
           options: A01.map(([o, d]) => option(o, d)), default_option_id: 4 }) },
       capabilities: { interval_increase: s.saved ? null : { direction: "l1-de" },
-        // This fake server shows the offer already opened (core C-INTV-OFFER); open/close is M-INTV.
-        undo_offer: s.right && s.right.context === contextId
-          ? { action_id: s.right.action, context_id: contextId, status: "offered", version: "2" } : null,
-        undo_target: s.right && s.right.context === contextId
+        // Core C-INTV-OFFER: pending until action.undo_offer.open, undo_target only while offered.
+        undo_offer: s.right && s.right.context === contextId && s.right.offer !== "closed"
+          ? { action_id: s.right.action, context_id: contextId, status: s.right.offer, version: String(s.right.version) } : null,
+        undo_target: s.right && s.right.context === contextId && s.right.offer === "offered"
           ? { action_id: s.right.action, kind: "interval.increase", version: "1", context_id: contextId } : null } };
   };
   const reply = (command: unknown, contextId: string | null, extra = {}) =>
@@ -71,7 +71,12 @@ function server() {
       else if (body.kind === "context.close") { s.contexts.set(contextId, "closed"); s.right = null; }
       else if (body.kind === "interval.increase") {
         s.saved = body.payload.direction === "l1-de";
-        const action = id(s.next++); fields = { action_id: action, object_version: "1" }; s.right = { action, context: contextId };
+        const action = id(s.next++); fields = { action_id: action, object_version: "1" };
+        s.right = { action, context: contextId, offer: "pending", version: 1 };
+      } else if (body.kind === "action.undo_offer.open" || body.kind === "action.undo_offer.close") {
+        if (!s.right) throw new Error("no offer");
+        s.right.version++; s.right.offer = body.kind === "action.undo_offer.open" ? "offered" : "closed";
+        fields = { target_id: s.right.action, object_version: String(s.right.version) };
       }
       s.state++;
       const fact = { id: body.command_id, kind: body.kind, status: "applied", applied_at: "2026-09-29T12:00:00Z", target_id: CARD,
@@ -183,9 +188,11 @@ describe("dictionary interval context hook with real access, controller and API"
     const count = f.calls().length;
     ui.rerender({ ...f.options, access: f.access() });
     await waitFor(() => expect(state(ui)).toMatchObject({ phase: "ready", pending: null }));
-    expect(f.calls().slice(count)).toEqual([`GET /api/v1/commands/${id(101)}`, `GET /api/v1/dictionary/contexts/${id(500)}`]);
+    // The status of the same ID names the increase's offer: the same live document opens it once (CT 2.1.2 p.1–3).
+    expect(f.calls().slice(count)).toEqual([`GET /api/v1/commands/${id(101)}`, "POST /api/v1/commands",
+      `GET /api/v1/dictionary/contexts/${id(500)}`]);
     expect(f.auth()).toBe("Bearer synthetic-interval-token-2");
-    expect(f.posts()).toHaveLength(2);
+    expect(f.posts().map(body => body.kind)).toEqual(["context.open", "interval.increase", "action.undo_offer.open"]);
     expect(state(ui).interval!).toMatchObject({ expected_progress_version: "1" });
   });
 
@@ -306,7 +313,7 @@ describe("commit→passive window without act (real React scheduler)", () => {
       expect(a1.access.isLive()).toBe(true);
       await seen.actions!.increase({ option_id: 2 });
       expect(f.auth()).toBe("Bearer synthetic-interval-token-sibling");
-      expect(f.posts().map(body => body.kind)).toEqual(["context.open", "interval.increase"]);
+      expect(f.posts().map(body => body.kind)).toEqual(["context.open", "interval.increase", "action.undo_offer.open"]);
     } finally {
       root.unmount();
       env.IS_REACT_ACT_ENVIRONMENT = previous;
@@ -319,6 +326,7 @@ describe("CP5 F-H1: a managed close without a live binding ends the old undo for
     const f = fixture(), { ui } = mount(f);
     await ready(ui);
     await act(() => ui.result.current.actions.increase({ option_id: 2 }));
+    await flush(); // the offer's one open (CT 2.1.2 p.2)
     expect(state(ui)).toMatchObject({ canUndo: true, context: { id: id(500) } });
     visible("hidden"); document.dispatchEvent(new Event("visibilitychange")); visible("visible");
     await flush();
@@ -357,6 +365,7 @@ describe("CP5 F-H1: a managed close without a live binding ends the old undo for
     const view = render(createElement(Host, { options: f.options }));
     await waitFor(() => expect(latest!.state).toMatchObject({ phase: "ready", canIncrease: true }));
     await act(() => latest!.actions.increase({ option_id: 2 }));
+    await flush(); // the offer's one open (CT 2.1.2 p.2)
     expect(latest!.state.canUndo).toBe(true);
     captured = latest!.actions;
     const count = f.calls().length;
@@ -422,3 +431,19 @@ describe("CP6 Q1: a pending initial open across a rebind (CON:147, CON:149, B3)"
     expect(f.posts()).toHaveLength(2);
   });
 });
+
+describe("M-INTV-QA QA-R: a newer observed state_version reads the context again", () => {
+  it("a higher minimumStateVersion: exactly one context GET and the newer version is shown", async () => {
+    const f = fixture(), { ui } = mount(f);
+    await ready(ui);
+    const reads = () => f.calls().filter(call => call.startsWith("GET /api/v1/dictionary/contexts/")).length;
+    const before = reads();
+    f.srv.state += 3n;
+    ui.rerender({ ...f.options, minimumStateVersion: String(f.srv.state) });
+    await flush();
+    await waitFor(() => expect(reads()).toBe(before + 1));
+    await waitFor(() => expect(state(ui).stateVersion).toBe(String(f.srv.state)));
+    expect(state(ui).problem).toBeNull();
+  });
+});
+

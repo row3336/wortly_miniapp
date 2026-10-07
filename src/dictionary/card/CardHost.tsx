@@ -12,17 +12,21 @@ import { useCardActions } from "../actions/useCardActions";
 import { useDictionaryCardDocument } from "../useDictionaryCardDocument";
 import { cardFieldSlots } from "../editors/CardFieldSlots";
 import { useFieldEditors } from "../editors/useFieldEditors";
+import { IntervalPanel } from "../IntervalPanel";
 import { useDictionaryIntervalContext } from "../useDictionaryIntervalContext";
 import { movesWrittenQuiz, type CardOrigin } from "./cardOrigin";
 import { CardScreen } from "./CardScreen";
 import type { ManualControl } from "./CardStudyBlock";
 
 export type CardContext = ReturnType<typeof useDictionaryIntervalContext>;
+/** An accepted study action of this card: exclude/return/relearn (M-ACTIONS) or the manual increase and its undo (M-INTV). */
+export type CardStudyEvent = CardActionApplied
+  | { kind: "interval.increase" | "action.undo"; cardId: string; stateVersion: string };
 /** Connection points of the packages that add their own controls to М12 (DESIGN M-CARD §7). */
 export type CardExtensions = {
   /** Further controls under the card's own study actions (M-ACTIONS renders those itself). */
   renderActions?(view: DictionaryCardView): ReactNode;
-  /** M-INTV: the interval window of the open card context. */
+  /** Replaces the interval window of the open card context (IntervalPanel, M-INTV). */
   renderInterval?(view: DictionaryCardView, context: CardContext): ReactNode;
 };
 
@@ -51,8 +55,11 @@ export type CardHostProps = {
   leaving?: boolean;
   /** The awaited close was started, or cannot follow any more (open refused or unresolved, access changed). */
   onClosed?(): void;
-  /** An accepted exclude/return/relearn of this card (M-ACTIONS): the source quiz may move on (TA:153). */
-  onStudyAction?(event: CardActionApplied): void;
+  /**
+   * An accepted exclude/return/relearn of this card (M-ACTIONS): the source quiz may move on (TA:153). An accepted manual
+   * increase or its undo (M-INTV): the source quiz reads its session again (Т08: the increase ends the earlier correction).
+   */
+  onStudyAction?(event: CardStudyEvent): void;
 };
 
 type ManualDocument = ReturnType<typeof useManualSelectionDocument>;
@@ -121,6 +128,18 @@ export function CardHost(props: CardHostProps) {
     backSlot.current = run;
     return () => { if (backSlot.current === run) backSlot.current = null; };
   }, [leaving, backSlot]);
+  // M-INTV: an accepted own increase or undo reads the card again (its study block shows the server's new term) and tells
+  // the source quiz. root decision, pending owner (M-INTV Р2): the quiz only reads its session again, it does not move on.
+  const applied = context.state.applied;
+  const { refresh: refreshCard } = card;
+  const latestStudy = useRef(props.onStudyAction); latestStudy.current = props.onStudyAction;
+  const reported = useRef<string | null>(null);
+  useEffect(() => {
+    if (applied === null || reported.current === applied.commandId) return;
+    reported.current = applied.commandId;
+    void refreshCard();
+    latestStudy.current?.({ kind: applied.kind, cardId: props.cardId, stateVersion: applied.stateVersion });
+  }, [applied, refreshCard, props.cardId]);
   const pending = context.state.pending;
   // An unknown open outcome that its status check could not settle is given up: the next open or document closes it.
   const settledOpen = pending?.kind !== "context.open" || pending.status === "unknown" && context.state.problem !== null
@@ -160,7 +179,12 @@ export function CardHost(props: CardHostProps) {
       <CardActions language={props.language} lemma={shown.content.card.lemma} document={studyActions} />
       {props.extensions?.renderActions?.(shown)}
     </>}
-    interval={shown && props.extensions?.renderInterval?.(shown, context)}
+    // root decision, pending owner (M-INTV Р3): no increase from the oral quiz (RA:220, TA:132, К07-064), although the
+    // dictionary context of its card offers it, neither the default window nor an extension; the dictionary and the main
+    // written quiz show it (TA:149).
+    interval={shown && (props.origin.kind === "dictionary" || movesWrittenQuiz(props.origin))
+      && (props.extensions?.renderInterval ? props.extensions.renderInterval(shown, context)
+        : <IntervalPanel language={props.language} context={context} enabled={!leaving} />)}
     fields={shown ? cardFieldSlots({ state: editors.state, actions: editors.actions, view: shown, language: props.language }) : undefined}
     onBack={editors.actions.requestLeave} onRetry={() => { void card.refresh(); }} />;
 }
