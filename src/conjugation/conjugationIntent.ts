@@ -1,6 +1,7 @@
 import type { AnswerSubmitCommand, ConjugationScheduleCommand, ConjugationStartPayload,
   PresentCommand, ResultCorrectCommand, ResultGradeCommand, SessionStartCommand, SessionStopCommand } from "../api/generated";
 import { exactKeys, oneOf, record, uuid, version } from "../api/wireValidation";
+import { intentHash } from "../commands/intentHash";
 import type { ResultUndoIntent } from "../commands/resultUndo";
 
 type WithoutOrigin<T> = T extends unknown ? Omit<T, "client_instance_id" | "document_id"> : never;
@@ -74,9 +75,5 @@ export async function conjugationIntentHash(value: ConjugationIntent): Promise<s
           expected_result_version: intent.expected_result_version, payload: intent.payload }); break;
     }
   }
-  // Nested answer/grade payloads contain at most one key. Versions remain exact strings.
-  const canonical = JSON.stringify({ kind: intent.kind,
-    payload: Object.fromEntries(Object.keys(payload).sort().map(key => [key, payload[key]])) });
-  const digest = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical));
-  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+  return intentHash(intent.kind, payload);
 }
