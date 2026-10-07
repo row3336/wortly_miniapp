@@ -51,6 +51,22 @@ const copy = {
     refine: "Refine fields" },
 } as const;
 
+/**
+ * Working copy for G05, root decision, pending owner (В3, 2.31б): the label of the daily counter. It names the
+ * material of the session group (the core counts words or phrases by that group) and inflects the noun by the number.
+ */
+const practiceLabel = {
+  ru: { prefix: "Сегодня", words: { one: "слово", few: "слова", many: "слов" }, phrases: { one: "фраза", few: "фразы", many: "фраз" } },
+  uk: { prefix: "Сьогодні", words: { one: "слово", few: "слова", many: "слів" }, phrases: { one: "фраза", few: "фрази", many: "фраз" } },
+  en: { prefix: "Today", words: { one: "word", few: "words", many: "words" }, phrases: { one: "phrase", few: "phrases", many: "phrases" } },
+} as const;
+export function practiceText(language: Language, phrases: boolean, count: number): string {
+  const label = practiceLabel[language], category = new Intl.PluralRules(language).select(count);
+  const forms = phrases ? label.phrases : label.words;
+  // English has no "few": every other category falls to the plural form.
+  return `${label.prefix}: ${count} ${category === "one" ? forms.one : category === "few" ? forms.few : forms.many}`;
+}
+
 /** Connects the local display to the owner's exact capabilities; command identity and outcome are never invented here. */
 export function WrittenScreen({ state, language, submitOnEnter, actions, onToday, onRefineFields }: WrittenScreenProps) {
   const t = copy[language], composing = useRef(false), root = useRef<HTMLElement>(null);
@@ -64,6 +80,8 @@ export function WrittenScreen({ state, language, submitOnEnter, actions, onToday
   const closed = state.phase === "closed" ? state.closed : null;
   const ownStop = closed?.reason === "stop";
   const problemCode = state.problem, phrases = state.bucket === "phrases";
+  // 2.31б: the daily count of unique items of the session's group, taken from the server step; never a local tally.
+  const practice = state.practice;
   // A refused «Шаг назад» says that this right is gone; the re-read state shows what holds now (CT 2.2).
   const refusedUndo = primary.outcome === "rejected" && primary.resolved?.kind === "result.undo" && problemCode === primary.rejectionCode;
   const problem = refusedUndo && problemCode !== "SESSION_CLOSED" ? stepBackCopy[language].unavailable
@@ -108,6 +126,7 @@ export function WrittenScreen({ state, language, submitOnEnter, actions, onToday
       {!isClosed && state.phase !== "idle" && <button type="button" disabled={!state.canStop}
         onClick={() => { if (state.canStop) void actions.stop("stop"); }}>{t.exit}</button>}
     </header>}
+    {!summary && !isClosed && practice && <p className="written-practice">{practiceText(language, phrases, practice.count)}</p>}
     {state.question && <WrittenAnswerInput assignment={state.question} language={language}
       value={pendingForgot ? "" : unknownAnswer && state.submittedText !== null ? state.submittedText : state.draft}
       readOnly={!state.canEditDraft} canSubmit={state.canSubmit} canForget={state.canForget} submitOnEnter={submitOnEnter}

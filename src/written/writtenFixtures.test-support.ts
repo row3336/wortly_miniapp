@@ -42,6 +42,8 @@ export type ServerOptions = {
   drills?: boolean;
   /** Frozen example candidates of every answered card (result detail). */
   examples?: CardExamples;
+  /** Unique items already practised today before this session: the daily count is never the number of its answers. */
+  dailyBase?: number;
   /** The server grants the undo of the latest answer of this document, as core does since C-UNDO-1. */
   undo?: boolean;
   /** Every result.undo is refused with this code; the refusal leaves no undo right (the reason it was refused). */
@@ -93,7 +95,7 @@ export function writtenServer(options: ServerOptions = {}) {
   }
   function step(): WrittenStep {
     return { ...projection(), practice: { pair: "ru-de", direction: "l1-de", local_date: "2026-10-05", time_zone: "UTC",
-      count: progress().completed }, review_progress: null };
+      count: progress().completed + (options.dailyBase ?? 0) }, review_progress: null };
   }
   function view(resultId: string) {
     const item = results.get(resultId)!, open = state.status !== "closed";

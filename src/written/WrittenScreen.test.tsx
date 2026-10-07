@@ -1,13 +1,14 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useWrittenDocument } from "./useWrittenDocument";
-import { WrittenScreen } from "./WrittenScreen";
+import { practiceText, WrittenScreen } from "./WrittenScreen";
 import { WrittenSummary } from "./WrittenSummary";
 import { writtenFixture, type ServerOptions } from "./writtenFixtures.test-support";
 
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 
-function setup(options: ServerOptions = {}, mode: "normal" | "accelerated" = "normal") {
+function setup(options: ServerOptions = {}, mode: "normal" | "accelerated" = "normal",
+  view: { language?: "ru" | "uk" | "en"; bucket?: "words" | "phrases" } = {}) {
   const f = writtenFixture(options);
   const onToday = vi.fn();
   function Harness() {
@@ -17,7 +18,7 @@ function setup(options: ServerOptions = {}, mode: "normal" | "accelerated" = "no
     return <>
       <button type="button" onClick={() => { void actions.start("words"); }}>start-words</button>
       <button type="button" onClick={() => { void actions.start("phrases"); }}>start-phrases</button>
-      <WrittenScreen state={state} language="ru" submitOnEnter actions={actions} onToday={onToday} />
+      <WrittenScreen state={view.bucket ? { ...state, bucket: view.bucket } : state} language={view.language ?? "ru"} submitOnEnter actions={actions} onToday={onToday} />
     </>;
   }
   render(<Harness />);
@@ -267,6 +268,73 @@ describe("М08 written task screen", () => {
     fireEvent.click(screen.getByRole("button", { name: "start-words" }));
     await screen.findByText("Сейчас нет доступных слов для этого занятия.");
     fireEvent.click(h.button("На Сегодня")); expect(h.onToday).toHaveBeenCalledOnce();
+  });
+});
+
+describe("M-WRITTEN-PRACTICE daily counter (2.31б)", () => {
+  const answer = (h: ReturnType<typeof setup>, text: string) => {
+    fireEvent.change(h.field(), { target: { value: text } }); fireEvent.keyDown(h.field(), { key: "Enter" });
+  };
+  const counter = () => document.querySelector(".written-practice")?.textContent ?? null;
+  it("shows the server's daily count, not the number of answers of this session, and keeps it for the next question", async () => {
+    // The session projection of a start has no practice (contract): nothing is invented before the first answer.
+    const h = setup({ cards: [6, 7], dailyBase: 10 }); await h.start();
+    expect(counter()).toBeNull();
+    answer(h, "Haus"); await screen.findByText("Верно");
+    expect(counter()).toBe("Сегодня: 11 слов");
+    fireEvent.click(h.button("Легко")); await screen.findByText("слово 7");
+    expect(counter()).toBe("Сегодня: 11 слов");
+    answer(h, "Haus"); await screen.findByText("Верно");
+    expect(counter()).toBe("Сегодня: 12 слов");
+  });
+  it.each([["ru", "words", "Сегодня: 21 слово"], ["ru", "phrases", "Сегодня: 21 фраза"], ["uk", "words", "Сьогодні: 21 слово"],
+    ["uk", "phrases", "Сьогодні: 21 фраза"], ["en", "words", "Today: 21 words"], ["en", "phrases", "Today: 21 phrases"]] as const)(
+    "labels the %s counter of the %s group", async (language, bucket, text) => {
+      const h = setup({ cards: [6, 7], dailyBase: 20 }, "normal", { language, bucket }); await h.start();
+      answer(h, "Haus");
+      expect(await screen.findByText(text)).toBeTruthy();
+    });
+  it("inflects the noun by the number", () => {
+    for (const [language, expected] of [["ru", ["1 фраза", "2 фразы", "5 фраз", "21 фраза"]], ["uk", ["1 фраза", "2 фрази", "5 фраз", "21 фраза"]],
+      ["en", ["1 phrase", "2 phrases", "5 phrases", "21 phrases"]]] as const) {
+      expect(expected.map(item => practiceText(language, true, Number(item.split(" ")[0])).replace(/^[^:]+: /, ""))).toEqual(expected);
+    }
+  });
+  it("is not shown on the summary", async () => {
+    const h = setup({ cards: [6], dailyBase: 3 }); await h.start();
+    answer(h, "falsch"); await screen.findByText("Есть ошибка");
+    expect(counter()).toBe("Сегодня: 4 слова");
+    fireEvent.click(h.button("Далее")); await screen.findByText("Занятие завершено.");
+    expect(counter()).toBeNull();
+  });
+  it("is not shown on an interrupted summary after Stop", async () => {
+    const h = setup({ cards: [6, 7, 8], dailyBase: 3 }); await h.start();
+    answer(h, "Haus"); await screen.findByText("Верно"); fireEvent.click(h.button("Далее")); await screen.findByText("слово 7");
+    expect(counter()).toBe("Сегодня: 4 слова");
+    fireEvent.click(h.button("Выйти"));
+    await screen.findByRole("region", { name: "Итог занятия" });
+    expect(counter()).toBeNull();
+  });
+  it("is not shown when the session is closed without a summary (summary_home)", async () => {
+    const h = setup({ cards: [6], dailyBase: 3 }); await h.start();
+    answer(h, "Haus"); await screen.findByText("Верно"); fireEvent.click(h.button("Легко")); await screen.findByText("Занятие завершено.");
+    fireEvent.click(h.button("На Сегодня"));
+    await waitFor(() => expect(h.posts().at(-1)).toMatchObject({ kind: "session.stop", payload: { reason: "summary_home" } }));
+    await waitFor(() => expect(screen.queryByRole("region", { name: "Итог занятия" })).toBeNull());
+    expect(screen.getByText("Занятие завершено.")).toBeTruthy();
+    expect(counter()).toBeNull();
+  });
+  it("a new session starts without the previous session's counter", async () => {
+    const h = setup({ cards: [6, 7], dailyBase: 3 }); await h.start();
+    answer(h, "Haus"); await screen.findByText("Верно"); fireEvent.click(h.button("Далее")); await screen.findByText("слово 7");
+    expect(counter()).toBe("Сегодня: 4 слова");
+    fireEvent.click(h.button("Выйти"));
+    await screen.findByRole("region", { name: "Итог занятия" });
+    await waitFor(() => expect((screen.getByRole("button", { name: "start-words" }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "start-words" }));
+    await waitFor(() => expect(h.kinds().filter(kind => kind === "session.start")).toHaveLength(2));
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 300)); });
+    expect(counter()).toBeNull();
   });
 });
 

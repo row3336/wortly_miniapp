@@ -1,4 +1,4 @@
-import type { PublicAssignment, SessionProjection, WrittenStep, WrittenSummary } from "../api/generated";
+import type { PublicAssignment, SessionProjection, WrittenPractice, WrittenStep, WrittenSummary } from "../api/generated";
 import { sameId } from "../api/wireValidation";
 import { StudyView, type StudyLanes, type StudyPhase } from "../commands/studyView";
 import type { WrittenAnswer } from "./writtenApi";
@@ -36,6 +36,11 @@ export type WrittenViewSnapshot = {
   timer: { key: string; durationMs: number } | null;
   /** Material of the current or last requested session; a refused start has no projection of its own. */
   bucket: "words" | "phrases" | null;
+  /**
+   * The daily practice count (2.31б) of the last server step that carried it. Only answer replies carry the step, so
+   * it is null until the first answer of the session and then survives the plain session projections that follow.
+   */
+  practice: WrittenPractice | null;
   /** The confirmed natural summary of the current session (Д02 «completed»). */
   summary: WrittenSummary | null;
   closed: WrittenClosed | null;
@@ -67,6 +72,7 @@ const closeReason = (value: string | null | undefined): WrittenClosed["reason"] 
 /** Presentation is local; only document commands can establish a saved answer, presentation or closure. */
 export class WrittenViewController extends StudyView<WrittenDocumentCommands, Current, WrittenAnswer, WrittenViewSnapshot> {
   private summary: { value: WrittenSummary; version: string } | null = null;
+  private practice: { value: WrittenPractice; version: string } | null = null;
   private requestedBucket: "words" | "phrases" | null = null;
   private closedFacts: WrittenClosed | null = null;
   private summaryReading: Promise<void> | null = null;
@@ -85,6 +91,9 @@ export class WrittenViewController extends StudyView<WrittenDocumentCommands, Cu
     this.closedFacts.reason ??= closeReason(reason);
   }
   protected captured(step: Current, version: string): void {
+    if ("practice" in step && (!this.practice || BigInt(version) >= BigInt(this.practice.version))) {
+      this.practice = { value: structuredClone(step.practice), version };
+    }
     if ("summary" in step && step.summary && (!this.summary || BigInt(version) >= BigInt(this.summary.version))) {
       this.summary = { value: structuredClone(step.summary), version };
     }
@@ -114,6 +123,7 @@ export class WrittenViewController extends StudyView<WrittenDocumentCommands, Cu
     const closing = live && commands.canStop && this.sessionId !== null && !this.stopping && !this.is("closed", "idle", "disposed");
     return { phase: live ? this.phase as Phase : "disposed", ...fields,
       bucket: live ? this.current?.bucket ?? this.requestedBucket ?? (pending?.kind === "session.start" ? pending.payload.bucket : null) : null,
+      practice: live && this.practice ? structuredClone(this.practice.value) : null,
       summary: live && this.summary ? structuredClone(this.summary.value) : null,
       closed: live && this.is("closed") && this.closedFacts ? structuredClone(this.closedFacts) : null,
       canStart: live && interactive && commands.canBegin && !this.operation && !this.reading && !this.stopping && this.is("idle", "closed"),
@@ -150,7 +160,7 @@ export class WrittenViewController extends StudyView<WrittenDocumentCommands, Cu
   start(bucket: "words" | "phrases"): Promise<void> {
     if (bucket !== "words" && bucket !== "phrases") return Promise.reject(new Error("written bucket required"));
     if (!this.snapshot().canStart) return Promise.resolve();
-    this.sessionId = this.options.newId(); this.current = null; this.currentVersion = null; this.summary = null; this.closedFacts = null;
+    this.sessionId = this.options.newId(); this.current = null; this.currentVersion = null; this.summary = null; this.practice = null; this.closedFacts = null;
     this.requestedBucket = bucket;
     this.question = null; this.answer = null; this.answerVersion = null; this.draft = ""; this.draftAssignmentId = null;
     this.previous = false; this.pendingGradeAdvance = null; this.waitNext = false;
