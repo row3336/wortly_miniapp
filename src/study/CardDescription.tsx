@@ -2,7 +2,9 @@ import type { ReactNode } from "react";
 import type { DictionaryCardContent, LearningPreviewContent } from "../api/generated";
 import type { Language } from "../i18n/language";
 
-type Props = { content: LearningPreviewContent | DictionaryCardContent; language: Language; headingId: string };
+type Props = { content: LearningPreviewContent | DictionaryCardContent; language: Language; headingId: string;
+  /** М12 only: the own-translation pencil, editor and undo at the translation (M-EDIT). */
+  translationSlot?: ReactNode };
 type Form = { label: string; value: string | null | undefined; status?: "applicable" | "not_applicable" | "unknown";
   article?: "der" | "die" | "das" };
 const copy = {
@@ -23,7 +25,7 @@ const articles = { masculine: "der", feminine: "die", neuter: "das" } as const;
 const auxiliaries = { haben: "hat", sein: "ist" } as const;
 
 /** Shared German forms, taxonomy and translation; the surrounding screen owns the remaining blocks. */
-export function CardDescription({ content, language, headingId }: Props) {
+export function CardDescription({ content, language, headingId, translationSlot }: Props) {
   const t = copy[language], { card, grammar } = content;
   const missing = <span className="reference-missing" lang={language}>{t.missing}</span>;
   const value = (text: string | null | undefined) => text?.trim() ? text : missing;
@@ -86,6 +88,7 @@ export function CardDescription({ content, language, headingId }: Props) {
     <section className="reference-translation" aria-label={t.translation} lang={dictionaryLanguage}>
       {personal !== null && <p className="reference-personal" lang={language}>{t.personal}</p>}
       {(translations.length ? translations : [null]).map((text, index) => <p key={index}>{value(text)}</p>)}
+      {translationSlot}
     </section>
   </>;
 }

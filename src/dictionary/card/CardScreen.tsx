@@ -4,6 +4,7 @@ import type { Language } from "../../i18n/language";
 import { navigationText } from "../../i18n/messages";
 import { ReferenceCardBody } from "../../study/ReferenceCardBody";
 import type { DictionaryCardSnapshot } from "../dictionaryCardController";
+import type { CardFieldSlots } from "../editors/CardFieldSlots";
 import { CardExamplesBlock } from "./CardExamplesBlock";
 import { cardText } from "./cardCopy";
 import type { CardOrigin } from "./cardOrigin";
@@ -22,6 +23,8 @@ export type CardScreenProps = {
   actions?: ReactNode;
   /** M-INTV connection point, under the review directions. */
   interval?: ReactNode;
+  /** M-EDIT: own-field pencils and editors at their fields, and the question before leaving unsaved text. */
+  fields?: CardFieldSlots;
   onBack(): void;
   onRetry(): void;
 };
@@ -47,8 +50,8 @@ export function CardScreen(props: CardScreenProps) {
   } else if (props.phase === "unavailable") body = <p className="card-status">{t.unavailable}</p>;
   else if (view !== null && (props.phase === "ready" || busy)) {
     body = <>
-      <ReferenceCardBody content={view.content} language={props.language}
-        renderExamples={examples => <CardExamplesBlock examples={examples} language={props.language} />} />
+      <ReferenceCardBody content={view.content} language={props.language} fieldSlots={props.fields}
+        renderExamples={examples => <><CardExamplesBlock examples={examples} language={props.language} />{props.fields?.examples}</>} />
       <CardStudyBlock study={view.study} origin={props.origin} language={props.language}
         manual={busy ? { ...props.manual, enabled: false } : props.manual} interval={props.interval} />
       {props.actions}
@@ -58,6 +61,7 @@ export function CardScreen(props: CardScreenProps) {
     <header className="card-header">
       <button type="button" className="card-back" onClick={props.onBack}>{navigationText(props.language).back}</button>
     </header>
+    {props.fields?.leave}
     {body}
   </main>;
 }

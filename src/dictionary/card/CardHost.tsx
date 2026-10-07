@@ -7,6 +7,8 @@ import type { Language } from "../../i18n/language";
 import type { ManualPendingStore } from "../../learning/manualPending";
 import { useManualSelectionDocument, type ManualSelectionDocumentState } from "../../learning/useManualSelectionDocument";
 import { useDictionaryCardDocument } from "../useDictionaryCardDocument";
+import { cardFieldSlots } from "../editors/CardFieldSlots";
+import { useFieldEditors } from "../editors/useFieldEditors";
 import { useDictionaryIntervalContext } from "../useDictionaryIntervalContext";
 import type { CardOrigin } from "./cardOrigin";
 import { CardScreen } from "./CardScreen";
@@ -121,13 +123,22 @@ export function CardHost(props: CardHostProps) {
   const finished = leaving && (settledOpen || left.current !== props.access);
   const { onClosed } = props;
   useEffect(() => { if (finished) onClosed?.(); }, [finished, onClosed]);
-  if (leaving) return null;
 
   const shown = (card.state.phase === "ready" || card.state.phase === "loading") && previous?.current.status === "available"
     ? previous.current : null;
+  // Own fields (M-EDIT): saved through the open card context; an accepted or refused field command reads the card and
+  // its context again (the save also ends the interval undo on the server, CT 2.3). Unsaved text asks before Back.
+  const editors = useFieldEditors({ access: props.access, transport: props.transport, enabled: !leaving, view: shown,
+    stateVersion: shown ? previous!.state_version : null,
+    contextId: context.state.phase === "ready" ? context.state.context?.id ?? null : null,
+    contextStateVersion: context.state.stateVersion, newId: props.newId,
+    onChanged: () => { void card.refresh(); void context.actions.refresh(); }, onLeave: () => latestLeave.current() });
+  if (leaving) return null;
+
   return <CardScreen language={props.language} phase={card.state.phase} problem={card.state.problem} view={shown}
     origin={props.origin} manual={manualControl(manual, props.cardId, card.state.phase === "ready")}
     actions={shown && props.extensions?.renderActions?.(shown)}
     interval={shown && props.extensions?.renderInterval?.(shown, context)}
-    onBack={leave} onRetry={() => { void card.refresh(); }} />;
+    fields={shown ? cardFieldSlots({ state: editors.state, actions: editors.actions, view: shown, language: props.language }) : undefined}
+    onBack={editors.actions.requestLeave} onRetry={() => { void card.refresh(); }} />;
 }

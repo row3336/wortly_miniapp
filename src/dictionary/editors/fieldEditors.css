@@ -1,0 +1,34 @@
+.field-slot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.field-pencil, .field-undo {
+  min-width: 44px; min-height: 44px; padding: 8px; border: 1px solid var(--line); border-radius: 12px;
+  background: var(--surface); color: var(--text); font: inherit; line-height: 1;
+}
+.field-add {
+  min-height: 44px; padding: 8px 14px; border: 1px solid var(--line); border-radius: 12px;
+  background: var(--surface); color: var(--text); font: inherit;
+}
+.field-note { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--muted); font-size: .875rem; }
+.field-editor, .field-pair { display: grid; gap: 8px; min-width: 0; }
+.field-pair { padding-top: 4px; }
+.field-editor-label { font-weight: 700; }
+.field-editor-text {
+  width: 100%; min-height: 48px; box-sizing: border-box; padding: 10px 12px; border: 1px solid var(--line);
+  border-radius: 12px; background: var(--surface); color: var(--text); font: inherit; resize: vertical;
+}
+.field-editor-text:read-only { opacity: .7; }
+.field-editor-notes { display: grid; gap: 4px; }
+.field-editor-common, .field-editor-hint { color: var(--muted); font-size: .875rem; }
+.field-editor-problem, .field-editor-conflict p:first-child { color: var(--error); }
+.field-editor-conflict { display: grid; gap: 4px; }
+.field-editor-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.field-editor-actions button, .field-note button, .field-leave button {
+  min-height: 44px; padding: 8px 14px; border: 1px solid var(--line); border-radius: 12px;
+  background: var(--surface); color: var(--text); font: inherit;
+}
+.field-leave { display: grid; gap: 12px; padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.field-slot button:disabled, .field-editor button:disabled, .field-pair button:disabled { opacity: .5; cursor: default; }
+.field-leave-backdrop {
+  position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 16px;
+  background: rgb(0 0 0 / .4);
+}
+.field-leave-backdrop .field-leave { width: min(100%, 420px); box-sizing: border-box; }

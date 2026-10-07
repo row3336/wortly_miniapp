@@ -1,0 +1,85 @@
+import type { Language } from "../../i18n/language";
+
+const quoted = { ru: (text: string) => `«${text}»`, uk: (text: string) => `«${text}»`, en: (text: string) => `“${text}”` } as const;
+
+// root decision, pending owner (M-EDIT Р16): working copy for G05. «Добавить пример/ассоциацию» is К07-045, «Продолжить
+// редактирование / выйти без сохранения» is RA table 6.1.12; the uk/en texts are working translations.
+const copy = {
+  ru: {
+    edit: { translation: "Изменить личный перевод", example: "Изменить личный пример", association: "Изменить ассоциацию",
+      pair: "Изменить личные примеры" },
+    add: { example: "Добавить пример", association: "Добавить ассоциацию", pair: "Добавить примеры" },
+    label: { translation: "Личный перевод", example: "Личный пример", association: "Ассоциация", akkusativ: "Akkusativ", dativ: "Dativ" },
+    pair: "Личные примеры Akkusativ / Dativ",
+    common: "Общий перевод", noCommon: "Общего перевода нет", substitute: "Подставить общий",
+    save: "Сохранить", cancel: "Отмена", retry: "Повторить", saving: "Сохраняем…", checking: "Проверяем сохранение…",
+    clear: { translation: "Пустое поле удалит личный перевод — будет показан общий.",
+      example: "Пустое поле удалит личный пример — будут показаны общие.", association: "Пустое поле удалит ассоциацию.",
+      akkusativ: "Пустое поле удалит этот пример.", dativ: "Пустое поле удалит этот пример." },
+    sameAsCommon: "Текст совпадает с общим переводом: личный перевод будет снят.",
+    pairRule: "Личные примеры показываются в карточке, когда заполнены оба поля.",
+    failed: "Не удалось сохранить. Текст остался в поле.", unknown: "Нет подтверждения сохранения. Текст остался в поле.",
+    unavailable: "Поле больше недоступно: карточка изменилась.", mismatch: "Это сохранение нельзя повторить. Текст остался в поле.",
+    conflict: "Это поле уже изменено в другом месте.", currentValue: (text: string) => `Сейчас сохранено: ${quoted.ru(text)}.`,
+    currentNone: "Сейчас личного значения нет.", accept: "Взять сохранённое", keep: "Сохранить моё",
+    saved: "Сохранено.",
+    removed: { translation: "Личный перевод снят — показан общий.", example: "Личный пример удалён — показаны общие.",
+      association: "Ассоциация удалена.", akkusativ: "Пример удалён.", dativ: "Пример удалён." },
+    undoing: "Отменяем сохранение…", undoUnknown: "Нет подтверждения отмены.",
+    leaveQuestion: "Есть несохранённые изменения. Выйти без сохранения?", continue: "Продолжить редактирование",
+    leave: "Выйти без сохранения",
+  },
+  uk: {
+    edit: { translation: "Змінити особистий переклад", example: "Змінити особистий приклад", association: "Змінити асоціацію",
+      pair: "Змінити особисті приклади" },
+    add: { example: "Додати приклад", association: "Додати асоціацію", pair: "Додати приклади" },
+    label: { translation: "Особистий переклад", example: "Особистий приклад", association: "Асоціація", akkusativ: "Akkusativ", dativ: "Dativ" },
+    pair: "Особисті приклади Akkusativ / Dativ",
+    common: "Загальний переклад", noCommon: "Загального перекладу немає", substitute: "Підставити загальний",
+    save: "Зберегти", cancel: "Скасувати", retry: "Повторити", saving: "Зберігаємо…", checking: "Перевіряємо збереження…",
+    clear: { translation: "Порожнє поле видалить особистий переклад — буде показано загальний.",
+      example: "Порожнє поле видалить особистий приклад — буде показано загальні.", association: "Порожнє поле видалить асоціацію.",
+      akkusativ: "Порожнє поле видалить цей приклад.", dativ: "Порожнє поле видалить цей приклад." },
+    sameAsCommon: "Текст збігається із загальним перекладом: особистий переклад буде знято.",
+    pairRule: "Особисті приклади показуються в картці, коли заповнено обидва поля.",
+    failed: "Не вдалося зберегти. Текст залишився в полі.", unknown: "Немає підтвердження збереження. Текст залишився в полі.",
+    unavailable: "Поле більше недоступне: картка змінилася.", mismatch: "Це збереження не можна повторити. Текст залишився в полі.",
+    conflict: "Це поле вже змінено в іншому місці.", currentValue: (text: string) => `Зараз збережено: ${quoted.uk(text)}.`,
+    currentNone: "Зараз особистого значення немає.", accept: "Взяти збережене", keep: "Зберегти моє",
+    saved: "Збережено.",
+    removed: { translation: "Особистий переклад знято — показано загальний.", example: "Особистий приклад видалено — показано загальні.",
+      association: "Асоціацію видалено.", akkusativ: "Приклад видалено.", dativ: "Приклад видалено." },
+    undoing: "Скасовуємо збереження…", undoUnknown: "Немає підтвердження скасування.",
+    leaveQuestion: "Є незбережені зміни. Вийти без збереження?", continue: "Продовжити редагування",
+    leave: "Вийти без збереження",
+  },
+  en: {
+    edit: { translation: "Edit personal translation", example: "Edit personal example", association: "Edit association",
+      pair: "Edit personal examples" },
+    add: { example: "Add example", association: "Add association", pair: "Add examples" },
+    label: { translation: "Personal translation", example: "Personal example", association: "Association", akkusativ: "Akkusativ", dativ: "Dativ" },
+    pair: "Personal examples Akkusativ / Dativ",
+    common: "Common translation", noCommon: "No common translation", substitute: "Insert common",
+    save: "Save", cancel: "Cancel", retry: "Retry", saving: "Saving…", checking: "Checking the save…",
+    clear: { translation: "An empty field removes the personal translation; the common one is shown.",
+      example: "An empty field removes the personal example; the common ones are shown.", association: "An empty field removes the association.",
+      akkusativ: "An empty field removes this example.", dativ: "An empty field removes this example." },
+    sameAsCommon: "The text matches the common translation: the personal translation will be removed.",
+    pairRule: "Personal examples are shown on the card when both fields are filled in.",
+    failed: "Could not save. The text stays in the field.", unknown: "The save is not confirmed. The text stays in the field.",
+    unavailable: "The field is no longer available: the card has changed.", mismatch: "This save cannot be repeated. The text stays in the field.",
+    conflict: "This field was already changed elsewhere.", currentValue: (text: string) => `Saved now: ${quoted.en(text)}.`,
+    currentNone: "There is no personal value now.", accept: "Take the saved one", keep: "Save mine",
+    saved: "Saved.",
+    removed: { translation: "Personal translation removed; the common one is shown.", example: "Personal example removed; the common ones are shown.",
+      association: "Association removed.", akkusativ: "Example removed.", dativ: "Example removed." },
+    undoing: "Undoing the save…", undoUnknown: "The undo is not confirmed.",
+    leaveQuestion: "There are unsaved changes. Leave without saving?", continue: "Keep editing",
+    leave: "Leave without saving",
+  },
+} as const;
+
+export type EditorText = (typeof copy)[Language];
+export function editorText(language: Language): EditorText {
+  return copy[language];
+}
