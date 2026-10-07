@@ -142,21 +142,29 @@ export function conjugationResultCurrent(value: Record<string, unknown>, address
     if (result.status === "active" && "summary" in step && record(step.summary) && Array.isArray(step.summary.results)
       && !step.summary.results.some(ref => record(ref) && sameId(ref.result_id, result.result_id as string) && ref.version === result.version)) return null;
   }
+  // The address of this live result of this open session; each right adds its own keys and conditions.
+  const liveAddress = (value: unknown, extraKeys: string[]): value is Record<string, unknown> =>
+    record(value) && record(result) && result.status === "active" && ["active", "summary"].includes(step.status as string)
+    && exactKeys(value, ["session_id", "assignment_id", "result_id", "expected_result_version", ...extraKeys])
+    && sameId(value.session_id, address.session_id) && sameId(value.assignment_id, address.assignment_id)
+    && sameId(value.result_id, result.result_id as string) && value.expected_result_version === result.version;
   const target = (value: unknown, grades: boolean): boolean => {
-    if (!record(value) || !record(result) || result.status !== "active" || !["active", "summary"].includes(step.status as string)
-      || !exactKeys(value, ["session_id", "assignment_id", "result_id", "expected_result_version", ...(grades ? ["values"] : [])])
-      || !sameId(value.session_id, address.session_id) || !sameId(value.assignment_id, address.assignment_id)
-      || !sameId(value.result_id, result.result_id as string) || value.expected_result_version !== result.version) return false;
+    if (!liveAddress(value, grades ? ["values"] : [])) return false;
     const values = value.values;
-    return grades ? (result.grade as number) >= 3 && Array.isArray(values) && values.length === 3
-      && [3, 4, 5].every(grade => values.includes(grade)) : result.grade === 2;
+    return grades ? (result as Record<string, unknown>).grade as number >= 3 && Array.isArray(values) && values.length === 3
+      && [3, 4, 5].every(grade => values.includes(grade)) : (result as Record<string, unknown>).grade === 2;
   };
+  // The one undo of this live form (CT table 2.3); any grade can be undone. No UI uses it yet (M-UNDO-CONJ).
+  const undoTarget = (value: unknown): boolean => liveAddress(value, ["action_id", "kind"]) && record(action)
+    && action.status === "active" && sameId(value.action_id, action.action_id as string) && value.kind === "answer.submit";
   if (!exactKeys(caps, ["answer_target", "correct_target", "grades", "undo_target", "stop", "summary_home"])
-    || caps.undo_target !== null || caps.correct_target !== null && !target(caps.correct_target, false)
+    || caps.undo_target !== null && !undoTarget(caps.undo_target)
+    || caps.correct_target !== null && !target(caps.correct_target, false)
     || caps.grades !== null && !target(caps.grades, true)
     || typeof caps.stop !== "boolean" || typeof caps.summary_home !== "boolean") return null;
   if (unavailable) {
-    if (caps.answer_target !== null || caps.correct_target !== null || caps.grades !== null || caps.stop || caps.summary_home) return null;
+    if (caps.answer_target !== null || caps.correct_target !== null || caps.grades !== null || caps.undo_target !== null
+      || caps.stop || caps.summary_home) return null;
   } else if (!("capabilities" in step) || !record(step.capabilities) || caps.answer_target !== step.capabilities.answer_target
     || caps.stop !== step.capabilities.stop || caps.summary_home !== step.capabilities.summary_home) return null;
   return { action, result, step, capabilities: caps } as ConjugationResultCurrent;

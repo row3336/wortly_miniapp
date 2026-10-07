@@ -133,6 +133,26 @@ describe("conjugation transport contract", () => {
     }
   });
 
+  it("accepts the exact undo_target of the live form and nothing looser (C-UNDO-2)", async () => {
+    const undo = { session_id: id(3), assignment_id: id(4), result_id: id(6), expected_result_version: "1", action_id: id(7), kind: "answer.submit" as const };
+    const live = result(); live.capabilities.undo_target = undo;
+    expect((await fixture(live).api.read("t", "p", resultAddress)).capabilities.undo_target).toEqual(undo);
+    expect((await fixture({ ...live, command: fact(submit()) }).api.send("t", "p", submit())).capabilities.undo_target).toEqual(undo);
+    const mutations = [
+      (r: any) => { r.capabilities.undo_target.action_id = id(70); }, (r: any) => { r.capabilities.undo_target.kind = "result.correct"; },
+      (r: any) => { r.capabilities.undo_target.expected_result_version = "2"; }, (r: any) => { r.capabilities.undo_target.result_id = id(60); },
+      (r: any) => { r.capabilities.undo_target.context = null; }, (r: any) => { delete r.capabilities.undo_target.action_id; },
+      (r: any) => { r.action.status = r.result.status = "undone"; r.capabilities.grades = null; },
+      (r: any) => { r.step.capabilities.undo_target = { ...r.capabilities.undo_target }; },
+    ];
+    for (const change of mutations) {
+      const bad = result(); bad.capabilities.undo_target = { ...undo }; change(bad);
+      await expect(fixture(bad).api.read("t", "p", resultAddress)).rejects.toMatchObject(invalid);
+    }
+    const gone = unavailableResult(); gone.capabilities.undo_target = undo;
+    await expect(fixture(gone).api.read("t", "p", resultAddress)).rejects.toMatchObject(invalid);
+  });
+
   it("requires the canonical pronoun for each of the six logical groups even when labels agree", async () => {
     const cases = [["ich", "ich"], ["du", "du"], ["er_sie_es", "er/sie/es"],
       ["wir", "wir"], ["ihr", "ihr"], ["sie_sie", "sie/Sie"]] as const;
