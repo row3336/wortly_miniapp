@@ -52,7 +52,7 @@ function snap(over: Partial<ConjugationDocumentSnapshot> = {}): ConjugationDocum
     commands: { study: command(), stop: command() }, problem: null,
     currentStep: { stateVersion: "10", step: projection(assignment(B1)) }, resultA: null,
     display: { kind: "step", assignmentId: B1 }, stepTicket: null, presentationTicket: null,
-    canStart: false, canSubmit: true, canCorrect: false, canStop: true, canSummaryHome: false, allowedGrades: [],
+    canStart: false, canSubmit: true, canCorrect: false, canUndo: false, canStop: true, canSummaryHome: false, allowedGrades: [],
     canRetry: { study: false, stop: false }, ...over };
 }
 /** A with display result, row 11. */
@@ -77,7 +77,7 @@ function harness() {
   const actions = {
     refresh: vi.fn(async () => undefined), start: vi.fn(async () => undefined), openStep: vi.fn(), openResult: vi.fn(),
     shown: vi.fn(async () => undefined), submit: vi.fn(async () => undefined), grade: vi.fn(async () => undefined),
-    correct: vi.fn(async () => undefined), stop: vi.fn(async () => undefined), retry: vi.fn(async () => undefined),
+    correct: vi.fn(async () => undefined), undo: vi.fn(async () => undefined), stop: vi.fn(async () => undefined), retry: vi.fn(async () => undefined),
   };
   const timers: { delay: number; run: () => void; cancelled: boolean }[] = [];
   const schedule = vi.fn((delay: 2000 | 3000, run: () => void) => {
@@ -99,7 +99,7 @@ function harness() {
 }
 /** Every intent of the flow, as a user (or a stale callback) could call it. */
 function everyIntent(flow: ConjugationTestFlow, ticket: ConjugationPresentationTicket) {
-  flow.setDraft("x"); flow.submit(); flow.forget(); flow.grade(3); flow.grade(4); flow.grade(5); flow.correct(); flow.next(); flow.previous();
+  flow.setDraft("x"); flow.submit(); flow.forget(); flow.grade(3); flow.grade(4); flow.grade(5); flow.correct(); flow.undo(); flow.next(); flow.previous();
   flow.committed(ticket); flow.enterReleased(); flow.enter({ repeat: false, composing: false }); flow.stop(); flow.home();
   flow.retry("study"); flow.retry("stop"); flow.refresh();
 }
@@ -235,7 +235,7 @@ describe("conjugation test flow: identity, mask and terminal", () => {
     h.flow.setDraft("geh");
     for (const state of [null, snap({ phase: "disposed", sessionId: null })]) {
       expect(h.show(h.input(state))).toEqual({ screen: "loading", canStop: false, stopping: false, problem: null, canRetry: { study: false, stop: false },
-        canCheck: false });
+        canCheck: false, undoing: false });
       everyIntent(h.flow, ticket);
     }
     expect(h.calls()).toBe(0);
@@ -807,5 +807,142 @@ describe("conjugation test flow: change notification (G-2 V3) and CP2 correction
     expect(wrong.show(wrong.input(answer(result(false)), { transitionMode: "normal" }))).toMatchObject({ timer: { durationMs: 2000 } });
     expect(wrong.timers).toHaveLength(1);
     expect(wrong.timers[0].cancelled).toBe(false);
+  });
+});
+
+describe("conjugation test flow: «Шаг назад» (result.undo)", () => {
+  const undoable = (state: ConjugationDocumentSnapshot) => ({ ...state, canUndo: true });
+  const summaryWithA = (over: Partial<ConjugationDocumentSnapshot> = {}) => snap({ phase: "summary", display: { kind: "summary" }, canSubmit: false,
+    canSummaryHome: true, canUndo: true, resultA: resultA(result(true)), currentStep: { stateVersion: "10", step: projection(null, "summary") }, ...over });
+  const undoIntent = { command_id: id(72), kind: "result.undo" as const, session_id: S1, assignment_id: A0, result_id: R1, expected_result_version: "5", payload: {} };
+  const undoCommand = (over: Partial<ConjugationCommandSnapshot> = {}) => command({ kind: "result.undo", sessionId: S1, ...over });
+
+  it("the result screen and the live summary offer it exactly when the document grants it", () => {
+    const h = harness();
+    expect(h.show(h.input(onResult(result(true))))).toMatchObject({ screen: "result", canUndo: false });
+    expect(h.show(h.input(undoable(onResult(result(true)))))).toMatchObject({ screen: "result", canUndo: true });
+    expect(h.show(h.input(undoable(onResult(result(false)))))).toMatchObject({ screen: "result", canUndo: true });
+    expect(h.show(h.input(undoable(onResult(result(true))), { active: false }))).toMatchObject({ screen: "result", canUndo: false });
+    expect(h.show(h.input(summaryWithA()))).toMatchObject({ screen: "summary", canUndo: true });
+    expect(h.show(h.input(summaryWithA({ canUndo: false })))).toMatchObject({ screen: "summary", canUndo: false });
+    expect(h.show(h.input(summaryWithA(), { active: false }))).toMatchObject({ screen: "summary", canUndo: false });
+    // The question of the next form never offers it (M-UNDO §9.2).
+    expect(h.show(h.input(undoable(snap())))).toMatchObject({ screen: "question" });
+    expect(h.show(h.input(undoable(snap())))).not.toHaveProperty("canUndo");
+  });
+
+  it("undo() asks the document once; the running timer is cancelled for good and never re-arms", () => {
+    const h = harness();
+    const ticket = stepTicket();
+    const state = undoable(onResult(result(true), { commands: { study: acceptedAnswer(), stop: command() }, stepTicket: ticket }));
+    expect(h.show(h.input(state))).toMatchObject({ screen: "result", mode: "answer", timer: { durationMs: 3000 } });
+    expect(h.running()).toHaveLength(1);
+    h.flow.undo();
+    expect(h.actions.undo).toHaveBeenCalledTimes(1);
+    expect(h.running()).toHaveLength(0);
+    expect(h.show(h.input(state))).toMatchObject({ timer: null });
+    expect(h.schedule).toHaveBeenCalledTimes(1);
+    expect(h.actions.openStep).not.toHaveBeenCalled();
+  });
+
+  it("undo() from the summary and from a previous answer; never from a question, inactive, or without the right", () => {
+    const s1 = harness();
+    s1.show(s1.input(summaryWithA()));
+    s1.flow.undo();
+    expect(s1.actions.undo).toHaveBeenCalledTimes(1);
+
+    const prev = harness();
+    prev.show(prev.input(snap({ resultA: resultA(result(true)) })));
+    prev.flow.previous();
+    prev.show(prev.input(undoable(onResult(result(true), { stepTicket: stepTicket() }))));
+    prev.flow.undo();
+    expect(prev.actions.undo).toHaveBeenCalledTimes(1);
+
+    const none = harness();
+    none.show(none.input(snap()));
+    none.flow.undo();
+    none.show(none.input(onResult(result(true))));
+    none.flow.undo();
+    none.show(none.input(undoable(onResult(result(true))), { active: false }));
+    none.flow.undo();
+    none.show(none.input(null));
+    none.flow.undo();
+    expect(none.actions.undo).not.toHaveBeenCalled();
+  });
+
+  it("while the command runs the view is busy: «changing», no grades, no second undo, status text flag", () => {
+    const h = harness();
+    h.show(h.input(undoable(onResult(result(true)))));
+    const busy = onResult(result(true), { allowedGrades: [], canUndo: false,
+      commands: { study: undoCommand({ phase: "sending", pending: true, pendingIntent: undoIntent }), stop: command() } });
+    expect(h.show(h.input(busy))).toMatchObject({ screen: "result", pending: "changing", undoing: true, canUndo: false, grades: [], canCorrect: false, canNext: false });
+    h.flow.undo(); h.flow.grade(5); h.flow.next();
+    expect(h.actions.undo).not.toHaveBeenCalled();
+    const summaryBusy = summaryWithA({ canUndo: false, commands: { study: undoCommand({ phase: "sending", pending: true, pendingIntent: undoIntent }), stop: command() } });
+    expect(h.show(h.input(summaryBusy))).toMatchObject({ screen: "summary", undoing: true, canUndo: false });
+    expect(h.show(h.input(onResult(result(true))))).toMatchObject({ undoing: false });
+    // A stale right in the document snapshot cannot be offered while a revision of the same answer is in flight.
+    const grading = onResult(result(true), { canUndo: true, commands: { study: command({ phase: "sending", pending: true, kind: "result.grade", sessionId: S1,
+      pendingIntent: { command_id: id(74), kind: "result.grade", session_id: S1, assignment_id: A0, result_id: R1, expected_result_version: "5", payload: { grade: 5 } } }),
+      stop: command() } });
+    expect(h.show(h.input(grading))).toMatchObject({ screen: "result", pending: "changing", canUndo: false });
+  });
+
+  it("an unknown outcome keeps the answer on screen as «checking», with check and retry, and cannot undo again", () => {
+    const h = harness();
+    h.show(h.input(undoable(onResult(result(true)))));
+    const unknown = snap({ phase: "unknown", display: { kind: "none" }, currentStep: null, resultA: null, canSubmit: false, canRetry: { study: true, stop: false },
+      commands: { study: undoCommand({ phase: "unresolved", pending: true, canRetry: true, pendingIntent: undoIntent }), stop: command() } });
+    expect(h.show(h.input(unknown))).toMatchObject({ screen: "result", pending: "unknown", undoing: false, canUndo: false, grades: [], canCorrect: false,
+      canNext: false, canCheck: true, canRetry: { study: true }, result: { result_id: R1, version: "5" } });
+    h.flow.undo(); h.flow.refresh(); h.flow.retry("study");
+    expect(h.actions.undo).not.toHaveBeenCalled();
+    expect(h.actions.refresh).toHaveBeenCalledTimes(1);
+    expect(h.actions.retry).toHaveBeenCalledWith("study");
+    // Without the remembered answer (e.g. after a restart) only the generic recovery remains.
+    const fresh = harness();
+    expect(fresh.show(fresh.input(unknown))).toMatchObject({ screen: "recovery", canCheck: true });
+  });
+
+  it.each(["CAPABILITY_EXPIRED", "VERSION_CONFLICT", "FORBIDDEN", "ASSIGNMENT_STALE"])("refusal %s is the «step back is gone» problem of the answer screen only", code => {
+    const h = harness();
+    const rejected = undoCommand({ phase: "settled", outcome: "rejected", rejectionCode: code,
+      resolved: { commandId: id(72), kind: "result.undo", sessionId: S1, assignmentId: A0 } });
+    const refused = onResult(result(true), { problem: code, commands: { study: rejected, stop: command() } });
+    expect(h.show(h.input(refused))).toMatchObject({ screen: "result", problem: "UNDO_UNAVAILABLE", canUndo: false });
+    expect(h.show(h.input(summaryWithA({ canUndo: false, problem: code, commands: { study: rejected, stop: command() } })))).toMatchObject({ screen: "summary", problem: "UNDO_UNAVAILABLE" });
+    // Once the person reaches the next question the old refusal is not repeated under it.
+    expect(h.show(h.input(snap({ problem: code, commands: { study: rejected, stop: command() } })))).toMatchObject({ screen: "question", problem: null });
+  });
+
+  it("other refusals and other commands keep their own problem codes", () => {
+    const h = harness();
+    const code = (kind: "result.undo" | "result.grade", rejectionCode: string) => undoCommand({ phase: "settled", outcome: "rejected", rejectionCode, kind: null,
+      resolved: { commandId: id(72), kind, sessionId: S1, assignmentId: A0 } });
+    for (const [kind, rejection] of [["result.undo", "SESSION_CLOSED"], ["result.undo", "SESSION_BUSY"], ["result.grade", "VERSION_CONFLICT"]] as const) {
+      const state = onResult(result(true), { problem: rejection, commands: { study: code(kind, rejection), stop: command() } });
+      expect(h.show(h.input(state))).toMatchObject({ screen: "result", problem: rejection });
+    }
+    // A problem of another source is not turned into the undo message even right after an undo refusal.
+    const rejected = code("result.undo", "VERSION_CONFLICT");
+    expect(h.show(h.input(onResult(result(true), { problem: "network", commands: { study: rejected, stop: command() } })))).toMatchObject({ problem: "network" });
+  });
+
+  it("an accepted undo leaves nothing of the answer: the form comes back as the next question and «Предыдущий ответ» is gone", () => {
+    const h = harness();
+    const ticket = stepTicket();
+    h.show(h.input(undoable(onResult(result(true), { commands: { study: acceptedAnswer(), stop: command() }, stepTicket: ticket }))));
+    const accepted = undoCommand({ phase: "settled", outcome: "accepted", kind: null,
+      resolved: { commandId: id(72), kind: "result.undo", sessionId: S1, assignmentId: A0, resultId: R1, objectVersion: "6" } });
+    const again = snap({ phase: "prefetched", display: { kind: "step", assignmentId: B2 }, resultA: null, acceptedAddress: null, canSubmit: false,
+      currentStep: { stateVersion: "11", step: projection(assignment(B2, "prefetched")) }, commands: { study: accepted, stop: command() } });
+    const view = h.show(h.input(again));
+    expect(view).toMatchObject({ screen: "question", canPrevious: false, draft: "", problem: null });
+    expect(view).toMatchObject({ question: conjugationQuestion(assignment(B2, "prefetched")) });
+    // The forgotten answer is not restored by any later snapshot of the same identity (also not in the unknown screen).
+    const revision = command({ phase: "unresolved", pending: true, kind: "result.grade", sessionId: S1,
+      pendingIntent: { command_id: id(73), kind: "result.grade", session_id: S1, assignment_id: A0, result_id: R1, expected_result_version: "5", payload: { grade: 4 } } });
+    expect(h.show(h.input(snap({ phase: "unknown", display: { kind: "none" }, currentStep: null, resultA: null, canSubmit: false,
+      commands: { study: revision, stop: command() } })))).toMatchObject({ screen: "recovery" });
   });
 });

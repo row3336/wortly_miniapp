@@ -3,6 +3,7 @@ import { sameId } from "../api/wireValidation";
 import type { OpenedAccess } from "../app/openedAccess";
 import type { CloseReason, ConjugationDocumentActions, ConjugationDocumentSnapshot, ConjugationLane,
   ConjugationPresentationTicket, ConjugationStepTicket } from "./conjugationDocumentController";
+import { resultAddressed } from "./conjugationCommandController";
 import { conjugationQuestion, type ConjugationQuestion } from "./conjugationQuestion";
 
 export type FlowSource = Readonly<{ tuple: string; access: OpenedAccess }>;
@@ -17,6 +18,8 @@ export type FlowOptions = Readonly<{
   onChange(): void;
 }>;
 type Common = { canStop: boolean; stopping: boolean; problem: string | null; canRetry: Record<ConjugationLane, boolean>;
+  /** The undo command is in flight: «Отменяем ответ…», nothing else is available. */
+  undoing: boolean;
   /** A manual GET may check the outcome now (TA табл. 5.1 `unknown`): stale, an unknown outcome, or a closed
    * session whose frozen summary is unknown (T2 C2). It re-proves the same command IDs; it never sends. */
   canCheck: boolean };
@@ -26,10 +29,10 @@ export type ConjugationView = Common & (
       status: "presenting" | "submitting" | "unknown" | null; pendingForgot: boolean; canPrevious: boolean;
       presentationTicket: ConjugationPresentationTicket | null }
   | { screen: "result"; result: WrittenResult; mode: "answer" | "previous"; grades: readonly (3 | 4 | 5)[];
-      canCorrect: boolean; pending: "changing" | "unknown" | null; barrier: boolean; canNext: boolean;
+      canCorrect: boolean; canUndo: boolean; pending: "changing" | "unknown" | null; barrier: boolean; canNext: boolean;
       timer: { key: string; durationMs: 2000 | 3000 } | null }
   /** `canPrevious`: К06-102, back to the last answer's result while the session is live; no timer, it waits for Next. */
-  | { screen: "summary"; summary: ConjugationSummary; canHome: boolean; canPrevious: boolean }
+  | { screen: "summary"; summary: ConjugationSummary; canHome: boolean; canPrevious: boolean; canUndo: boolean }
   | { screen: "closed"; reason: CloseReason | null; summary: ConjugationSummary | null });
 
 /** Flow memory of one identity (tuple, sessionId). Replaced copy-on-write, so `project` can derive it without writing. */
@@ -40,6 +43,7 @@ type Memory = Readonly<{
   lastResult: WrittenResult | null;
   lastDisplay: "step" | "result" | null;
   resultMode: Readonly<{ resultId: string; mode: "answer" | "previous" }> | null;
+  /** Command IDs of accepted answers and undos whose effect on this memory is already applied. */
   seenAnswers: readonly string[];
   terminal: boolean;
   /** Bookkeeping of a terminal session; not part of the memory that terminal erases. */
@@ -52,7 +56,10 @@ type Eligible = { resultKey: string; durationMs: 2000 | 3000 | null; ticket: Con
 
 const busy = ["checking", "sending"];
 const noRetry = (): Record<ConjugationLane, boolean> => ({ study: false, stop: false });
-const loading = (): ConjugationView => ({ screen: "loading", canStop: false, stopping: false, problem: null, canRetry: noRetry(), canCheck: false });
+const loading = (): ConjugationView => ({ screen: "loading", canStop: false, stopping: false, problem: null, canRetry: noRetry(), canCheck: false, undoing: false });
+/** Refusals that say the right to step back is gone (M-UNDO §4); the re-read state shows what holds now. SESSION_CLOSED keeps its own text. */
+const undoGone = ["FORBIDDEN", "CAPABILITY_EXPIRED", "VERSION_CONFLICT", "ASSIGNMENT_STALE"];
+export const undoUnavailableProblem = "UNDO_UNAVAILABLE";
 
 /** `state:null`, `phase:"disposed"` and host gap are a mask, not an identity (DESIGN_V3 §3.2). */
 function unmasked(state: ConjugationDocumentSnapshot | null): ConjugationDocumentSnapshot | null {
@@ -97,6 +104,11 @@ function reconcile(memory: Memory, input: FlowInput, state: ConjugationDocumentS
     next = { ...next, seenAnswers: [...next.seenAnswers, resolved.commandId], lastDisplay: "result",
       resultMode: { resultId: resolved.resultId.toLowerCase(), mode: "answer" },
       draft: next.draft && assignmentId && sameId(next.draft.assignmentId, assignmentId) ? null : next.draft };
+  }
+  // An accepted undo retires its answer: nothing of it stays (CT 2.3, not a chain), the form comes back as a new question.
+  // root decision, pending owner: the answer field of the reissued form is empty (docs are silent; same as written/Learning, M-UNDO §9.1).
+  if (study.outcome === "accepted" && resolved?.kind === "result.undo" && !next.seenAnswers.includes(resolved.commandId)) {
+    next = { ...next, seenAnswers: [...next.seenAnswers, resolved.commandId], lastDisplay: null, resultMode: null, lastResult: null };
   }
   if (next.draft && state.acceptedAddress && sameId(state.acceptedAddress.assignment_id, next.draft.assignmentId)) next = { ...next, draft: null };
   // A fresh step without this B (replaced, summary) drops its draft; an absent step (refresh, stale) keeps it.
@@ -210,6 +222,15 @@ export class ConjugationTestFlow {
     this.cancelTimer(); this.gradeRequest = null;
     void this.options.actions.correct();
   }
+  /** «Шаг назад»: the one undo of the answer on screen (result or live summary); the timer of that result never runs again. */
+  undo(): void {
+    const state = this.active();
+    if (!state) return;
+    const view = this.view(state);
+    if (view.screen !== "result" && view.screen !== "summary" || !view.canUndo) return;
+    this.cancelTimer(); this.gradeRequest = null;
+    void this.options.actions.undo();
+  }
   next(): void {
     const state = this.active();
     if (!state) return;
@@ -218,7 +239,8 @@ export class ConjugationTestFlow {
     this.cancelTimer();
     this.options.actions.openStep(state.stepTicket);
   }
-  /** Back to A's result from the question or (К06-102) from the live summary: previous mode, no timer, Next returns. */
+  /** Back to A's result from the question or (К06-102) from the live summary: previous mode, no timer, Next returns.
+   * root decision, pending owner: the visible К06-102 button on the summary is not part of M-UNDO-CONJ (M-CONJ item 2, label by Q47). */
   previous(): void {
     const state = this.active(), result = state && resultOf(state);
     if (!state || !result) return;
@@ -295,8 +317,13 @@ export class ConjugationTestFlow {
   private viewOf(memory: Memory, input: FlowInput, state: ConjugationDocumentSnapshot, generation: number,
     history: ReadonlySet<string>): ConjugationView {
     const active = input.active;
-    const common: Common = { canStop: active && state.canStop, stopping: state.phase === "stopping", problem: state.problem,
-      canRetry: { study: active && state.canRetry.study, stop: active && state.canRetry.stop }, canCheck: false };
+    const answered = state.commands.study;
+    const refusedUndo = answered.outcome === "rejected" && answered.resolved?.kind === "result.undo"
+      && answered.rejectionCode !== null && state.problem === answered.rejectionCode && undoGone.includes(answered.rejectionCode);
+    const common: Common = { canStop: active && state.canStop, stopping: state.phase === "stopping",
+      problem: refusedUndo ? undoUnavailableProblem : state.problem,
+      canRetry: { study: active && state.canRetry.study, stop: active && state.canRetry.stop }, canCheck: false,
+      undoing: answered.kind === "result.undo" && busy.includes(answered.phase) };
     const checkable: Common = { ...common, canCheck: active };
     if (memory.terminal || state.phase === "closed") {
       const summary = state.closed?.summary ? structuredClone(state.closed.summary) : null;
@@ -313,9 +340,9 @@ export class ConjugationTestFlow {
           editable: false, canSubmit: false, canForget: false, status: "unknown", pendingForgot: "forgot" in payload, canPrevious: false, presentationTicket: null };
       }
       const study = state.commands.study, revision = study.pendingIntent;
-      if (study.pending && study.outcome === null && (revision?.kind === "result.grade" || revision?.kind === "result.correct")
+      if (study.pending && study.outcome === null && revision && resultAddressed(revision)
         && memory.lastResult && sameId(memory.lastResult.result_id, revision.result_id)) {
-        return { ...checkable, screen: "result", result: memory.lastResult, mode: "previous", grades: [], canCorrect: false,
+        return { ...checkable, screen: "result", result: memory.lastResult, mode: "previous", grades: [], canCorrect: false, canUndo: false,
           pending: "unknown", barrier: false, canNext: false, timer: null };
       }
       return { ...checkable, screen: "recovery" };
@@ -332,7 +359,10 @@ export class ConjugationTestFlow {
       const draft = memory.draft && sameId(memory.draft.assignmentId, question.assignmentId) ? memory.draft.text : "";
       // Typing is local memory: open while B is being presented, closed whenever rights or activity are.
       const editable = active && !submitting && !common.stopping && (canForget || presenting || state.phase === "prefetched");
-      return { ...common, screen: "question", question, draft,
+      // The refusal of a step back belongs to the screen of the answer it concerned, not to the next question.
+      // root decision, pending owner: «Шаг назад» is offered on the result and the live summary only, never on the next question
+      // (docs are silent; same as written/Learning, M-UNDO §9.2).
+      return { ...common, problem: refusedUndo ? null : common.problem, screen: "question", question, draft,
         editable, canSubmit: canForget && draft.trim() !== "", canForget, status: presenting ? "presenting" : submitting ? "submitting" : null, pendingForgot: false,
         canPrevious: active && !common.stopping && !submitting && resultOf(state) !== null,
         presentationTicket: active ? state.presentationTicket : null };
@@ -342,7 +372,7 @@ export class ConjugationTestFlow {
       const result = shownResult;
       const mode = presenting ? "previous"
         : memory.resultMode && sameId(memory.resultMode.resultId, result.result_id) ? memory.resultMode.mode : "previous";
-      const pending = (study.kind === "result.grade" || study.kind === "result.correct") && study.pending
+      const pending = (study.kind === "result.grade" || study.kind === "result.correct" || study.kind === "result.undo") && study.pending
         ? busy.includes(study.phase) ? "changing" as const : "unknown" as const : null;
       const canNext = active && state.stepTicket !== null && pending === null;
       const eligible = this.eligible(input, state, mode, pending, canNext);
@@ -353,13 +383,13 @@ export class ConjugationTestFlow {
         : eligible && eligible.durationMs !== null && !history.has(eligible.resultKey)
           ? { key: generationKey!, durationMs: eligible.durationMs } : null;
       return { ...(pending === "unknown" ? checkable : common), screen: "result", result, mode, grades: active ? [...state.allowedGrades] : [],
-        canCorrect: active && state.canCorrect, pending, barrier: presenting, canNext, timer };
+        canCorrect: active && state.canCorrect, canUndo: active && state.canUndo && pending === null, pending, barrier: presenting, canNext, timer };
     }
     if (display.kind === "summary" && state.currentStep?.step.summary) {
       // К06-102: rights on the reopened result stay the server's (grades, correct_target of A); the return itself
       // needs only a known A of this live session.
       return { ...common, screen: "summary", summary: structuredClone(state.currentStep.step.summary), canHome: active && state.canSummaryHome,
-        canPrevious: active && !common.stopping && resultOf(state) !== null };
+        canPrevious: active && !common.stopping && resultOf(state) !== null, canUndo: active && state.canUndo };
     }
     return state.problem ? { ...checkable, screen: "stale" } : { ...common, screen: "loading" };
   }

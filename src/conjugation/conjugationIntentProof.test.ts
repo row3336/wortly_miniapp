@@ -16,12 +16,15 @@ const vectors: [ConjugationIntent, string][] = [
   [{ ...addressed, kind: "result.grade", result_id, expected_result_version: "9007199254740993", payload: { grade: 5 } }, "c299c4cb2d848d786ecfb64955c1187bd09fbb0fa0d4f3f64fdeac89fe0c8b46"],
   [{ ...addressed, kind: "result.correct", result_id, expected_result_version: "9223372036854775807", payload: {} }, "390fbf843165e5878c90c45312b0178c4a7a4ace82edbf05c643526192786a41"],
   [{ command_id: id(1), session_id, kind: "session.stop", payload: { reason: "summary_home" } }, "aa9b7c5e18606a4cef0951e5efbc108f42fa7e394200adb8c3195d4b40e7b8ed"],
+  // core ResultUndoService.undo payload (M-UNDO-CONJ/logs/hash_reference.txt): the version is a string, the nested payload is empty.
+  [{ ...addressed, kind: "result.undo", result_id, expected_result_version: "9007199254740993", payload: {} }, "9466afc383074b8d71f6506818e66c806bf784f6907e8e5c99bd84651e32304f"],
+  [{ ...addressed, kind: "result.undo", result_id, expected_result_version: "3", payload: {} }, "e4651c21628bdb5c239fe1f65db4be30958423b94593a137e88ade75a396a5b2"],
 ];
 const wire = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
 const api = (fetcher: typeof fetch) => createConjugationApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 20000 });
 const command = (intent: ConjugationIntent): ConjugationCommand => ({ ...intent, client_instance_id: id(2), document_id: id(3) });
 function receipt(intent: ConjugationIntent, verified: unknown) {
-  const result = ["answer.submit", "result.grade", "result.correct"].includes(intent.kind);
+  const result = ["answer.submit", "result.grade", "result.correct", "result.undo"].includes(intent.kind);
   const version = "expected_result_version" in intent ? String(BigInt(intent.expected_result_version) + 1n) : "1";
   return { command: { id: intent.command_id, kind: intent.kind, status: "already_applied", applied_at: "2026-10-01T00:00:00Z",
     target_id: intent.kind === "conjugation.schedule" ? intent.payload.base_verb_id : "assignment_id" in intent ? intent.assignment_id : intent.session_id,

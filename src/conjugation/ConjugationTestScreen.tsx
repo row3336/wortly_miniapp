@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef } from "react";
+import { StepBackButton, stepBackCopy } from "../commands/StepBackButton";
 import type { Language } from "../i18n/language";
 import { WrittenAnswerInput } from "../study/WrittenAnswerInput";
 import { WrittenAnswerResult } from "../study/WrittenAnswerResult";
@@ -6,7 +7,7 @@ import "../learning/learning.css";
 import { ConjugationQuestionHeading } from "./ConjugationQuestionHeading";
 import { conjugationWrittenQuestion } from "./conjugationQuestion";
 import { ConjugationSummaryView } from "./ConjugationSummaryView";
-import type { ConjugationTestFlow, ConjugationView } from "./conjugationTestFlow";
+import { undoUnavailableProblem, type ConjugationTestFlow, type ConjugationView } from "./conjugationTestFlow";
 
 export type ConjugationTestScreenProps = {
   view: ConjugationView;
@@ -40,15 +41,15 @@ const problems: Record<Language, Readonly<Record<string, string>>> = {
   ru: { network: "Нет связи с сервером.", unconfirmed_session: "Есть неподтверждённое занятие.", storage: "Не удалось обновить данные на этом устройстве.",
       expired: "Доступ истёк.", forbidden: "Доступ закрыт.", ASSIGNMENT_STALE: "Задание изменилось. Обнови занятие.",
       SESSION_CLOSED: "Занятие завершено.", SESSION_BUSY: "Занятие открыто на другом устройстве",
-      mismatch: "Действие нельзя повторить. Проверь состояние занятия." },
+      mismatch: "Действие нельзя повторить. Проверь состояние занятия.", [undoUnavailableProblem]: stepBackCopy.ru.unavailable },
   uk: { network: "Немає зв’язку із сервером.", unconfirmed_session: "Є непідтверджене заняття.", storage: "Не вдалося оновити дані на цьому пристрої.",
       expired: "Доступ закінчився.", forbidden: "Доступ закрито.", ASSIGNMENT_STALE: "Завдання змінилося. Онови заняття.",
       SESSION_CLOSED: "Заняття завершено.", SESSION_BUSY: "Заняття відкрито на іншому пристрої",
-      mismatch: "Дію не можна повторити. Перевір стан заняття." },
+      mismatch: "Дію не можна повторити. Перевір стан заняття.", [undoUnavailableProblem]: stepBackCopy.uk.unavailable },
   en: { network: "No connection to the server.", unconfirmed_session: "There is an unconfirmed session.", storage: "Could not update data on this device.",
       expired: "Access has expired.", forbidden: "Access is closed.", ASSIGNMENT_STALE: "The question has changed. Refresh the session.",
       SESSION_CLOSED: "The session has ended.", SESSION_BUSY: "A session is open on another device",
-      mismatch: "This action cannot be retried. Check session status." },
+      mismatch: "This action cannot be retried. Check session status.", [undoUnavailableProblem]: stepBackCopy.en.unavailable },
 };
 const control = 'button, a, input, textarea, select, [contenteditable="true"], [role="dialog"]';
 
@@ -138,14 +139,20 @@ export function ConjugationTestScreen({ view, flow, language, submitOnEnter }: C
       {view.mode === "previous" && <p>{t.previousMode}</p>}
       {view.barrier && <p role="status">{t.barrier}</p>}
       {view.stopping && <p role="status">{t.stopping}</p>}
+      {view.undoing && <p role="status">{stepBackCopy[language].pending}</p>}
       <WrittenAnswerResult result={view.result} language={language} pending={view.pending} grades={view.grades}
         canCorrect={view.canCorrect} canNext={view.canNext} timer={view.timer}
         onGrade={grade => flow.grade(grade)} onCorrect={() => flow.correct()} onNext={() => flow.next()} />
+      {view.canUndo && <StepBackButton className="learning-step-back" language={language} onUndo={() => flow.undo()} />}
     </>}
     {view.screen === "summary" && <>
       {/* The summary_home Stop in flight: waiting, not just a disabled button. */}
       {view.stopping && <p role="status">{t.stopping}</p>}
+      {view.undoing && <p role="status">{stepBackCopy[language].pending}</p>}
       <ConjugationSummaryView summary={view.summary} language={language} onHome={view.canHome ? () => flow.home() : null} />
+      {/* М17 keeps «Шаг назад» while the server grants it: the last form comes back as a new question.
+          root decision, pending owner: label, glyph ↶ and refusal texts are working copies until G05 (common StepBackButton/stepBackCopy). */}
+      {view.canUndo && <StepBackButton className="learning-step-back" language={language} onUndo={() => flow.undo()} />}
     </>}
     {/* A refusal or failure while studying reaches the person (recovery and stale render their own). */}
     {problem && (view.screen === "question" || view.screen === "result" || view.screen === "summary") && <p role="status">{problem}</p>}

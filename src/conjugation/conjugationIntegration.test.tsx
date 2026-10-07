@@ -16,7 +16,7 @@ import { useConjugationDocument, type ConjugationDocumentHookOptions } from "./u
 const id = (n: number) => `abababab-cdcd-4000-8000-${String(n).padStart(12, "0")}`;
 const S1 = id(3), B1 = id(21), B2 = id(22), B3 = id(23);
 const studyKey = "wortly.pending.conjugation_session";
-type Result = { result_id: string; assignment_id: string; action_id: string; version: string; grade: 2 | 3 | 4 | 5 };
+type Result = { result_id: string; assignment_id: string; action_id: string; version: string; grade: 2 | 3 | 4 | 5; undone?: true };
 type Session = { id: string; status: "active" | "summary" | "closed"; assignment: string | null; presented: boolean; results: Result[];
   reason?: "stop" | "summary_home" };
 function setVisibility(state: "visible" | "hidden") {
@@ -24,11 +24,14 @@ function setVisibility(state: "visible" | "hidden") {
 }
 afterEach(() => { cleanup(); setVisibility("visible"); });
 
+/** The form issued anew after an undo (core: new assignment_id of the same form, prefetched). */
+const REISSUED = id(24);
 function projection(s: Session): ConjugationSessionProjection {
-  const done = s.results.length, correct = s.results.filter(r => r.grade >= 3).length;
+  const live = s.results.filter(r => !r.undone);
+  const done = live.length, correct = live.filter(r => r.grade >= 3).length;
   const total = s.status === "active" ? done + 1 : done;
   const summary = s.status === "active" ? null : { completed_cycle_ids: [], partial: [{ cycle_id: id(9), answered_groups: ["ich"] }],
-    results: s.results.map(r => ({ result_id: r.result_id, version: r.version })), completed: done, correct, wrong: done - correct,
+    results: live.map(r => ({ result_id: r.result_id, version: r.version })), completed: done, correct, wrong: done - correct,
     blocks: [{ cycle_id: id(9), base_verb_id: id(8), base_lemma: "kommen", tense: "present", answered_groups: ["ich"], effect: "incomplete", grade: null }] } as ConjugationSessionProjection["summary"];
   const assignment = s.status === "active" && s.assignment ? { id: s.assignment, card_id: id(8), status: s.presented ? "presented" : "prefetched",
     kind: "conjugation", cycle_id: id(9), slot_id: { cycle_id: id(9), pronoun_group: "du" }, base_verb_id: id(8), display_verb_id: id(18),
@@ -39,14 +42,17 @@ function projection(s: Session): ConjugationSessionProjection {
     capabilities: { answer_target: assignment && s.presented ? s.assignment : null, correct_target: null, grades: null, undo_target: null,
       stop: s.status !== "closed", summary_home: s.status === "summary" } };
 }
-function resultEnvelope(s: Session, r: Result) {
-  const step = projection(s), live = s.status !== "closed";
+/** Core grants the one undo only for the latest live answer of an open session (`noUndoRight` models a closed right). */
+function resultEnvelope(s: Session, r: Result, grantUndo = true) {
+  const step = projection(s), live = s.status !== "closed" && !r.undone;
   const target = { session_id: s.id, assignment_id: r.assignment_id, result_id: r.result_id, expected_result_version: r.version };
-  return { action: { action_id: r.action_id, kind: "answer.submit", version: r.version, status: "active" },
+  const status = r.undone ? "undone" : "active", latest = s.results.filter(x => !x.undone).at(-1) === r;
+  return { action: { action_id: r.action_id, kind: "answer.submit", version: r.version, status },
     result: { result_id: r.result_id, assignment_id: r.assignment_id, version: r.version, grade: r.grade, correct: r.grade >= 3,
-      status: "active", accepted_at: "2026-10-01T08:00:00Z", answer_date: "2026-10-01", detail: null },
+      status, accepted_at: "2026-10-01T08:00:00Z", answer_date: "2026-10-01", detail: null },
     step, capabilities: { ...step.capabilities, grades: live && r.grade >= 3 ? { ...target, values: [3, 4, 5] } : null,
-      correct_target: live && r.grade === 2 ? target : null } };
+      correct_target: live && r.grade === 2 ? target : null,
+      undo_target: live && latest && grantUndo ? { ...target, action_id: r.action_id, kind: "answer.submit" } : null } };
 }
 const profile = (state_version = "9007199254740990"): OpenedClient["profile"] => ({ profile_id: id(50), role: "user", ui_language: "ru",
   dictionary_language: "ru", time_zone: "UTC", state_version, access: { status: "admitted", version: "1", reason: null } });
@@ -62,7 +68,7 @@ function model(initial: Session[] = [{ id: S1, status: "active", assignment: B1,
   const accepted = new Map<string, ConjugationIntent>();
   let stateVersion = "9007199254740991", counter = 100;
   const posted: ConjugationCommand[] = [], gets: string[] = [], fetches: string[] = [];
-  const server = { lostReply: false, failPost: false, extraField: false, rejectNext: null as string | null,
+  const server = { lostReply: false, failPost: false, extraField: false, rejectNext: null as string | null, noUndoRight: false,
     hold: null as null | { match: (url: URL, method: string) => boolean; gate: Promise<void>; entered: () => void },
     bump: () => { stateVersion = String(BigInt(stateVersion) + 1n); return stateVersion; } };
   const fact = (intent: ConjugationIntent, status: "applied" | "already_applied", r?: Result) => ({ id: intent.command_id, kind: intent.kind, status,
@@ -71,9 +77,9 @@ function model(initial: Session[] = [{ id: S1, status: "active", assignment: B1,
     object_version: r ? (intent.kind === "answer.submit" ? "1" : r.version) : null });
   const envelopeFor = (intent: ConjugationIntent) => {
     const s = sessions.get((intent as { session_id: string }).session_id)!;
-    if (intent.kind === "answer.submit" || intent.kind === "result.grade" || intent.kind === "result.correct") {
+    if (intent.kind === "answer.submit" || intent.kind === "result.grade" || intent.kind === "result.correct" || intent.kind === "result.undo") {
       const r = s.results.find(x => x.assignment_id === intent.assignment_id)!;
-      return { body: resultEnvelope(s, r), r };
+      return { body: resultEnvelope(s, r, !server.noUndoRight), r };
     }
     return { body: { current: projection(s) }, r: undefined };
   };
@@ -94,6 +100,12 @@ function model(initial: Session[] = [{ id: S1, status: "active", assignment: B1,
       if (r.grade === grade) return;
       r.version = String(BigInt(r.version) + 1n); r.grade = grade;
     }
+    if (intent.kind === "result.undo") {
+      // core _undo_conjugation_form: the answer is retired at the next version, the session is open again with the form issued anew.
+      const r = s.results.find(x => x.result_id === intent.result_id)!;
+      r.undone = true; r.version = String(BigInt(r.version) + 1n);
+      s.status = "active"; s.assignment = REISSUED; s.presented = false;
+    }
     if (intent.kind === "session.stop") { s.status = "closed"; s.assignment = null; s.reason = intent.payload.reason; }
     server.bump();
   };
@@ -105,7 +117,7 @@ function model(initial: Session[] = [{ id: S1, status: "active", assignment: B1,
       const command = JSON.parse(String(init!.body)) as ConjugationCommand; posted.push(command);
       if (server.failPost) throw new TypeError("synthetic network failure before server");
       const { client_instance_id: _c, document_id: _d, ...intent } = command;
-      if (server.rejectNext && intent.kind === "answer.submit") {
+      if (server.rejectNext && (intent.kind === "answer.submit" || intent.kind === "result.undo")) {
         const code = server.rejectNext; server.rejectNext = null;
         const step = projection(sessions.get(intent.session_id)!);
         return response({ command: { id: intent.command_id, status: "rejected" }, action: null, result: null, step,
@@ -127,7 +139,7 @@ function model(initial: Session[] = [{ id: S1, status: "active", assignment: B1,
     const sessionId = url.pathname.split("/").at(-1)!, s = sessions.get(sessionId)!;
     if (url.searchParams.has("result_id")) {
       const r = s.results.find(x => x.result_id === url.searchParams.get("result_id"))!;
-      return response({ ...resultEnvelope(s, r), state_version: stateVersion });
+      return response({ ...resultEnvelope(s, r, !server.noUndoRight), state_version: stateVersion });
     }
     const current = projection(s);
     return response({ current: server.extraField ? { ...current, block_error: true } : current, state_version: stateVersion });
@@ -155,7 +167,7 @@ function model(initial: Session[] = [{ id: S1, status: "active", assignment: B1,
 function proxy(ref: { current: ConjugationDocumentController }): ConjugationDocumentActions {
   return { refresh: () => ref.current.refresh(), start: () => ref.current.start(), openStep: t => ref.current.openStep(t),
     openResult: () => ref.current.openResult(), shown: t => ref.current.shown(t), submit: (a, b) => ref.current.submit(a, b),
-    grade: v => ref.current.grade(v), correct: () => ref.current.correct(), stop: r => ref.current.stop(r), retry: l => ref.current.retry(l) };
+    grade: v => ref.current.grade(v), correct: () => ref.current.correct(), undo: () => ref.current.undo(), stop: r => ref.current.stop(r), retry: l => ref.current.retry(l) };
 }
 /** Host semantics of the flow without React: project + commit of the controller's current snapshot. */
 function drive(ref: { current: ConjugationDocumentController }, access: OpenedAccess) {
@@ -620,5 +632,203 @@ describe("QA-5 timer details, summary and Today (К06-102, К06-103)", () => {
     d.flow.next();
     expect(await d.settle()).toMatchObject({ screen: "summary", canHome: true, summary: { correct: 1, wrong: 0 } });
     expect(m.posted.filter(c => c.kind === "session.stop")).toEqual([]);
+  });
+});
+
+describe("M-UNDO-CONJ: «Шаг назад» through the real controller and flow", () => {
+  const undone = (m: ReturnType<typeof model>) => m.posted.filter(c => c.kind === "result.undo");
+
+  it("result → «Шаг назад» → the same form comes back as the next question, empty, with no answer left to return to", async () => {
+    const m = model(), a1 = m.access(1), ref = { current: m.controller(a1) };
+    await ref.current.refresh();
+    const d = drive(ref, a1);
+    d.show(); d.flow.setDraft("kommst"); d.show(); d.flow.submit();
+    expect(await d.settle()).toMatchObject({ screen: "result", mode: "answer", canUndo: true, timer: { durationMs: 3000 } });
+    d.flow.undo();
+    const back = await d.settle();
+    expect(back).toMatchObject({ screen: "question", draft: "", canPrevious: false, problem: null, question: { assignmentId: REISSUED } });
+    expect(undone(m)).toHaveLength(1);
+    expect(undone(m)[0]).toMatchObject({ session_id: S1, assignment_id: B1, expected_result_version: "1", payload: {} });
+    expect(d.running()).toHaveLength(0);
+    // The old timer never fires into the new question; no second undo can be sent.
+    d.flow.undo(); d.flow.previous();
+    await macrotasks();
+    expect(undone(m)).toHaveLength(1);
+    expect(d.show()).toMatchObject({ screen: "question", question: { assignmentId: REISSUED } });
+  });
+
+  it("the answer after an undo is a normal new answer with its own right", async () => {
+    const m = model(), a1 = m.access(1), ref = { current: m.controller(a1) };
+    await ref.current.refresh();
+    const d = drive(ref, a1);
+    d.show(); d.flow.setDraft("kommst"); d.show(); d.flow.submit();
+    await d.settle(); d.flow.undo();
+    expect(await d.settle()).toMatchObject({ screen: "question", status: null, canSubmit: false });
+    // The reissued form is a new prefetched assignment: it is presented like any other question before it can be answered.
+    d.flow.committed(ref.current.snapshot().presentationTicket!);
+    await d.settle();
+    expect(m.posted.filter(c => c.kind === "assignment.present").at(-1)).toMatchObject({ assignment_id: REISSUED });
+    d.flow.setDraft("kommst"); d.show();
+    expect(d.show()).toMatchObject({ screen: "question", canSubmit: true });
+    d.flow.submit();
+    expect(await d.settle()).toMatchObject({ screen: "result", mode: "answer", canUndo: true });
+    expect(m.posted.filter(c => c.kind === "answer.submit")).toHaveLength(2);
+    expect(m.posted.filter(c => c.kind === "answer.submit")[1]).toMatchObject({ assignment_id: REISSUED });
+  });
+
+  it("from the summary of the finished session: «Шаг назад» reopens the session on the last form", async () => {
+    const m = model(undefined, true), a1 = m.access(1), ref = { current: m.controller(a1) };
+    await ref.current.refresh();
+    const d = drive(ref, a1);
+    d.show(); d.flow.setDraft("kommst"); d.show(); d.flow.submit();
+    expect(await d.settle()).toMatchObject({ screen: "result", canNext: true });
+    d.flow.next();
+    expect(await d.settle()).toMatchObject({ screen: "summary", canUndo: true, canHome: true });
+    d.flow.undo();
+    const reopened = await d.settle();
+    expect(reopened).toMatchObject({ screen: "question", question: { assignmentId: REISSUED }, canStop: true });
+    expect(m.sessions.get(S1)).toMatchObject({ status: "active" });
+    expect(m.posted.filter(c => c.kind === "session.stop")).toEqual([]);
+  });
+
+  it("works on a corrected answer: the command carries the current version", async () => {
+    const m = model(), a1 = m.access(1), ref = { current: m.controller(a1) };
+    await ref.current.refresh();
+    const d = drive(ref, a1);
+    d.show(); d.flow.setDraft("falsch"); d.show(); d.flow.submit();
+    expect(await d.settle()).toMatchObject({ screen: "result", canCorrect: true, canUndo: true });
+    d.flow.correct();
+    expect(await d.settle()).toMatchObject({ screen: "result", result: { version: "2" }, canUndo: true });
+    d.flow.undo();
+    expect(await d.settle()).toMatchObject({ screen: "question", question: { assignmentId: REISSUED } });
+    expect(undone(m)[0]).toMatchObject({ expected_result_version: "2" });
+  });
+
+  it.each(["CAPABILITY_EXPIRED", "VERSION_CONFLICT"])("a refused undo (%s): message, the answer stays, no timer, and the re-read state decides what is offered", async code => {
+    const m = model(), a1 = m.access(1), ref = { current: m.controller(a1) };
+    await ref.current.refresh();
+    const d = drive(ref, a1);
+    d.show(); d.flow.setDraft("kommst"); d.show(); d.flow.submit();
+    expect(await d.settle()).toMatchObject({ screen: "result", canUndo: true });
+    m.server.rejectNext = code; m.server.noUndoRight = true;
+    const getsBefore = m.gets.length;
+    d.flow.undo();
+    const refused = await d.settle();
+    expect(refused).toMatchObject({ screen: "result", canUndo: false, problem: "UNDO_UNAVAILABLE", result: { version: "1" }, timer: null });
+    expect(m.gets.slice(getsBefore).some(g => g.includes("result_id="))).toBe(true);
+    expect(d.timers).toHaveLength(1); expect(d.running()).toHaveLength(0);
+    // The person goes on with Next as before.
+    expect(refused).toMatchObject({ canNext: true });
+  });
+
+  it("a lost reply: the answer stays as «checking»; the check by the same ID finds it accepted and the question appears", async () => {
+    const m = model(), a1 = m.access(1), ref = { current: m.controller(a1) };
+    await ref.current.refresh();
+    const d = drive(ref, a1);
+    d.show(); d.flow.setDraft("kommst"); d.show(); d.flow.submit();
+    await d.settle();
+    m.server.lostReply = true;
+    d.flow.undo();
+    const unknown = await d.settle();
+    expect(unknown).toMatchObject({ screen: "result", pending: "unknown", canUndo: false, canCheck: true, grades: [] });
+    m.server.lostReply = false;
+    d.flow.refresh();
+    expect(await d.settle()).toMatchObject({ screen: "question", question: { assignmentId: REISSUED } });
+    expect(undone(m)).toHaveLength(1);
+  });
+
+  it("a lost undo before the server: the retry resends the same ID while the right holds; once it is gone nothing is resent", async () => {
+    const m = model(), a1 = m.access(1), ref = { current: m.controller(a1) };
+    await ref.current.refresh();
+    const d = drive(ref, a1);
+    d.show(); d.flow.setDraft("kommst"); d.show(); d.flow.submit();
+    await d.settle();
+    m.server.failPost = true;
+    d.flow.undo();
+    await d.settle();
+    m.server.failPost = false;
+    d.flow.refresh();
+    expect(await d.settle()).toMatchObject({ screen: "result", pending: "unknown", canRetry: { study: true } });
+    d.flow.retry("study");
+    expect(await d.settle()).toMatchObject({ screen: "question", question: { assignmentId: REISSUED } });
+    const [first, second] = undone(m);
+    expect(second.command_id).toBe(first.command_id);
+
+    const g = model(), b1 = g.access(1), gref = { current: g.controller(b1) };
+    await gref.current.refresh();
+    const e = drive(gref, b1);
+    e.show(); e.flow.setDraft("kommst"); e.show(); e.flow.submit();
+    await e.settle();
+    g.server.failPost = true;
+    e.flow.undo();
+    await e.settle();
+    g.server.failPost = false; g.server.noUndoRight = true;
+    e.flow.refresh();
+    const stuck = await e.settle();
+    expect(stuck).toMatchObject({ canRetry: { study: false }, canUndo: false });
+    e.flow.retry("study");
+    await macrotasks();
+    expect(undone(g)).toHaveLength(1);
+  });
+});
+
+describe("M-UNDO-CONJ hook + flow + screen", () => {
+  it("click «Шаг назад» on the result: one command, the same form returns as a question with an empty field", async () => {
+    const m = model(), sink = { timers: 0, disposed: 0 };
+    render(<Host options={hostOptions(m)} sink={sink} />);
+    await typed("kommst");
+    fireEvent.click(screen.getByRole("button", { name: "Проверить" }));
+    const back = await screen.findByRole("button", { name: "Шаг назад" });
+    fireEvent.click(back); fireEvent.click(back);
+    const field = await screen.findByRole("textbox") as HTMLTextAreaElement;
+    expect(field.value).toBe("");
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Шаг назад" })).toBeNull());
+    expect(screen.queryByRole("button", { name: "Предыдущий ответ" })).toBeNull();
+    expect(m.posted.filter(c => c.kind === "result.undo")).toHaveLength(1);
+    // The reissued form is presented by the renderer's visible commit like any other question.
+    await waitFor(() => expect(m.posted.filter(c => c.kind === "assignment.present").at(-1)).toMatchObject({ assignment_id: REISSUED }));
+  });
+
+  it("a refused step back shows its text under the answer and the button is gone after the re-read", async () => {
+    const m = model(), sink = { timers: 0, disposed: 0 };
+    render(<Host options={hostOptions(m)} sink={sink} />);
+    await typed("kommst");
+    fireEvent.click(screen.getByRole("button", { name: "Проверить" }));
+    const back = await screen.findByRole("button", { name: "Шаг назад" });
+    m.server.rejectNext = "CAPABILITY_EXPIRED"; m.server.noUndoRight = true;
+    fireEvent.click(back);
+    await screen.findByText("Шаг назад больше недоступен.");
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Шаг назад" })).toBeNull());
+    expect(screen.getByRole("button", { name: "Далее" })).toBeTruthy();
+  });
+
+  it("the live summary shows the button and the click brings the last form back", async () => {
+    const m = model(undefined, true), sink = { timers: 0, disposed: 0 };
+    render(<Host options={hostOptions(m)} sink={sink} />);
+    await typed("kommst");
+    fireEvent.click(screen.getByRole("button", { name: "Проверить" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Далее" }));
+    await screen.findByRole("heading", { name: "Итог спряжений" });
+    fireEvent.click(await screen.findByRole("button", { name: "Шаг назад" }));
+    const field = await screen.findByRole("textbox") as HTMLTextAreaElement;
+    expect(field.value).toBe("");
+    expect(screen.queryByRole("heading", { name: "Итог спряжений" })).toBeNull();
+    expect(m.sessions.get(S1)).toMatchObject({ status: "active" });
+  });
+
+  it("an unknown undo: checking text, then «Проверить статус» finds it accepted and shows the question", async () => {
+    const m = model(), sink = { timers: 0, disposed: 0 };
+    render(<Host options={hostOptions(m)} sink={sink} />);
+    await typed("kommst");
+    fireEvent.click(screen.getByRole("button", { name: "Проверить" }));
+    const back = await screen.findByRole("button", { name: "Шаг назад" });
+    m.server.lostReply = true;
+    fireEvent.click(back);
+    await screen.findByText("Проверяем изменение");
+    expect(screen.queryByRole("button", { name: "Шаг назад" })).toBeNull();
+    m.server.lostReply = false;
+    fireEvent.click(await screen.findByRole("button", { name: "Проверить статус" }));
+    await screen.findByRole("textbox");
+    expect(m.posted.filter(c => c.kind === "result.undo")).toHaveLength(1);
   });
 });

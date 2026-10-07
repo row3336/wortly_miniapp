@@ -11,14 +11,17 @@ const id = (n: number) => `cccccccc-dddd-4000-8000-${String(n).padStart(12, "0")
 const S1 = id(3), S2 = id(4), B1 = id(21), B2 = id(22), B3 = id(23), R1 = id(31);
 const HIGH = "9007199254740993"; // > 2^53, must stay a quoted decimal string end to end.
 const studyKey = "wortly.pending.conjugation_session", stopKey = "wortly.pending.conjugation_stop";
-type Result = { result_id: string; assignment_id: string; action_id: string; version: string; grade: 2 | 3 | 4 | 5 };
+type Result = { result_id: string; assignment_id: string; action_id: string; version: string; grade: 2 | 3 | 4 | 5; undone?: true };
 type Session = { id: string; status: "active" | "summary" | "closed"; assignment: string | null; presented: boolean; results: Result[] };
 
+/** The form issued anew after an undo (core: new assignment_id of the same form, prefetched). */
+const REISSUED = id(24);
 function projection(s: Session): ConjugationSessionProjection {
-  const done = s.results.length, correct = s.results.filter(r => r.grade >= 3).length;
+  const live = s.results.filter(r => !r.undone);
+  const done = live.length, correct = live.filter(r => r.grade >= 3).length;
   const total = s.status === "active" ? done + 1 : done;
   const summary = s.status === "active" ? null : { completed_cycle_ids: [], partial: [{ cycle_id: id(9), answered_groups: ["ich"] }],
-    results: s.results.map(r => ({ result_id: r.result_id, version: r.version })), completed: done, correct, wrong: done - correct,
+    results: live.map(r => ({ result_id: r.result_id, version: r.version })), completed: done, correct, wrong: done - correct,
     blocks: [{ cycle_id: id(9), base_verb_id: id(8), base_lemma: "kommen", tense: "present", answered_groups: ["ich"], effect: "incomplete", grade: null }] } as ConjugationSessionProjection["summary"];
   const assignment = s.status === "active" && s.assignment ? { id: s.assignment, card_id: id(8), status: s.presented ? "presented" : "prefetched",
     kind: "conjugation", cycle_id: id(9), slot_id: { cycle_id: id(9), pronoun_group: "du" }, base_verb_id: id(8), display_verb_id: id(18),
@@ -29,14 +32,18 @@ function projection(s: Session): ConjugationSessionProjection {
     capabilities: { answer_target: assignment && s.presented ? s.assignment : null, correct_target: null, grades: null, undo_target: null,
       stop: s.status !== "closed", summary_home: s.status === "summary" } };
 }
-function resultEnvelope(s: Session, r: Result) {
-  const step = projection(s), live = s.status !== "closed";
+/** `grantUndo`: core grants the one undo only for the latest live answer of an open session, until the next answer. */
+function resultEnvelope(s: Session, r: Result, grantUndo = true) {
+  const step = projection(s), live = s.status !== "closed" && !r.undone;
   const target = { session_id: s.id, assignment_id: r.assignment_id, result_id: r.result_id, expected_result_version: r.version };
-  return { action: { action_id: r.action_id, kind: "answer.submit", version: r.version, status: "active" },
+  const latest = s.results.filter(x => !x.undone).at(-1) === r;
+  const status = r.undone ? "undone" : "active";
+  return { action: { action_id: r.action_id, kind: "answer.submit", version: r.version, status },
     result: { result_id: r.result_id, assignment_id: r.assignment_id, version: r.version, grade: r.grade, correct: r.grade >= 3,
-      status: "active", accepted_at: "2026-10-01T08:00:00Z", answer_date: "2026-10-01", detail: null },
+      status, accepted_at: "2026-10-01T08:00:00Z", answer_date: "2026-10-01", detail: null },
     step, capabilities: { ...step.capabilities, grades: live && r.grade >= 3 ? { ...target, values: [3, 4, 5] } : null,
-      correct_target: live && r.grade === 2 ? target : null } };
+      correct_target: live && r.grade === 2 ? target : null,
+      undo_target: live && latest && grantUndo ? { ...target, action_id: r.action_id, kind: "answer.submit" } : null } };
 }
 const profile = (state_version = "9007199254740990"): OpenedClient["profile"] => ({ profile_id: id(50), role: "user", ui_language: "ru",
   dictionary_language: "ru", time_zone: "UTC", state_version, access: { status: "admitted", version: "1", reason: null } });
@@ -58,7 +65,7 @@ function fixture(config: { seed?: string | null; saved?: ConjugationIntent[]; se
   let stateVersion = "9007199254740991", live = true, counter = 100;
   const posted: ConjugationCommand[] = [], gets: string[] = [];
   const server = {
-    lostReply: false, failPost: false, rejectNext: null as string | null, replaceOnCorrect: null as string | null,
+    lostReply: false, failPost: false, rejectNext: null as string | null, replaceOnCorrect: null as string | null, noUndoRight: false, unavailableStatus: false,
     hold: null as null | { match: (url: URL, method: string) => boolean; gate: Promise<void>; entered: () => void },
     denyNext: null as null | number, staleNext: null as string | null, failResultRead: false,
     bump: () => { stateVersion = String(BigInt(stateVersion) + 1n); return stateVersion; },
@@ -70,9 +77,9 @@ function fixture(config: { seed?: string | null; saved?: ConjugationIntent[]; se
     object_version: r ? (intent.kind === "answer.submit" ? "1" : r.version) : null });
   const envelopeFor = (intent: ConjugationIntent) => {
     const s = sessions.get((intent as { session_id: string }).session_id)!;
-    if (intent.kind === "answer.submit" || intent.kind === "result.grade" || intent.kind === "result.correct") {
+    if (intent.kind === "answer.submit" || intent.kind === "result.grade" || intent.kind === "result.correct" || intent.kind === "result.undo") {
       const r = s.results.find(x => x.assignment_id === intent.assignment_id)!;
-      return { body: resultEnvelope(s, r), r };
+      return { body: resultEnvelope(s, r, !server.noUndoRight), r };
     }
     return { body: { current: projection(s) }, r: undefined };
   };
@@ -91,6 +98,12 @@ function fixture(config: { seed?: string | null; saved?: ConjugationIntent[]; se
       const r = s.results.find(x => x.result_id === intent.result_id)!;
       r.version = String(BigInt(r.version) + 1n); r.grade = intent.kind === "result.correct" ? 4 : intent.payload.grade as 3 | 4 | 5;
       if (intent.kind === "result.correct" && server.replaceOnCorrect && !s.presented) s.assignment = server.replaceOnCorrect;
+    }
+    if (intent.kind === "result.undo") {
+      // core _undo_conjugation_form: the answer is retired at the next version, the session is open again with the form issued anew.
+      const r = s.results.find(x => x.result_id === intent.result_id)!;
+      r.undone = true; r.version = String(BigInt(r.version) + 1n);
+      s.status = "active"; s.assignment = REISSUED; s.presented = false;
     }
     if (intent.kind === "session.stop") { s.status = "closed"; s.assignment = null; }
     server.bump();
@@ -120,6 +133,10 @@ function fixture(config: { seed?: string | null; saved?: ConjugationIntent[]; se
       const hash = await conjugationIntentHash(intent);
       if (hash !== url.searchParams.get("expected_intent_hash")) return response({ error: { code: "COMMAND_PAYLOAD_MISMATCH" } }, 409);
       const { body, r } = envelopeFor(intent);
+      // The acceptance fact stays readable but grants no document access (core command_status: unavailable).
+      if (server.unavailableStatus) return response({ action: null, result: null, step: { status: "unavailable" }, command: fact(intent, "already_applied", r),
+        capabilities: { answer_target: null, correct_target: null, grades: null, undo_target: null, stop: false, summary_home: false },
+        verified_intent_hash: hash, state_version: stateVersion });
       return response({ ...body, command: fact(intent, "already_applied", r), verified_intent_hash: hash, state_version: stateVersion });
     }
     const sessionId = url.pathname.split("/").at(-1)!, s = sessions.get(sessionId) ?? { id: sessionId, status: "active", assignment: B1, presented: true, results: [] };
@@ -127,7 +144,7 @@ function fixture(config: { seed?: string | null; saved?: ConjugationIntent[]; se
     if (url.searchParams.has("result_id")) {
       if (server.failResultRead) return response({ error: { code: "UNAVAILABLE" } }, 503);
       const r = s.results.find(x => x.result_id === url.searchParams.get("result_id"))!;
-      return response({ ...resultEnvelope(s as Session, r), state_version: version });
+      return response({ ...resultEnvelope(s as Session, r, !server.noUndoRight), state_version: version });
     }
     return response({ current: sessions.has(sessionId) ? projection(s as Session) : { session_id: sessionId, status: "not_found" }, state_version: version });
   };
@@ -962,5 +979,212 @@ describe("C3: a retained A address is identity only, never authority", () => {
     await g.controller.start();
     expect(s(g.controller).sessionId).not.toBe(S1);
     expect(s(g.controller).acceptedAddress).toBeNull();
+  });
+});
+
+describe("M-UNDO-CONJ: «Шаг назад» (result.undo) of the form on screen", () => {
+  const undoBody = (version = "1") => ({ kind: "result.undo", session_id: S1, assignment_id: B1, result_id: R1, expected_result_version: version, payload: {} });
+
+  it("is offered only with the server's undo_target of the A on screen and sends exactly its address", async () => {
+    const f = fixture();
+    await f.controller.refresh();
+    expect(s(f.controller)).toMatchObject({ canUndo: false });
+    await answered(f);
+    expect(s(f.controller)).toMatchObject({ phase: "result", canUndo: true, resultA: { capabilities: { undo_target: { result_id: R1, expected_result_version: "1" } } } });
+    await f.controller.undo();
+    const sent = f.posted.at(-1)!;
+    expect(sent).toMatchObject(undoBody());
+    // The action ID and kind of the right stay out of the command (C-UNDO-1: only the result address).
+    expect(Object.keys(sent).sort()).toEqual(["assignment_id", "client_instance_id", "command_id", "document_id", "expected_result_version",
+      "kind", "payload", "result_id", "session_id"]);
+    expect(f.posted.filter(c => c.kind === "result.undo")).toHaveLength(1);
+  });
+
+  it("accepted: the answer is gone, the same form comes back as a new prefetched question that openStep selects", async () => {
+    const f = fixture();
+    await answered(f);
+    const first = s(f.controller).acceptedAddress;
+    expect(first).toMatchObject({ result_id: R1 });
+    await f.controller.undo();
+    const after = s(f.controller);
+    expect(after).toMatchObject({ resultA: null, acceptedAddress: null, canUndo: false, canCorrect: false, allowedGrades: [],
+      display: { kind: "none" }, phase: "prefetched", problem: null,
+      commands: { study: { outcome: "accepted", resolved: { kind: "result.undo", resultId: R1, assignmentId: B1 } } },
+      currentStep: { step: { status: "active", assignment: { id: REISSUED, status: "prefetched" } } } });
+    expect(after.stepTicket).not.toBeNull();
+    f.controller.openStep(after.stepTicket!);
+    expect(s(f.controller)).toMatchObject({ display: { kind: "step", assignmentId: REISSUED }, phase: "prefetched" });
+    expect(s(f.controller).presentationTicket).not.toBeNull();
+    // Not a chain: no earlier answer takes its place and there is nothing to step back to.
+    f.controller.openResult();
+    expect(s(f.controller)).toMatchObject({ display: { kind: "step" }, resultA: null });
+    await expect(f.controller.undo()).resolves.toBeUndefined();
+    expect(f.posted.filter(c => c.kind === "result.undo")).toHaveLength(1);
+  });
+
+  it("from the live summary: the session is open again and the last form is a question, not the summary", async () => {
+    const f = fixture({ lastAnswer: true });
+    const snap = await answered(f);
+    f.controller.openStep(snap.stepTicket!);
+    expect(s(f.controller)).toMatchObject({ phase: "summary", display: { kind: "summary" }, canUndo: true, canSummaryHome: true });
+    await f.controller.undo();
+    expect(s(f.controller)).toMatchObject({ phase: "prefetched", display: { kind: "none" }, canSummaryHome: false, resultA: null,
+      currentStep: { step: { status: "active", assignment: { id: REISSUED, status: "prefetched" } } } });
+    expect(s(f.controller).stepTicket).not.toBeNull();
+    expect(s(f.controller).terminalSessionIds).toEqual([]);
+  });
+
+  it("undoes a corrected answer at its current version and a version above 2^53 stays a decimal string", async () => {
+    const f = fixture();
+    await answered(f, "wrong");
+    await f.controller.correct();
+    expect(s(f.controller).resultA?.result).toMatchObject({ version: "2", grade: 4 });
+    await f.controller.undo();
+    expect(f.posted.at(-1)).toMatchObject(undoBody("2"));
+    const g = fixture();
+    await answered(g);
+    g.sessions.get(S1)!.results[0].version = HIGH; g.server.bump();
+    await g.controller.refresh();
+    await g.controller.undo();
+    expect(g.posted.at(-1)).toMatchObject(undoBody(HIGH));
+    expect(s(g.controller).commands.study).toMatchObject({ outcome: "accepted", resolved: { objectVersion: "9007199254740994" } });
+  });
+
+  it("is closed while B is shown but not confirmed, while a revision is pending, when inactive, and when the server grants no right", async () => {
+    const f = fixture();
+    const snap = await answered(f);
+    f.controller.openStep(snap.stepTicket!);
+    const ticket = s(f.controller).presentationTicket!;
+    const held = f.hold((_url, method) => method === "POST");
+    const shown = f.controller.shown(ticket);
+    expect(s(f.controller)).toMatchObject({ phase: "visible_unconfirmed", canUndo: false });
+    await held.entered;
+    f.controller.openResult();
+    expect(s(f.controller)).toMatchObject({ canUndo: false });
+    const joined = f.controller.undo();
+    expect(joined).toBe(shown);
+    held.release(); await Promise.all([shown, joined]);
+    expect(f.posted.map(c => c.kind)).toEqual(["answer.submit", "assignment.present"]);
+    // Confirmed B: returning to A keeps the right (a shown, unconfirmed B was the only thing that closed it).
+    expect(s(f.controller)).toMatchObject({ phase: "result", canUndo: true });
+    disable(f);
+    expect(s(f.controller)).toMatchObject({ canUndo: false });
+    await f.controller.undo();
+    expect(f.posted.filter(c => c.kind === "result.undo")).toHaveLength(0);
+    enable(f);
+    const none = fixture();
+    await answered(none);
+    none.server.noUndoRight = true;
+    await none.controller.refresh();
+    expect(s(none.controller)).toMatchObject({ phase: "result", canUndo: false, resultA: { capabilities: { undo_target: null } } });
+    await none.controller.undo();
+    expect(none.posted.filter(c => c.kind === "result.undo")).toHaveLength(0);
+  });
+
+  it("a repeated call joins the running undo: one command ID, one POST", async () => {
+    const f = fixture();
+    await answered(f);
+    const held = f.hold((_url, method) => method === "POST");
+    const first = f.controller.undo();
+    await held.entered;
+    const again = f.controller.undo();
+    expect(s(f.controller)).toMatchObject({ canUndo: false });
+    held.release(); await Promise.all([first, again]);
+    expect(f.posted.filter(c => c.kind === "result.undo")).toHaveLength(1);
+  });
+
+  it.each(["CAPABILITY_EXPIRED", "VERSION_CONFLICT", "FORBIDDEN", "ASSIGNMENT_STALE"])("refusal %s keeps the answer, re-reads session and result, offers no timer-driven step", async code => {
+    const f = fixture();
+    await answered(f);
+    f.server.noUndoRight = true; // the server no longer grants it (e.g. the next answer already closed it in another window)
+    f.server.rejectNext = code;
+    const readsBefore = f.gets.length;
+    await f.controller.undo();
+    expect(s(f.controller)).toMatchObject({ phase: "result", canUndo: false, problem: code, display: { kind: "result" },
+      commands: { study: { outcome: "rejected", rejectionCode: code } }, resultA: { capabilities: { undo_target: null } } });
+    expect(f.gets.slice(readsBefore).some(g => g.includes(`/sessions/${S1}`) && g.includes(`result_id=${R1}`))).toBe(true);
+    expect(f.gets.slice(readsBefore).some(g => g.includes(`/sessions/${S1}`) && !g.includes("result_id="))).toBe(true);
+  });
+
+  it("an answer that the server shows undone (undone in another window) is withdrawn when it is read again", async () => {
+    const f = fixture();
+    await answered(f);
+    const r = f.sessions.get(S1)!.results[0];
+    r.undone = true; r.version = "2"; const session = f.sessions.get(S1)!; session.assignment = REISSUED; session.presented = false; f.server.bump();
+    await f.controller.refresh();
+    expect(s(f.controller)).toMatchObject({ resultA: null, acceptedAddress: null, canUndo: false, display: { kind: "none" }, phase: "prefetched",
+      currentStep: { step: { assignment: { id: REISSUED } } } });
+  });
+
+  it("a lost reply is unknown, blocks a second undo, and the same-ID check settles it as accepted", async () => {
+    const f = fixture();
+    await answered(f);
+    f.server.lostReply = true;
+    await f.controller.undo();
+    const unknown = s(f.controller);
+    expect(unknown).toMatchObject({ phase: "unknown", canUndo: false, resultA: null, problem: "network",
+      commands: { study: { pending: true, kind: "result.undo", pendingIntent: { kind: "result.undo", expected_result_version: "1" } } } });
+    f.server.lostReply = false;
+    const commandId = f.posted.at(-1)!.command_id;
+    await f.controller.refresh();
+    expect(f.posted.filter(c => c.kind === "result.undo")).toHaveLength(1);
+    expect(f.gets.some(g => g.includes(`/commands/${commandId}`) && g.includes("expected_intent_hash="))).toBe(true);
+    expect(s(f.controller)).toMatchObject({ commands: { study: { outcome: "accepted", pending: false } }, resultA: null, acceptedAddress: null,
+      display: { kind: "none" }, currentStep: { step: { assignment: { id: REISSUED, status: "prefetched" } } } });
+    expect(f.values.has(studyKey)).toBe(false);
+  });
+
+  it("an acceptance that carries no view (unavailable) still retires the answer: its address never comes back as A", async () => {
+    const f = fixture();
+    await answered(f);
+    f.server.lostReply = true;
+    await f.controller.undo();
+    f.server.lostReply = false; f.server.unavailableStatus = true;
+    const readsBefore = f.gets.filter(g => g.includes(`result_id=${R1}`)).length;
+    await f.controller.refresh();
+    expect(s(f.controller)).toMatchObject({ commands: { study: { outcome: "accepted", resolved: { kind: "result.undo" } } },
+      resultA: null, acceptedAddress: null, canUndo: false, canCorrect: false, allowedGrades: [], display: { kind: "none" } });
+    // The retired answer has no address left to read: neither this refresh nor the next asks the server for it.
+    await f.controller.refresh();
+    expect(f.gets.filter(g => g.includes(`result_id=${R1}`)).length).toBe(readsBefore);
+    expect(s(f.controller).resultA).toBeNull();
+  });
+
+  it("a lost undo is resent with the same ID and payload only while the right is still granted", async () => {
+    const f = fixture();
+    await answered(f);
+    f.server.failPost = true;
+    await f.controller.undo();
+    f.server.failPost = false;
+    const sentId = f.posted.at(-1)!.command_id;
+    await f.controller.refresh();
+    expect(s(f.controller)).toMatchObject({ canRetry: { study: true } });
+    await f.controller.retry("study");
+    expect(f.posted.filter(c => c.kind === "result.undo").map(c => c.command_id)).toEqual([sentId, sentId]);
+    expect(s(f.controller)).toMatchObject({ commands: { study: { outcome: "accepted" } }, resultA: null });
+    // The right is gone: nothing is resent and the right is not created again.
+    const g = fixture();
+    await answered(g);
+    g.server.failPost = true;
+    await g.controller.undo();
+    g.server.failPost = false; g.server.noUndoRight = true;
+    await g.controller.refresh();
+    expect(s(g.controller)).toMatchObject({ canRetry: { study: false }, canUndo: false });
+    await g.controller.retry("study");
+    expect(g.posted.filter(c => c.kind === "result.undo")).toHaveLength(1);
+  });
+
+  it("an undo pending in the durable slot survives a restart and stays an unsent unknown until the person checks", async () => {
+    const f = fixture();
+    await answered(f);
+    f.server.failPost = true;
+    await f.controller.undo();
+    f.server.failPost = false;
+    const stored = f.values.get(studyKey)!;
+    expect(JSON.parse(stored).intent).toMatchObject({ kind: "result.undo", result_id: R1 });
+    const g = fixture({ saved: [JSON.parse(stored).intent], sessions: [structuredClone(f.sessions.get(S1)!)] });
+    await g.controller.refresh();
+    expect(g.posted).toEqual([]);
+    expect(s(g.controller)).toMatchObject({ phase: "unknown", canUndo: false, commands: { study: { pending: true, kind: "result.undo" } } });
   });
 });

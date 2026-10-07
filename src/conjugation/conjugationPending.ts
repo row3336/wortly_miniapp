@@ -49,7 +49,7 @@ export function canonicalConjugationIntent(value: ConjugationIntent): Conjugatio
     case "answer.submit": return { command_id, kind: value.kind, session_id,
       assignment_id: value.assignment_id.toLowerCase(),
       payload: "text" in value.payload ? { text: value.payload.text } : { forgot: true } };
-    case "result.grade": case "result.correct": return { command_id, kind: value.kind, session_id,
+    case "result.grade": case "result.correct": case "result.undo": return { command_id, kind: value.kind, session_id,
       assignment_id: value.assignment_id.toLowerCase(), result_id: value.result_id.toLowerCase(),
       expected_result_version: value.expected_result_version,
       payload: value.kind === "result.grade" ? { grade: value.payload.grade } : {} } as ConjugationIntent;

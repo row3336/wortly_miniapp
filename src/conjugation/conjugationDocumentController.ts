@@ -3,10 +3,11 @@ import { ApiError, type HttpOptions } from "../api/http";
 import { sameId, uuid, version } from "../api/wireValidation";
 import { ClosedAccessError, type OpenedAccess } from "../app/openedAccess";
 import { createConjugationApi } from "./conjugationApi";
-import { ConjugationCommandController, type ConjugationCommandSnapshot, type ConjugationCommandView,
+import { ConjugationCommandController, resultAddressed, type ConjugationCommandSnapshot, type ConjugationCommandView,
   type ConjugationRead, type ConjugationTransition } from "./conjugationCommandController";
 import type { ConjugationSessionPendingStore, ConjugationStopPendingStore } from "./conjugationPending";
 import type { ConjugationResultCurrent } from "./conjugationProjection";
+import { undoAction } from "../commands/resultUndo";
 
 type AccessCredentials = Parameters<Parameters<OpenedAccess["run"]>[0]>[0];
 type ResultView = Extract<ConjugationCommandView, { kind: "result" }>;
@@ -49,6 +50,8 @@ export type ConjugationDocumentSnapshot = {
   stepTicket: ConjugationStepTicket | null;
   presentationTicket: ConjugationPresentationTicket | null;
   canStart: boolean; canSubmit: boolean; canCorrect: boolean; canStop: boolean; canSummaryHome: boolean;
+  /** «Шаг назад» (CT 2.3): the server grants exactly this right for the A on screen and nothing is in flight. */
+  canUndo: boolean;
   allowedGrades: readonly (3 | 4 | 5)[];
   canRetry: Record<ConjugationLane, boolean>;
 };
@@ -76,7 +79,7 @@ export type ConjugationDocumentActions = {
   shown(ticket: ConjugationPresentationTicket): Promise<void>;
   /** `assignmentId` is the question the answer was typed for; any other current question refuses it without a request. */
   submit(answer: { text: string } | { forgot: true }, assignmentId: string): Promise<void>;
-  grade(value: 3 | 4 | 5): Promise<void>; correct(): Promise<void>;
+  grade(value: 3 | 4 | 5): Promise<void>; correct(): Promise<void>; undo(): Promise<void>;
   stop(reason: "stop" | "summary_home"): Promise<void>;
   retry(lane: ConjugationLane): Promise<void>;
 };
@@ -167,7 +170,7 @@ export class ConjugationDocumentController implements ConjugationDocumentActions
       read: intent => this.exchange<ConjugationRead>(({ token, proof, clientInstanceId, documentId }) => {
         if (intent.kind === "conjugation.schedule") throw new Error("catalog lane is not owned here");
         const address = { session_id: intent.session_id, client_instance_id: clientInstanceId, document_id: documentId };
-        return intent.kind === "result.grade" || intent.kind === "result.correct"
+        return resultAddressed(intent)
           ? api.read(token, proof, { ...address, assignment_id: intent.assignment_id, result_id: intent.result_id })
           : api.read(token, proof, address);
       }),
@@ -225,6 +228,11 @@ export class ConjugationDocumentController implements ConjugationDocumentActions
   }
   private selected(sessionId: string): boolean { return this.sessionId !== null && sameId(sessionId, this.sessionId); }
   private setDisplay(display: ConjugationDisplay): void { this.display = display; this.displayRev++; }
+  /** After an undo the answer is gone: no address, view, or screen of it remains, and no earlier answer takes its place (CT 2.3). */
+  private retireAnswer(): void {
+    this.acceptedA = null; this.resultA = null; this.shownAssignment = null;
+    if (this.display.kind === "result" || this.display.kind === "summary") this.setDisplay({ kind: "none" });
+  }
   private fallbackDisplay(): void { this.setDisplay(this.resultA || this.acceptedA ? { kind: "result" } : { kind: "none" }); }
 
   private markClosed(sessionId: string): void {
@@ -283,6 +291,8 @@ export class ConjugationDocumentController implements ConjugationDocumentActions
   private observeResult(view: ConjugationResultCurrent, stateVersion: string, address: ResultAddress): void {
     if (!this.fresh(stateVersion)) { this.problem = "stale_response"; return; }
     this.raise(stateVersion);
+    // An A that the server shows undone (here or in another window of this document) is no longer an answer to show.
+    if (view.result?.status === "undone" && this.acceptedA && sameId(this.acceptedA.result_id, address.result_id)) this.retireAnswer();
     const step = view.step;
     if ("pair" in step) this.setStep(step, stateVersion);
     else if ("session_id" in step && this.selected(step.session_id)) { this.step = null; this.stopRight = null; }
@@ -305,6 +315,8 @@ export class ConjugationDocumentController implements ConjugationDocumentActions
     const resolved = snapshot.resolved;
     if (snapshot.outcome === "accepted" && resolved?.kind === "session.stop" && resolved.sessionId) this.markClosed(resolved.sessionId);
     if (lane === "study" && resolved && snapshot.outcome !== null && resolved.kind === "assignment.present") this.shownAssignment = null;
+    if (lane === "study" && snapshot.outcome === "accepted" && resolved?.kind === "result.undo" && resolved.sessionId
+      && this.selected(resolved.sessionId)) this.retireAnswer();
     if (lane === "study" && snapshot.outcome === "accepted" && resolved?.kind === "answer.submit" && resolved.sessionId
       && resolved.assignmentId && resolved.resultId && this.selected(resolved.sessionId)
       && !this.seenAnswers.has(resolved.commandId)) {
@@ -321,9 +333,10 @@ export class ConjugationDocumentController implements ConjugationDocumentActions
       const intent = snapshot.pendingIntent;
       const address: ResultAddress | null = resolved?.sessionId && resolved.assignmentId && resolved.resultId
         ? { session_id: resolved.sessionId, assignment_id: resolved.assignmentId, result_id: resolved.resultId }
-        : intent && (intent.kind === "result.grade" || intent.kind === "result.correct")
+        : intent && resultAddressed(intent)
           ? { session_id: intent.session_id, assignment_id: intent.assignment_id, result_id: intent.result_id } : null;
-      if (address && resolved?.kind !== "answer.submit" && this.selected(address.session_id)
+      // An accepted undo names the answer it retired; it must not bring it back as A.
+      if (address && resolved?.kind !== "answer.submit" && resolved?.kind !== "result.undo" && this.selected(address.session_id)
         && (!this.acceptedA || sameId(this.acceptedA.result_id, address.result_id))) {
         this.acceptedA = { session_id: address.session_id.toLowerCase(), assignment_id: address.assignment_id.toLowerCase(),
           result_id: address.result_id.toLowerCase() };
@@ -439,6 +452,7 @@ export class ConjugationDocumentController implements ConjugationDocumentActions
       canSubmit: mutate && display.kind === "step" && assignment?.status === "presented"
         && !!step && sameId(step.step.capabilities.answer_target ?? "", assignment.id),
       canCorrect: mutate && !!caps?.correct_target && target3(caps.correct_target),
+      canUndo: mutate && !!caps?.undo_target && target3(caps.undo_target),
       canStop: canStopBase && !!right?.stop, canSummaryHome: canStopBase && !!right?.home,
       allowedGrades,
       canRetry: { study: study && commands.study.canRetry && !this.tasks.study, stop: study && commands.stop.canRetry && !this.tasks.stop },
@@ -654,6 +668,12 @@ export class ConjugationDocumentController implements ConjugationDocumentActions
     return this.begin("study", { kind: "result.correct", session_id: target.session_id, assignment_id: target.assignment_id,
       result_id: target.result_id, expected_result_version: target.expected_result_version, payload: {} },
       snapshot.resultA!.stateVersion);
+  }
+  /** The one undo of the A on screen, built only from the server's undo_target (never from the grade or history). */
+  undo(): Promise<void> {
+    const snapshot = this.snapshot(), target = snapshot.resultA?.capabilities.undo_target;
+    if (!snapshot.canUndo || !target) return this.tasks.study ?? Promise.resolve();
+    return this.begin("study", undoAction(target), snapshot.resultA!.stateVersion);
   }
   stop(reason: "stop" | "summary_home"): Promise<void> {
     if (reason !== "stop" && reason !== "summary_home") return Promise.reject(new Error("conjugation stop reason required"));

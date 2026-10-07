@@ -16,6 +16,7 @@ const schedule: ConjugationScheduleTransportCommand = { ...origin, command_id: i
 const start: ConjugationSessionCommand = { ...address, command_id: id(12), kind: "session.start", payload: { mode: "conjugation" } };
 const grade: ConjugationResultCommand = { ...resultAddress, command_id: id(13), kind: "result.grade", expected_result_version: "1", payload: { grade: 5 } };
 const correct: ConjugationResultCommand = { ...resultAddress, command_id: id(14), kind: "result.correct", expected_result_version: "1", payload: {} };
+const undo: ConjugationResultCommand = { ...resultAddress, command_id: id(17), kind: "result.undo", expected_result_version: "1", payload: {} };
 const present: ConjugationSessionCommand = { ...address, assignment_id: id(5), command_id: id(15), kind: "assignment.present", payload: {} };
 const stop: ConjugationSessionCommand = { ...address, command_id: id(16), kind: "session.stop", payload: { reason: "stop" } };
 function catalog(): ConjugationCatalog {
@@ -56,12 +57,21 @@ function result(): ConjugationResultReadResponse {
         variants: [{ parts: ["komme"] }], conjunction_hint: null, examples: null } },
     step: session(), capabilities: { ...session().capabilities, grades: { session_id: id(3), assignment_id: id(4), result_id: id(6), expected_result_version: "1", values: [3, 4, 5] } }, state_version: "9" };
 }
+/** The reply of an accepted undo: the answer retired at its next version, the same form issued again as a new prefetched question. */
+function undoneResult(): ConjugationResultReadResponse {
+  const step = session();
+  step.assignment = { ...step.assignment!, id: id(25), status: "prefetched" }; step.capabilities.answer_target = null;
+  return { action: { action_id: id(7), kind: "answer.submit", version: "2", status: "undone" },
+    result: { result_id: id(6), assignment_id: id(4), version: "2", grade: 4, correct: true, status: "undone",
+      accepted_at: "2026-10-01T08:00:00Z", answer_date: "2026-10-01", detail: null },
+    step, capabilities: { ...step.capabilities }, state_version: "9" };
+}
 function unavailableResult(): ConjugationResultReadResponse {
   return { action: null, result: null, step: { session_id: id(3), status: "unavailable" },
     capabilities: { answer_target: null, correct_target: null, grades: null, undo_target: null, stop: false, summary_home: false }, state_version: "9" };
 }
 function fact(command: ConjugationCommand, status: "applied" | "already_applied" = "applied", objectVersion?: string): SavedCommandFact {
-  const result = ["answer.submit", "result.grade", "result.correct"].includes(command.kind);
+  const result = ["answer.submit", "result.grade", "result.correct", "result.undo"].includes(command.kind);
   return { id: command.command_id, kind: command.kind, status, applied_at: "2026-10-01T08:00:00+00:00",
     target_id: command.kind === "conjugation.schedule" ? command.payload.base_verb_id : "assignment_id" in command ? command.assignment_id : command.session_id,
     action_id: result ? id(7) : null, result_id: result ? id(6) : null, context_id: null,
@@ -102,7 +112,7 @@ describe("conjugation transport contract", () => {
   });
 
   it("allows all exact intents including empty text and rejects mixed/foreign payloads before transport", async () => {
-    const commands = [schedule, start, present, stop, submit(), submit({ text: "" }), submit({ forgot: true }), grade, correct,
+    const commands = [schedule, start, present, stop, submit(), submit({ text: "" }), submit({ forgot: true }), grade, correct, undo,
       { ...stop, payload: { reason: "summary_home" } }];
     for (const command of commands) {
       const { client_instance_id: _c, document_id: _d, ...intent } = command;
@@ -112,7 +122,8 @@ describe("conjugation transport contract", () => {
       { ...submit(), payload: { text: "", forgot: true } }, { ...submit(), payload: { forgot: false } },
       { ...submit(), payload: { text: 4 } }, { ...schedule, session_id: id(3) }, { ...start, payload: { mode: "conjugation", bucket: "words" } },
       { ...grade, payload: { grade: 2 } }, { ...correct, expected_result_version: "9223372036854775808" },
-      { ...correct, kind: "result.undo" }, { ...present, payload: { variants: [] } }, { ...submit(), token: "x" },
+      { ...undo, payload: { grade: 4 } }, { ...undo, expected_result_version: "0" }, { ...undo, kind: "result.revert" },
+      { ...present, payload: { variants: [] } }, { ...submit(), token: "x" },
     ];
     for (const command of bad) {
       const f = fixture({}); await expect(f.api.send("t", "p", command as any)).rejects.toThrow(); expect(f.fetcher).not.toHaveBeenCalled();
@@ -263,6 +274,48 @@ describe("conjugation transport contract", () => {
     }
     const body = result(); body.result!.accepted_at = "2026-02-30T08:00:00Z";
     await expect(fixture(body).api.read("t", "p", resultAddress)).rejects.toMatchObject(invalid);
+  });
+
+  it("sends result.undo as the exact address of the right and accepts only the retired result at its next version", async () => {
+    const f = fixture({ ...undoneResult(), command: fact(undo, "applied", "2") });
+    const reply = await f.api.send("t", "p", undo);
+    expect(reply).toMatchObject({ outcome: "accepted", result: { status: "undone", version: "2", detail: null }, action: { status: "undone" } });
+    expect(JSON.parse(String(f.fetcher.mock.calls[0][1]?.body))).toEqual(undo);
+    // A repeated command and the status read tell the same truth.
+    const proven = await withProof(undo, { ...undoneResult(), command: fact(undo, "already_applied", "2") });
+    expect((await fixture(proven).api.status("t", "p", undo)).outcome).toBe("accepted");
+    const altered: ((r: any, f: any) => void)[] = [
+      (_r, c) => { c.object_version = "1"; }, (_r, c) => { c.object_version = "3"; }, (_r, c) => { c.result_id = id(60); },
+      (r) => { r.result.status = r.action.status = "active"; }, (r) => { r.result.version = r.action.version = "3"; },
+      (r, c) => { r.result.version = r.action.version = "3"; c.object_version = "3"; }, (r, c) => { r.result.version = r.action.version = "1"; c.object_version = "1"; },
+      (r) => { r.result.detail = result().result!.detail; }, (r) => { r.action.action_id = id(70); },
+      (_r, c) => { c.action_id = id(70); }, (r) => { r.result.assignment_id = id(80); },
+    ];
+    for (const change of altered) {
+      const body: any = undoneResult(), fact_: any = fact(undo, "applied", "2");
+      change(body, fact_);
+      await expect(fixture({ ...body, command: fact_ }).api.send("t", "p", undo)).rejects.toMatchObject(invalid);
+    }
+    // The next form is the new prefetched question: a presented one or a stale right in the reply is not an undo.
+    const right = undoneResult(); right.capabilities.undo_target = { session_id: id(3), assignment_id: id(4), result_id: id(6),
+      expected_result_version: "2", action_id: id(7), kind: "answer.submit" };
+    await expect(fixture({ ...right, command: fact(undo, "applied", "2") }).api.send("t", "p", undo)).rejects.toMatchObject(invalid);
+  });
+
+  it("separates an undo refusal from its unavailable acceptance, and sends the status hash of the undo payload", async () => {
+    for (const code of ["VERSION_CONFLICT", "CAPABILITY_EXPIRED", "FORBIDDEN"]) {
+      const live = result(); live.capabilities.grades = null;
+      const body = { ...live, command: { id: undo.command_id, status: "rejected" }, error: { code } };
+      expect(await fixture(body, code === "FORBIDDEN" ? 403 : 409).api.send("t", "p", undo)).toMatchObject({ outcome: "rejected", error: { code } });
+    }
+    const gone = await withProof(undo, { ...unavailableResult(), command: fact(undo, "already_applied", "2") });
+    expect((await fixture(gone).api.status("t", "p", undo)).outcome).toBe("accepted");
+    const f = fixture({ command: { id: undo.command_id, status: "not_found" }, current: profile, state_version: "9" });
+    expect((await f.api.status("t", "p", undo)).outcome).toBe("not_found");
+    const query = new URL(String(f.fetcher.mock.calls[0][0]), "https://synthetic.invalid").searchParams;
+    const { client_instance_id: _c, document_id: _d, ...intent } = undo;
+    expect(query.get("expected_intent_hash")).toBe(await conjugationIntentHash(intent));
+    expect(query.get("session_id")).toBe(id(3));
   });
 
   it("copies nested intent and result address before awaiting", async () => {

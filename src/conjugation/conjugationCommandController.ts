@@ -235,7 +235,7 @@ export class ConjugationCommandController {
       if (!this.live()) return;
       if (!this.observe(read.state_version)) this.problem = "stale_response";
       else {
-        this.view = this.addressedView(pending.intent, read, pending.intent.kind === "result.grade" || pending.intent.kind === "result.correct");
+        this.view = this.addressedView(pending.intent, read, resultAddressed(pending.intent));
         this.problem = retryProblem(pending.intent, this.view, pending.pair);
         this.retryVerified = this.problem === "not_found";
       }
@@ -297,6 +297,11 @@ export class ConjugationCommandController {
   dispose(): void { this.lifetime.abort(); this.clearView(); this.phase = "disposed"; }
 }
 
+/** The intents addressed to one saved result: their reply and their retry check are that result's view. */
+export function resultAddressed(intent: ConjugationIntent): intent is Extract<ConjugationIntent, { kind: "result.grade" | "result.correct" | "result.undo" }> {
+  return intent.kind === "result.grade" || intent.kind === "result.correct" || intent.kind === "result.undo";
+}
+
 function retryProblem(intent: ConjugationIntent, view: ConjugationCommandView | null, pair: string): ConjugationCommandSnapshot["problem"] {
   if (!view) return "step_changed";
   if (intent.kind === "conjugation.schedule") {
@@ -311,13 +316,16 @@ function retryProblem(intent: ConjugationIntent, view: ConjugationCommandView | 
   if (step.status === "unavailable") return "forbidden";
   if (step.status === "not_found") return intent.kind === "session.start" ? "not_found" : "step_changed";
   if (!("pair" in step) || step.mode !== "conjugation" || step.pair !== pair) return "pair_changed";
-  if (intent.kind === "result.grade" || intent.kind === "result.correct") {
+  if (resultAddressed(intent)) {
     if (view.kind !== "result") return "step_changed";
     const { action, result, capabilities } = view;
     if (!result || !action || result.status !== "active" || action.status !== "active"
       || !sameId(result.result_id, intent.result_id) || !sameId(result.assignment_id, intent.assignment_id)
       || result.version !== intent.expected_result_version || action.version !== result.version) return "step_changed";
-    const target = intent.kind === "result.correct" ? capabilities.correct_target : capabilities.grades;
+    // An undo is resent only while the server still grants exactly this right: a lost one is never created again (CT 2.3).
+    // The decoder already ties undo_target.action_id to the action of this view.
+    const target = intent.kind === "result.undo" ? capabilities.undo_target
+      : intent.kind === "result.correct" ? capabilities.correct_target : capabilities.grades;
     if (!target || !sameId(target.session_id, intent.session_id) || !sameId(target.assignment_id, intent.assignment_id)
       || !sameId(target.result_id, intent.result_id) || target.expected_result_version !== intent.expected_result_version) return "step_changed";
     if (intent.kind === "result.grade" && !capabilities.grades?.values.includes(intent.payload.grade as 3 | 4 | 5)) return "step_changed";

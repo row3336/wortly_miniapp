@@ -82,6 +82,19 @@ describe("conjugation durable slots through the public store Interface", () => {
     expect(canonicalConjugationIntent({ ...intents[1], kind: "answer.submit", session_id: id(3), assignment_id: id(4), payload: { text: "" } }).payload).toEqual({ text: "" });
     expect(canonicalConjugationIntent({ ...intents[1], kind: "answer.submit", session_id: id(3), assignment_id: id(4), payload: { forgot: true } }).payload).toEqual({ forgot: true });
   });
+  it("keeps an undo in the study slot with its exact address, lower-cased, and refuses an undo payload", async () => {
+    const f = fixture(), upper = (value: string) => value.toUpperCase();
+    const undo: ConjugationIntent = { command_id: id(2), kind: "result.undo", session_id: id(3), assignment_id: id(4), result_id: id(6),
+      expected_result_version: "9007199254740993", payload: {} };
+    await f.stores[1].save(pending(undo), signal());
+    expect(await f.stores[1].load(id(90), signal())).toEqual(pending(undo));
+    await expect(f.stores[0].save(pending(undo), signal())).rejects.toMatchObject({ kind: "invalid" });
+    await expect(f.stores[2].save(pending(undo), signal())).rejects.toMatchObject({ kind: "invalid" });
+    expect(canonicalConjugationIntent({ ...undo, session_id: upper(undo.session_id), result_id: upper(id(6)) })).toEqual(undo);
+    for (const payload of [{ grade: 4 }, { text: "x" }, { forgot: true }]) {
+      expect(validConjugationPending(pending({ ...undo, payload } as ConjugationIntent))).toBe(false);
+    }
+  });
   it("aborted read prevents a following write and keeps malformed JSON untouched", async () => {
     const f = fixture(), abort = new AbortController();
     vi.mocked(f.storage.get).mockImplementationOnce(async () => { abort.abort(); return null; });

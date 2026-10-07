@@ -1,12 +1,15 @@
 import type { AnswerSubmitCommand, ConjugationScheduleCommand, ConjugationStartPayload,
   PresentCommand, ResultCorrectCommand, ResultGradeCommand, SessionStartCommand, SessionStopCommand } from "../api/generated";
 import { exactKeys, oneOf, record, uuid, version } from "../api/wireValidation";
+import type { ResultUndoIntent } from "../commands/resultUndo";
 
 type WithoutOrigin<T> = T extends unknown ? Omit<T, "client_instance_id" | "document_id"> : never;
 export type ConjugationScheduleIntent = WithoutOrigin<ConjugationScheduleCommand>;
 export type ConjugationSessionIntent = WithoutOrigin<
   (Omit<SessionStartCommand, "payload"> & { payload: ConjugationStartPayload }) | PresentCommand | SessionStopCommand>;
-export type ConjugationResultIntent = WithoutOrigin<AnswerSubmitCommand | ResultCorrectCommand | ResultGradeCommand>;
+/** «Шаг назад» (CT 2.3): the one undo of the form on screen, addressed by the server's undo_target; no payload of its own. */
+export type ConjugationUndoIntent = ResultUndoIntent;
+export type ConjugationResultIntent = WithoutOrigin<AnswerSubmitCommand | ResultCorrectCommand | ResultGradeCommand> | ConjugationUndoIntent;
 export type ConjugationIntent = ConjugationScheduleIntent | ConjugationSessionIntent | ConjugationResultIntent;
 type WithOrigin<T> = T extends unknown ? T & { client_instance_id: string; document_id: string } : never;
 export type ConjugationScheduleTransportCommand = WithOrigin<ConjugationScheduleIntent>;
@@ -36,12 +39,12 @@ export function validConjugationIntent(value: unknown): value is ConjugationInte
       return value.kind === "assignment.present" ? exactKeys(value.payload, [])
         : exactKeys(value.payload, ["text"]) && typeof value.payload.text === "string"
           || exactKeys(value.payload, ["forgot"]) && value.payload.forgot === true;
-    case "result.grade": case "result.correct":
+    case "result.grade": case "result.correct": case "result.undo":
       keys.push("assignment_id", "result_id", "expected_result_version");
       return exactKeys(value, keys) && uuid(value.assignment_id) && uuid(value.result_id)
         && version(value.expected_result_version)
-        && (value.kind === "result.correct" ? exactKeys(value.payload, [])
-          : exactKeys(value.payload, ["grade"]) && [3, 4, 5].includes(value.payload.grade as number));
+        && (value.kind === "result.grade" ? exactKeys(value.payload, ["grade"]) && [3, 4, 5].includes(value.payload.grade as number)
+          : exactKeys(value.payload, []));
     default: return false;
   }
 }
@@ -65,7 +68,8 @@ export async function conjugationIntentHash(value: ConjugationIntent): Promise<s
       case "assignment.present": payload.assignment_id = intent.assignment_id.toLowerCase(); break;
       case "answer.submit":
         Object.assign(payload, { assignment_id: intent.assignment_id.toLowerCase(), payload: intent.payload }); break;
-      case "result.grade": case "result.correct":
+      // A correction and an undo have no payload of their own (core ResultUndoService.undo, result_commands._revise).
+      case "result.grade": case "result.correct": case "result.undo":
         Object.assign(payload, { assignment_id: intent.assignment_id.toLowerCase(), result_id: intent.result_id.toLowerCase(),
           expected_result_version: intent.expected_result_version, payload: intent.payload }); break;
     }

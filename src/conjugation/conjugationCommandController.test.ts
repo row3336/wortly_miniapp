@@ -7,7 +7,7 @@ import { createConjugationApi, type ConjugationReply } from "./conjugationApi";
 import { conjugationIntentHash, type ConjugationIntent } from "./conjugationIntent";
 import { ConjugationCatalogPendingStore, ConjugationSessionPendingStore, ConjugationStopPendingStore,
   conjugationLane, type ConjugationPending } from "./conjugationPending";
-import { ConjugationCommandController, type ConjugationCommandOptions, type ConjugationRead, type ConjugationTransition } from "./conjugationCommandController";
+import { ConjugationCommandController, resultAddressed, type ConjugationCommandOptions, type ConjugationRead, type ConjugationTransition } from "./conjugationCommandController";
 
 const id = (n: number) => `aaaaaaaa-bbbb-4000-8000-${String(n).padStart(12, "0")}`;
 const base = { command_id: id(10), session_id: id(3) };
@@ -19,6 +19,7 @@ const intents: ConjugationIntent[] = [
   { ...base, kind: "result.grade", assignment_id: id(4), result_id: id(6), expected_result_version: "1", payload: { grade: 5 } },
   { ...base, kind: "result.correct", assignment_id: id(4), result_id: id(6), expected_result_version: "1", payload: {} },
   { ...base, kind: "session.stop", payload: { reason: "stop" } },
+  { ...base, kind: "result.undo", assignment_id: id(4), result_id: id(6), expected_result_version: "1", payload: {} },
 ];
 const profile: Profile = { profile_id: id(90), access: { status: "admitted", version: "1", reason: null }, role: "user",
   ui_language: "ru", dictionary_language: "ru", time_zone: "Europe/Berlin", state_version: "9" };
@@ -51,20 +52,37 @@ function result(version = "1", grade: 2 | 3 | 4 | 5 = 4): ConjugationResultReadR
     step, capabilities: { ...step.capabilities, grades: grade >= 3 ? { ...target, values: [3, 4, 5] } : null,
       correct_target: grade === 2 ? target : null }, state_version: "9" };
 }
+/** The right of the live answer on screen (core: undo_target of the answer), with its action. */
+function withUndo(view: ConjugationResultReadResponse, version = "1"): ConjugationResultReadResponse {
+  view.capabilities.undo_target = { session_id: id(3), assignment_id: id(4), result_id: id(6), expected_result_version: version,
+    action_id: id(7), kind: "answer.submit" };
+  return view;
+}
+/** The reply of an accepted undo: the answer retired at its next version, the same form issued anew as a prefetched question. */
+function undone(expected: string): ConjugationResultReadResponse {
+  const step = session(id(25), false), next = (BigInt(expected) + 1n).toString();
+  return { action: { action_id: id(7), kind: "answer.submit", version: next, status: "undone" },
+    result: { result_id: id(6), assignment_id: id(4), version: next, grade: 4, correct: true, status: "undone",
+      accepted_at: "2026-10-01T08:00:00Z", answer_date: "2026-10-01", detail: null },
+    step, capabilities: { ...step.capabilities }, state_version: "9" };
+}
 function readFor(intent: ConjugationIntent): ConjugationRead {
+  if (intent.kind === "result.undo") return withUndo(result(intent.expected_result_version), intent.expected_result_version);
   if (intent.kind === "conjugation.schedule") return { current: catalog(), state_version: "9" };
   if (intent.kind === "session.start") return { current: { session_id: id(3), status: "not_found" }, state_version: "9" };
   if (intent.kind === "result.grade" || intent.kind === "result.correct") return result(intent.expected_result_version, intent.kind === "result.correct" ? 2 : 4);
   return { current: session(id(4), intent.kind !== "assignment.present"), state_version: "9" };
 }
 function acceptedBody(intent: ConjugationIntent, status = false): Record<string, unknown> {
-  const isResult = ["answer.submit", "result.grade", "result.correct"].includes(intent.kind);
-  const objectVersion = intent.kind === "result.grade" || intent.kind === "result.correct" ? (BigInt(intent.expected_result_version) + 1n).toString() : "1";
+  const isResult = ["answer.submit", "result.grade", "result.correct", "result.undo"].includes(intent.kind);
+  const objectVersion = intent.kind === "result.grade" || intent.kind === "result.correct" || intent.kind === "result.undo"
+    ? (BigInt(intent.expected_result_version) + 1n).toString() : "1";
   const command: SavedCommandFact = { id: intent.command_id, kind: intent.kind, status: status ? "already_applied" : "applied",
     applied_at: "2026-10-01T08:00:00Z", target_id: intent.kind === "conjugation.schedule" ? intent.payload.base_verb_id : "assignment_id" in intent ? intent.assignment_id : intent.session_id,
     action_id: isResult ? id(7) : null, result_id: isResult ? id(6) : null, context_id: null,
     object_version: isResult || intent.kind === "conjugation.schedule" ? objectVersion : null };
-  const view = isResult ? result(objectVersion, intent.kind === "result.grade" ? intent.payload.grade as 3 | 4 | 5 : 4)
+  const view = intent.kind === "result.undo" ? undone(intent.expected_result_version)
+    : isResult ? result(objectVersion, intent.kind === "result.grade" ? intent.payload.grade as 3 | 4 | 5 : 4)
     : { current: intent.kind === "conjugation.schedule" ? catalog() : intent.kind === "session.stop" ? closed() : session(), state_version: "9" };
   return { ...view, command };
 }
@@ -131,7 +149,7 @@ function fixture(seed?: ConjugationPending, source = seed?.intent ?? intents[3])
   const read = vi.fn((intent: ConjugationIntent): Promise<ConjugationRead> => {
     if (intent.kind === "conjugation.schedule") return api.catalog("synthetic-token");
     const address = { session_id: intent.session_id, client_instance_id: id(1), document_id: id(2) };
-    return intent.kind === "result.grade" || intent.kind === "result.correct"
+    return resultAddressed(intent)
       ? api.read("synthetic-token", "synthetic-proof", { ...address, assignment_id: intent.assignment_id, result_id: intent.result_id })
       : api.read("synthetic-token", "synthetic-proof", address);
   });
@@ -211,6 +229,27 @@ describe("conjugation persistence and immutable command lifecycle", () => {
     if (change === "caps") view.capabilities.grades = null;
     if (change === "values") view.capabilities.grades!.values = [3, 4]; // Invalid wire is rejected by the Adapter.
     f.model.readBody = view; await f.controller.retry(); expect(f.send).not.toHaveBeenCalled(); expect(f.controller.snapshot().canRetry).toBe(false);
+  });
+  it.each(["target", "version", "caps", "action", "inactive"])("a lost undo is resent only while the server still grants exactly this right: changed %s blocks it", async change => {
+    const f = fixture(pending(intents[7])); await f.controller.refresh();
+    // The unchanged right is verified first: only then may the same ID be sent again (CT 2.3, no right is created anew).
+    expect(f.controller.snapshot()).toMatchObject({ canRetry: true, problem: "not_found" });
+    const view = readFor(intents[7]) as ConjugationResultReadResponse;
+    if (change === "target") { view.result!.result_id = id(99); view.capabilities.undo_target!.result_id = id(99); }
+    if (change === "version") { view.result!.version = view.action!.version = "2"; }
+    if (change === "caps") view.capabilities.undo_target = null;
+    if (change === "action") view.capabilities.undo_target!.action_id = id(98);
+    if (change === "inactive") { view.result!.status = view.action!.status = "undone"; view.capabilities.undo_target = null; }
+    f.model.readBody = view;
+    await f.controller.retry();
+    expect(f.send).not.toHaveBeenCalled(); expect(f.controller.snapshot()).toMatchObject({ canRetry: false, outcome: null, pending: true });
+  });
+  it("an accepted undo is remembered as the retired answer, never as a live one", async () => {
+    const f = fixture(undefined, intents[7]); await f.controller.refresh(); await f.controller.begin(action(intents[7]));
+    expect(f.send).toHaveBeenCalledExactlyOnceWith(intents[7]);
+    expect(f.controller.snapshot()).toMatchObject({ outcome: "accepted", pending: false,
+      resolved: { commandId: id(10), kind: "result.undo", assignmentId: id(4), resultId: id(6), objectVersion: "2" },
+      view: { kind: "result", result: { status: "undone", version: "2" }, step: { assignment: { id: id(25), status: "prefetched" } } } });
   });
   it("disappeared schedule and changed answer assignment are unresolved rather than successful", async () => {
     const schedule = fixture(pending(intents[0])); await schedule.controller.refresh();

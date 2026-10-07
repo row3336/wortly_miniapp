@@ -48,7 +48,7 @@ function snap(over: Partial<ConjugationDocumentSnapshot> = {}): ConjugationDocum
     commands: { study: command(), stop: command() }, problem: null,
     currentStep: { stateVersion: "10", step: projection(assignment()) }, resultA: null,
     display: { kind: "step", assignmentId: B1 }, stepTicket: null, presentationTicket: null,
-    canStart: false, canSubmit: true, canCorrect: false, canStop: true, canSummaryHome: false, allowedGrades: [],
+    canStart: false, canSubmit: true, canCorrect: false, canUndo: false, canStop: true, canSummaryHome: false, allowedGrades: [],
     canRetry: { study: false, stop: false }, ...over };
 }
 const accepted = command({ phase: "settled", outcome: "accepted", kind: "answer.submit", sessionId: S1,
@@ -76,7 +76,7 @@ function setup(initial: ConjugationDocumentSnapshot | null, options: { language?
   const actions = {
     refresh: vi.fn(async () => undefined), start: vi.fn(async () => undefined), openStep: vi.fn(), openResult: vi.fn(),
     shown: vi.fn(async (_ticket: ConjugationPresentationTicket) => undefined), submit: vi.fn(async () => undefined), grade: vi.fn(async () => undefined),
-    correct: vi.fn(async () => undefined), stop: vi.fn(async () => undefined), retry: vi.fn(async () => undefined),
+    correct: vi.fn(async () => undefined), undo: vi.fn(async () => undefined), stop: vi.fn(async () => undefined), retry: vi.fn(async () => undefined),
   };
   const schedule = vi.fn((_delay: 2000 | 3000, _run: () => void) => () => undefined);
   const onToday = vi.fn();
@@ -486,7 +486,7 @@ describe("ConjugationTestScreen G-2: the flow draft is the only source", () => {
     const created: { flow: ConjugationTestFlow; changes: number }[] = [];
     const actions = { refresh: vi.fn(async () => undefined), start: vi.fn(async () => undefined), openStep: vi.fn(), openResult: vi.fn(),
       shown: vi.fn(async () => undefined), submit: vi.fn(async () => undefined), grade: vi.fn(async () => undefined),
-      correct: vi.fn(async () => undefined), stop: vi.fn(async () => undefined), retry: vi.fn(async () => undefined) };
+      correct: vi.fn(async () => undefined), undo: vi.fn(async () => undefined), stop: vi.fn(async () => undefined), retry: vi.fn(async () => undefined) };
     function Owner() {
       const [flow, setFlow] = useState<ConjugationTestFlow | null>(null);
       const [, repaint] = useReducer((n: number) => n + 1, 0);
@@ -510,5 +510,92 @@ describe("ConjugationTestScreen G-2: the flow draft is the only source", () => {
     created[0].flow.setDraft("late");
     expect(created[0].changes).toBe(0);
     expect(created[1].changes).toBe(1);
+  });
+});
+
+describe("ConjugationTestScreen «Шаг назад»", () => {
+  const summaryState = (over: Partial<ConjugationDocumentSnapshot> = {}) => snap({ phase: "summary", display: { kind: "summary" }, canSubmit: false,
+    canSummaryHome: true, currentStep: { stateVersion: "10", step: projection(null, "summary") }, ...over });
+  const undoing = command({ phase: "sending", pending: true, kind: "result.undo", sessionId: S1,
+    pendingIntent: { command_id: id(72), kind: "result.undo", session_id: S1, assignment_id: A0, result_id: R1, expected_result_version: "5", payload: {} } });
+  const rejected = (rejectionCode: string) => command({ phase: "settled", outcome: "rejected", rejectionCode,
+    resolved: { commandId: id(72), kind: "result.undo", sessionId: S1, assignmentId: A0 } });
+
+  it("shows the button on the result and on the live summary only while the document grants it, and sends one undo", async () => {
+    const h = setup(onResult(result(true)));
+    expect(screen.queryByRole("button", { name: "Шаг назад" })).toBeNull();
+    await h.update(onResult(result(true), { canUndo: true }));
+    const button = screen.getByRole("button", { name: "Шаг назад" });
+    expect(button.getAttribute("title")).toBe("Шаг назад");
+    fireEvent.click(button);
+    expect(h.actions.undo).toHaveBeenCalledTimes(1);
+    expect(h.actions.openStep).not.toHaveBeenCalled();
+    await h.update(summaryState({ canUndo: true, resultA: onResult(result(true)).resultA }));
+    fireEvent.click(screen.getByRole("button", { name: "Шаг назад" }));
+    expect(h.actions.undo).toHaveBeenCalledTimes(2);
+    await h.update(summaryState({ canUndo: false }));
+    expect(screen.queryByRole("button", { name: "Шаг назад" })).toBeNull();
+    // The next question never carries it.
+    await h.update(snap({ canUndo: true }));
+    expect(screen.queryByRole("button", { name: "Шаг назад" })).toBeNull();
+  });
+
+  it("the button disappears and «Отменяем ответ…» is shown while the command runs, on the result and on the summary", async () => {
+    const h = setup(onResult(result(true), { canUndo: true }));
+    await h.update(onResult(result(true), { canUndo: false, allowedGrades: [], commands: { study: undoing, stop: command() } }));
+    expect(screen.queryByRole("button", { name: "Шаг назад" })).toBeNull();
+    expect(screen.getByText("Отменяем ответ…")).toBeTruthy();
+    await h.update(summaryState({ commands: { study: undoing, stop: command() } }));
+    expect(screen.getByText("Отменяем ответ…")).toBeTruthy();
+    await h.update(onResult(result(true)));
+    expect(screen.queryByText("Отменяем ответ…")).toBeNull();
+  });
+
+  it.each(["CAPABILITY_EXPIRED", "VERSION_CONFLICT", "FORBIDDEN", "ASSIGNMENT_STALE"])("refusal %s says that the step back is gone, on the answer", async code => {
+    const h = setup(onResult(result(true), { canUndo: true }));
+    await h.update(onResult(result(true), { problem: code, commands: { study: rejected(code), stop: command() } }));
+    expect(screen.getByText("Шаг назад больше недоступен.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Шаг назад" })).toBeNull();
+    await h.update(snap({ problem: code, commands: { study: rejected(code), stop: command() } }));
+    expect(screen.queryByText("Шаг назад больше недоступен.")).toBeNull();
+  });
+
+  it("another refusal of the same command keeps its own text; a refused grade does not borrow the undo text", async () => {
+    const h = setup(onResult(result(true)));
+    await h.update(onResult(result(true), { problem: "SESSION_CLOSED", commands: { study: rejected("SESSION_CLOSED"), stop: command() } }));
+    expect(screen.getByText("Занятие завершено.")).toBeTruthy();
+    expect(screen.queryByText("Шаг назад больше недоступен.")).toBeNull();
+    const grade = command({ phase: "settled", outcome: "rejected", rejectionCode: "VERSION_CONFLICT",
+      resolved: { commandId: id(73), kind: "result.grade", sessionId: S1, assignmentId: A0 } });
+    await h.update(onResult(result(true), { problem: "VERSION_CONFLICT", commands: { study: grade, stop: command() } }));
+    expect(screen.queryByText("Шаг назад больше недоступен.")).toBeNull();
+    expect(screen.getByText("Не удалось обновить занятие.")).toBeTruthy();
+  });
+
+  it.each([["uk", "Крок назад", "Скасовуємо відповідь…", "Крок назад більше недоступний."], ["en", "Step back", "Undoing the answer…", "Step back is no longer available."]] as const)(
+    "%s: label, waiting text and refusal are localized", async (language, label, waiting, gone) => {
+      const h = setup(onResult(result(true), { canUndo: true }), { language });
+      expect(screen.getByRole("button", { name: label })).toBeTruthy();
+      await h.update(onResult(result(true), { canUndo: false, commands: { study: undoing, stop: command() } }));
+      expect(screen.getByText(waiting)).toBeTruthy();
+      await h.update(onResult(result(true), { problem: "VERSION_CONFLICT", commands: { study: rejected("VERSION_CONFLICT"), stop: command() } }));
+      expect(screen.getByText(gone)).toBeTruthy();
+    });
+
+  it("an inactive screen shows no button; an unknown undo shows the checking text with the check and retry buttons", async () => {
+    setup(onResult(result(true), { canUndo: true }), { active: false });
+    expect(screen.queryByRole("button", { name: "Шаг назад" })).toBeNull();
+    cleanup();
+    const h = setup(onResult(result(true), { canUndo: true }));
+    const unknown = snap({ phase: "unknown", display: { kind: "none" }, currentStep: null, resultA: null, canSubmit: false, canRetry: { study: true, stop: false },
+      commands: { study: command({ phase: "unresolved", pending: true, kind: "result.undo", sessionId: S1, canRetry: true, pendingIntent: undoing.pendingIntent }), stop: command() } });
+    await h.update(unknown);
+    expect(screen.getByText("Проверяем изменение")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Шаг назад" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Проверить статус" }));
+    fireEvent.click(screen.getByRole("button", { name: "Повторить действие" }));
+    expect(h.actions.refresh).toHaveBeenCalledTimes(1);
+    expect(h.actions.retry).toHaveBeenCalledWith("study");
+    expect(h.actions.undo).not.toHaveBeenCalled();
   });
 });

@@ -126,6 +126,7 @@ export function useConjugationDocument(options: ConjugationDocumentHookOptions):
       shown: ticket => perform(c => c.shown(ticket), none()),
       submit: (answer, assignmentId) => perform(c => c.submit(answer, assignmentId), none()),
       grade: value => perform(c => c.grade(value), none()), correct: () => perform(c => c.correct(), none()),
+      undo: () => perform(c => c.undo(), none()),
       stop: reason => perform(c => c.stop(reason), none()), retry: lane => perform(c => c.retry(lane), none()),
     };
   }, []);

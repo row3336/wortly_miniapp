@@ -4,6 +4,7 @@ import type { ClosedSessionBoundary, ConjugationCatalog, ConjugationCatalogRespo
 import { validProfile } from "../api/entryApi";
 import { ApiError, createJsonTransport, errorCode, httpError, type HttpOptions } from "../api/http";
 import { eventTime, exactKeys, oneOf, record, sameId, uuid, validClosedSessionBoundary, version } from "../api/wireValidation";
+import { validUndoFact } from "../commands/resultUndo";
 import { conjugationIntentHash, copyConjugationIntent, validConjugationIntent, type ConjugationCommand,
   type ConjugationResultCommand, type ConjugationScheduleTransportCommand, type ConjugationSessionCommand } from "./conjugationIntent";
 import { conjugationResultCurrent, validConjugationCatalog, validConjugationCurrent, type ConjugationResultCurrent } from "./conjugationProjection";
@@ -54,7 +55,8 @@ function prepare(token: string, proof: string, original: ConjugationCommand): Co
   return { ...copyConjugationIntent(intent), client_instance_id, document_id };
 }
 function resultCommand(command: ConjugationCommand): command is ConjugationResultCommand {
-  return command.kind === "answer.submit" || command.kind === "result.grade" || command.kind === "result.correct";
+  return command.kind === "answer.submit" || command.kind === "result.grade" || command.kind === "result.correct"
+    || command.kind === "result.undo";
 }
 function unavailable(value: unknown): value is UnavailableCurrent {
   return record(value) && exactKeys(value, ["status"]) && value.status === "unavailable";
@@ -83,6 +85,8 @@ function acceptance(value: unknown, command: ConjugationCommand, view: Read): va
   if (!resultCommand(command)) return value.action_id === null && value.result_id === null
     && (command.kind === "conjugation.schedule" ? version(value.object_version) : value.object_version === null);
   if (!uuid(value.action_id) || !uuid(value.result_id) || !version(value.object_version) || !("result" in view)) return false;
+  // An accepted undo retired exactly the addressed result at its next version (shared with the written quiz and Learning).
+  if (command.kind === "result.undo") return validUndoFact(value, command, view);
   if (command.kind === "answer.submit") {
     if (value.object_version !== "1") return false;
   } else {

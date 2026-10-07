@@ -154,7 +154,7 @@ export function conjugationResultCurrent(value: Record<string, unknown>, address
     return grades ? (result as Record<string, unknown>).grade as number >= 3 && Array.isArray(values) && values.length === 3
       && [3, 4, 5].every(grade => values.includes(grade)) : (result as Record<string, unknown>).grade === 2;
   };
-  // The one undo of this live form (CT table 2.3); any grade can be undone. No UI uses it yet (M-UNDO-CONJ).
+  // The one undo of this live form (CT table 2.3); any grade can be undone.
   const undoTarget = (value: unknown): boolean => liveAddress(value, ["action_id", "kind"]) && record(action)
     && action.status === "active" && sameId(value.action_id, action.action_id as string) && value.kind === "answer.submit";
   if (!exactKeys(caps, ["answer_target", "correct_target", "grades", "undo_target", "stop", "summary_home"])
