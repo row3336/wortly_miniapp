@@ -1,0 +1,40 @@
+.card-screen {
+  width: 100%;
+  min-height: var(--app-height, 100dvh);
+  min-width: 0;
+  padding:
+    calc(16px + var(--safe-top, env(safe-area-inset-top, 0px)))
+    calc(24px + var(--safe-right, env(safe-area-inset-right, 0px)))
+    calc(20px + var(--safe-bottom, env(safe-area-inset-bottom, 0px)))
+    calc(24px + var(--safe-left, env(safe-area-inset-left, 0px)));
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  background: var(--bg);
+  color: var(--text);
+  font: 400 16px/1.5 "PT Sans", sans-serif;
+  overflow-wrap: anywhere;
+}
+.card-screen p { margin: 0; }
+.card-header { display: flex; align-items: center; }
+.card-back { min-height: 44px; padding: 8px 0; border: 0; background: none; color: var(--text); font: inherit; font-weight: 700; }
+.card-status { color: var(--muted); }
+.card-problem { display: grid; justify-items: start; gap: 12px; }
+.card-problem p, .card-study-manual p { color: var(--error); }
+.card-action { min-height: 48px; padding: 10px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--text); font: inherit; }
+.card-screen button:disabled { opacity: .5; cursor: default; }
+.card-screen button:focus-visible { outline: 2px solid var(--text); outline-offset: 3px; }
+.card-examples { display: grid; gap: 6px; line-height: 1.5; }
+.card-examples h3 { margin: 0; color: var(--muted); font-size: .875rem; font-weight: 400; }
+.card-personal-mark { color: var(--muted); font-size: .875rem; }
+.card-study { display: grid; gap: 12px; padding-top: 16px; border-top: 1px solid var(--line); }
+.card-study-status { font-weight: 700; }
+.card-study-manual { display: grid; justify-items: start; gap: 8px; }
+.card-study-rows { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin: 0; }
+.card-study-row { display: grid; gap: 2px; min-width: 0; }
+.card-study-row dt { font-weight: 700; }
+.card-study-row dd { margin: 0; }
+.card-study-term { color: var(--muted); font-size: .875rem; }
+@media (max-width: 359px) {
+  .card-screen { padding-left: calc(16px + var(--safe-left, env(safe-area-inset-left, 0px))); padding-right: calc(16px + var(--safe-right, env(safe-area-inset-right, 0px))); }
+}

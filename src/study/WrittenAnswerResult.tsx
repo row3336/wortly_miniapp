@@ -4,6 +4,7 @@ import type { Language } from "../i18n/language";
 import { answerExampleCandidates, selectAnswerExample, type AnswerExampleChoice } from "./answerExample";
 import { ConjunctionHint } from "./ConjunctionHint";
 import { GermanExample } from "./GermanExample";
+import { PersonalExamplePair } from "./PersonalExamplePair";
 import "./writtenAnswer.css";
 
 export type WrittenAnswerResultProps = {
@@ -43,7 +44,9 @@ function HighlightedText({ text, errors }: { text: string; errors: readonly Matc
   return <>{fragments}{points.slice(offset).join("")}</>;
 }
 
-/** One example of the answered card per result: the choice stays while revisions of that result are shown. */
+/** One example of the answered card per result: the choice stays while revisions of that result are shown.
+ * root decision, pending owner (M-CARD В5): the written result keeps selectAnswerExample, not the reference-card rule —
+ * К05-126 shows one (random) example after an answer; the two-case preposition pair comes from the same selection. */
 function useAnswerExample(result: WrittenResult, source: WrittenAnswerResultProps["example"]): AnswerExampleChoice | null {
   const chosen = useRef<{ key: string; choice: AnswerExampleChoice } | null>(null);
   const examples = result.detail?.examples ?? null;
@@ -53,10 +56,16 @@ function useAnswerExample(result: WrittenResult, source: WrittenAnswerResultProp
   return chosen.current.choice;
 }
 
-/** German text only, without a heading or translation. The wechsel pair (К05-127) is not rendered here yet. */
+/** German text only, without a heading or translation. A two-case preposition shows its pair (К05-127, К07-121):
+ * the full own pair with its case labels, otherwise both common examples, Akkusativ (direction) first; never a mix. */
 function AnswerExample({ choice }: { choice: AnswerExampleChoice | null }) {
   if (choice?.kind === "personal") return <GermanExample text={choice.personal.value} highlightedParts={[]} />;
   if (choice?.kind === "common") return <GermanExample text={choice.common.text} highlightedParts={choice.common.highlighted_parts} />;
+  if (choice?.kind === "personal_pair") return <PersonalExamplePair pair={choice} />;
+  if (choice?.kind === "wechsel_pair") return <>
+    <GermanExample text={choice.direction.text} highlightedParts={choice.direction.highlighted_parts} />
+    <GermanExample text={choice.location.text} highlightedParts={choice.location.highlighted_parts} />
+  </>;
   return null;
 }
 

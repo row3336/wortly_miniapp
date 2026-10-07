@@ -55,9 +55,10 @@ describe("Learning preview examples (current CardExamples shape)", () => {
     expect(container.textContent).not.toContain(own);
   });
 
-  it("К05-127 the pair marker is the two roles, not the card type, and every common example stays visible", () => {
+  // root decision, pending owner (M-CARD QA question 2): a two-case preposition shows only its two wechsel examples.
+  it("К05-127 the pair marker is the two roles, not the card type, and only the two wechsel examples are visible", () => {
     const { container } = showPreview({ common: threeCommon, personal: personal("Mein Satz.") }, "particle", "doch");
-    expect(sentences(container)).toEqual(threeCommon.map(item => item.text));
+    expect(sentences(container)).toEqual([threeCommon[0].text, threeCommon[1].text]);
     expect(container.textContent).not.toContain("Mein Satz.");
   });
 
@@ -69,10 +70,10 @@ describe("Learning preview examples (current CardExamples shape)", () => {
   });
 
   it("X2 without a personal example shows every common example in source order, regardless of role", () => {
-    const items = [common(5, "Fünfter."), ...threeCommon, common(4, "Vierter.", null)];
+    // A single wechsel role is no pair (the pair itself: the К05-127 test above).
+    const items = [common(5, "Fünfter."), threeCommon[0], threeCommon[2], common(4, "Vierter.", null)];
     const first = showPreview({ common: items, personal: null });
-    expect(sentences(first.container)).toEqual(["Fünfter.", "Ich gehe in die Schule.", "Ich bin in der Schule.",
-      "Gemeinsamer Satz.", "Vierter."]);
+    expect(sentences(first.container)).toEqual(["Fünfter.", "Ich gehe in die Schule.", "Gemeinsamer Satz.", "Vierter."]);
     first.unmount();
     const second = showPreview({ common: items, personal: null });
     expect(sentences(second.container)).toEqual(items.map(item => item.text));
@@ -132,7 +133,7 @@ describe("Learning preview examples (current CardExamples shape)", () => {
     const before = structuredClone(examples);
     Object.freeze(examples.common); Object.freeze(examples);
     const { container } = render(<LearningPreviewExamples examples={examples} />);
-    expect(sentences(container)).toHaveLength(3);
+    expect(sentences(container)).toHaveLength(2);
     expect(examples).toEqual(before);
     expect(validCardExamples({ common: threeCommon })).toBe(false);
     expect(validCardExamples({ common: threeCommon, personal: undefined })).toBe(false);

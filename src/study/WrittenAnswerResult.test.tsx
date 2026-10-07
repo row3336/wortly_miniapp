@@ -160,9 +160,9 @@ describe("example after a written answer (К05-126)", () => {
     rerender(<WrittenAnswerResult {...p} result={{ ...p.result, detail: null }} example={{ random }} />);
     expect(shown(container)).toEqual([]);
   });
-  it("leaves the Akkusativ/Dativ pair of a wechsel preposition to its own package (К05-127): no single random example", () => {
+  it("shows both common examples of a wechsel preposition, Akkusativ (direction) first (К05-127): no single random example", () => {
     const p = withExamples({ common: [common(1, "wechsel_location"), common(2, "wechsel_direction")], personal: null });
     const { container } = render(<WrittenAnswerResult {...p} example={{ random: () => 0 }} />);
-    expect(shown(container)).toEqual([]);
+    expect(shown(container)).toEqual(["Beispiel 2", "Beispiel 1"]);
   });
 });

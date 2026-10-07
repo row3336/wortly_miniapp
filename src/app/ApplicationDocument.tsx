@@ -2,9 +2,12 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type Rea
 import type { LearningPreviewAddress } from "../api/generated";
 import type { HttpOptions } from "../api/http";
 import { sameId } from "../api/wireValidation";
+import { CardHost } from "../dictionary/card/CardHost";
+import { cardOrigin, type CardOrigin } from "../dictionary/card/cardOrigin";
 import { DictionaryHost, type DictionaryVisit } from "../dictionary/DictionaryHost";
 import type { Language } from "../i18n/language";
 import { LearningPreviewCard } from "../learning/LearningPreviewCard";
+import { ManualPendingStore } from "../learning/manualPending";
 import type { AsyncStorage } from "../platform/storage";
 import { SettingsHost } from "../settings/SettingsHost";
 import { useSettingsDocument, type SettingsObservation } from "../settings/useSettingsDocument";
@@ -16,7 +19,7 @@ import { TodayScreen, type OrdinaryQuiz } from "../today/TodayScreen";
 import { useWrittenHost } from "../written/useWrittenHost";
 import { EntryScreen } from "./EntryScreen";
 import { LearningHost } from "./LearningHost";
-import { backDestination, initialRoute, navigationReducer, type Tab } from "./navigation";
+import { backDestination, initialRoute, navigationReducer, type Route, type Tab } from "./navigation";
 import { useBackLayer } from "./navigationBack";
 import { useScreenTransition } from "./navigationMotion";
 import { StatisticsPlaceholder } from "./navigationStubs";
@@ -40,6 +43,9 @@ function highest(...versions: (string | undefined)[]): string | undefined {
   return versions.reduce<string | undefined>((top, value) =>
     value !== undefined && (top === undefined || BigInt(value) > BigInt(top)) ? value : top, undefined);
 }
+
+/** The card host shown on the card route, or the one still finishing its close after Back. */
+type CardSlot = { key: string; cardId: string; origin: CardOrigin };
 
 /** A mode owner's resume seed: it belongs to the dictionary pair it was read for. */
 type ModeSeed = { seed: string | null; pair: string; version?: string } | null;
@@ -68,6 +74,12 @@ export function ApplicationDocument(props: Props) {
   const frame = useRef<HTMLDivElement>(null);
   useScreenTransition(frame, route);
   const [settingsOpened, setSettingsOpened] = useState(false);
+  // The one durable slot of the manual Learning choice in this document (М12 «Добавить в обучение»).
+  const [manualPending] = useState(() => new ManualPendingStore(props.storage));
+  // A card left by Back before its context.open was confirmed stays mounted, hidden, until that close follows (M-CARD В6).
+  const [leavingCard, setLeavingCard] = useState<CardSlot | null>(null);
+  const cardKeys = useRef(new WeakMap<Route, string>()), cardSerial = useRef(0);
+  const cardBack = useRef<(() => void) | null>(null);
   // The dictionary owner stays mounted once opened, so a return from a card finds its search unchanged (К07-096).
   const [dictionaryOpened, setDictionaryOpened] = useState(false);
   // One visit per route object: Back from a nested screen of the dictionary is a return, any other route there is an entry.
@@ -181,7 +193,9 @@ export function ApplicationDocument(props: Props) {
   // Native Back of a non-study screen (TA:86): a return to Today is its «Сегодня» (SettingsScreen onToday) with the
   // same refresh; a session supplies its own exit from its owner. A gate-hidden Host is not Settings.
   const destination = backDestination(route);
-  const back = destination === "today" ? today : () => navigate({ type: "back" });
+  // On the card route native Back is the card's own exit (it closes the card context first), called through one slot.
+  const back = destination === "today" ? today : at === "card"
+    ? () => { if (cardBack.current) cardBack.current(); else navigate({ type: "back" }); } : () => navigate({ type: "back" });
   useBackLayer("screen", destination === null ? null : back);
   const openSettings = () => { setSettingsOpened(true); navigate({ type: "open", screen: "settings" }); };
   // The panel only navigates: each section owns its screen (M-DICT, M-SET); Today keeps its refresh on return.
@@ -212,6 +226,7 @@ export function ApplicationDocument(props: Props) {
       screen = readScreen();
     } else todayShown = true;
   } else if (at === "statistics") screen = <StatisticsPlaceholder language={props.language} onBack={back} />;
+  // One host per opened card: Back returns to the source with its return context (TA:86, К07-096).
   // The oral owner lives for the whole document; it shows a screen only on its own route.
   const oral = useOralHost({ access: props.access, transport: props.transport, stores: props.oralStores, newId: props.newId,
     language: props.language, settings, minimumStateVersion: highest(floor?.version, oralSelected?.version),
@@ -224,6 +239,15 @@ export function ApplicationDocument(props: Props) {
     initialSessionId: writtenSeed, route: at === "written" ? "written" : todayShown ? "today" : "hidden",
     onWritten: () => navigate({ type: "open", screen: "written" }), onToday: today });
   if (todayShown && (oral.blocksToday || written.blocksToday)) { hostRoute = "settings"; screen = loading; }
+  // One host per opened card route (TA:86, К07-096): a fresh key per route object, so reopening a card while its
+  // previous host still awaits a close starts a new host. The slot keeps one position, so leaving keeps the same host.
+  let activeCard: CardSlot | null = null;
+  if (at === "card" && route.subject !== null) {
+    let key = cardKeys.current.get(route);
+    if (key === undefined) { key = `${route.subject}:${++cardSerial.current}`; cardKeys.current.set(route, key); }
+    activeCard = { key, cardId: route.subject, origin: cardOrigin(route.back?.source ?? null) };
+  }
+  const cardSlot = activeCard ?? leavingCard;
   const quizzes = {
     onStartQuiz: (quiz: OrdinaryQuiz) => { if (quiz.direction === "l1-de") written.requestStart(quiz.material); },
     canStartQuiz: (quiz: OrdinaryQuiz) => quiz.direction === "l1-de" && written.canRequestStart,
@@ -240,6 +264,11 @@ export function ApplicationDocument(props: Props) {
     {screen}
     {oral.screen}
     {written.screen}
+    {cardSlot && <CardHost key={cardSlot.key} access={props.access} transport={props.transport} language={props.language}
+      pendingStore={manualPending} cardId={cardSlot.cardId} origin={cardSlot.origin} newId={props.newId}
+      leaving={cardSlot !== activeCard} backSlot={cardBack}
+      onBack={close => { if (close === "after_open" && activeCard) setLeavingCard(activeCard); navigate({ type: "back" }); }}
+      onClosed={() => setLeavingCard(current => current?.key === cardSlot.key ? null : current)} />}
     {dictionaryOpened && <DictionaryHost access={props.access} transport={props.transport} language={props.language} visit={visit}
       onOpenCard={(cardId, back) => navigate({ type: "push", screen: "card", subject: cardId, details: back })}
       onNavigate={openTab} />}
