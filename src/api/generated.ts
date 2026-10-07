@@ -36,7 +36,7 @@ export type ClosedSessionBoundary = { "session_id": string; "status": "closed"; 
 
 export type CommandFact = { "id": string; "status": "applied" | "already_applied"; "applied_at": string; "target_id": (string | null); "object_version": string; };
 
-export type CommandStatusResponse = { "command": (StoredCommandFact | MissingCommandFact); "current": (Profile | ModeState | UnavailableCurrent | SettingsProjection | SessionProjection | LearningSessionProjection | OralSessionProjection | ConjugationSessionProjection | UnavailableSession | RemoteSessionProjection | LearningCurrentProjection | ConjugationCatalog | FeedbackCurrent); "state_version": string; "closed_session"?: (ClosedSessionBoundary | null); "verified_intent_hash"?: (string | null); };
+export type CommandStatusResponse = { "command": (StoredCommandFact | MissingCommandFact); "current": (Profile | ModeState | UnavailableCurrent | SettingsProjection | SessionProjection | LearningSessionProjection | OralSessionProjection | ConjugationSessionProjection | UnavailableSession | RemoteSessionProjection | LearningCurrentProjection | ConjugationCatalog | FeedbackCurrent | OnboardingProjection); "state_version": string; "closed_session"?: (ClosedSessionBoundary | null); "verified_intent_hash"?: (string | null); };
 
 export type Compatibility = { "compatible": boolean; "contract_version": string; };
 
@@ -245,6 +245,22 @@ export type ModeCommandResponse = { "command": CommandFact; "current": ModeState
 export type ModePayload = { "mode": "manual" | "automatic"; "expected_version": string; };
 
 export type ModeState = { "mode": "manual" | "automatic"; "version": string; };
+
+export type OnboardingAdvanceCommand = { "command_id": string; "kind": "onboarding.advance"; "client_instance_id": string; "document_id": string; "payload": OnboardingAdvancePayload; };
+
+export type OnboardingAdvancePayload = { "mode": "written" | "oral" | "learning" | "conjugation"; "side": "l1-de" | "de-l1" | "none"; "position": number; };
+
+export type OnboardingCommandResponse = { "command": (SavedCommandFact | RejectedCommandFact); "current": OnboardingProjection; "state_version": string; "error"?: (ErrorDetail | null); };
+
+export type OnboardingExplanation = { "mode": "written" | "oral" | "learning" | "conjugation"; "side": "l1-de" | "de-l1" | "none"; "status": "not_started" | "in_progress" | "dismissed" | "completed"; "position": (number | null); };
+
+export type OnboardingFinishCommand = { "command_id": string; "kind": "onboarding.complete" | "onboarding.dismiss"; "client_instance_id": string; "document_id": string; "payload": OnboardingKeyPayload; };
+
+export type OnboardingKeyPayload = { "mode": "written" | "oral" | "learning" | "conjugation"; "side": "l1-de" | "de-l1" | "none"; };
+
+export type OnboardingProjection = { "explanations": Array<OnboardingExplanation>; };
+
+export type OnboardingResponse = { "state_version": string; "explanations": Array<OnboardingExplanation>; };
 
 export type OpenDictionaryContext = { "status": "open"; "context": DictionaryContextReference; "view": (DictionaryCardView | UnavailableCurrent); "interval": (DictionaryContextInterval | null); "capabilities": DictionaryContextCapabilities; };
 
