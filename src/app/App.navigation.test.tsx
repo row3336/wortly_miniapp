@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { app, pairText, startWords, useWrittenAppEnvironment } from "../written/writtenApp.test-support";
 import { App } from "./App";
-import { transitionFrames } from "./navigationMotion";
+import { leavingFrames, transitionFrames } from "./navigationMotion";
 
 useWrittenAppEnvironment();
 
@@ -93,13 +93,16 @@ describe("M-NAV navigation through the actual App document", () => {
 });
 
 describe("M-NAV П1 in the actual App document", () => {
+  let leavingRecord: Keyframe[][] = [];
   const original = HTMLElement.prototype.animate;
   afterEach(() => { HTMLElement.prototype.animate = original; });
   function record(reduced: boolean) {
-    const frames: Keyframe[][] = [];
-    HTMLElement.prototype.animate = vi.fn(function (keyframes: Keyframe[]) {
-      frames.push(keyframes); return { cancel() {} } as unknown as Animation;
+    // `frames` holds the incoming screen's motion; the leaving copy's motion is kept apart (2.24б.1).
+    const frames: Keyframe[][] = [], leaving: Keyframe[][] = [];
+    HTMLElement.prototype.animate = vi.fn(function (this: HTMLElement, keyframes: Keyframe[]) {
+      (this.classList.contains("wortly-screen-ghost") ? leaving : frames).push(keyframes); return { cancel() {} } as unknown as Animation;
     }) as unknown as HTMLElement["animate"];
+    leavingRecord = leaving;
     vi.stubGlobal("matchMedia", (query: string) => ({ matches: reduced && query === "(prefers-reduced-motion: reduce)" }));
     return frames;
   }
@@ -114,6 +117,8 @@ describe("M-NAV П1 in the actual App document", () => {
     await a.back.click();
     await screen.findByText(pairText);
     expect(frames).toEqual([transitionFrames("forward"), transitionFrames("back")]);
+    // The previous screen leaves the opposite way each time (2.24б.1, 2.24б.2).
+    expect(leavingRecord).toEqual([leavingFrames("forward"), leavingFrames("back")]);
   });
 
   it("N8 with reduced motion the same navigation is static", async () => {

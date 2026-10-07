@@ -6,3 +6,5 @@
 .nav-placeholder-text { color: var(--muted); }
 .today-direction { display: block; color: var(--muted); font-size: 14px; }
 .nav-screen { min-width: 0; }
+/* The leaving copy of the previous screen (2.24б.1): laid over the new one for the length of the motion only. */
+.wortly-screen-ghost { position: absolute; z-index: 5; pointer-events: none; background: var(--bg); }
