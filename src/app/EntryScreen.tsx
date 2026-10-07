@@ -1,5 +1,5 @@
 import type { Language } from "../i18n/language";
-import { t } from "../i18n/messages";
+import { maintenanceWait, t } from "../i18n/messages";
 import type { EntryState } from "./entryState";
 import { RemoteStopScreen } from "../study/RemoteStopScreen";
 
@@ -30,27 +30,32 @@ export function EntryScreen({ state, language, onRetry, onReapply,
     : state.kind === "pending"
       ? copy.pending
       : state.kind === "rejected"
-        ? copy.rejected
+        ? state.pause ? copy.maintenance : copy.rejected
         : busy
           ? copy.busy
           : state.kind === "opened"
             ? copy.opened
           : state.kind === "expired"
             ? copy.expired
+          : state.kind === "incompatible"
+            ? copy.incompatible
         : copy.unavailable;
   const detail = loading
     ? copy.loadingDetail
     : state.kind === "pending"
       ? copy.pendingDetail
       : state.kind === "rejected"
-        ? copy.rejectedDetail
+        ? state.pause ? copy.maintenanceDetail : copy.rejectedDetail
         : busy
           ? copy.busyDetail
           : state.kind === "opened"
             ? copy.openedDetail
           : state.kind === "expired"
             ? copy.expiredDetail
+          : state.kind === "incompatible"
+            ? copy.incompatibleDetail
         : copy.unavailableDetail;
+  const wait = state.kind === "rejected" && state.pause ? maintenanceWait(language, state.pause.waitSeconds) : null;
 
   return (
     <main className="app-shell">
@@ -64,6 +69,7 @@ export function EntryScreen({ state, language, onRetry, onReapply,
         )}
         <h1>{title}</h1>
         <p>{detail}</p>
+        {wait && <p className="maintenance-wait">{wait}</p>}
         {state.kind === "rejected" && state.reason && <p className="access-reason">{state.reason}</p>}
         {state.kind === "rejected" && onReapply && (
           <button className="primary-action" type="button" onClick={onReapply}>

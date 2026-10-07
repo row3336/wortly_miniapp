@@ -131,3 +131,52 @@ describe("entry API transport", () => {
       .rejects.toMatchObject({ kind: "invalid_response" });
   });
 });
+
+describe("incompatible client open and refusals of a write (M-COMPAT-HDR)", () => {
+  const incompatible = (patch: Record<string, unknown> = {}) => ({ status: "incompatible", client_instance_id: "client",
+    profile: sampleProfile(), session: null, compatibility: { compatible: false, contract_version: "2" }, ...patch });
+
+  it.each([
+    [{}], [{ session: { id: "s", phase: "active" } }], [{ session: { id: "s", phase: "summary" } }],
+  ])("accepts the incompatible answer as its own status, not as an invalid response %#", async patch => {
+    const result = await respondingWith(incompatible(patch)).open("synthetic", "synthetic", openRequest);
+    expect(result).toMatchObject({ status: "incompatible", client_instance_id: "client" });
+  });
+
+  it.each([
+    { client_instance_id: "" }, { client_instance_id: 1 }, { client_instance_id: undefined },
+    { profile: { ...sampleProfile(), role: "admin" } }, { profile: undefined },
+    { session: undefined }, { session: "s" }, { session: {} }, { session: { id: "s", phase: "closed" } },
+    { session: { id: "", phase: "active" } },
+    { compatibility: undefined }, { compatibility: { compatible: "no", contract_version: "2" } }, { compatibility: { compatible: false } },
+  ])("keeps the incompatible answer strict %#", async patch => {
+    await expect(respondingWith(incompatible(patch)).open("synthetic", "synthetic", openRequest))
+      .rejects.toMatchObject({ kind: "invalid_response" });
+  });
+
+  it("does not let an unknown status pass as incompatible", async () => {
+    await expect(respondingWith(incompatible({ status: "incompatible_client" })).open("synthetic", "synthetic", openRequest))
+      .rejects.toMatchObject({ kind: "invalid_response" });
+  });
+
+  it("sends the contract version header on the writes of the entry flow", async () => {
+    const seen: Record<string, string | null> = {};
+    const fetcher = vi.fn(async (url: string, init: RequestInit) => {
+      seen[url] = new Headers(init.headers).get("X-Wortly-Contract-Version");
+      return new Response(JSON.stringify({ error: { code: "CLIENT_INCOMPATIBLE" } }), { status: 409 });
+    });
+    const api = createEntryApi({ fetcher: fetcher as typeof fetch, timeoutMs: 1000, maxResponseBytes: 1000, contractVersion: "5" });
+    await expect(api.reapply("t", { command_id: "c", expected_access_version: "1" })).rejects
+      .toMatchObject({ kind: "http", status: 409, code: "CLIENT_INCOMPATIBLE" });
+    await expect(api.open("t", "p", openRequest)).rejects.toMatchObject({ code: "CLIENT_INCOMPATIBLE" });
+    expect(seen).toEqual({ "/api/v1/access/reapply": "5", "/api/v1/client/open": "5" });
+  });
+
+  it("carries the pause estimate of a paused reapply", async () => {
+    const api = createEntryApi({ fetcher: vi.fn(async () => new Response(JSON.stringify({
+      error: { code: "MAINTENANCE", estimated_end_at: "2026-10-07T12:00:00Z", wait_seconds: 40 } }),
+      { status: 503, headers: { "Retry-After": "40" } })) as typeof fetch, timeoutMs: 1000, maxResponseBytes: 1000 });
+    await expect(api.reapply("t", { command_id: "c", expected_access_version: "1" })).rejects.toMatchObject({
+      kind: "http", status: 503, code: "MAINTENANCE", pause: { waitSeconds: 40 } });
+  });
+});

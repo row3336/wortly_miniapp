@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { DictionaryCardView, OpenDictionaryContext } from "../api/generated";
-import { ApiError } from "../api/http";
+import { ApiError, clientContractVersion } from "../api/http";
 import {
   commandOutcomeUnknown, createDictionaryIntervalApi, dictionaryIncreaseIntent, dictionaryIntervalIntentHash,
   dictionaryUndoIntent, validDictionaryContextCurrent, type DictionaryIntervalCommand, type DictionaryIntervalIntent,
@@ -151,7 +151,8 @@ describe("dictionary context commands over the real JSON transport", () => {
     const { url, init, body } = sent(fetcher);
     expect(url).toBe("/api/v1/commands");
     expect(init).toMatchObject({ method: "POST", cache: "no-store", credentials: "same-origin" });
-    expect(init.headers).toEqual({ Authorization: `Bearer ${token}`, "X-Origin-Proof": proof, "Content-Type": "application/json" });
+    expect(init.headers).toEqual({ Authorization: `Bearer ${token}`, "X-Origin-Proof": proof, "Content-Type": "application/json",
+      "X-Wortly-Contract-Version": clientContractVersion() });
     expect(body).toEqual({ command_id: commandId, kind: "context.open", client_instance_id: clientId,
       document_id: documentId, payload: { card_id: cardId, source: { kind: "dictionary" } } });
   });

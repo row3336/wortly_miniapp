@@ -158,7 +158,7 @@ export type DirectionCounts = { "l1-de": ReadyCount; "de-l1": ReadyCount; };
 
 export type EmptyPayload = {  };
 
-export type ErrorDetail = { "code": string; };
+export type ErrorDetail = { "code": string; "estimated_end_at"?: (string | null); "wait_seconds"?: (number | null); };
 
 export type ErrorResponse = { "error": ErrorDetail; };
 
@@ -175,6 +175,8 @@ export type FeedbackPayload = { "text": string; "card_id"?: (string | null); };
 export type ForgotAnswerPayload = { "forgot": true; };
 
 export type GrammarTerm = { "id": string; "name": string; };
+
+export type IncompatibleClient = { "status": "incompatible"; "client_instance_id": string; "profile": Profile; "session": (SessionReference | null); "compatibility": Compatibility; };
 
 export type InitialAnswerCheck = { "correct": boolean; "variant_index": (number | null); "correct_answer": string; "other_answers": Array<string>; "matched_spans": Array<MatchedSpan>; "input_errors"?: (Array<MatchedSpan> | null); "answer_errors"?: (Array<MatchedSpan> | null); "span_unit": "unicode_code_point"; "span_bounds": "start_inclusive_end_exclusive"; };
 

@@ -9,7 +9,7 @@ import { browserDocumentLock } from "./documentLock";
 import { EntryController } from "./entryController";
 import { EntryScreen } from "./EntryScreen";
 import type { EntryState } from "./entryState";
-import type { HttpOptions } from "../api/http";
+import { clientContractVersion, type HttpOptions } from "../api/http";
 import type { OpenedAccess } from "./openedAccess";
 import type { BusyAccess } from "./busyAccess";
 import { BusyTodayHost } from "./TodayHost";
@@ -112,7 +112,7 @@ export function App() {
           savedLanguage: saved,
           browserLanguage: window.navigator.language || null,
           clientVersion: import.meta.env.VITE_WORTLY_CLIENT_VERSION || packageJson.version,
-          contractVersion: import.meta.env.VITE_WORTLY_CONTRACT_VERSION || "1",
+          contractVersion: clientContractVersion(),
           timeZone: () => Intl.DateTimeFormat().resolvedOptions().timeZone || null,
           newId,
           closeWindow: () => closeMiniApp(window),

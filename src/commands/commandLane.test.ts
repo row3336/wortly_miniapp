@@ -213,3 +213,78 @@ describe("durable lane record", () => {
     expect(copyLanePending(record as LanePending<Intent>, copy)).not.toHaveProperty("mismatch");
   });
 });
+
+describe("planned pause and outdated client (M-COMPAT-HDR)", () => {
+  const paused = (waitSeconds: number | null = 40) => new ApiError("http", 503, "MAINTENANCE", { waitSeconds });
+
+  it.each([
+    [new ApiError("http", 503, "MAINTENANCE", { waitSeconds: 1 }), "maintenance"],
+    [new ApiError("http", 409, "CLIENT_INCOMPATIBLE"), "incompatible"],
+    [new ApiError("http", 503, "WRITE_UNAVAILABLE"), "network"],
+    [new ApiError("http", 503), "network"],
+    [new ApiError("http", 409, "DOCUMENT_STALE"), "network"],
+    [new ApiError("http", 500, "MAINTENANCE"), "network"],
+    [new ApiError("network"), "network"],
+    [new ApiError("invalid_response"), "network"],
+    [new ApiError("http", 401, "MAINTENANCE"), "expired"],
+  ] as const)("names the refusal of a write %#: %s", (error, problem) => {
+    expect(failureProblem(error)).toBe(problem);
+  });
+
+  it("a paused write keeps the intent unknown under its ID, with the wait, and is never repeated on its own", async () => {
+    const f = fixture(); await f.controller.refresh();
+    f.send.mockRejectedValueOnce(paused(40));
+    await f.controller.begin(mark);
+    await new Promise(resolve => setTimeout(resolve, 20));
+    const sent = f.send.mock.calls[0][0];
+    expect(f.send).toHaveBeenCalledOnce();
+    expect(f.controller.snapshot()).toMatchObject({ phase: "unresolved", pending: true, problem: "maintenance",
+      pauseSeconds: 40, canRetry: false, pendingIntent: sent });
+    expect(JSON.parse(f.values.get("test.pending")!).intent).toEqual(sent);
+  });
+
+  it("the check by the same ID works during the pause and settles what the first send did", async () => {
+    const f = fixture(); await f.controller.refresh();
+    f.send.mockRejectedValueOnce(paused());
+    await f.controller.begin(mark);
+    const sent = f.send.mock.calls[0][0];
+    f.check.mockResolvedValueOnce({ ...accepted(), outcome: "accepted" } as Status);
+    await f.controller.refresh();
+    expect(f.check).toHaveBeenCalledWith(sent); expect(f.send).toHaveBeenCalledOnce();
+    expect(f.controller.snapshot()).toMatchObject({ phase: "settled", outcome: "accepted", problem: null, pauseSeconds: null, pending: false });
+  });
+
+  it("a manual retry during a longer pause sends once per tap, the same intent, and shows the pause again", async () => {
+    const saved = { command_id: id(50), kind: "item.mark" as const, session_id: id(3) };
+    const f = fixture({ saved });
+    f.check.mockResolvedValue(missing()); f.read.mockResolvedValue({ state_version: "6", current: active() });
+    await f.controller.refresh();
+    expect(f.controller.snapshot()).toMatchObject({ canRetry: true });
+    f.send.mockRejectedValueOnce(paused(0));
+    await f.controller.retry();
+    expect(f.send.mock.calls).toEqual([[saved]]);
+    expect(f.controller.snapshot()).toMatchObject({ problem: "maintenance", pauseSeconds: 0, pendingIntent: saved, phase: "unresolved" });
+    expect(f.newId).not.toHaveBeenCalled();
+  });
+
+  it("an outdated client keeps the intent, says so and may still check it", async () => {
+    const f = fixture(); await f.controller.refresh();
+    f.send.mockRejectedValueOnce(new ApiError("http", 409, "CLIENT_INCOMPATIBLE"));
+    await f.controller.begin(mark);
+    const sent = f.send.mock.calls[0][0];
+    expect(f.controller.snapshot()).toMatchObject({ phase: "unresolved", pending: true, problem: "incompatible",
+      pauseSeconds: null, pendingIntent: sent });
+    f.check.mockResolvedValueOnce(missing());
+    f.read.mockResolvedValueOnce({ state_version: "6", current: active() });
+    await f.controller.refresh();
+    expect(f.check).toHaveBeenCalledWith(sent);
+    expect(f.controller.snapshot()).toMatchObject({ pending: true, problem: "not_found" });
+  });
+
+  it("a lost reply and a refused write (503 WRITE_UNAVAILABLE) carry no pause data", async () => {
+    const f = fixture(); await f.controller.refresh();
+    f.send.mockRejectedValueOnce(new ApiError("http", 503, "WRITE_UNAVAILABLE"));
+    await f.controller.begin(mark);
+    expect(f.controller.snapshot()).toMatchObject({ problem: "network", pauseSeconds: null });
+  });
+});

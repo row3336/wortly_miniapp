@@ -9,13 +9,14 @@ import type {
   ReapplyRequest,
   RegisterRequest,
   RegisterResponse,
+  IncompatibleClient,
 } from "./generated";
 
 export interface EntryApi {
   auth(request: AuthRequest): Promise<AuthResponse>;
   reapply(token: string, request: ReapplyRequest): Promise<AccessCommandResponse>;
   register(token: string, request: RegisterRequest): Promise<RegisterResponse>;
-  open(token: string, proof: string, request: OpenRequest): Promise<OpenedClient | BusyClient>;
+  open(token: string, proof: string, request: OpenRequest): Promise<OpenedClient | BusyClient | IncompatibleClient>;
 }
 
 import { ApiError as EntryApiError, createJsonTransport, httpError, type HttpOptions } from "./http";
@@ -75,7 +76,18 @@ function validRegister(value: unknown): value is RegisterResponse {
     && (value.origin_proof === undefined || value.origin_proof === null || typeof value.origin_proof === "string");
 }
 
-function validOpen(value: unknown): value is OpenedClient | BusyClient {
+function validSessionReference(value: unknown): boolean {
+  return value === null || record(value) && nonemptyString(value.id)
+    && (value.phase === "active" || value.phase === "summary");
+}
+
+function validIncompatible(value: Record<string, unknown>): boolean {
+  return nonemptyString(value.client_instance_id) && validProfile(value.profile)
+    && validSessionReference(value.session) && validCompatibility(value.compatibility);
+}
+
+function validOpen(value: unknown): value is OpenedClient | BusyClient | IncompatibleClient {
+  if (record(value) && value.status === "incompatible") return validIncompatible(value);
   if (!record(value) || !validProfile(value.profile) || !validCompatibility(value.compatibility)) return false;
   if (value.status === "SESSION_BUSY") {
     if (!record(value.session) || value.session.status !== "busy") return false;
@@ -89,10 +101,7 @@ function validOpen(value: unknown): value is OpenedClient | BusyClient {
   }
   return value.status === "opened" && nonemptyString(value.client_instance_id)
     && nonemptyString(value.document_id) && validVersion(value.document_epoch)
-    && validVersion(value.proof_version)
-    && (value.session === null || record(value.session)
-      && nonemptyString(value.session.id)
-      && (value.session.phase === "active" || value.session.phase === "summary"));
+    && validVersion(value.proof_version) && validSessionReference(value.session);
 }
 
 function validReapply(value: unknown): value is AccessCommandResponse {

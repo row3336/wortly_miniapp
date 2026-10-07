@@ -1,9 +1,21 @@
+/** The contract version of this client, sent with every write and with sign-in/open (the server compares for equality). */
+export function clientContractVersion(): string {
+  return import.meta.env.VITE_WORTLY_CONTRACT_VERSION || "1";
+}
+
+/** The header the core reads on POST /commands and /access/reapply; a write without it is refused as incompatible. */
+export const CONTRACT_VERSION_HEADER = "X-Wortly-Contract-Version";
+
+/** What a planned pause (503 MAINTENANCE) says about its end: whole seconds, an estimate, never a promise; null if absent. */
+export type MaintenancePause = { waitSeconds: number | null };
+
 /** One bounded exchange. A transport error never establishes a command's outcome. */
 export class ApiError extends Error {
   constructor(
     public readonly kind: "network" | "http" | "invalid_response",
     public readonly status?: number,
     public readonly code?: string,
+    public readonly pause?: MaintenancePause,
   ) {
     super(kind);
   }
@@ -16,6 +28,8 @@ export type HttpOptions = {
   maxResponseBytes: number;
   /** Told of every DOCUMENT_STALE refusal before the caller reads it; the window, not each module, reacts. */
   onDocumentStale?(): void;
+  /** Overrides clientContractVersion() for the header of every POST. */
+  contractVersion?: string;
 };
 
 type Request = {
@@ -25,7 +39,8 @@ type Request = {
   body?: object;
 };
 
-export type JsonReply = { status: number; ok: boolean; value: unknown };
+/** retryAfter: whole seconds of a numeric Retry-After header, when the reply carried one. */
+export type JsonReply = { status: number; ok: boolean; value: unknown; retryAfter?: number };
 
 export function errorCode(value: unknown): string | undefined {
   if (typeof value !== "object" || value === null || !("error" in value)) return;
@@ -34,8 +49,21 @@ export function errorCode(value: unknown): string | undefined {
   if (typeof error.code === "string" && /^[A-Z][A-Z0-9_]*$/.test(error.code)) return error.code;
 }
 
+function wholeSeconds(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+/** MAINTENANCE carries its wait in the body and the same number in Retry-After; a malformed part is dropped. estimated_end_at is not read: the wait line needs only the seconds. */
+function maintenancePause(reply: JsonReply): MaintenancePause {
+  const error = typeof reply.value === "object" && reply.value !== null && "error" in reply.value
+    && typeof reply.value.error === "object" && reply.value.error !== null ? reply.value.error : {};
+  return { waitSeconds: wholeSeconds("wait_seconds" in error ? error.wait_seconds : undefined) ?? reply.retryAfter ?? null };
+}
+
 export function httpError(reply: JsonReply): ApiError {
-  return new ApiError("http", reply.status, errorCode(reply.value));
+  const code = errorCode(reply.value);
+  return new ApiError("http", reply.status, code,
+    code === "MAINTENANCE" && reply.status === 503 ? maintenancePause(reply) : undefined);
 }
 
 async function readJson(response: Response, limit: number, signal: AbortSignal): Promise<unknown> {
@@ -83,6 +111,7 @@ export function createJsonTransport(options: HttpOptions) {
     throw new Error("maxResponseBytes must be a positive safe integer");
   }
   const base = (options.baseUrl ?? "").replace(/\/+$/, "");
+  const contractVersion = options.contractVersion || clientContractVersion();
   return async (path: string, request: Request): Promise<JsonReply> => {
     const controller = new AbortController();
     let refusalStatus: number | undefined;
@@ -97,6 +126,8 @@ export function createJsonTransport(options: HttpOptions) {
       const headers: Record<string, string> = {};
       if (request.token) headers.Authorization = `Bearer ${request.token}`;
       if (request.proof) headers["X-Origin-Proof"] = request.proof;
+      // Every write names the contract it was built for: reads stay open to an outdated client (CT §1), writes do not.
+      if (request.method === "POST") headers[CONTRACT_VERSION_HEADER] = contractVersion;
       if (request.body !== undefined) headers["Content-Type"] = "application/json";
       const response = await fetcher(`${base}/api/v1${path}`, {
         method: request.method, headers,
@@ -114,7 +145,9 @@ export function createJsonTransport(options: HttpOptions) {
         // An unreadable refusal still supplies HTTP status, never an acceptance fact.
         if (response.ok || controller.signal.aborted) throw error;
       }
-      return { status: response.status, ok: response.ok, value };
+      const retryAfter = /^\d{1,9}$/.test(response.headers.get("retry-after") ?? "")
+        ? Number(response.headers.get("retry-after")) : undefined;
+      return { status: response.status, ok: response.ok, value, ...(retryAfter === undefined ? {} : { retryAfter }) };
     };
     let reply: JsonReply;
     try { reply = await Promise.race([exchange(), deadline]); }

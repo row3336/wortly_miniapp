@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError, createJsonTransport, httpError } from "./http";
+import { ApiError, clientContractVersion, createJsonTransport, httpError } from "./http";
 
-afterEach(() => vi.useRealTimers());
+afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); });
 
 function transport(fetcher: typeof fetch, maxResponseBytes = 1000) {
   return createJsonTransport({ fetcher, timeoutMs: 100, maxResponseBytes });
@@ -17,7 +17,8 @@ describe("bounded JSON exchange", () => {
       .toMatchObject({ status: 200, value: { saved: true } });
     expect(fetcher).toHaveBeenCalledExactlyOnceWith("https://example.invalid/api/v1/commands", {
       method: "POST", headers: { Authorization: "Bearer synthetic-token",
-        "X-Origin-Proof": "synthetic-proof", "Content-Type": "application/json" },
+        "X-Origin-Proof": "synthetic-proof", "Content-Type": "application/json",
+        "X-Wortly-Contract-Version": clientContractVersion() },
       body: '{"command_id":"same-intent"}', signal: expect.any(AbortSignal),
       credentials: "same-origin", cache: "no-store",
     });
@@ -201,5 +202,95 @@ describe("the one DOCUMENT_STALE point", () => {
     const request = createJsonTransport({ fetcher: broken, timeoutMs: 100, maxResponseBytes: 1000, onDocumentStale });
     await expect(request("/today", { method: "GET" })).resolves.toMatchObject({ status: 409, value: undefined });
     expect(onDocumentStale).not.toHaveBeenCalled();
+  });
+});
+
+describe("contract version on writes (M-COMPAT-HDR)", () => {
+  const ok = () => vi.fn(async (_url: string, _init: RequestInit) => new Response("{}"));
+  const sent = (fetcher: ReturnType<typeof ok>) => new Headers(fetcher.mock.calls[0][1].headers);
+
+  it("names the contract on every POST, with or without credentials and body", async () => {
+    for (const request of [
+      { method: "POST" as const },
+      { method: "POST" as const, token: "t", body: { command_id: "c" } },
+      { method: "POST" as const, token: "t", proof: "p", body: {} },
+    ]) {
+      const fetcher = ok();
+      await createJsonTransport({ fetcher: fetcher as typeof fetch, timeoutMs: 100, maxResponseBytes: 100, contractVersion: "7" })("/commands", request);
+      expect(sent(fetcher).get("X-Wortly-Contract-Version")).toBe("7");
+    }
+  });
+
+  it("does not send it on a read: the core checks writes only, and an outdated client may still read", async () => {
+    const fetcher = ok();
+    await createJsonTransport({ fetcher: fetcher as typeof fetch, timeoutMs: 100, maxResponseBytes: 100, contractVersion: "7" })("/today", { method: "GET", token: "t" });
+    expect(sent(fetcher).has("X-Wortly-Contract-Version")).toBe(false);
+  });
+
+  it.each(["", undefined])("an empty configured version falls back to \"1\", so the header is never empty (%s)", async configured => {
+    vi.stubEnv("VITE_WORTLY_CONTRACT_VERSION", configured as string);
+    expect(clientContractVersion()).toBe("1");
+    for (const contractVersion of [undefined, ""]) {
+      const fetcher = ok();
+      await createJsonTransport({ fetcher: fetcher as typeof fetch, timeoutMs: 100, maxResponseBytes: 100, contractVersion })("/commands", { method: "POST" });
+      expect(sent(fetcher).get("X-Wortly-Contract-Version")).toBe("1");
+    }
+    vi.unstubAllEnvs();
+  });
+
+  it("takes the version from the client's own configuration unless the caller overrides it", async () => {
+    const fetcher = ok();
+    await createJsonTransport({ fetcher: fetcher as typeof fetch, timeoutMs: 100, maxResponseBytes: 100 })("/commands", { method: "POST" });
+    expect(sent(fetcher).get("X-Wortly-Contract-Version")).toBe(clientContractVersion());
+    expect(clientContractVersion()).toMatch(/^[1-9][0-9]*$/);
+  });
+});
+
+describe("known refusals of a write (M-COMPAT-HDR)", () => {
+  const refusal = (value: unknown, status: number, headers: Record<string, string> = {}) =>
+    transport(vi.fn(async () => new Response(JSON.stringify(value), { status, headers })))("/commands", { method: "POST" });
+
+  it("reads the planned pause estimate from the body", async () => {
+    const reply = await refusal({ error: { code: "MAINTENANCE", estimated_end_at: "2026-10-07T12:00:00Z", wait_seconds: 42 } }, 503,
+      { "Retry-After": "42" });
+    expect(httpError(reply)).toMatchObject({ kind: "http", status: 503, code: "MAINTENANCE",
+      pause: { waitSeconds: 42 } });
+  });
+
+  it("keeps wait_seconds=0 (the estimate has passed) distinct from no estimate", async () => {
+    expect(httpError(await refusal({ error: { code: "MAINTENANCE", estimated_end_at: "2026-10-07T12:00:00Z", wait_seconds: 0 } }, 503)).pause)
+      .toEqual({ waitSeconds: 0 });
+    expect(httpError(await refusal({ error: { code: "MAINTENANCE" } }, 503)).pause)
+      .toEqual({ waitSeconds: null });
+  });
+
+  it("falls back to Retry-After when the body has no wait, and prefers the body when it has one", async () => {
+    expect(httpError(await refusal({ error: { code: "MAINTENANCE" } }, 503, { "Retry-After": "30" })).pause)
+      .toMatchObject({ waitSeconds: 30 });
+    expect(httpError(await refusal({ error: { code: "MAINTENANCE", wait_seconds: 5 } }, 503, { "Retry-After": "30" })).pause)
+      .toMatchObject({ waitSeconds: 5 });
+  });
+
+  it.each([-1, 1.5, "7", null, 2 ** 60])("drops a malformed wait_seconds %s", async wait => {
+    expect(httpError(await refusal({ error: { code: "MAINTENANCE", wait_seconds: wait } }, 503)).pause)
+      .toEqual({ waitSeconds: null });
+  });
+
+  it("ignores a Retry-After that is a date or negative", async () => {
+    expect(httpError(await refusal({ error: { code: "MAINTENANCE" } }, 503, { "Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT" })).pause)
+      .toEqual({ waitSeconds: null });
+  });
+
+  it("tells MAINTENANCE from WRITE_UNAVAILABLE, which has no pause data", async () => {
+    const error = httpError(await refusal({ error: { code: "WRITE_UNAVAILABLE", wait_seconds: 9 } }, 503, { "Retry-After": "9" }));
+    expect(error).toMatchObject({ status: 503, code: "WRITE_UNAVAILABLE" });
+    expect(error.pause).toBeUndefined();
+  });
+
+  it("recognises CLIENT_INCOMPATIBLE as a known code and never leaks the body", async () => {
+    const error = httpError(await refusal({ error: { code: "CLIENT_INCOMPATIBLE", secret: "do-not-expose" } }, 409));
+    expect(error).toMatchObject({ kind: "http", status: 409, code: "CLIENT_INCOMPATIBLE" });
+    expect(error.pause).toBeUndefined();
+    expect(JSON.stringify(error)).not.toContain("do-not-expose");
   });
 });

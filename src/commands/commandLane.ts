@@ -6,7 +6,10 @@ import { PendingStoreError, type PendingSlot } from "./pendingSlot";
 export type CommandPhase = "loading" | "idle" | "checking" | "sending" | "unresolved" | "blocked" | "settled" | "disposed";
 export type CommandProblem = "network" | "storage" | "invalid_pending" | "pending_changed" | "mismatch" | "not_found"
   | "expired" | "forbidden" | "profile_changed" | "client_changed" | "pair_changed" | "step_changed"
-  | "closed" | "stale_response";
+  | "closed" | "stale_response"
+  // Known refusals of a write that is not a lost reply: a planned pause (503 MAINTENANCE, К14-021) and an outdated
+  // client (409 CLIENT_INCOMPATIBLE, К10-059). Both leave the intent unknown and checkable like "network".
+  | "maintenance" | "incompatible";
 export type CommandOutcome = "accepted" | "rejected" | "not_applied";
 export type Pair = "ru-de" | "uk-de" | "en-de";
 export type LaneIntent = { command_id: string; kind: string; session_id: string };
@@ -50,6 +53,8 @@ export type LaneSnapshot<I extends LaneIntent, C, R> = {
   resolved: R | null;
   rejectionCode: string | null;
   problem: CommandProblem | null;
+  /** Seconds the server estimates for a planned pause (problem "maintenance"); 0 once the estimate has passed. */
+  pauseSeconds?: number | null;
   canRetry: boolean;
   current: C | null;
   closedSession: ClosedSessionBoundary | null;
@@ -96,6 +101,10 @@ export function failureProblem(error: unknown): CommandProblem {
   if (error instanceof PendingStoreError) return error.kind === "invalid" ? "invalid_pending"
     : error.kind === "changed" ? "pending_changed" : "storage";
   if (error instanceof ApiError && (error.status === 401 || error.status === 403)) return error.status === 401 ? "expired" : "forbidden";
+  if (error instanceof ApiError && error.kind === "http") {
+    if (error.status === 503 && error.code === "MAINTENANCE") return "maintenance";
+    if (error.status === 409 && error.code === "CLIENT_INCOMPATIBLE") return "incompatible";
+  }
   return "network";
 }
 
@@ -133,6 +142,7 @@ export abstract class LaneCore<I extends LaneIntent, Snapshot> {
   protected readonly lifetime = new AbortController();
   protected phase: CommandPhase = "loading";
   protected problem: CommandProblem | null = null;
+  protected pauseSeconds: number | null = null;
   protected pending: LanePending<I> | null = null;
   protected outcome: CommandOutcome | null = null;
   protected loaded = false;
@@ -154,6 +164,7 @@ export abstract class LaneCore<I extends LaneIntent, Snapshot> {
       // A failed local cleanup must not erase an already confirmed result.
       if (!this.outcome) this.clearCurrent();
       this.problem = failureProblem(error);
+      this.pauseSeconds = this.problem === "maintenance" && error instanceof ApiError ? error.pause?.waitSeconds ?? null : null;
       // A timeout keeps the same intent: it becomes unknown, never a new command.
       this.phase = this.pending ? "unresolved" : "blocked";
     }).finally(() => { if (this.running === task) this.running = null; this.emit(); });
@@ -235,6 +246,7 @@ export abstract class CommandLane<S extends LaneSpec, O extends LaneOptions<S> =
       pendingIntent: ownPending ? this.mode.copy(this.pending!.intent) : null,
       outcome: this.outcome, resolved: live && this.resolved ? { ...this.resolved } : null,
       rejectionCode: live ? this.rejectionCode : null, problem: this.problem,
+      pauseSeconds: this.problem === "maintenance" ? this.pauseSeconds : null,
       canRetry: live && fresh && !this.running && this.retryVerified && own && !this.pending!.mismatch && this.outcome === null,
       current: live && fresh ? structuredClone(this.current) : null,
       closedSession: live && fresh ? structuredClone(this.closedSession) : null, stateVersion: this.floor }, live && fresh);

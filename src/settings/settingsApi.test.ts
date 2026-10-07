@@ -1,5 +1,6 @@
 import { settingsResponse as current } from "./settingsRead.test-support";
 import { describe, expect, it, vi } from "vitest";
+import { clientContractVersion } from "../api/http";
 import type { Profile, SavedCommandFact, SettingCommand, SettingsResponse } from "../api/generated";
 import {
   allowedSettingValue, createSettingsApi, validSettingIntent,
@@ -230,7 +231,8 @@ describe("Settings command exchange", () => {
     await expect(api.save("synthetic", "synthetic-proof", subject, request)).resolves.toMatchObject({ outcome: "accepted" });
     const [url, init] = fetcher.mock.calls[0];
     expect(url).toBe("/api/v1/commands");
-    expect(init?.headers).toEqual({ Authorization: "Bearer synthetic", "X-Origin-Proof": "synthetic-proof", "Content-Type": "application/json" });
+    expect(init?.headers).toEqual({ Authorization: "Bearer synthetic", "X-Origin-Proof": "synthetic-proof", "Content-Type": "application/json",
+      "X-Wortly-Contract-Version": clientContractVersion() });
     expect(JSON.parse(init!.body as string)).toEqual(request); expect(fetcher).toHaveBeenCalledOnce();
     expect(allowedSettingValue(current(), payload.key, payload.value)).toBe(true);
   });

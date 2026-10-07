@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { LearningCurrentResponse, ManualSelectionCommand, SavedCommandFact } from "../api/generated";
+import { clientContractVersion } from "../api/http";
 import { createLearningApi } from "./learningApi";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -111,7 +112,8 @@ describe("manual command exchange", () => {
     const call = (fetcher.mock.calls as unknown as [string, RequestInit][])[0];
     expect(call[0]).toBe("/api/v1/commands");
     expect(call[1].headers).toEqual({ Authorization: "Bearer synthetic",
-      "X-Origin-Proof": "synthetic-proof", "Content-Type": "application/json" });
+      "X-Origin-Proof": "synthetic-proof", "Content-Type": "application/json",
+      "X-Wortly-Contract-Version": clientContractVersion() });
     expect(JSON.parse(call[1].body as string)).toEqual(request);
   });
 

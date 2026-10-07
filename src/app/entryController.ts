@@ -282,7 +282,9 @@ export class EntryController {
       this.session = response;
     }
     const session = this.session;
-    if (!session || !session.compatibility.compatible) { this.emit({ kind: "unavailable" }); return; }
+    if (!session) { this.emit({ kind: "unavailable" }); return; }
+    // An incompatible client may read why (CT §1), so this is its own state, not "unavailable" (К10-060).
+    if (!session.compatibility.compatible) { this.emit({ kind: "incompatible" }, session.profile); return; }
     const profile = session.profile;
     if (!this.acceptProfile(profile)) throw new EntryApiError("invalid_response");
     if (profile.access.status === "pending") {
@@ -409,9 +411,17 @@ export class EntryController {
     };
     const opened = await this.options.api.open(token, installation.proof, request);
     if (!this.current(generation)) return;
-    if (opened.profile.access.status !== "admitted" || !opened.compatibility.compatible
+    if (opened.profile.access.status !== "admitted"
       || (this.observedStateVersion !== null && newerVersion(this.observedStateVersion, opened.profile.state_version))
       || !this.acceptProfile(opened.profile)) throw new EntryApiError("invalid_response");
+    if (opened.status === "incompatible" || !opened.compatibility.compatible) {
+      // The core neither made this document live nor activated the installation (В6): nothing is saved or locked here.
+      if (opened.status === "incompatible" && opened.client_instance_id !== installation.clientInstanceId) {
+        throw new Error("Invalid opened client");
+      }
+      this.emit({ kind: "incompatible" }, opened.profile);
+      return;
+    }
     this.staleHint = false; // The server answered for this document: it is still the live one.
     this.claimLock(`${opened.profile.profile_id}:${installation.clientInstanceId}`);
     if (opened.status === "SESSION_BUSY") {
@@ -598,6 +608,15 @@ export class EntryController {
         return;
       }
       if (confirmed) { this.emit(failure(error)); return; }
+      if (error instanceof EntryApiError && error.kind === "http") {
+        // Known refusals of a write, each with its own meaning: neither is a network error nor a rejected access.
+        if (error.status === 409 && error.code === "CLIENT_INCOMPATIBLE") { this.emit({ kind: "incompatible" }); return; }
+        if (error.status === 503 && error.code === "MAINTENANCE") {
+          const wait = error.pause?.waitSeconds;
+          this.emit({ kind: "rejected", reason, pause: wait === null || wait === undefined ? {} : { waitSeconds: wait } });
+          return;
+        }
+      }
       if (error instanceof EntryApiError && error.kind === "invalid_response") {
         this.emit({ kind: "unavailable" });
         return;

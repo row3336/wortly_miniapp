@@ -18,6 +18,16 @@ const messages = {
     openedDetail: "Продовження поки недоступне.",
     expired: "Потрібно знову підтвердити вхід",
     expiredDetail: "Закрий застосунок і знову натисни кнопку Wortly в боті.",
+    // M-COMPAT-HDR (working copy, labelled until G05)
+    incompatible: "Потрібно оновити Wortly",
+    incompatibleDetail: "Ця версія застосунку застаріла й не може надсилати нові дії. Закрий Wortly і відкрий його знову через бота.",
+    maintenance: "Триває планове оновлення",
+    maintenanceDetail: "Зараз нові дії не приймаються. Спробуй ще раз трохи пізніше.",
+    maintenanceWaitSeconds: "Приблизне очікування — близько {n} с.",
+    maintenanceWaitMinutes: "Приблизне очікування — близько {n} хв.",
+    maintenanceOver: "Оновлення ще триває, орієнтовний час уже минув.",
+    commandMaintenance: "Триває планове оновлення, нові дії зараз не приймаються. Пізніше перевір стан надсилання.",
+    commandIncompatible: "Потрібно оновити застосунок: ця версія не може надсилати нові дії. Закрий Wortly і відкрий знову через бота.",
   },
   en: {
     loading: "Opening Wortly",
@@ -36,6 +46,16 @@ const messages = {
     openedDetail: "You cannot continue yet.",
     expired: "Please confirm sign-in again",
     expiredDetail: "Close the app and tap the Wortly button in the bot again.",
+    // M-COMPAT-HDR (working copy, labelled until G05)
+    incompatible: "Wortly needs an update",
+    incompatibleDetail: "This version of the app is out of date and cannot send new actions. Close Wortly and open it again from the bot.",
+    maintenance: "A planned update is in progress",
+    maintenanceDetail: "New actions are not accepted right now. Please try again a little later.",
+    maintenanceWaitSeconds: "Estimated wait: about {n} s.",
+    maintenanceWaitMinutes: "Estimated wait: about {n} min.",
+    maintenanceOver: "The update is still in progress; the estimated time has passed.",
+    commandMaintenance: "A planned update is in progress and new actions are not accepted. Check the sending status later.",
+    commandIncompatible: "The app needs an update: this version cannot send new actions. Close Wortly and open it again from the bot.",
   },
   ru: {
     loading: "Открываем Wortly",
@@ -54,11 +74,31 @@ const messages = {
     openedDetail: "Продолжить пока нельзя.",
     expired: "Нужно снова подтвердить вход",
     expiredDetail: "Закрой приложение и снова нажми кнопку Wortly в боте.",
+    // M-COMPAT-HDR (working copy, labelled until G05)
+    incompatible: "Нужно обновить Wortly",
+    incompatibleDetail: "Эта версия приложения устарела и не может отправлять новые действия. Закрой Wortly и открой его снова через бота.",
+    maintenance: "Идёт плановое обновление",
+    maintenanceDetail: "Сейчас новые действия не принимаются. Попробуй ещё раз чуть позже.",
+    maintenanceWaitSeconds: "Примерное ожидание — около {n} с.",
+    maintenanceWaitMinutes: "Примерное ожидание — около {n} мин.",
+    maintenanceOver: "Обновление ещё идёт, ожидаемое время уже прошло.",
+    commandMaintenance: "Идёт плановое обновление, новые действия сейчас не принимаются. Позже проверь состояние отправки.",
+    commandIncompatible: "Нужно обновить приложение: эта версия не может отправлять новые действия. Закрой Wortly и открой снова через бота.",
   },
 } as const;
 
 export function t(language: Language) {
   return messages[language];
+}
+
+/** The planned-pause wait line. A zero or missing estimate gets no number: the server only says the time has passed. */
+export function maintenanceWait(language: Language, waitSeconds: number | null | undefined): string | null {
+  if (waitSeconds === null || waitSeconds === undefined) return null;
+  const copy = messages[language];
+  if (waitSeconds === 0) return copy.maintenanceOver;
+  return waitSeconds >= 60
+    ? copy.maintenanceWaitMinutes.replace("{n}", String(Math.ceil(waitSeconds / 60)))
+    : copy.maintenanceWaitSeconds.replace("{n}", String(waitSeconds));
 }
 
 /** Pair ids of the contract; the pair belongs to the dictionary, never to the UI language. */
