@@ -9,6 +9,8 @@ function data(state_version = "1", pair: StatisticsOverviewResponse["pair"] = "r
     base: { total: 0, words: 0, phrases: 0, by_type: { noun: 0, verb: 0, phrase: 0, adjective: 0,
       pronoun: 0, adverb: 0, preposition: 0, conjunction: 0, particle: 0 } },
     ready: { words: { "l1-de": 0, "de-l1": 0 }, phrases: { "l1-de": 0, "de-l1": 0 } },
+    learned: { words: 0, phrases: 0 }, not_started: { words: 0, phrases: 0 }, added: { words: 0, phrases: 0 },
+    word_results: { last_wrong: 0, streaks: { one: 0, two: 0, three: 0, four: 0, five_plus: 0 } },
     practice: { state_version, pair, local_date: "2026-09-30", time_zone: "UTC",
       starts_at: "2026-09-28T00:00:00Z", ends_at: "2026-10-05T00:00:00Z",
       days: Array.from({ length: 7 }, (_, index) => ({ local_date: index < 3 ? `2026-09-${28 + index}` : `2026-10-0${index - 2}`,

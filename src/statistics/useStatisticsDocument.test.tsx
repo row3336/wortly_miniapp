@@ -14,6 +14,8 @@ function data(week: PracticeWeek, state_version = "1", pair: StatisticsOverviewR
     base: { total: 1, words: 1, phrases: 0, by_type: { noun: 1, verb: 0, phrase: 0, adjective: 0,
       pronoun: 0, adverb: 0, preposition: 0, conjunction: 0, particle: 0 } },
     ready: { words: { "l1-de": 1, "de-l1": 0 }, phrases: { "l1-de": 0, "de-l1": 0 } },
+    learned: { words: 0, phrases: 0 }, not_started: { words: 0, phrases: 0 }, added: { words: 0, phrases: 0 },
+    word_results: { last_wrong: 0, streaks: { one: 0, two: 0, three: 0, four: 0, five_plus: 0 } },
     practice: { state_version, pair, local_date: "2026-10-01", time_zone: "UTC", starts_at: `${start}T00:00:00Z`, ends_at: `${end}T00:00:00Z`,
       days: Array.from({ length: 7 }, (_, i) => ({ local_date: new Date(Date.parse(`${start}T00:00:00Z`) + i * 86400000).toISOString().slice(0, 10),
         words: 0, phrases: 0 })) } };

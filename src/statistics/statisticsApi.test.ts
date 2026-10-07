@@ -10,6 +10,8 @@ function body(week: PracticeWeek = "current", pair: StatisticsOverviewResponse["
     base: { total: 10, words: 8, phrases: 2,
       by_type: { noun: 1, verb: 1, phrase: 2, adjective: 1, pronoun: 1, adverb: 1, preposition: 1, conjunction: 1, particle: 1 } },
     ready: { words: { "l1-de": 8, "de-l1": 3 }, phrases: { "l1-de": 2, "de-l1": 0 } },
+    learned: { words: 3, phrases: 1 }, not_started: { words: 2, phrases: 1 }, added: { words: 1, phrases: 0 },
+    word_results: { last_wrong: 1, streaks: { one: 2, two: 1, three: 1, four: 0, five_plus: 3 } },
     practice: { state_version: "9007199254740993", local_date: "2026-03-29", pair, time_zone: "Europe/Berlin",
       starts_at: week === "current" ? "2026-03-22T23:00:00Z" : "2026-03-15T23:00:00Z",
       ends_at: week === "current" ? "2026-03-29T22:00:00Z" : "2026-03-22T23:00:00Z",
@@ -39,6 +41,8 @@ describe("1. synthetic overview snapshots and exact GET", () => {
     const value = body(); value.base.total = value.base.words = value.base.phrases = 0;
     for (const type of Object.keys(value.base.by_type) as (keyof typeof value.base.by_type)[]) value.base.by_type[type] = 0;
     value.ready = { words: { "l1-de": 0, "de-l1": 0 }, phrases: { "l1-de": 0, "de-l1": 0 } };
+    value.learned = { words: 0, phrases: 0 }; value.not_started = { words: 0, phrases: 0 }; value.added = { words: 0, phrases: 0 };
+    value.word_results = { last_wrong: 0, streaks: { one: 0, two: 0, three: 0, four: 0, five_plus: 0 } };
     value.practice.days[0].phrases = Number.MAX_SAFE_INTEGER;
     expect(await setup(value).api.get("synthetic-token", "current")).toEqual(value);
     value.practice.days.forEach(day => { day.words = day.phrases = 0; });
@@ -54,6 +58,11 @@ describe("2. exact object keys", () => {
     ["ready extra", v => { v.ready.other = {}; }], ["ready missing", v => { delete v.ready.phrases; }],
     ["direction extra", v => { v.ready.words.other = 0; }], ["direction missing", v => { delete v.ready.phrases["de-l1"]; }],
     ["base array", v => { v.base = []; }], ["ready null", v => { v.ready = null; }],
+    ["learned missing", v => { delete v.learned; }], ["not started missing", v => { delete v.not_started; }],
+    ["added missing", v => { delete v.added; }], ["word results missing", v => { delete v.word_results; }],
+    ["learned extra", v => { v.learned.total = 0; }], ["added missing bucket", v => { delete v.added.phrases; }],
+    ["streak extra", v => { v.word_results.streaks.six = 0; }], ["streak missing", v => { delete v.word_results.streaks.five_plus; }],
+    ["word results extra", v => { v.word_results.phrases = 0; }], ["owner metric null", v => { v.owner_metric = null; }],
   ])("rejects %s", (_, mutate) => { const value = body(); mutate(value); expect(validStatistics(value, "current")).toBe(false); });
   it.each([null, [], false, "overview"])("rejects non-object %j", value => expect(validStatistics(value, "current")).toBe(false));
 });
@@ -169,5 +178,47 @@ describe("8. single bounded exchange and errors", () => {
       expect(fetcher).toHaveBeenCalledTimes(1);
       expect(fetcher.mock.calls[0][1]?.signal?.aborted).toBe(true);
     } finally { vi.useRealTimers(); }
+  });
+});
+
+describe("9. K9 counts and the owner-only metric", () => {
+  const owner = { profiles: [
+    { profile_id: "00000000-0000-4000-8000-000000000001", words: 4, phrases: 1 },
+    { profile_id: "00000000-0000-4000-8000-000000000002", words: Number.MAX_SAFE_INTEGER, phrases: 0 }] };
+  it("accepts a guest body without the owner metric and an owner body with it", async () => {
+    expect(validStatistics(body(), "current")).toBe(true);
+    const value = { ...body(), owner_metric: structuredClone(owner) };
+    expect(await setup(value).api.get("synthetic-token", "current")).toEqual(value);
+    expect(validStatistics({ ...body(), owner_metric: { profiles: [] } }, "current")).toBe(true);
+  });
+  it.each([-1, 0.5, true, "1", null, Number.MAX_SAFE_INTEGER + 1])("rejects count %j at every K9 surface", bad => {
+    for (const mutate of [
+      (v: any) => { v.learned.words = bad; }, (v: any) => { v.not_started.phrases = bad; },
+      (v: any) => { v.added.words = bad; }, (v: any) => { v.word_results.last_wrong = bad; },
+      (v: any) => { v.word_results.streaks.five_plus = bad; }, (v: any) => { v.owner_metric = structuredClone(owner); v.owner_metric.profiles[0].words = bad; },
+    ]) { const value = body(); mutate(value); expect(validStatistics(value, "current")).toBe(false); }
+  });
+  it.each<Mutation>([
+    ["learned above base", v => { v.learned.words = v.base.words + 1; }],
+    ["not started above base", v => { v.not_started.phrases = v.base.phrases + 1; }],
+    ["added above base", v => { v.added.words = v.base.words + 1; }],
+    ["word groups above words", v => { v.word_results.streaks.five_plus = v.base.words; }],
+    ["owner array", v => { v.owner_metric = []; }], ["owner extra", v => { v.owner_metric = { ...structuredClone(owner), total: 0 }; }],
+    ["owner bad id", v => { v.owner_metric = { profiles: [{ profile_id: "owner", words: 0, phrases: 0 }] }; }],
+    ["owner row extra", v => { v.owner_metric = { profiles: [{ ...structuredClone(owner.profiles[0]), name: "x" }] }; }],
+    ["owner duplicate", v => { v.owner_metric = { profiles: [structuredClone(owner.profiles[0]), { ...structuredClone(owner.profiles[0]), words: 0 }] }; }],
+    ["owner not array", v => { v.owner_metric = { profiles: {} }; }],
+  ])("rejects %s", (_, mutate) => { const value = body(); mutate(value); expect(validStatistics(value, "current")).toBe(false); });
+  it("keeps the shared owner sample valid, so each rejection above has its own cause", () => {
+    expect(validStatistics({ ...body(), owner_metric: structuredClone(owner) }, "current")).toBe(true);
+    expect(validStatistics({ ...body(), owner_metric: { profiles: [structuredClone(owner.profiles[0])] } }, "current")).toBe(true);
+  });
+  it("bounds word groups by exact sums without rounding", () => {
+    const value = body(); value.base.total = Number.MAX_SAFE_INTEGER; value.base.words = Number.MAX_SAFE_INTEGER - 2;
+    value.base.by_type.noun = Number.MAX_SAFE_INTEGER - 9;
+    value.word_results.last_wrong = Number.MAX_SAFE_INTEGER - 9;
+    expect(validStatistics(value, "current")).toBe(true);
+    value.word_results.streaks.one = 3;
+    expect(validStatistics(value, "current")).toBe(false);
   });
 });

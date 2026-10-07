@@ -320,6 +320,10 @@ export type OralStartPayload = { "mode": "oral"; "bucket": "words" | "phrases"; 
 
 export type OrdinaryCounts = { "words": DirectionCounts; "phrases": DirectionCounts; };
 
+export type OwnerMetric = { "profiles": Array<OwnerMetricProfile>; };
+
+export type OwnerMetricProfile = { "profile_id": string; "words": number; "phrases": number; };
+
 export type PersonalCardText = { "value": string; "version": string; };
 
 export type PersonalFieldCurrent = { "status": "available"; "card_id": string; "language": "uk" | "en" | "ru"; "card_revision": string; "field_name": "translation" | "example" | "association"; "field_version": string; "personal": (PersonalCardText | null); "common_translations": (Array<string> | null); "common_examples": (Array<CardExample> | null); "undo_target": (FieldUndoTarget | null); };
@@ -448,11 +452,17 @@ export type SettingsValues = { "ui_language": SettingValue_Literal__uk____en____
 
 export type StatisticsBase = { "total": number; "words": number; "phrases": number; "by_type": StatisticsTypeCounts; };
 
-export type StatisticsOverviewResponse = { "state_version": string; "local_date": string; "pair": "ru-de" | "uk-de" | "en-de"; "time_zone": string; "base": StatisticsBase; "ready": StatisticsReady; "practice": PracticeResponse; };
+export type StatisticsCardCounts = { "words": number; "phrases": number; };
+
+export type StatisticsOverviewResponse = { "state_version": string; "local_date": string; "pair": "ru-de" | "uk-de" | "en-de"; "time_zone": string; "base": StatisticsBase; "ready": StatisticsReady; "practice": PracticeResponse; "learned": StatisticsCardCounts; "not_started": StatisticsCardCounts; "word_results": StatisticsWordResults; "added": StatisticsCardCounts; "owner_metric"?: (OwnerMetric | null); };
 
 export type StatisticsReady = { "words": PracticeDirections; "phrases": PracticeDirections; };
 
+export type StatisticsStreaks = { "one": number; "two": number; "three": number; "four": number; "five_plus": number; };
+
 export type StatisticsTypeCounts = { "noun": number; "verb": number; "phrase": number; "adjective": number; "pronoun": number; "adverb": number; "preposition": number; "conjunction": number; "particle": number; };
+
+export type StatisticsWordResults = { "last_wrong": number; "streaks": StatisticsStreaks; };
 
 export type StoredCommandFact = { "id": string; "kind": string; "status": "already_applied"; "applied_at": string; "target_id": (string | null); "action_id": (string | null); "result_id": (string | null); "context_id": (string | null); "object_version": (string | null); };
 
