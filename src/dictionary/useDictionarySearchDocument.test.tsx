@@ -131,7 +131,7 @@ describe("dictionary search document with real access, search API and controller
     const f = fixture(), h = mount(f);
     await flush();
     expect(f.fetcher).not.toHaveBeenCalled();
-    expect(h.state()).toEqual({ phase: "idle", mode: "suggest", query: "", material: "words", pair: null, items: [], nextCursor: null,
+    expect(h.state()).toEqual({ phase: "idle", mode: "suggest", query: "", material: "words", pair: null, items: [], similar: [], nextCursor: null,
       loadingMore: false, pagesLoaded: 0, restoreReady: true, problem: null, focusRequest: 0 });
     h.run(a => a.setQuery("   ")); await flush();
     expect(f.fetcher).not.toHaveBeenCalled();
@@ -332,7 +332,7 @@ describe("dictionary search document with real access, search API and controller
     h.run(a => a.submit()); await h.ready();
     h.run(a => a.enterFromSection()); await flush();
     expect(f.fetcher).toHaveBeenCalledTimes(2);
-    expect(h.state()).toEqual({ phase: "idle", mode: "suggest", query: "", material: "words", pair: "ru-de", items: [], nextCursor: null,
+    expect(h.state()).toEqual({ phase: "idle", mode: "suggest", query: "", material: "words", pair: "ru-de", items: [], similar: [], nextCursor: null,
       loadingMore: false, pagesLoaded: 0, restoreReady: true, problem: null, focusRequest: 1 });
   });
 

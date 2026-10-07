@@ -79,7 +79,7 @@ describe("dictionary search controller", () => {
   it("actions only change state and owe a read; commit is the single place that sends", async () => {
     const h = harness();
     h.commit();
-    expect(h.view()).toEqual({ phase: "idle", mode: "suggest", query: "", material: "words", pair: null, items: [], nextCursor: null,
+    expect(h.view()).toEqual({ phase: "idle", mode: "suggest", query: "", material: "words", pair: null, items: [], similar: [], nextCursor: null,
       loadingMore: false, pagesLoaded: 0, restoreReady: true, problem: null, focusRequest: 0 });
     h.controller.setQuery("Haus");
     expect(h.fetcher).not.toHaveBeenCalled();
@@ -129,7 +129,7 @@ describe("dictionary search controller", () => {
     expect(h.view({ access: next }).items).toHaveLength(3);
     expect(h.view({ access: next, pair: "en-de" })).toMatchObject({ phase: "loading", items: [], pair: null, pagesLoaded: 0, restoreReady: false });
     expect(h.view({ open: false })).toEqual({ phase: "disposed", mode: "suggest", query: "Haus", material: "words", pair: null, items: [],
-      nextCursor: null, loadingMore: false, pagesLoaded: 0, restoreReady: false, problem: null, focusRequest: 0 });
+      similar: [], nextCursor: null, loadingMore: false, pagesLoaded: 0, restoreReady: false, problem: null, focusRequest: 0 });
     expect(h.view()).toMatchObject({ phase: "ready", restoreReady: true });
   });
 

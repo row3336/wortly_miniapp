@@ -12,7 +12,7 @@ function item(n: number, rest: Partial<DictionarySearchItem> = {}): DictionarySe
     translation: { common: [`слово${n}`], personal: null }, match_kind: "exact", ...rest };
 }
 function snapshot(rest: Partial<DictionarySearchSnapshot> = {}): DictionarySearchSnapshot {
-  return { phase: "idle", mode: "suggest", query: "", material: "words", pair: null, items: [], nextCursor: null,
+  return { phase: "idle", mode: "suggest", query: "", material: "words", pair: null, items: [], similar: [], nextCursor: null,
     loadingMore: false, pagesLoaded: 0, restoreReady: true, problem: null, focusRequest: 0, ...rest };
 }
 const ready = (rest: Partial<DictionarySearchSnapshot> = {}) => snapshot({ phase: "ready", query: "Haus", pair: "ru-de",
@@ -23,7 +23,7 @@ function fixture(state: DictionarySearchSnapshot, rest: Partial<DictionarySearch
   const props: DictionarySearchScreenProps = {
     state, language: "ru", restoreScroll: null, onOpenCard: vi.fn(), onNavigate: vi.fn(),
     actions: { setQuery: vi.fn(), setMaterial: vi.fn(), submit: vi.fn(), loadMore: vi.fn(), retry: vi.fn() },
-    ...rest,
+    ...noHistory(), ...rest,
   };
   const view = render(<DictionarySearchScreen {...props} />);
   const update = (next: Partial<DictionarySearchScreenProps>) => {
@@ -32,6 +32,8 @@ function fixture(state: DictionarySearchSnapshot, rest: Partial<DictionarySearch
   };
   return { props, view, update };
 }
+const noHistory = (): Pick<DictionarySearchScreenProps, "history" | "historyActions"> =>
+  ({ history: { phase: "idle", items: [], pair: null, problem: null }, historyActions: { retry: vi.fn() } });
 const results = () => screen.getByRole("region", { name: "Результаты" });
 const query = () => screen.getByRole("textbox", { name: "Поиск" }) as HTMLInputElement;
 
@@ -70,6 +72,46 @@ describe("DictionarySearchScreen", () => {
     for (const code of ["cursor_stale", "pair_changed", "stale_response", "c1", id(1), "noun", "ru-de", "exact"]) {
       expect(text).not.toContain(code);
     }
+  });
+
+  it.each([
+    ["ru", { history: "История", loading: "Загружаем историю…", empty: "История пуста", failed: "Не удалось загрузить историю",
+      retry: "Повторить", similar: "Похожие", results: "Результаты" }],
+    ["uk", { history: "Історія", loading: "Завантажуємо історію…", empty: "Історія порожня", failed: "Не вдалося завантажити історію",
+      retry: "Спробувати ще раз", similar: "Схожі", results: "Результати" }],
+    ["en", { history: "History", loading: "Loading history…", empty: "History is empty", failed: "Could not load history",
+      retry: "Try again", similar: "Similar", results: "Results" }],
+  ] as const)("RA 6.1.14: tells history loading, emptiness and failure apart and keeps similar cards apart, in %s", (language: Language, t) => {
+    const history = (rest: Partial<DictionarySearchScreenProps["history"]>) =>
+      ({ phase: "ready" as const, items: [], pair: "ru-de" as const, problem: null, ...rest });
+    const { props, update } = fixture(snapshot(), { language, history: history({ phase: "loading" }) });
+    const region = () => screen.getByRole("region", { name: t.history });
+    expect(within(region()).getByRole("status").textContent).toBe(t.loading);
+    expect(region().getAttribute("aria-busy")).toBe("true");
+    update({ history: history({}) });
+    expect(within(region()).getByRole("status").textContent).toBe(t.empty);
+    update({ history: history({ phase: "failed", pair: null, problem: "stale_response" }) });
+    expect(within(region()).getByRole("alert").textContent).toBe(`${t.failed}${t.retry}`);
+    fireEvent.click(within(region()).getByRole("button", { name: t.retry }));
+    expect(props.historyActions.retry).toHaveBeenCalledTimes(1);
+    expect(props.actions.retry).not.toHaveBeenCalled();
+    // A refresh keeps the shown entries without a waiting text.
+    update({ history: history({ phase: "loading", items: [{ ...item(4), opened_at: "2026-10-06T10:00:00Z" }] }) });
+    expect(within(region()).queryByRole("status")).toBeNull();
+    expect(within(region()).getByRole("button").querySelector("[lang='de']")!.textContent).toBe("Wort4");
+    expect(within(region()).getByRole("button").querySelector("[lang='ru']")!.textContent).toBe("слово4");
+    fireEvent.click(within(region()).getByRole("button"));
+    expect(props.onOpenCard).toHaveBeenCalledExactlyOnceWith(id(4));
+    // A typed query hides the history; similar cards get their own region after the results.
+    update({ state: ready({ similar: [item(7)] }) });
+    expect(screen.queryByRole("region", { name: t.history })).toBeNull();
+    const similar = screen.getByRole("region", { name: t.similar });
+    expect(within(similar).getByRole("button").querySelector("[lang='de']")!.textContent).toBe("Wort7");
+    const shown = screen.getByRole("region", { name: t.results });
+    expect(shown.compareDocumentPosition(similar) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(shown).queryByText("Wort7")).toBeNull();
+    update({ state: ready({ similar: [] }) });
+    expect(screen.queryByRole("region", { name: t.similar })).toBeNull();
   });
 
   it("sends typing, clearing, the phrase switch and the full search to the search document", () => {
@@ -132,7 +174,8 @@ describe("DictionarySearchScreen", () => {
   it("navigates to Today and Settings and marks the dictionary as the current section", () => {
     const { props } = fixture(snapshot());
     const nav = screen.getByRole("navigation", { name: "Основная навигация" });
-    expect(nav.className).toBe("today-nav");
+    // M-NAV: the shared main panel, not a copy of its own.
+    expect(nav.className).toBe("today-nav bottom-nav");
     const current = within(nav).getByRole("button", { name: "Словарь" }) as HTMLButtonElement;
     expect(current.getAttribute("aria-current")).toBe("page");
     expect(current.disabled).toBe(true);
@@ -258,7 +301,7 @@ describe("DictionarySearchScreen", () => {
   it("waits for a visible list and drops the restore when the search changes first", () => {
     const scroll = vi.spyOn(window, "scrollTo").mockImplementation(() => {});
     const props: DictionarySearchScreenProps = { state: full(), language: "ru", restoreScroll: 120, onOpenCard: vi.fn(), onNavigate: vi.fn(),
-      actions: { setQuery: vi.fn(), setMaterial: vi.fn(), submit: vi.fn(), loadMore: vi.fn(), retry: vi.fn() } };
+      actions: { setQuery: vi.fn(), setMaterial: vi.fn(), submit: vi.fn(), loadMore: vi.fn(), retry: vi.fn() }, ...noHistory() };
     const view = render(<div hidden><DictionarySearchScreen {...props} /></div>);
     expect(scroll).not.toHaveBeenCalled();
     view.rerender(<div><DictionarySearchScreen {...props} /></div>);
@@ -309,7 +352,7 @@ describe("DictionarySearchScreen", () => {
     const scroll = vi.spyOn(window, "scrollTo").mockImplementation(() => {});
     const props: DictionarySearchScreenProps = { state: full({ items: [], nextCursor: null }), language: "ru", restoreScroll: 700,
       onOpenCard: vi.fn(), onNavigate: vi.fn(),
-      actions: { setQuery: vi.fn(), setMaterial: vi.fn(), submit: vi.fn(), loadMore: vi.fn(), retry: vi.fn() } };
+      actions: { setQuery: vi.fn(), setMaterial: vi.fn(), submit: vi.fn(), loadMore: vi.fn(), retry: vi.fn() }, ...noHistory() };
     const view = render(<div hidden><DictionarySearchScreen {...props} /></div>);
     view.rerender(<div hidden><DictionarySearchScreen {...props} state={full({ phase: "loading", items: [], nextCursor: null, restoreReady: false })} /></div>);
     expect(scroll).not.toHaveBeenCalled();
@@ -327,7 +370,7 @@ describe("DictionarySearchScreen", () => {
   it("Q2: StrictMode keeps one scroll for a list and none after an empty final result", () => {
     const scroll = vi.spyOn(window, "scrollTo").mockImplementation(() => {});
     const props: DictionarySearchScreenProps = { state: full(), language: "ru", restoreScroll: 300, onOpenCard: vi.fn(), onNavigate: vi.fn(),
-      actions: { setQuery: vi.fn(), setMaterial: vi.fn(), submit: vi.fn(), loadMore: vi.fn(), retry: vi.fn() } };
+      actions: { setQuery: vi.fn(), setMaterial: vi.fn(), submit: vi.fn(), loadMore: vi.fn(), retry: vi.fn() }, ...noHistory() };
     const view = render(<StrictMode><DictionarySearchScreen {...props} /></StrictMode>);
     view.rerender(<StrictMode><DictionarySearchScreen {...props} state={full({ loadingMore: true })} /></StrictMode>);
     expect(scroll).toHaveBeenCalledExactlyOnceWith(0, 300);

@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useReducer, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from "react";
 import type { LearningPreviewAddress } from "../api/generated";
 import type { HttpOptions } from "../api/http";
 import { sameId } from "../api/wireValidation";
+import { DictionaryHost, type DictionaryVisit } from "../dictionary/DictionaryHost";
 import type { Language } from "../i18n/language";
 import { LearningPreviewCard } from "../learning/LearningPreviewCard";
 import type { AsyncStorage } from "../platform/storage";
@@ -15,10 +16,10 @@ import { TodayScreen, type OrdinaryQuiz } from "../today/TodayScreen";
 import { useWrittenHost } from "../written/useWrittenHost";
 import { EntryScreen } from "./EntryScreen";
 import { LearningHost } from "./LearningHost";
-import { backDestination, initialRoute, navigationReducer, tabs, type Tab } from "./navigation";
+import { backDestination, initialRoute, navigationReducer, type Tab } from "./navigation";
 import { useBackLayer } from "./navigationBack";
 import { useScreenTransition } from "./navigationMotion";
-import { DictionaryPlaceholder, StatisticsPlaceholder } from "./navigationStubs";
+import { StatisticsPlaceholder } from "./navigationStubs";
 import type { OpenedAccess } from "./openedAccess";
 import { useOralHost, type OralStores } from "./OralHost";
 
@@ -67,6 +68,11 @@ export function ApplicationDocument(props: Props) {
   const frame = useRef<HTMLDivElement>(null);
   useScreenTransition(frame, route);
   const [settingsOpened, setSettingsOpened] = useState(false);
+  // The dictionary owner stays mounted once opened, so a return from a card finds its search unchanged (К07-096).
+  const [dictionaryOpened, setDictionaryOpened] = useState(false);
+  // One visit per route object: Back from a nested screen of the dictionary is a return, any other route there is an entry.
+  const visit = useMemo<DictionaryVisit | null>(() => route.screen !== "dictionary" ? null
+    : route.restored?.source === "dictionary" ? { kind: "return", scroll: route.restored.scroll ?? null } : { kind: "entry" }, [route]);
   const [floor, setFloor] = useState<SettingsObservation | null>(null);
   const [gate, setGate] = useState<"ready" | "loading" | "failed">("ready");
   // The Learning owner is chosen once per document; later mode reads never reseed or remount it.
@@ -179,7 +185,8 @@ export function ApplicationDocument(props: Props) {
   useBackLayer("screen", destination === null ? null : back);
   const openSettings = () => { setSettingsOpened(true); navigate({ type: "open", screen: "settings" }); };
   // The panel only navigates: each section owns its screen (M-DICT, M-SET); Today keeps its refresh on return.
-  const openTab = (tab: Tab) => tab === "today" ? today() : tab === "settings" ? openSettings() : navigate({ type: "open", screen: tab });
+  const openDictionary = () => { setDictionaryOpened(true); navigate({ type: "open", screen: "dictionary" }); };
+  const openTab = (tab: Tab) => tab === "today" ? today() : tab === "settings" ? openSettings() : openDictionary();
   const renderPreview = useCallback((preview: LearningPreviewAddress) => <LearningPreviewCard content={preview.content}
     language={props.language} renderExamples={renderLearningPreviewExamples} />, [props.language]);
   const retry = () => { void synchronize(); };
@@ -204,9 +211,6 @@ export function ApplicationDocument(props: Props) {
       hostRoute = "settings";
       screen = readScreen();
     } else todayShown = true;
-  } else if (at === "dictionary") {
-    screen = <DictionaryPlaceholder language={props.language}
-      navigation={{ onNavigate: openTab, enabled: tabs.filter(tab => tab !== "dictionary") }} />;
   } else if (at === "statistics") screen = <StatisticsPlaceholder language={props.language} onBack={back} />;
   // The oral owner lives for the whole document; it shows a screen only on its own route.
   const oral = useOralHost({ access: props.access, transport: props.transport, stores: props.oralStores, newId: props.newId,
@@ -236,6 +240,9 @@ export function ApplicationDocument(props: Props) {
     {screen}
     {oral.screen}
     {written.screen}
+    {dictionaryOpened && <DictionaryHost access={props.access} transport={props.transport} language={props.language} visit={visit}
+      onOpenCard={(cardId, back) => navigate({ type: "push", screen: "card", subject: cardId, details: back })}
+      onNavigate={openTab} />}
     {settingsOpened && <div hidden={at !== "settings"}>
       <SettingsHost access={props.access} transport={props.transport} document={settings}
         language={props.language} active={at === "settings"} onToday={today}

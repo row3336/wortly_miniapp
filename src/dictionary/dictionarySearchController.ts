@@ -5,6 +5,7 @@ import { validSearchPage, type SearchMaterial, type SearchRequest } from "./sear
 
 type Pair = DictionarySearchResponse["pair"];
 type Item = DictionarySearchResponse["items"][number];
+type Similar = NonNullable<DictionarySearchResponse["similar"]>[number];
 /** `cursor_stale`: the server refused to continue the shown list (409 SEARCH_CURSOR_STALE). */
 type Problem = "load" | "pair_changed" | "stale_response" | "cursor_stale";
 /** A refusal of the access itself: never kept beside shown results. */
@@ -22,6 +23,11 @@ export type DictionarySearchSnapshot = {
   /** Pair of the last settled read; null before any read and when the current access has another pair. */
   pair: Pair | null;
   items: Item[];
+  /**
+   * K07-091: similar cards of the shown first page, kept apart from `items`; the server sends them only without an exact match.
+   * A card already among the shown results is left out (В5).
+   */
+  similar: Similar[];
   /** Always null for suggestions: they cannot be paged. Null while a failed append waits for retry. */
   nextCursor: string | null;
   loadingMore: boolean;
@@ -82,6 +88,7 @@ export class DictionarySearchController implements DictionarySearchActions {
   private phase: Exclude<DictionarySearchSnapshot["phase"], "disposed"> = "idle";
   private problem: Problem | null = null;
   private items: Item[] = [];
+  private similar: Similar[] = [];
   private cursor: string | null = null;
   private pages = 0;
   private listLimit = 0;
@@ -193,6 +200,7 @@ export class DictionarySearchController implements DictionarySearchActions {
         if (this.owed?.kind !== "pages") this.owed = { kind: "pages", count: this.rereadPages() };
         if (this.pair !== null && this.pair !== input.pair) {
           this.items = [];
+          this.similar = [];
           this.cursor = null;
           this.pages = 0;
           this.pair = null;
@@ -213,7 +221,7 @@ export class DictionarySearchController implements DictionarySearchActions {
   view(observed: DictionarySearchObserved): DictionarySearchSnapshot {
     const base = { mode: this.mode, query: this.query, material: this.material, focusRequest: this.focusRequest };
     if (!observed.open) {
-      return structuredClone<DictionarySearchSnapshot>({ ...base, phase: "disposed", pair: null, items: [], nextCursor: null,
+      return structuredClone<DictionarySearchSnapshot>({ ...base, phase: "disposed", pair: null, items: [], similar: [], nextCursor: null,
         loadingMore: false, pagesLoaded: 0, restoreReady: false, problem: null });
     }
     // Same render as the access change: hide another pair and do not offer a restore yet.
@@ -224,6 +232,7 @@ export class DictionarySearchController implements DictionarySearchActions {
       ...base, phase,
       pair: otherPair ? null : this.pair,
       items: otherPair ? [] : this.items,
+      similar: otherPair ? [] : this.distinctSimilar(),
       nextCursor: this.mode === "full" && phase === "ready" && !pending && this.problem === null ? this.cursor : null,
       loadingMore: this.flight?.intent.kind === "more" || this.owed?.kind === "more",
       pagesLoaded: otherPair ? 0 : this.pages,
@@ -233,6 +242,13 @@ export class DictionarySearchController implements DictionarySearchActions {
   }
 
   private content(): boolean { return this.query.trim() !== ""; }
+
+  // root decision, pending owner: В5 — the server may rank a shown result as similar too; the user never sees it twice.
+  // Checked against every shown page, so a card that arrives with «Ещё» leaves the similar list.
+  private distinctSimilar(): Similar[] {
+    const shown = new Set(this.items.map(item => item.card_id.toLowerCase()));
+    return this.similar.filter(item => !shown.has(item.card_id.toLowerCase()));
+  }
 
   private emit(): void { this.listener?.(); }
 
@@ -251,6 +267,7 @@ export class DictionarySearchController implements DictionarySearchActions {
   private restart(): void {
     this.abandon();
     this.items = [];
+    this.similar = [];
     this.cursor = null;
     this.pages = 0;
     this.problem = null;
@@ -301,6 +318,8 @@ export class DictionarySearchController implements DictionarySearchActions {
     }
     this.flight = null;
     this.items = read.flatMap(page => page.items);
+    // Similar cards come with the first page only; a reread replaces them together with the list.
+    this.similar = read[0].similar ?? [];
     this.cursor = read.at(-1)!.next_cursor;
     this.pages = read.length;
     this.listLimit = base.limit;
@@ -356,6 +375,7 @@ export class DictionarySearchController implements DictionarySearchActions {
     this.phase = "failed";
     this.problem = problem;
     this.items = [];
+    this.similar = [];
     this.cursor = null;
     this.pages = 0;
     this.pair = pair;
