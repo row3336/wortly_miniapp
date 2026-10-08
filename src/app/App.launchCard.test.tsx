@@ -1,6 +1,6 @@
 // T+M-CARD-LINK (answer Q20, variant A): the bot's complaint button opens the Mini App with `?card=<id>`.
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { cardIdOf, cardView } from "../dictionary/card/cardTestData.test-support";
 import { app, exchange, pairText, useWrittenAppEnvironment } from "../written/writtenApp.test-support";
 import { response } from "../written/writtenFixtures.test-support";
@@ -119,5 +119,36 @@ describe("the launch card in the actual App document", () => {
     await screen.findByRole("textbox", undefined, exchange);
     expect(screen.queryByRole("main", { name: "Карточка" })).toBeNull();
     expect(a.views()).toEqual([]);
+  });
+
+  it("L6 a document rebuilt inside the same App (a new access key) does not open the launch card a second time", async () => {
+    launch(`?card=${CARD}`);
+    const a = launchApp();
+    render(<App />);
+    await screen.findByText("В очереди на изучение", undefined, exchange);
+    await waitFor(() => expect(a.kinds()).toEqual(["context.open"]));
+    fireEvent.click(screen.getByRole("button", { name: "Назад" }));
+    await screen.findByText(pairText, undefined, exchange);
+    await waitFor(() => expect(a.kinds()).toEqual(["context.open", "context.close"]));
+    expect(a.views()).toHaveLength(1);
+
+    // The next foreground open answers another document epoch: the access key changes and the document is built again.
+    const opens = () => a.openReply.mock.calls.length;
+    const before = opens(), todays = a.todayReply.mock.calls.length;
+    const reply = a.openReply.getMockImplementation()!;
+    a.openReply.mockImplementation(async body => {
+      const opened = await (await reply(body)).json();
+      return new Response(JSON.stringify({ ...opened, document_epoch: "2" }), { status: 200 });
+    });
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    act(() => { document.dispatchEvent(new Event("visibilitychange")); });
+    await waitFor(() => expect(opens()).toBeGreaterThan(before), exchange);
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 400)); });
+    expect(a.views()).toHaveLength(1);
+    expect(a.kinds()).toEqual(["context.open", "context.close"]);
+    expect(screen.queryByRole("main", { name: "Карточка" })).toBeNull();
+    await screen.findByText(pairText, undefined, exchange);
+    // The rebuilt document reads Today again; that read is the proof that it was built, not merely kept.
+    expect(a.todayReply.mock.calls.length).toBeGreaterThan(todays);
   });
 });
