@@ -1,7 +1,7 @@
 import { useRef, type ReactNode } from "react";
 import type { LearningPreviewAddress } from "../api/generated";
 import { recoveryCopy } from "../commands/commandCopy";
-import { CommandRecovery, localCleanupOnly } from "../commands/CommandRecovery";
+import { CommandRecovery, localCleanupOnly, recoveryCover } from "../commands/CommandRecovery";
 import { RecoveryOverlay, recoveryConflict, recoveryScreen } from "../commands/RecoveryOverlay";
 import { StepBackButton, stepBackCopy } from "../commands/StepBackButton";
 import { useEnterNext } from "../commands/useEnterNext";
@@ -82,7 +82,7 @@ export function LearningScreen({ state, language, submitOnEnter, actions, render
   const manualLanes = automatic ? [stop] : [primary, stop];
   const unresolved = manualLanes.some(lane => lane.pending && lane.outcome === null);
   const showRecovery = !isClosed && (unresolved || !automatic && (problem || state.phase === "stale"));
-  const recovering = isClosed ? null : recoveryScreen(state.commands);
+  const recovering = isClosed ? null : recoveryCover(recoveryScreen(state.commands), state.commands);
   const status = state.phase === "submitting" ? t.saving : state.phase === "visible_unconfirmed" ? t.present
     : state.phase === "unknown" ? t.unknown : undefined;
   const pendingForgot = primary.pending && primary.outcome === null && primary.pendingIntent?.kind === "answer.submit"
@@ -116,6 +116,9 @@ export function LearningScreen({ state, language, submitOnEnter, actions, render
       grades={state.grades} canCorrect={state.canCorrect} canNext={state.canNext} timer={state.timer} example={answerExampleSource}
       onGrade={grade => { void actions.grade(grade); }} onCorrect={() => { void actions.correct(); }} onNext={() => { void actions.next(); }} />}
     {result && state.canUndo && <StepBackButton className="learning-step-back" language={language} onUndo={() => { void actions.undo(); }} />}
+    {/* The previous result shown while B's present waits says so, as the written quiz does (TA:113, Q25.2). */}
+    {state.phase === "previous_result" && pendingKind === "assignment.present" && primary.outcome === null
+      && <p role="status">{t.present}</p>}
     {state.canPrevious && <button type="button" className="learning-previous" onClick={() => actions.previousResult()}>{t.previous}</button>}
     {state.phase === "summary" && <button type="button" className="learning-summary" aria-label={t.today} disabled={!state.canStop}
       onClick={() => { if (state.canStop) void actions.stop("summary_home"); }}>

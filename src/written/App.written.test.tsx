@@ -124,18 +124,21 @@ describe("Written quiz through the actual App document", () => {
   it("В02 an unknown present of the old document is resolved by its own ID before any change; nothing is issued again (CT:109)", async () => {
     const a = app({ cards: [6, 7] }); const first = render(<App />);
     await startWords(); await answer("Haus");
-    loseReply(a, "assignment.present");
+    // The old document cannot check the lost present: it is left unknown there.
+    loseReply(a, "assignment.present"); const online = offlineStudy(a);
     fireEvent.click(screen.getByRole("button", { name: "Далее" }));
-    // B stays visible and unconfirmed; only a check of the same ID is offered.
-    await screen.findByRole("button", { name: "Проверить состояние" });
-    expect(screen.getByText("слово 7")).toBeTruthy();
+    // B stays visible, typed and unconfirmed under its short status: no cover, no manual control (Q25.1, Q25.2).
+    await screen.findByText("Подтверждаем показ задания…");
+    expect(screen.getByText("слово 7")).toBeTruthy(); expect(field().readOnly).toBe(false);
+    expect(document.querySelector(".recovery-overlay")).toBeNull();
+    for (const name of ["Проверить состояние", "Повторить отправку"]) expect(screen.queryByRole("button", { name })).toBeNull();
     const lost = a.posts().at(-1)!;
     expect([lost.kind, lost.assignment_id]).toEqual(["assignment.present", id(7)]);
-    first.unmount();
+    first.unmount(); online();
     const mark = a.fetcher.mock.calls.length, posts = a.posts().length;
     render(<App />);
     await screen.findByText("слово 7");
-    await waitFor(() => expect(field().readOnly).toBe(false));
+    await waitFor(() => expect(screen.queryByText("Подтверждаем показ задания…")).toBeNull(), exchange);
     expect(a.posts()).toHaveLength(posts);
     await answer("Haus");
     const later = requests(a, mark), check = later.indexOf(`GET /api/v1/commands/${lost.command_id}`);

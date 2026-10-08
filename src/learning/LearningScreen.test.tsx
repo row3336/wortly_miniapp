@@ -170,6 +170,34 @@ describe("Learning screen with its real command owner", () => {
     await act(async () => { gate.resolve(await f.handler(...present)); });
     await waitFor(() => expect(f.view.snapshot().canSubmit).toBe(true)); expect(input().value).toBe("B draft");
   });
+  it("a lost present is checked by itself without the cover: B is typed under its short status, no button (Q25.1, Q25.2)", async () => {
+    const { f } = await mount({ wrong: true }); await answer(f, "wrong A");
+    f.fetcher.mockImplementationOnce(async (...call) => { await f.handler(...call); throw new Error("lost response"); });
+    // The machine's check by the same ID is held: the mark is unknown meanwhile.
+    const check = deferred<Response>(); f.fetcher.mockReturnValueOnce(check.promise);
+    click("Далее");
+    await waitFor(() => expect(f.view.snapshot().commands.recovery?.state.name).toBe("checking"));
+    const present = f.posts().at(-1)!;
+    expect(present.kind).toBe("assignment.present");
+    expect(document.querySelector(".recovery-overlay")).toBeNull();
+    for (const name of ["Повторить отправку", "Проверить состояние"]) expect(screen.queryByRole("button", { name })).toBeNull();
+    expect(screen.getByText("Подтверждаем показ задания…")).toBeTruthy();
+    expect(input().readOnly).toBe(false); fireEvent.change(input(), { target: { value: "B draft" } });
+    expect((screen.getByRole("button", { name: "Проверить" }) as HTMLButtonElement).disabled).toBe(true);
+    click("Проверить"); click("Забыл…");
+    // A's result is shown with the same status and no correction until the confirmation (CT:107).
+    click("Предыдущий ответ");
+    expect(screen.getByText("Подтверждаем показ задания…")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Исправить ответ" })).toBeNull();
+    click("Далее"); expect(input().value).toBe("B draft");
+    expect(f.posts().map(post => post.kind)).toEqual(["answer.submit", "assignment.present"]);
+    const status = f.fetcher.mock.calls.at(-1)!;
+    await act(async () => { check.resolve(await f.handler(...status)); });
+    await waitFor(() => expect(f.view.snapshot().canSubmit).toBe(true));
+    expect(screen.queryByText("Подтверждаем показ задания…")).toBeNull();
+    expect(input().value).toBe("B draft");
+    expect(f.posts().map(post => post.kind)).toEqual(["answer.submit", "assignment.present"]);
+  });
   it("pending grade replaces confirmation and blocks keyboard navigation until acknowledgement", async () => {
     const { f } = await mount(); await answer(f);
     const gate = deferred<Response>(); f.fetcher.mockReturnValueOnce(gate.promise); click("Легко");

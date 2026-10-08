@@ -8,13 +8,13 @@ import { LearningSessionPendingStore, LearningStopPendingStore } from "./learnin
 
 export type LearningDocumentSnapshot = DocumentLanesSnapshot<LearningCommandSnapshot>;
 /**
- * The Learning commands that pass the result of a study step (CT §6.1 п. 1; TC table 4.3 «Шаг занятия»; D-RECOV table
- * 1.1.1 group (а)): the answer or «Не помню», a grade, a correction, «Шаг назад», and «Дальше» / «Уже знаю» of a preview.
- * session.start and assignment.present keep their manual recovery until the owner decides (4.6-В1, 4.6-В2);
- * session.stop always does.
+ * The Learning commands that recover automatically (CT §6.1 п. 1; TC table 4.3 «Шаг занятия»; D-RECOV table 1.1.1
+ * group (а)): the answer or «Не помню», a grade, a correction, «Шаг назад», «Дальше» / «Уже знаю» of a preview, and the
+ * mark that a question was shown (assignment.present, owner answer Q25.1 of 08.10.2026: its manual retry is gone).
+ * session.start keeps its manual recovery until its own package (Q26); session.stop always does.
  */
 export const learningAutomaticKinds = ["answer.submit", "result.grade", "result.correct", "result.undo",
-  "learning.preview_next", "learning.known"] as const;
+  "learning.preview_next", "learning.known", "assignment.present"] as const;
 
 function resultCommand(intent: LearningCommandIntent): intent is LearningAnswerIntent | LearningResultIntent {
   return intent.kind === "answer.submit" || isLearningResultIntent(intent);

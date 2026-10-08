@@ -6,11 +6,12 @@ import { id, primaryKey, stopKey, profile, current, prefetched, closed, action, 
 
 afterEach(() => { vi.useRealTimers(); });
 
-// The manual mechanics of the document (handles, floors, closures) are shown with assignment.present, which keeps its
-// manual recovery (4.6-В1); study results recover automatically (M-RECOV-AUTO CP2b) and have their own cases below.
+// The manual mechanics of the document (handles, floors, closures) are shown with Stop: every primary kind of Learning
+// that can be retried recovers automatically (M-RECOV-AUTO CP2b; assignment.present since the owner answer Q25.1 of
+// 08.10.2026, CP2c), and session.start is never retried. The automatic cases have their own tests below.
 describe("Learning opened-document command owner", () => {
-  it.each(["primary", "stop"] as const)("a new handle during %s persistence requires GET recovery and explicit retry", async lane => {
-    const transition = lane === "stop" ? stop : present, command = original(transition);
+  it.each(["stop"] as const)("a new handle during %s persistence requires GET recovery and explicit retry", async lane => {
+    const transition = stop, command = original(transition);
     const key = lane === "stop" ? stopKey : primaryKey, f = fixture(); await f.owner.refresh();
     const gate = deferred<void>();
     vi.spyOn(f.storage, "set").mockImplementationOnce(async (key, value) => {
@@ -31,8 +32,8 @@ describe("Learning opened-document command owner", () => {
     expect(f.fetcher.mock.calls[2][1]?.headers).toMatchObject({ Authorization: "Bearer fresh-token" });
     expect(f.newId).toHaveBeenCalledOnce(); expect(f.values.has(key)).toBe(false);
   });
-  it.each(["primary", "stop"] as const)("a new handle also revokes %s retry while it persists the same intent", async lane => {
-    const command = original(lane === "stop" ? stop : present), key = lane === "stop" ? stopKey : primaryKey;
+  it.each(["stop"] as const)("a new handle also revokes %s retry while it persists the same intent", async lane => {
+    const command = original(stop), key = stopKey;
     const f = fixture({ [lane]: command });
     f.fetcher.mockResolvedValueOnce(response(missing(command))).mockResolvedValueOnce(response({ current: prefetched(), state_version: "3" }));
     await f.owner.refresh(); expect(f.owner.snapshot()[lane].canRetry).toBe(true);
@@ -80,12 +81,12 @@ describe("Learning opened-document command owner", () => {
     expect(f.fetcher).not.toHaveBeenCalled();
   });
   it("a previously verified retry loses permission when a settings observation advances", async () => {
-    let floor = "1"; const command = original(present), f = fixture({ primary: command }, () => floor);
+    let floor = "1"; const command = original(stop), f = fixture({ stop: command }, () => floor);
     f.fetcher.mockResolvedValueOnce(response(missing(command, "3"))).mockResolvedValueOnce(response({ current: prefetched(), state_version: "3" }));
-    await f.owner.refresh(); expect(f.owner.snapshot().primary.canRetry).toBe(true);
-    floor = "4"; expect(f.owner.snapshot().primary.canRetry).toBe(false);
-    await f.owner.retry("primary"); expect(f.fetcher).toHaveBeenCalledTimes(2); expect(f.newId).not.toHaveBeenCalled();
-    expect(f.values.has(primaryKey)).toBe(true);
+    await f.owner.refresh(); expect(f.owner.snapshot().stop.canRetry).toBe(true);
+    floor = "4"; expect(f.owner.snapshot().stop.canRetry).toBe(false);
+    await f.owner.retry("stop"); expect(f.fetcher).toHaveBeenCalledTimes(2); expect(f.newId).not.toHaveBeenCalled();
+    expect(f.values.has(stopKey)).toBe(true);
   });
   it("an accepted Stop stays conclusive even below a later settings observation", async () => {
     const f = fixture({}, () => "20"); await f.owner.refresh(); await f.owner.begin(stop);
@@ -299,12 +300,12 @@ describe("Learning opened-document command owner", () => {
     expect(f.fetcher).toHaveBeenCalledOnce(); expect(f.onUpdate).toHaveBeenCalledTimes(emitted); expect(f.values.has(primaryKey)).toBe(true);
   });
   it("a newer foreground profile immediately blocks a previously verified retry", async () => {
-    const command = original(present), f = fixture({ primary: command });
+    const command = original(stop), f = fixture({ stop: command });
     f.fetcher.mockResolvedValueOnce(response(missing(command))).mockResolvedValueOnce(response({ current: prefetched(), state_version: "3" }));
     await f.owner.refresh();
-    expect(f.owner.snapshot().primary.canRetry).toBe(true); f.replace({ profile: profile("10") });
-    await f.owner.retry("primary"); expect(f.fetcher).toHaveBeenCalledTimes(2);
-    expect(f.owner.snapshot()).toMatchObject({ stateVersion: "10", primary: { pending: true, canRetry: false, current: null, answer: null } });
+    expect(f.owner.snapshot().stop.canRetry).toBe(true); f.replace({ profile: profile("10") });
+    await f.owner.retry("stop"); expect(f.fetcher).toHaveBeenCalledTimes(2);
+    expect(f.owner.snapshot()).toMatchObject({ stateVersion: "10", stop: { pending: true, canRetry: false, current: null, answer: null } });
   });
   it("failed local persistence blocks the answer while independent Stop still works", async () => {
     const f = fixture(); await f.owner.refresh(); vi.mocked(f.storage.set).mockRejectedValueOnce(new Error("storage full"));
@@ -375,13 +376,13 @@ describe("Learning opened-document command owner", () => {
     expect(f.values.has(primaryKey)).toBe(false); expect(f.fetcher.mock.calls.every(call => call[1]?.method === "GET")).toBe(true);
   });
   it("closure of another addressed session does not resolve this pending intent", async () => {
-    const command = original(present), f = fixture({ primary: command });
+    const command = original(stop), f = fixture({ stop: command });
     f.fetcher.mockResolvedValueOnce(response(missing(command))).mockResolvedValueOnce(response({ current: prefetched(), state_version: "3" }));
     await f.owner.refresh();
     f.fetcher.mockResolvedValueOnce(response({ current: { ...closed(), session_id: id(90) }, state_version: "10" }));
     await f.owner.readSession(id(90));
-    expect(f.fetcher).toHaveBeenCalledTimes(3); expect(f.owner.snapshot().primary).toMatchObject({ pending: true, outcome: null });
-    expect(JSON.parse(f.values.get(primaryKey)!).intent).toEqual(command);
+    expect(f.fetcher).toHaveBeenCalledTimes(3); expect(f.owner.snapshot().stop).toMatchObject({ pending: true, outcome: null });
+    expect(JSON.parse(f.values.get(stopKey)!).intent).toEqual(command);
   });
   it("screen reads use the refreshed document's current credentials", async () => {
     const f = fixture(); f.replace({}, "synthetic-new-token"); f.fetcher.mockResolvedValueOnce(response({ current: current(), state_version: "3" }));

@@ -98,6 +98,58 @@ describe("the waiting screen of a lost study result", () => {
   });
 });
 
+describe("the mark that a question was shown waits without the cover (owner answers Q25.1, Q25.2 of 08.10.2026; TA §12.3)", () => {
+  const labels = {
+    ru: { status: "Подтверждаем показ задания…", check: "Проверить", previous: "Предыдущий ответ", next: "Далее" },
+    uk: { status: "Підтверджуємо показ завдання…", check: "Перевірити", previous: "Попередня відповідь", next: "Далі" },
+    en: { status: "Confirming the displayed question…", check: "Check", previous: "Previous answer", next: "Next" },
+  } as const;
+  it.each(["ru", "uk", "en"] as const)("%s: the question stays visible and typed under its short status, no button; its answer waits for the automatic confirmation", async language => {
+    const h = await setup(language), t = labels[language];
+    const presents = () => h.posts().filter(post => post.kind === "assignment.present");
+    await h.answer("Haus");
+    let online = false;
+    h.route(request => !online && (request.kind === "assignment.present" || request.method === "GET") ? "drop" : undefined);
+    await h.step(3000); await h.step();
+    expect(presents()).toHaveLength(2);
+    expect(screen.getByText("слово 7")).toBeTruthy();
+    expect(screen.getByText(t.status)).toBeTruthy();
+    expect(h.overlay()).toBeNull(); h.noManual();
+    const field = screen.getByRole("textbox") as HTMLTextAreaElement;
+    expect(field.readOnly).toBe(false);
+    fireEvent.change(field, { target: { value: "Haus" } }); expect(field.value).toBe("Haus");
+    const check = screen.getByRole("button", { name: t.check }) as HTMLButtonElement;
+    expect(check.disabled).toBe(true);
+    fireEvent.click(check); await h.step();
+    // The previous result can be viewed with the same status; it offers no change before the confirmation (CT:107).
+    fireEvent.click(screen.getByRole("button", { name: t.previous }));
+    expect(screen.getByText(t.status)).toBeTruthy(); expect(h.overlay()).toBeNull(); h.noManual();
+    expect(document.querySelector(".written-step-back")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: t.next }));
+    expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("Haus");
+    expect(h.answers()).toHaveLength(1);
+    online = true;
+    for (let second = 0; second < 30; second += 5) await h.step(5000);
+    expect(presents()).toHaveLength(3);
+    expect(presents()[2].command_id).toBe(presents()[1].command_id);
+    expect(screen.queryByText(t.status)).toBeNull();
+    const confirmed = screen.getByRole("button", { name: t.check }) as HTMLButtonElement;
+    expect(confirmed.disabled).toBe(false);
+    fireEvent.click(confirmed); await h.step();
+    expect(h.answers()).toHaveLength(2);
+  });
+  it("six lost presents end on the unsaved status, as any study action until CP4 (Я15.8)", async () => {
+    const h = await setup();
+    await h.answer("Haus");
+    h.route(request => request.kind === "assignment.present" ? "drop" : undefined);
+    for (let second = 0; second < 75; second++) await h.step(1000);
+    expect(h.posts().filter(post => post.kind === "assignment.present")).toHaveLength(7);
+    expect(h.overlay()?.textContent).toBe("Не удалось сохранить последнее действие. Связь восстановлена.");
+    h.noManual();
+    expect((screen.getByRole("button", { name: "Выйти" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+});
+
 describe("Stop keeps its manual recovery", () => {
   it("a lost Stop over a recovering answer offers only the Stop check and «Повторить завершение»", async () => {
     const h = await setup();

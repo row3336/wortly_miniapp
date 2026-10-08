@@ -1,6 +1,7 @@
 import type { Language } from "../i18n/language";
 import { maintenanceWait, t as messages } from "../i18n/messages";
 import { commandCopy } from "./commandCopy";
+import type { RecoveryScreen } from "./RecoveryOverlay";
 
 type Props = {
   className: string;
@@ -22,6 +23,17 @@ type LaneFacts = { pending: boolean; outcome: string | null; problem?: string | 
  */
 export function localCleanupOnly(primary: LaneFacts, stop: LaneFacts): boolean {
   return primary.pending && primary.outcome !== null && primary.problem === "storage" && !(stop.pending && stop.outcome === null);
+}
+
+type PendingKind = { primary: { pendingIntent: { kind: string } | null } };
+/**
+ * The blurred cover a study screen shows for its recovery. The mark that a shown question was seen (assignment.present)
+ * waits without it: the question stays visible, its draft can be typed and the screen's short status says what it
+ * waits for, while its answer and any change of the previous result wait for the confirmation (owner answer Q25.2 of
+ * 08.10.2026; TA §12.3, TA:113). An unsaved outcome is no waiting and keeps its screen.
+ */
+export function recoveryCover(screen: RecoveryScreen | null, lanes: PendingKind): RecoveryScreen | null {
+  return screen?.kind === "waiting" && lanes.primary.pendingIntent?.kind === "assignment.present" ? null : screen;
 }
 
 /**

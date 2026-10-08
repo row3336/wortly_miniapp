@@ -128,6 +128,43 @@ describe("the budget of one action (Я15.5, Я15.6, 8.3)", () => {
   }, 60_000);
 });
 
+describe("the mark that a question was shown (assignment.present; owner answers Q25.1, Q25.2 of 08.10.2026)", () => {
+  const presents = (h: ReturnType<typeof harness>) => h.posts().filter(post => post.kind === "assignment.present");
+  it("a lost present goes again by itself with the same ID after a check; meanwhile the question is typed, its answer waits", async () => {
+    const h = harness(); await h.view.refresh();
+    let drops = 1; h.route(request => request.kind === "assignment.present" && drops-- > 0 ? "drop" : undefined);
+    await h.view.start("words"); await tick();
+    const [lost] = presents(h);
+    expect(h.recovery()).toMatchObject({ commandId: lost.command_id, state: { name: "retry_wait" }, sends: 1 });
+    expect(h.checks(lost.command_id)).toBe(1);
+    // The question the server issued is shown and typed; it is not confirmed by being issued (Q25.1, Q25.2).
+    expect(h.view.snapshot()).toMatchObject({ phase: "visible_unconfirmed", question: { id: lost.assignment_id, status: "prefetched" },
+      canEditDraft: true, canSubmit: false, canForget: false, canRetryPrimary: false, commands: { automaticPrimary: true } });
+    h.view.setDraft("Haus"); await h.view.submit(); await h.view.submit({ forgot: true }); await h.view.retry();
+    expect(h.kinds()).toEqual(["session.start", "assignment.present"]);
+    await h.run(2000); await tick();
+    expect(presents(h).map(post => JSON.stringify(post))).toEqual([JSON.stringify(lost), JSON.stringify(lost)]);
+    expect(h.checks(lost.command_id)).toBe(2);
+    expect(h.recovery()).toMatchObject({ commandId: lost.command_id, state: { name: "settled", outcome: "accepted" }, sends: 2 });
+    expect(h.view.snapshot()).toMatchObject({ phase: "question", question: { status: "presented" }, draft: "Haus", canSubmit: true });
+    await h.view.submit(); await tick();
+    expect(h.kinds()).toEqual(["session.start", "assignment.present", "assignment.present", "answer.submit"]);
+  });
+  it("six lost presents: exactly six POSTs, 2, 5, 10, 20 and 30 s apart, then nothing; the answer is never sent", async () => {
+    const h = harness(); await h.view.refresh();
+    h.route(request => request.kind === "assignment.present" ? "drop" : undefined);
+    await h.view.start("words"); await tick(); h.view.setDraft("Haus");
+    await h.run(70_000); await h.run(9 * 60_000, 30_000);
+    const times = h.log.filter(entry => entry.kind === "assignment.present").map(entry => entry.at);
+    expect(times.map(at => at - times[0])).toEqual([0, 2000, 7000, 17000, 37000, 67000]);
+    expect(new Set(presents(h).map(post => JSON.stringify(post))).size).toBe(1);
+    expect(h.recovery()).toMatchObject({ state: { name: "exhausted" }, sends: 6, transmitted: 6, remaining: 0 });
+    await h.view.submit();
+    expect(h.kinds()).toEqual(["session.start", ...Array(6).fill("assignment.present")]);
+    expect(h.view.snapshot()).toMatchObject({ phase: "visible_unconfirmed", canSubmit: false, canRetryPrimary: false, canStop: true });
+  });
+});
+
 describe("waiting for the server (Я15.4, Я15.7, 8.4)", () => {
   it("no connection for three minutes: checks at 5, 15, 35, 65, 95, 125, 155 s, no POST; then the check and the retry", async () => {
     const h = harness(); await h.started();
@@ -339,7 +376,8 @@ describe("cases the independent QA found uncovered (QA CP2 QM05b, QM11, QM22)", 
     expect(h.recovery()).toMatchObject({ state: { name: "exhausted" }, sends: 6, transmitted: 6 });
   });
   it("DOCUMENT_STALE on a retry of a live window: nothing for 5 s, then a check and the rest of the budget", async () => {
-    const h = harness(); await h.started();
+    // A wrong answer waits for «Далее»: no timer shows the next question, whose present would take over the recovery view.
+    const h = harness(); await h.started("falsch");
     let stale = 1;
     h.route(request => request.kind !== "answer.submit" ? undefined : h.answers().length === 1 ? "drop"
       : stale-- > 0 ? response({ error: { code: "DOCUMENT_STALE" } }, 409) : undefined);

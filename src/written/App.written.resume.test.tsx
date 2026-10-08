@@ -2,7 +2,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { App } from "../app/App";
-import { app, answer, compatibility, dropRequest, field, loseReply, offlineStudy, pairText, requests, row, startWords,
+import { app, answer, compatibility, dropRequest, exchange, field, loseReply, offlineStudy, pairText, requests, row, startWords,
   useWrittenAppEnvironment } from "./writtenApp.test-support";
 import { id, profile, response } from "./writtenFixtures.test-support";
 
@@ -77,30 +77,51 @@ describe("Written session resume after a relaunch (В02)", () => {
     expect(a.posts().at(-1)).toMatchObject({ kind: "session.stop", payload: { reason: "summary_home" } });
   });
 
-  it("a present that never reached the server: after resume its ID is checked first, nothing is sent until the manual repeat of the same ID", async () => {
-    const a = app({ cards: [6, 7] }); const first = render(<App />);
+  it("a present that never reached the server goes again by itself with the same ID; B's typed answer waits for it (Q25.1, Q25.2)", async () => {
+    const a = app({ cards: [6, 7] }); render(<App />);
     await startWords(); await answer("Haus");
     dropRequest(a, "assignment.present");
     fireEvent.click(screen.getByRole("button", { name: "Далее" }));
-    await screen.findByRole("button", { name: "Проверить состояние" });
+    await screen.findByText("слово 7");
+    const lost = a.posts().at(-1)!, posts = a.posts().length;
+    expect(lost.kind).toBe("assignment.present");
+    // B is typed under the short status, without a cover or a manual control; its answer is not sent yet (CT:107).
+    expect(screen.getByText("Подтверждаем показ задания…")).toBeTruthy();
+    expect(document.querySelector(".recovery-overlay")).toBeNull();
+    for (const name of ["Проверить состояние", "Повторить отправку"]) expect(screen.queryByRole("button", { name })).toBeNull();
+    fireEvent.change(field(), { target: { value: "Haus" } });
+    fireEvent.click(screen.getByRole("button", { name: "Проверить" }));
+    expect(a.posts()).toHaveLength(posts);
+    await waitFor(() => expect(a.posts().length).toBeGreaterThan(posts), { timeout: 5000 });
+    expect(a.posts().slice(posts).map(post => [post.kind, post.command_id])).toEqual([["assignment.present", lost.command_id]]);
+    await waitFor(() => expect((screen.getByRole("button", { name: "Проверить" }) as HTMLButtonElement).disabled).toBe(false), exchange);
+    expect(a.server.state.assignment).toBe("presented");
+    expect(field().value).toBe("Haus");
+    expect(screen.queryByText("Подтверждаем показ задания…")).toBeNull();
+  });
+
+  it("after a relaunch an unconfirmed present with an unknown count is only checked: B is typed, nothing is sent, no manual control (CT §6.1 п. 4)", async () => {
+    const a = app({ cards: [6, 7] }); const first = render(<App />);
+    await startWords(); await answer("Haus");
+    dropRequest(a, "assignment.present"); const online = offlineStudy(a);
+    fireEvent.click(screen.getByRole("button", { name: "Далее" }));
+    await screen.findByText("слово 7");
     const lost = a.posts().at(-1)!;
-    first.unmount();
+    first.unmount(); online();
     const mark = a.fetcher.mock.calls.length, posts = a.posts().length;
     render(<App />);
     await screen.findByText("слово 7");
-    await screen.findByRole("button", { name: "Повторить отправку" });
-    expect(requests(a, mark)).toContain(`GET /api/v1/commands/${lost.command_id}`);
-    // B is typed locally but its answer is not sent before present is confirmed (CT:109).
+    await waitFor(() => expect(requests(a, mark)).toContain(`GET /api/v1/commands/${lost.command_id}`), exchange);
+    await waitFor(() => expect(field().readOnly).toBe(false), exchange);
     fireEvent.change(field(), { target: { value: "Haus" } });
     fireEvent.click(screen.getByRole("button", { name: "Проверить" }));
-    await act(async () => { await new Promise(resolve => setTimeout(resolve, 100)); });
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 3000)); });
     expect(a.posts()).toHaveLength(posts);
-    fireEvent.click(screen.getByRole("button", { name: "Повторить отправку" }));
-    await waitFor(() => expect(a.posts().length).toBeGreaterThan(posts));
-    const again = a.posts().slice(posts);
-    expect(again.map(post => [post.kind, post.command_id])).toEqual([["assignment.present", lost.command_id]]);
-    expect(a.server.state.assignment).toBe("presented");
-  });
+    expect(screen.getByText("Подтверждаем показ задания…")).toBeTruthy();
+    expect(document.querySelector(".recovery-overlay")).toBeNull();
+    for (const name of ["Проверить состояние", "Повторить отправку"]) expect(screen.queryByRole("button", { name })).toBeNull();
+    expect(a.server.state.assignment).toBe("prefetched");
+  }, 15_000);
 });
 
 describe("Written start refused as SESSION_BUSY (В02)", () => {

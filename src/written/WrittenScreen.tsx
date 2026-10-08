@@ -1,7 +1,7 @@
 import { useRef } from "react";
 import type { Language } from "../i18n/language";
 import { recoveryCopy } from "../commands/commandCopy";
-import { CommandRecovery, localCleanupOnly } from "../commands/CommandRecovery";
+import { CommandRecovery, localCleanupOnly, recoveryCover } from "../commands/CommandRecovery";
 import { Loader, RecoveryOverlay, recoveryConflict, recoveryScreen } from "../commands/RecoveryOverlay";
 import { StepBackButton, stepBackCopy } from "../commands/StepBackButton";
 import { useEnterNext } from "../commands/useEnterNext";
@@ -106,7 +106,7 @@ export function WrittenScreen({ state, language, submitOnEnter, actions, onToday
   const summaryFailed = ownStop && closed?.summaryRead === "failed";
   const showRecovery = !isClosed && (unknownLane || !automatic && (!!problem && state.phase !== "idle" || state.phase === "stale"))
     || summaryFailed;
-  const recovering = isClosed ? null : recoveryScreen(state.commands);
+  const recovering = isClosed ? null : recoveryCover(recoveryScreen(state.commands), state.commands);
   const status = state.phase === "submitting" ? t.saving : state.phase === "visible_unconfirmed" ? t.present
     : state.phase === "unknown" ? t.unknown : undefined;
   const pendingForgot = primary.pending && primary.outcome === null && primary.pendingIntent?.kind === "answer.submit"

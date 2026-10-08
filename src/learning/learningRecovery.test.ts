@@ -38,6 +38,11 @@ function harness(sessionId: string | null = id(3)) {
   return { ...f, sends, times, run, recovery, route: (next: Route) => { route = next; } };
 }
 const preview = async (h: ReturnType<typeof harness>) => { await h.view.refresh(); await h.view.start(); await tick(); };
+/** The recovery of commandId ended as terminated(step_stale) in some update; the present that follows replaces its view. */
+const endedStale = (h: ReturnType<typeof harness>, commandId: string) => h.onUpdate.mock.calls.some(([state]) => {
+  const recovery = (state as ReturnType<LearningViewController["snapshot"]>).commands.recovery;
+  return recovery?.commandId === commandId && recovery.state.name === "terminated" && recovery.state.reason === "step_stale";
+});
 
 describe("the budget of one Learning action (Я15.5, Я15.6)", () => {
   it("six lost answers: exactly six POSTs 2, 5, 10, 20, 30 s apart with one body, then nothing", async () => {
@@ -122,6 +127,54 @@ describe("a preview step: «Дальше» and «Уже знаю»", () => {
   });
 });
 
+describe("the mark that a question was shown (assignment.present; owner answers Q25.1, Q25.2 of 08.10.2026)", () => {
+  /** A answered: its reply issues B, the 3 s timer shows B, and B's present goes out through the machine. */
+  const showB = async (h: ReturnType<typeof harness>) => {
+    await h.view.refresh(); h.view.setDraft("Haus");
+    await h.view.submit(); await tick(); await h.run(3000); await tick();
+  };
+  it("a lost present goes again by itself with the same ID; meanwhile B is typed, its answer and A's changes wait", async () => {
+    const h = harness();
+    let drops = 1; h.route(request => request.kind === "assignment.present" && drops-- > 0 ? "drop" : undefined);
+    await showB(h);
+    const [lost] = h.sends("assignment.present");
+    expect(lost).toMatchObject({ assignment_id: id(7) });
+    expect(h.recovery()).toMatchObject({ commandId: lost.command_id, state: { name: "retry_wait" }, sends: 1 });
+    // The server issued B with A's reply: that is no confirmed showing (Q25.1).
+    expect(h.view.snapshot()).toMatchObject({ phase: "visible_unconfirmed", question: { id: id(7), status: "prefetched" },
+      canEditDraft: true, canSubmit: false, canForget: false, canRetryPrimary: false, commands: { automaticPrimary: true } });
+    h.view.setDraft("Baum"); expect(h.view.snapshot().draft).toBe("Baum");
+    await h.view.submit(); await h.view.submit({ forgot: true }); await h.view.retry();
+    // A's result can be viewed, never changed before the confirmation (CT:107).
+    h.view.previousResult();
+    expect(h.view.snapshot()).toMatchObject({ phase: "previous_result", grades: [], canCorrect: false, canUndo: false, canNext: true });
+    await h.view.grade(5); await h.view.next();
+    expect(h.view.snapshot()).toMatchObject({ phase: "visible_unconfirmed", draft: "Baum" });
+    expect(h.posts().map(post => post.kind)).toEqual(["answer.submit", "assignment.present"]);
+    await h.run(2000); await tick();
+    const presents = h.sends("assignment.present");
+    expect(presents).toHaveLength(2);
+    expect(JSON.stringify(presents[1])).toBe(JSON.stringify(lost));
+    expect(h.recovery()).toMatchObject({ commandId: lost.command_id, state: { name: "settled", outcome: "accepted" }, sends: 2 });
+    expect(h.view.snapshot()).toMatchObject({ phase: "question", question: { id: id(7), status: "presented" }, draft: "Baum",
+      canSubmit: true, problem: null });
+    expect(h.values.has(primaryKey)).toBe(false);
+  });
+  it("six lost presents: exactly six POSTs 2, 5, 10, 20, 30 s apart with one body, then nothing; B's answer is never sent", async () => {
+    const h = harness();
+    h.route(request => request.kind === "assignment.present" ? "drop" : undefined);
+    await showB(h); h.view.setDraft("Baum");
+    await h.run(70_000); await h.run(9 * 60_000, 30_000);
+    const times = h.times("assignment.present");
+    expect(times.map(at => at - times[0])).toEqual([0, 2000, 7000, 17000, 37000, 67000]);
+    expect(new Set(h.sends("assignment.present").map(post => JSON.stringify(post))).size).toBe(1);
+    expect(h.recovery()).toMatchObject({ state: { name: "exhausted" }, sends: 6, transmitted: 6 });
+    await h.view.submit();
+    expect(h.posts().map(post => post.kind)).toEqual(["answer.submit", ...Array(6).fill("assignment.present")]);
+    expect(h.view.snapshot()).toMatchObject({ phase: "visible_unconfirmed", canSubmit: false, canRetryPrimary: false, canStop: true });
+  });
+});
+
 describe("refusals and Stop", () => {
   it("another payload under the same ID is a conflict: never resent, the record stays (Я17)", async () => {
     const h = harness(); await h.view.refresh(); h.view.setDraft("Haus");
@@ -159,7 +212,9 @@ describe("a step that moved on elsewhere (step_stale) and the commands that stay
     const sessionId = h.view.snapshot().sessionId!;
     h.setStep({ ...current(sessionId), assignment: { ...current().assignment!, status: "prefetched" } });
     await h.run(5000);
-    expect(h.recovery()?.state).toEqual({ name: "terminated", reason: "step_stale" });
+    expect(endedStale(h, h.sends(kind)[0].command_id)).toBe(true);
+    // The question is then shown by its own present, which the machine now owns (Q25.1).
+    expect(h.recovery()).toMatchObject({ commandId: h.sends("assignment.present")[0].command_id, state: { name: "settled", outcome: "accepted" } });
     expect(h.values.has(primaryKey)).toBe(false);
     expect(h.sends(kind)).toHaveLength(1);
     expect(h.sends("assignment.present")).toHaveLength(1);
@@ -173,23 +228,18 @@ describe("a step that moved on elsewhere (step_stale) and the commands that stay
     expect(h.recovery()?.state.name).toBe("retry_wait");
     h.setStep({ ...current(), assignment: { ...current().assignment!, id: id(7), status: "prefetched" } });
     await h.run(5000);
-    expect(h.recovery()?.state).toEqual({ name: "terminated", reason: "step_stale" });
+    expect(endedStale(h, h.sends("answer.submit")[0].command_id)).toBe(true);
+    expect(h.recovery()).toMatchObject({ commandId: h.sends("assignment.present")[0].command_id, state: { name: "settled", outcome: "accepted" } });
     expect(h.values.has(primaryKey)).toBe(false);
     expect(h.sends("answer.submit")).toHaveLength(1);
     expect(h.view.snapshot()).toMatchObject({ phase: "question", question: { id: id(7), status: "presented" }, problem: null,
       commands: { primary: { pending: false } } });
   });
-  it("session.start and assignment.present stay manual (4.6-В1, 4.6-В2): lost ones are never resent by themselves", async () => {
+  it("session.start stays manual until its own package (Q26): a lost one is never resent by itself", async () => {
     const start = harness(null); await start.view.refresh(); await tick();
     start.route(request => request.kind === "session.start" ? "drop" : undefined);
     await start.view.start(); await tick(); await start.run(5 * 60_000, 5000);
     expect(start.sends("session.start")).toHaveLength(1);
     expect(start.view.snapshot().commands).toMatchObject({ automaticPrimary: false, recovery: null });
-    const shown = harness();
-    shown.setStep({ ...current(), assignment: { ...current().assignment!, status: "prefetched" } });
-    shown.route(request => request.kind === "assignment.present" ? "drop" : undefined);
-    await shown.view.refresh(); await tick(); await shown.run(5 * 60_000, 5000);
-    expect(shown.sends("assignment.present")).toHaveLength(1);
-    expect(shown.view.snapshot().commands).toMatchObject({ automaticPrimary: false, recovery: null });
   });
 });

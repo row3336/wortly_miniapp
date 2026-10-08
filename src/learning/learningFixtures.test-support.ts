@@ -23,7 +23,7 @@ function prefetched(): LearningSessionProjection {
   const step = current();
   return { ...step, assignment: { ...step.assignment!, status: "prefetched" } };
 }
-/** A present stays manual (4.6-В1): the document mechanics of a manual retry are shown with it. */
+/** The mark that the question was shown; it recovers automatically (owner answer Q25.1 of 08.10.2026). */
 const present: LearningTransition = { kind: "assignment.present", session_id: id(3), assignment_id: id(6), payload: {} };
 const closed = (): LearningSessionProjection => ({ ...current(), status: "closed", close_reason: "stop", assignment: null });
 const action = (kind: "answer.submit" | "result.correct" | "result.grade" = "answer.submit"): LearningTransition => kind === "answer.submit"

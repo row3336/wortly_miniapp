@@ -323,16 +323,21 @@ describe("Learning question, result and presentation lifecycle", () => {
     expect(seen[0].phase).toBe("visible_unconfirmed");
     expect(f.posts().map(x => x.kind)).toEqual(["assignment.present"]);
   });
-  it("a missing original present reloads with its barrier, permits typing and retries exactly once", async () => {
+  it("a missing original present reloads with its barrier and permits typing; with an unknown count it is only checked (Q25.1, CT §6.1 п. 4)", async () => {
+    vi.useFakeTimers();
     const f = harness(), intent = { command_id: id(100), session_id: id(3), kind: "assignment.present" as const, assignment_id: id(6), payload: {} };
     f.values.set(primaryKey, JSON.stringify(pending(intent)));
     const question = { ...current(), assignment: { ...current().assignment!, status: "prefetched" as const } }; f.setStep(question);
-    f.fetcher.mockResolvedValueOnce(response(missing(intent, "1"))).mockResolvedValueOnce(response({ current: question, state_version: "1" }));
-    await f.view.refresh(); expect(f.view.snapshot()).toMatchObject({ phase: "visible_unconfirmed", canForget: false });
-    f.view.setDraft("retained B"); await f.view.submit(); expect(f.posts()).toHaveLength(0);
-    await f.view.retry(); expect(f.posts()).toHaveLength(1); expect(f.posts()[0].command_id).toBe(id(100));
-    expect(f.view.snapshot()).toMatchObject({ phase: "question", draft: "retained B", canSubmit: true });
-    expect(f.newId).not.toHaveBeenCalled();
+    f.fetcher.mockImplementation(async (url, init) => init?.method === "GET" && String(url).includes(`/commands/${id(100)}`)
+      ? response(missing(intent, "1")) : f.handler(url, init));
+    await f.view.refresh(); await tick();
+    expect(f.view.snapshot()).toMatchObject({ phase: "visible_unconfirmed", question: { id: id(6) }, canEditDraft: true, canForget: false,
+      canRetryPrimary: false, commands: { automaticPrimary: true, recovery: { state: { name: "counter_unknown" } } } });
+    f.view.setDraft("retained B"); await f.view.submit(); await f.view.retry();
+    for (let second = 0; second < 120; second += 5) await tick(5000);
+    // Nothing goes out by itself or by hand: no manual retry of the mark remains (Q25.1), and an unknown count resends nothing.
+    expect(f.posts()).toEqual([]); expect(f.newId).not.toHaveBeenCalled();
+    expect(f.view.snapshot()).toMatchObject({ phase: "visible_unconfirmed", draft: "retained B", canSubmit: false });
   });
   it("a missing submitted answer reloads the same text; with an unknown count it is only checked, never resent (CT §6.1 п. 4)", async () => {
     vi.useFakeTimers();
