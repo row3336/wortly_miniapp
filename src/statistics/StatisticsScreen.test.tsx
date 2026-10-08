@@ -47,14 +47,15 @@ describe("statistics screen: states", () => {
   it("a real server answer of zeros is shown as zeros, not as an error or a missing value", () => {
     show(ready(emptyStatistics()));
     expect(screen.queryByRole("alert")).toBeNull(); expect(screen.queryByRole("status")).toBeNull();
-    expect(screen.queryByText("—")).toBeNull();
+    // The only dash is the practice table's reverse direction, which has no data by design.
+    expect(screen.queryAllByText("—")).toHaveLength(7);
     for (const name of ["Изучено", "Добавлено в базу", "Ещё не начинал"]) {
       expect(pairs(name)).toEqual([["Слова", "0"], ["Фразы", "0"]]);
     }
     expect(pairs("Результаты слов").every(([, value]) => value === "0")).toBe(true);
     const rows = card("Практика по дням").getAllByRole("row").slice(1);
     expect(rows).toHaveLength(7);
-    for (const row of rows) expect(within(row).getAllByRole("cell").map(cell => cell.textContent)).toEqual(["0", "0"]);
+    for (const row of rows) expect(within(row).getAllByRole("cell").map(cell => cell.textContent)).toEqual(["0", "0", "—"]);
   });
 
   it("keeps the back control and the week switch in every state", () => {
@@ -98,7 +99,19 @@ describe("statistics screen: composition of K9", () => {
     show(ready());
     const rows = card("Практика по дням").getAllByRole("row").slice(1);
     expect(rows.map(row => within(row).getAllByRole("cell").map(cell => cell.textContent)))
-      .toEqual([["11", "21"], ["12", "22"], ["13", "23"], ["14", "24"], ["15", "25"], ["16", "26"], ["17", "27"]]);
+      .toEqual([["11", "21", "—"], ["12", "22", "—"], ["13", "23", "—"], ["14", "24", "—"], ["15", "25", "—"], ["16", "26", "—"], ["17", "27", "—"]]);
+  });
+
+  it.each([
+    ["ru", "Практика по дням", "Немецкий → родной", "В письменном квизе такого направления нет"],
+    ["uk", "Практика за днями", "Німецька → рідна", "У письмовому квізі такого напрямку немає"],
+    ["en", "Practice by day", "German → native", "The written quiz has no such direction"],
+  ] as const)("explains the missing reverse direction in %s and shows no conjugation figure", (language, title, header, note) => {
+    show(ready(), { language });
+    const practice = card(title);
+    expect(practice.getByRole("columnheader", { name: header })).toBeTruthy();
+    expect(practice.getByText(new RegExp(note))).toBeTruthy();
+    expect(practice.queryByText(/спряж|спряг|conjugat/i)).toBeNull();
   });
 
   it("never shifts the server's local dates by the device time zone", () => {

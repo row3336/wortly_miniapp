@@ -39,11 +39,13 @@ export function PeriodGroup({ data, language }: Props) {
     <section className="today-card" aria-labelledby="stat-practice-heading">
       <h3 id="stat-practice-heading">{t.practice}</h3>
       <p className="today-small">{t.practiceNote}</p>
+      <p className="today-small">{t.reverseNote}</p>
+      {/* Conjugations are a separate number outside the directions; its unit is undecided (Q15), so no figure exists yet. */}
       <table className="stat-table">
-        <thead><tr><th scope="col">{t.day}</th><th scope="col">{t.words}</th><th scope="col">{t.phrases}</th></tr></thead>
+        <thead><tr><th scope="col">{t.day}</th><th scope="col">{t.words}</th><th scope="col">{t.phrases}</th><th scope="col">{t.reverseDirection}</th></tr></thead>
         <tbody>{days.map(item => <tr key={item.local_date}>
           <th scope="row">{formatDay(item.local_date, language, { weekday: "short", day: "numeric", month: "short" })}</th>
-          <td>{item.words}</td><td>{item.phrases}</td>
+          <td>{item.words}</td><td>{item.phrases}</td><td>—</td>
         </tr>)}</tbody>
       </table>
     </section>

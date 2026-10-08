@@ -8,6 +8,7 @@ export type StatisticsCopy = {
   failed: string; expired: string; stale: string; pairChanged: string;
   weekGroup: string; nowGroup: string; weekRange: (from: string, to: string) => string;
   practice: string; practiceNote: string; day: string; words: string; phrases: string;
+  reverseDirection: string; reverseNote: string;
   learned: string; added: string; notStarted: string;
   base: string; baseTotal: string; baseTypes: string; types: Record<BaseType, string>;
   ready: string; readyRows: { wordsTo: string; wordsFrom: string; phrasesTo: string; phrasesFrom: string };
@@ -15,6 +16,7 @@ export type StatisticsCopy = {
   owner: string; ownerNote: string; profile: string; ownerProfile: (n: number, id: string) => string;
 };
 
+// reverseNote/reverseDirection: working text, wording awaits owner approval (Q14).
 // Working copy for G05: the layout belongs to G03 and the owner fixes the wording. Row titles repeat «Сегодня».
 export const statisticsCopy: Record<Language, StatisticsCopy> = {
   ru: {
@@ -25,6 +27,7 @@ export const statisticsCopy: Record<Language, StatisticsCopy> = {
     weekGroup: "За неделю", nowGroup: "Сейчас", weekRange: (from, to) => `Неделя ${from} – ${to}`,
     practice: "Практика по дням", practiceNote: "Разные карточки письменного квиза «на немецкий».",
     day: "День", words: "Слова", phrases: "Фразы",
+    reverseDirection: "Немецкий → родной", reverseNote: "В письменном квизе такого направления нет, поэтому здесь «—».",
     learned: "Изучено", added: "Добавлено в базу", notStarted: "Ещё не начинал",
     base: "База", baseTotal: "Всего", baseTypes: "Состав базы",
     types: { noun: "Существительные", verb: "Глаголы", phrase: "Фразы", adjective: "Прилагательные", pronoun: "Местоимения",
@@ -46,6 +49,7 @@ export const statisticsCopy: Record<Language, StatisticsCopy> = {
     weekGroup: "За тиждень", nowGroup: "Зараз", weekRange: (from, to) => `Тиждень ${from} – ${to}`,
     practice: "Практика за днями", practiceNote: "Різні картки письмового квізу «німецькою».",
     day: "День", words: "Слова", phrases: "Фрази",
+    reverseDirection: "Німецька → рідна", reverseNote: "У письмовому квізі такого напрямку немає, тому тут «—».",
     learned: "Вивчено", added: "Додано до бази", notStarted: "Ще не починав",
     base: "База", baseTotal: "Усього", baseTypes: "Склад бази",
     types: { noun: "Іменники", verb: "Дієслова", phrase: "Фрази", adjective: "Прикметники", pronoun: "Займенники",
@@ -67,6 +71,7 @@ export const statisticsCopy: Record<Language, StatisticsCopy> = {
     weekGroup: "This period", nowGroup: "Right now", weekRange: (from, to) => `Week ${from} – ${to}`,
     practice: "Practice by day", practiceNote: "Distinct cards of the written quiz «into German».",
     day: "Day", words: "Words", phrases: "Phrases",
+    reverseDirection: "German → native", reverseNote: "The written quiz has no such direction, so this shows «—».",
     learned: "Learned", added: "Added to the collection", notStarted: "Not started yet",
     base: "Collection", baseTotal: "Total", baseTypes: "Collection by type",
     types: { noun: "Nouns", verb: "Verbs", phrase: "Phrases", adjective: "Adjectives", pronoun: "Pronouns",
