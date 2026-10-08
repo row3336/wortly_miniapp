@@ -8,9 +8,10 @@ import { validDictionaryViewContent } from "../study/referenceCardContent";
 
 /**
  * Where the full card is opened from: only a dictionary opening enters the history; a card opened from a quiz
- * («Уточнить поля») is "study" and is not recorded (2.26б.1).
+ * («Уточнить поля») is "study" and a card from a bot message button is "message", neither is recorded (2.26б.1,
+ * answer S02). Only "study" claims the quiz visibility of the card.
  */
-export type DictionaryViewOrigin = "dictionary" | "study";
+export type DictionaryViewOrigin = "dictionary" | "study" | "message";
 
 export interface DictionaryViewApi {
   read(token: string, cardId: string, origin?: DictionaryViewOrigin): Promise<DictionaryCardViewResponse>;
@@ -118,9 +119,9 @@ export function createDictionaryViewApi(options: HttpOptions): DictionaryViewApi
   return {
     async read(token, cardId, origin = "dictionary") {
       if (typeof token !== "string" || !token || !uuid(cardId)) throw new Error("token and card ID are required");
-      if (origin !== "dictionary" && origin !== "study") throw new Error("unknown card view origin");
+      if (origin !== "dictionary" && origin !== "study" && origin !== "message") throw new Error("unknown card view origin");
       // The dictionary is the server default, so its read keeps the bare address.
-      const query = origin === "study" ? "?origin=study" : "";
+      const query = origin === "dictionary" ? "" : `?origin=${origin}`;
       const reply = await request(`/dictionary/cards/${cardId}/view${query}`, { method: "GET", token });
       if (!reply.ok) throw httpError(reply);
       if (reply.status !== 200 || !validDictionaryView(reply.value, cardId)) throw new ApiError("invalid_response");

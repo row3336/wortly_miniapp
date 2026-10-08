@@ -14,7 +14,7 @@ import { cardFieldSlots } from "../editors/CardFieldSlots";
 import { useFieldEditors } from "../editors/useFieldEditors";
 import { IntervalPanel } from "../IntervalPanel";
 import { useDictionaryIntervalContext } from "../useDictionaryIntervalContext";
-import { movesWrittenQuiz, type CardOrigin } from "./cardOrigin";
+import { movesWrittenQuiz, viewOrigin, type CardOrigin } from "./cardOrigin";
 import { CardScreen } from "./CardScreen";
 import type { ManualControl } from "./CardStudyBlock";
 
@@ -60,6 +60,8 @@ export type CardHostProps = {
    * increase or its undo (M-INTV): the source quiz reads its session again (Т08: the increase ends the earlier correction).
    */
   onStudyAction?(event: CardStudyEvent): void;
+  /** The card's content was shown for the first time (an unavailable card or a failed read never is). */
+  onShown?(): void;
 };
 
 type ManualDocument = ReturnType<typeof useManualSelectionDocument>;
@@ -87,9 +89,9 @@ function manualControl({ state, actions }: ManualDocument, cardId: string, ready
  */
 export function CardHost(props: CardHostProps) {
   const leaving = props.leaving === true;
-  // A card opened from a quiz is not a dictionary opening and stays out of the history (2.26б.1).
+  // Only an opening in the dictionary itself enters the history (2.26б.1, answer S02).
   const card = useDictionaryCardDocument({ access: props.access, transport: props.transport, cardId: props.cardId, enabled: !leaving,
-    origin: props.origin.kind === "quiz" ? "study" : "dictionary" });
+    origin: viewOrigin(props.origin) });
   const pair = `${props.access.profile.dictionary_language}-de`;
   const last = useRef<DictionaryCardViewResponse | null>(null);
   if (card.state.phase === "ready" && card.state.data?.current.status === "available") last.current = card.state.data;
@@ -152,6 +154,9 @@ export function CardHost(props: CardHostProps) {
 
   const shown = (card.state.phase === "ready" || card.state.phase === "loading") && previous?.current.status === "available"
     ? previous.current : null;
+  const viewed = shown !== null && !leaving;
+  const latestShown = useRef(props.onShown); latestShown.current = props.onShown;
+  useEffect(() => { if (viewed) latestShown.current?.(); }, [viewed]);
   // Own fields (M-EDIT): saved through the open card context; an accepted or refused field command reads the card and
   // its context again (the save also ends the interval undo on the server, CT 2.3). Unsaved text asks before Back.
   const editors = useFieldEditors({ access: props.access, transport: props.transport, enabled: !leaving, view: shown,

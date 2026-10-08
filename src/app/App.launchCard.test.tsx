@@ -1,11 +1,13 @@
 // T+M-CARD-LINK (answer Q20, variant A): the bot's complaint button opens the Mini App with `?card=<id>`.
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+// M-CARD-LINK-2 (answers S01–S03): it opens over a resumed session too, takes no quiz rights, and is forgotten once seen.
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cardIdOf, cardView } from "../dictionary/card/cardTestData.test-support";
-import { app, exchange, pairText, useWrittenAppEnvironment } from "../written/writtenApp.test-support";
-import { response } from "../written/writtenFixtures.test-support";
+import { cardIdOf, cardView, reviewing } from "../dictionary/card/cardTestData.test-support";
+import { app, exchange, field, pairText, useWrittenAppEnvironment } from "../written/writtenApp.test-support";
+import { id } from "../written/writtenFixtures.test-support";
 import { App } from "./App";
-import { LaunchCard, launchCardId } from "./launchCard";
+import { LaunchCard, launchCardId, withoutLaunchCard } from "./launchCard";
+import { besidesContext, launch, serveLaunchCard } from "./launchCard.test-support";
 
 useWrittenAppEnvironment();
 afterEach(() => { window.history.replaceState(null, "", "/"); });
@@ -14,34 +16,8 @@ const CARD = cardIdOf(3);
 /** The real App over the synthetic server, with the card read and its context commands; `hidden` answers as for another user. */
 function launchApp(options: { hidden?: boolean; active?: boolean } = {}) {
   const a = app({ active: options.active });
-  const base = a.fetcher.getMockImplementation()!;
-  let state = 1000, next = 600;
-  a.fetcher.mockImplementation(async (url, init) => {
-    const target = new URL(String(url), "http://localhost");
-    if (target.pathname.endsWith("/view")) {
-      return response({ state_version: String(state), current: options.hidden ? { status: "unavailable" } : cardView(CARD) });
-    }
-    if (target.pathname.endsWith("/learning/current")) return response({ pair: "ru-de", state_version: String(state), manual_selection_version: "1",
-      group: null, manual_selection: [], learning: { status: "new_group", ready: 0, preview: 0, next_due_at: null, new_group_size: 2,
-        manual_eligible: 0, automatic_eligible: 2 } });
-    const body = init?.method === "POST" && target.pathname.endsWith("/commands") ? JSON.parse(String(init.body)) : null;
-    if (body?.kind === "context.open" || body?.kind === "context.close") {
-      const contextId: string = body.kind === "context.open" ? `00000000-0000-4000-8000-${String(next++).padStart(12, "0")}` : body.context_id;
-      state++;
-      const view = cardView(CARD); view.study.local_date = null;
-      const reference = { id: contextId, kind: "dictionary", card_id: CARD };
-      return response({ command: { id: body.command_id, kind: body.kind, status: "applied", applied_at: "2026-10-07T09:00:00Z", target_id: CARD,
-        action_id: null, result_id: null, context_id: contextId, object_version: null },
-        current: body.kind === "context.open" ? { status: "open", context: reference, view, interval: null,
-          capabilities: { interval_increase: null, undo_offer: null, undo_target: null } } : { status: "closed", context: reference },
-        state_version: String(state) });
-    }
-    return base(url, init);
-  });
-  const views = () => a.fetcher.mock.calls.filter(([url]) => String(url).endsWith("/view")).map(([url]) => new URL(String(url), "http://localhost").pathname);
-  return { ...a, views };
+  return { ...a, ...serveLaunchCard(a.fetcher, CARD, { hidden: options.hidden, learning: true }) };
 }
-const launch = (search: string) => window.history.replaceState(null, "", `/${search}`);
 
 describe("launchCardId: only one well-formed card id is taken from the query", () => {
   it("takes a UUID, in lower case", () => {
@@ -57,6 +33,19 @@ describe("launchCardId: only one well-formed card id is taken from the query", (
     expect(card.take()).toBe(CARD);
     expect(card.take()).toBeNull();
   });
+  it("forgets the address once, when viewed", () => {
+    const forget = vi.fn();
+    const card = new LaunchCard(CARD, forget);
+    card.take();
+    expect(forget).not.toHaveBeenCalled();
+    card.viewed(); card.viewed();
+    expect(forget).toHaveBeenCalledTimes(1);
+  });
+  it.each([[`?card=${CARD}`, ""], [`?v=2&card=${CARD}&flag`, "?v=2&flag"], [`?a=%20b+c&card=${CARD}`, "?a=%20b+c"],
+    [`?c%61rd=${CARD}&v=1`, "?v=1"], [`?Card=${CARD}`, `?Card=${CARD}`], ["?v=%E0%A4%A", "?v=%E0%A4%A"], ["", ""]])(
+    "withoutLaunchCard(%j) keeps every other part as written: %j", (search, expected) => {
+      expect(withoutLaunchCard(search)).toBe(expected);
+    });
 });
 
 describe("the launch card in the actual App document", () => {
@@ -69,8 +58,10 @@ describe("the launch card in the actual App document", () => {
     expect(screen.getByRole("heading", { level: 2 }).textContent).toBe("das\u00a0Haus");
     // The ordinary signed entry came first; the id is only in the card read's path.
     expect(a.fetcher.mock.calls.findIndex(([url]) => String(url).endsWith("/auth/telegram")))
-      .toBeLessThan(a.fetcher.mock.calls.findIndex(([url]) => String(url).endsWith("/view")));
+      .toBeLessThan(a.fetcher.mock.calls.findIndex(([url]) => String(url).includes("/view")));
     expect(a.views()).toEqual([`/api/v1/dictionary/cards/${CARD}/view`]);
+    // A message opening, not a dictionary one: it stays out of the history (answer S02).
+    expect(a.origins()).toEqual(["?origin=message"]);
     await waitFor(() => expect(a.kinds()).toEqual(["context.open"]));
     expect(a.posts()[0].payload).toEqual({ card_id: CARD, source: { kind: "dictionary" } });
 
@@ -112,13 +103,49 @@ describe("the launch card in the actual App document", () => {
     expect(a.views()).toEqual([]);
   });
 
-  it("L5 a start that resumes a session drops the launch card", async () => {
+  it("L5 over a resumed written session the card opens at once, sends no study command and Back returns to the same question", async () => {
+    launch(`?card=${CARD}`);
+    const a = launchApp({ active: true });
+    // The question is not yet shown: its visible commit (assignment.present) belongs to the quiz, not to the card over it.
+    a.server.state.assignment = "prefetched";
+    render(<App />);
+    await screen.findByText("В очереди на изучение", undefined, exchange);
+    // The card of the complaint, not the card of the current assignment (слово 6, id 106).
+    expect(screen.getByRole("heading", { level: 2 }).textContent).toBe("das\u00a0Haus");
+    expect(a.views()).toEqual([`/api/v1/dictionary/cards/${CARD}/view`]);
+    // A message opening, not a dictionary one: it stays out of the history (answer S02).
+    expect(a.origins()).toEqual(["?origin=message"]);
+    await waitFor(() => expect(a.kinds()).toEqual(["context.open"]));
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 300)); });
+    expect(besidesContext(a.kinds())).toEqual([]);
+    expect(screen.queryByText("слово 6")).toBeNull();
+
+    await a.back.click();
+    await screen.findByText("слово 6", undefined, exchange);
+    await waitFor(() => expect(field().readOnly).toBe(false), exchange);
+    expect(screen.queryByRole("main", { name: "Карточка" })).toBeNull();
+    // The quiz goes on where it was: its own present follows only now; the card closed its context once.
+    await waitFor(() => expect(a.kinds()).toEqual(["context.open", "context.close", "assignment.present"]), exchange);
+    expect(a.server.state.sessionId).not.toBeNull(); expect(a.server.state.status).toBe("active");
+    expect(a.views()).toHaveLength(1);
+  });
+
+  it("L5b the screen control Back of the card over a written session also returns to the quiz, the session stays open", async () => {
     launch(`?card=${CARD}`);
     const a = launchApp({ active: true });
     render(<App />);
-    await screen.findByRole("textbox", undefined, exchange);
-    expect(screen.queryByRole("main", { name: "Карточка" })).toBeNull();
-    expect(a.views()).toEqual([]);
+    await screen.findByText("В очереди на изучение", undefined, exchange);
+    await waitFor(() => expect(a.kinds()).toEqual(["context.open"]));
+    const opens = a.openReply.mock.calls.length;
+    fireEvent.click(screen.getByRole("button", { name: "Назад" }));
+    await screen.findByText("слово 6", undefined, exchange);
+    await waitFor(() => expect(a.kinds()).toEqual(["context.open", "context.close"]));
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 300)); });
+    expect(besidesContext(a.kinds())).toEqual([]);
+    // A return, not a way through Today: no Today refresh (a new open of the document) on the way back.
+    expect(a.openReply.mock.calls.length).toBe(opens);
+    expect(a.server.state.status).toBe("active");
+    expect(screen.queryByText(pairText)).toBeNull();
   });
 
   it("L6 a document rebuilt inside the same App (a new access key) does not open the launch card a second time", async () => {
@@ -151,4 +178,81 @@ describe("the launch card in the actual App document", () => {
     // The rebuilt document reads Today again; that read is the proof that it was built, not merely kept.
     expect(a.todayReply.mock.calls.length).toBeGreaterThan(todays);
   });
+
+  it("L7 S03: once the card was shown and closed, a reload of the same address opens Today; other parts of the address stay", async () => {
+    launch(`?v=2&card=${CARD}#tgWebAppData=synthetic`);
+    const a = launchApp();
+    render(<App />);
+    await screen.findByText("В очереди на изучение", undefined, exchange);
+    await waitFor(() => expect(a.kinds()).toEqual(["context.open"]));
+    // Seen but not closed: the address still asks for the card.
+    expect(window.location.search).toBe(`?v=2&card=${CARD}`);
+    fireEvent.click(screen.getByRole("button", { name: "Назад" }));
+    await screen.findByText(pairText, undefined, exchange);
+    expect(window.location.search).toBe("?v=2");
+    expect(window.location.hash).toBe("#tgWebAppData=synthetic");
+    expect(window.history.length).toBe(1);
+
+    cleanup(); render(<App />);
+    await screen.findByText(pairText, undefined, exchange);
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 300)); });
+    expect(screen.queryByRole("main", { name: "Карточка" })).toBeNull();
+    expect(a.views()).toHaveLength(1);
+
+    // A new tap of the bot button is a new address with the card: it opens again.
+    cleanup(); launch(`?v=2&card=${CARD}#tgWebAppData=synthetic-2`); render(<App />);
+    await screen.findByText("В очереди на изучение", undefined, exchange);
+    expect(a.views()).toHaveLength(2);
+  });
+
+  it("L8 S03: a reload before the card was closed opens it again: the intent is not lost", async () => {
+    launch(`?card=${CARD}`);
+    const a = launchApp();
+    render(<App />);
+    await screen.findByText("В очереди на изучение", undefined, exchange);
+    cleanup(); render(<App />);
+    await screen.findByText("В очереди на изучение", undefined, exchange);
+    expect(a.views()).toHaveLength(2);
+  });
+
+  it("L9 S03: a card that was never shown (unavailable) keeps the address after Back", async () => {
+    launch(`?card=${CARD}`);
+    const a = launchApp({ hidden: true });
+    render(<App />);
+    await screen.findByText("Карточка недоступна", undefined, exchange);
+    fireEvent.click(screen.getByRole("button", { name: "Назад" }));
+    await screen.findByText(pairText, undefined, exchange);
+    expect(window.location.search).toBe(`?card=${CARD}`);
+    expect(a.views()).toHaveLength(1);
+  });
+
+  it("L11 C024: «Не повторять» of the current question's card in the complaint card: the server moves the quiz on; Back shows its step", async () => {
+    const CURRENT = id(106);
+    launch(`?card=${CURRENT}`);
+    const a = app({ active: true, cards: [6, 7, 8] });
+    const s = a.server.state;
+    let excluded = 0;
+    const card = serveLaunchCard(a.fetcher, CURRENT, { learning: true, view: cardId => reviewing(cardView(cardId)),
+      // As core card_exclusion._withdraw_from_written: the live assignment of the card closes, the next one is issued.
+      exclude: () => { excluded++; s.index = 1; s.assignment = "prefetched"; s.version++; } });
+    render(<App />);
+    await screen.findByRole("heading", { level: 2 }, exchange);
+    await waitFor(() => expect(a.kinds()).toEqual(["context.open"]), exchange);
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 300)); });
+    fireEvent.click(await screen.findByRole("button", { name: "Не повторять" }, exchange));
+    await waitFor(() => expect(a.kinds()).toEqual(["context.open", "card.exclude"]), exchange);
+    // The message card stays open (no quiz rights: no automatic exit, no «Далее»).
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 300)); });
+    expect(screen.getByRole("main", { name: "Карточка" })).toBeTruthy();
+    expect(excluded).toBe(1);
+
+    await a.back.click();
+    // The quiz reads its session after the return: the withdrawn question is not shown, the next one is.
+    await screen.findByText("слово 7", undefined, exchange);
+    expect(screen.queryByText("слово 6")).toBeNull();
+    await waitFor(() => expect(a.kinds()).toEqual(["context.open", "card.exclude", "context.close", "assignment.present"]), exchange);
+    expect(a.posts()[3]).toMatchObject({ kind: "assignment.present", assignment_id: id(7) });
+    expect(card.origins().every(origin => origin === "?origin=message")).toBe(true);
+  });
 });
+

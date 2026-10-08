@@ -61,10 +61,12 @@ describe("coherent dictionary view", () => {
     const { api, fetcher } = transport(body());
     await api.read("synthetic", cardId, "study");
     await api.read("synthetic", cardId, "dictionary");
+    await api.read("synthetic", cardId, "message");
     expect(fetcher.mock.calls.map(call => call[0])).toEqual([
-      `/api/v1/dictionary/cards/${cardId}/view?origin=study`, `/api/v1/dictionary/cards/${cardId}/view`]);
+      `/api/v1/dictionary/cards/${cardId}/view?origin=study`, `/api/v1/dictionary/cards/${cardId}/view`,
+      `/api/v1/dictionary/cards/${cardId}/view?origin=message`]);
     await expect(api.read("synthetic", cardId, "quiz" as never)).rejects.toThrow("unknown card view origin");
-    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(fetcher).toHaveBeenCalledTimes(3);
   });
   it("accepts opaque unavailable without leaking the requested card", async () => {
     const response = { state_version: "1", current: { status: "unavailable" } };

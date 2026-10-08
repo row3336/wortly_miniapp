@@ -162,43 +162,48 @@ export function ApplicationDocument(props: Props) {
     minimumStateVersion: floor?.version, enabled: session !== null && (selected === null || readAfter) });
   const read = selected === null && session === null ? { kind: "pending" } as const : classify(resume.state);
   const readId = read.kind === "learning" || read.kind === "oral" || read.kind === "written" || read.kind === "closed" ? read.id : null;
+  // The launch card opens once, when the start settles (the mode read chose the start screen), over that screen (answer
+  // S01): over Today, or over a resumed session, which Back then returns to at the same place. It is pushed in the same
+  // update as the start route, so the session is never shown (nor its question committed as shown) before the card.
+  // It is a message entry: it takes no rights of the quiz under it (cardOrigin) and is not a dictionary opening (S02).
+  const launchCard = useRef(props.launchCard);
+  const start = useCallback((screen: "learning" | "oral" | "written" | null) => {
+    if (screen !== null) navigate({ type: "open", screen });
+    const cardId = launchCard.current?.take() ?? null;
+    if (cardId !== null) navigate({ type: "push", screen: "card", subject: cardId, entry: "message" });
+  }, []);
   useEffect(() => {
     // Leaving the seed's pair closes that session on the server: it is never a seed again, even after a return.
     for (const [selection, select] of [[selected, setSelected], [oralSelected, setOralSelected], [writtenSelected, setWrittenSelected]] as const) {
       if (selection !== null && selection.seed !== null && selection.pair !== pair) { select({ ...selection, seed: null }); return; }
     }
-    if (selected === null && session === null) { setSelected({ seed: null, pair }); return; }
+    if (selected === null && session === null) { setSelected({ seed: null, pair }); start(null); return; }
+    // A session of a mode this client does not run (conjugation) keeps the start undecided, but the launch card still
+    // opens over its screen and returns to it (root decision on S01); nothing of that session is started or sent.
+    if (selected === null && read.kind === "other") { start(null); return; }
     if (selected === null && read.kind === "learning") {
-      setSelected({ seed: read.id, pair, version: read.version }); navigate({ type: "open", screen: "learning" }); return;
+      setSelected({ seed: read.id, pair, version: read.version }); start("learning"); return;
     }
     // An active session of this client continues on its own route (tz_app:48); Learning keeps no seed.
     if ((selected === null || readAfter) && read.kind === "oral") {
-      if (selected === null) setSelected({ seed: null, pair });
-      setOralSelected({ seed: read.id, pair, version: read.version }); navigate({ type: "open", screen: "oral" }); return;
+      setOralSelected({ seed: read.id, pair, version: read.version });
+      if (selected === null) { setSelected({ seed: null, pair }); start("oral"); } else navigate({ type: "open", screen: "oral" });
+      return;
     }
     // Its server projection chooses the step; no undo or correction of an earlier document comes with it (TA:48).
     if ((selected === null || readAfter) && read.kind === "written") {
-      if (selected === null) setSelected({ seed: null, pair });
-      setWrittenSelected({ seed: read.id, pair, version: read.version }); navigate({ type: "open", screen: "written" }); return;
+      setWrittenSelected({ seed: read.id, pair, version: read.version });
+      if (selected === null) { setSelected({ seed: null, pair }); start("written"); } else navigate({ type: "open", screen: "written" });
+      return;
     }
     // A closed session is never resumed: one fresh open per closed id, then a manual retry.
     if ((selected === null || readAfter) && read.kind === "closed" && !synchronizedClosed.current.has(read.id)) {
       synchronizedClosed.current.add(read.id);
       void synchronize();
     }
-  }, [selected, oralSelected, writtenSelected, session, pair, read.kind, readId, readAfter, synchronize]);
-  // The launch card opens once, when the start has settled (the mode read chose the start screen), and only over Today:
-  // Back returns to Today. A start that resumes a session drops it: over a quiz the card would take the quiz as its
-  // origin (cardOrigin), which is not what the owner asked for.
-  const started = selected !== null;
-  const startScreen = useRef(at);
-  startScreen.current = at;
-  const launchCard = useRef(props.launchCard);
-  useEffect(() => {
-    if (!started) return;
-    const cardId = launchCard.current?.take() ?? null;
-    if (cardId !== null && startScreen.current === "today") navigate({ type: "push", screen: "card", subject: cardId });
-  }, [started]);
+  }, [selected, oralSelected, writtenSelected, session, pair, read.kind, readId, readAfter, synchronize, start]);
+  // The launch card host that has shown its content: closing it after that forgets the card in the address (answer S03).
+  const shownLaunch = useRef<string | null>(null);
 
   const today = () => {
     attemptedFloor.current = latest.current?.version ?? null;
@@ -232,7 +237,8 @@ export function ApplicationDocument(props: Props) {
   // hostRoute "settings" means hidden, not navigation: the Host renders nothing and keeps its owner mounted.
   let hostRoute: "today" | "learning" | "settings" = at === "today" || at === "learning" ? at : "settings";
   let screen: ReactNode = null, todayShown = false;
-  if (selected === null) screen = readScreen();
+  // The launch card over an undecided start (a session of another mode) hides its screen until Back.
+  if (selected === null) screen = at === "card" ? null : readScreen();
   else if (at === "today") {
     if (!(fits && gate === "ready")) {
       hostRoute = "settings";
@@ -269,7 +275,7 @@ export function ApplicationDocument(props: Props) {
   if (at === "card" && route.subject !== null) {
     let key = cardKeys.current.get(route);
     if (key === undefined) { key = `${route.subject}:${++cardSerial.current}`; cardKeys.current.set(route, key); }
-    activeCard = { key, cardId: route.subject, origin: cardOrigin(route.back?.source ?? null) };
+    activeCard = { key, cardId: route.subject, origin: cardOrigin(route.back?.source ?? null, route.entry) };
   }
   const cardSlot = activeCard ?? leavingCard;
   // L1→De rows start the written quiz, De→L1 rows the oral one (tz_app М09/М18; CP14 B-ENTRY lifted by M-ORAL-ENTRY).
@@ -294,7 +300,13 @@ export function ApplicationDocument(props: Props) {
       leaving={cardSlot !== activeCard} backSlot={cardBack}
       // Only a card opened from the written quiz moves it on (M-ACTIONS Р4); dictionary and oral cards report nothing.
       onStudyAction={movesWrittenQuiz(cardSlot.origin) ? written.cardActionApplied : undefined}
-      onBack={close => { if (close === "after_open" && activeCard) setLeavingCard(activeCard); navigate({ type: "back" }); }}
+      onShown={cardSlot.origin.kind === "dictionary" && cardSlot.origin.via === "message"
+        ? () => { shownLaunch.current = cardSlot.key; } : undefined}
+      onBack={close => {
+        if (shownLaunch.current === cardSlot.key) props.launchCard?.viewed();
+        if (close === "after_open" && activeCard) setLeavingCard(activeCard);
+        navigate({ type: "back" });
+      }}
       onClosed={() => setLeavingCard(current => current?.key === cardSlot.key ? null : current)} />}
     {dictionaryOpened && <DictionaryHost access={props.access} transport={props.transport} language={props.language} visit={visit}
       onOpenCard={(cardId, back) => navigate({ type: "push", screen: "card", subject: cardId, details: back })}

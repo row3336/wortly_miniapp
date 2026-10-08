@@ -21,6 +21,11 @@ export type ReturnContext = {
 };
 /** Fields a source may hand over when it opens a nested screen. */
 export type ReturnDetails = Pick<ReturnContext, "assignment" | "search" | "scroll">;
+/**
+ * A nested screen opened from outside the application: "message" is a bot message button (answer S01). Its source is
+ * then only where Back leads, not what opened it, so the screen takes no rights of that source.
+ */
+export type Entry = "message";
 
 export type Route = {
   screen: ScreenId;
@@ -31,13 +36,15 @@ export type Route = {
   restored: ReturnContext | null;
   /** Direction of the change that produced this route, for the screen transition (П1). */
   direction: "forward" | "back" | "none";
+  /** Set on the pushed screen only; a return by Back never carries it. */
+  entry?: Entry;
 };
 
 export type NavigationAction =
   /** A section or a study session: the route starts afresh. */
   | { type: "open"; screen: Tab | StudyScreen }
   /** A nested screen remembers where it was opened from. */
-  | { type: "push"; screen: NestedScreen; subject?: string; details?: ReturnDetails }
+  | { type: "push"; screen: NestedScreen; subject?: string; details?: ReturnDetails; entry?: Entry }
   | { type: "back" }
   /** Today after a section, a closed session or an explicit return. */
   | { type: "home" };
@@ -74,7 +81,8 @@ export function navigationReducer(route: Route, action: NavigationAction): Route
         direction: isStudy(action.screen) ? "forward" : sideways(route.screen, action.screen) };
     case "push":
       return { screen: action.screen, subject: action.subject ?? null, restored: null, direction: "forward",
-        back: { ...action.details, source: route.screen, subject: route.subject, parent: route.back } };
+        back: { ...action.details, source: route.screen, subject: route.subject, parent: route.back },
+        ...(action.entry ? { entry: action.entry } : {}) };
     case "back": {
       // A session is left through its own exit; Back never navigates away from it by itself.
       if (isStudy(route.screen)) return route;

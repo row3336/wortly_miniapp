@@ -232,6 +232,33 @@ describe("М12 card host: card read, card context, manual Learning choice, Back"
       await screen.findByRole("heading", { level: 2 });
       expect(viewUrls(q)).toEqual([`/api/v1/dictionary/cards/${CARD}/view?origin=study`]);
     }
+    // A card from a bot message (answer S02) is not a dictionary opening either.
+    cleanup();
+    const m = fixture(reviewing);
+    render(<CardHost {...m.props} origin={{ kind: "dictionary", via: "message" }} />);
+    await screen.findByRole("heading", { level: 2 });
+    expect(viewUrls(m)).toEqual([`/api/v1/dictionary/cards/${CARD}/view?origin=message`]);
+  });
+
+  it("H11 a card from a bot message is shown with the rights of a dictionary opening: both directions and the interval", async () => {
+    const f = fixture(reviewing);
+    const onShown = vi.fn();
+    render(<CardHost {...f.props} origin={{ kind: "dictionary", via: "message" }} onShown={onShown} />);
+    await screen.findByRole("heading", { level: 2 });
+    expect(within(study()).getAllByRole("term").map(term => term.textContent)).toEqual(["Рус → Нем", "Нем → Рус"]);
+    expect(within(study()).getByText("Интервал: 3 дн.")).toBeTruthy();
+    await waitFor(() => expect(onShown).toHaveBeenCalledTimes(1));
+    await flush();
+    expect(onShown).toHaveBeenCalledTimes(1);
+  });
+
+  it("H12 an unavailable card is never reported as shown", async () => {
+    const gone = fixture(); gone.srv.gone = true;
+    const onShown = vi.fn();
+    render(<CardHost {...gone.props} origin={{ kind: "dictionary", via: "message" }} onShown={onShown} />);
+    await screen.findByText("Карточка недоступна");
+    await flush();
+    expect(onShown).not.toHaveBeenCalled();
   });
 
   it("H9 extension points receive the shown view and the card context", async () => {

@@ -10,6 +10,8 @@ import { SessionResumeController } from "../study/sessionResumeController";
 import { App } from "./App";
 import { gate, refuseOnce, replaceDocument, watchFlash } from "./flashWatch.test-support";
 import { staleRefusal } from "./openRules.test-support";
+import { cardIdOf } from "../dictionary/card/cardTestData.test-support";
+import { besidesContext, launch, serveLaunchCard } from "./launchCard.test-support";
 
 type Fetch = (url: string | URL | Request, init?: RequestInit) => Promise<Response>;
 type Route = (url: string | URL | Request, init: RequestInit | undefined, base: Fetch) => Promise<Response>;
@@ -769,6 +771,165 @@ describe("Learning while the window checks its document (2.33)", () => {
     await act(async () => { hold.open(); }); await settled();
     await waitFor(() => expect(wrapperDisplay()).toBe("contents"));
     expect(document.querySelector(".document-check")!.hasAttribute("inert")).toBe(false);
+  });
+});
+
+// M-CARD-LINK-2 (answer S01): the bot's complaint button over a resumed session opens its card at once; Back returns to
+// the session at the same place; neither the opening nor the closing sends a study command or ends the session.
+describe("the launch card over a resumed session", () => {
+  afterEach(() => { window.history.replaceState(null, "", "/"); });
+  const LAUNCH = cardIdOf(3);
+  const kinds = (a: Server) => a.posts().map(post => post.kind as string);
+  const pause = () => act(async () => { await new Promise(resolve => setTimeout(resolve, 300)); });
+
+  it("Learning: the card opens over the question; native Back returns to the same question, the session stays open", async () => {
+    launch(`?card=${LAUNCH}`);
+    const back = fakeBack();
+    const a = app({ session: id(3), back });
+    const card = serveLaunchCard(a.fetcher, LAUNCH, { learning: true });
+    render(<App />);
+    await screen.findByText("В очереди на изучение", undefined, exchange);
+    expect(screen.getByRole("heading", { level: 2 }).textContent).toBe("das\u00a0Haus");
+    expect(card.views()).toEqual([`/api/v1/dictionary/cards/${LAUNCH}/view`]);
+    expect(card.origins()).toEqual(["?origin=message"]);
+    // The card of the complaint is not the card of the current assignment.
+    expect(current().assignment?.card_id).not.toBe(LAUNCH);
+    await waitFor(() => expect(kinds(a)).toEqual(["context.open"]));
+    await pause();
+    expect(besidesContext(kinds(a))).toEqual([]);
+    expect(screen.queryByRole("textbox")).toBeNull();
+
+    const opens = a.openReply.mock.calls.length;
+    await back.click();
+    const input = await editable(); expect(input).toBeTruthy();
+    expect(screen.getAllByText("дом").length).toBeGreaterThan(0);
+    await waitFor(() => expect(kinds(a)).toEqual(["context.open", "context.close"]));
+    await pause();
+    expect(besidesContext(kinds(a))).toEqual([]);
+    // No session.stop or other study command: the session stays open on the server. A return, not a way through Today.
+    expect(a.openReply.mock.calls.length).toBe(opens);
+    expect(screen.queryByRole("main", { name: "Карточка" })).toBeNull();
+    expect(a.todayReply).not.toHaveBeenCalled();
+  });
+
+  // C024 (b): an action in the card changes the session on the server (e.g. an interval increase ends earlier answer
+  // rights, K05-057); the session shown after Back is the server's current one, not a read from before the card.
+  it("Learning: a session changed on the server while the card is open is shown as the server has it after Back", async () => {
+    launch(`?card=${LAUNCH}`);
+    const back = fakeBack();
+    const a = app({ session: id(3), back });
+    serveLaunchCard(a.fetcher, LAUNCH, { learning: true });
+    render(<App />);
+    await screen.findByText("В очереди на изучение", undefined, exchange);
+    await waitFor(() => expect(kinds(a)).toEqual(["context.open"]));
+    const step = current();
+    a.f.setStep({ ...step, assignment: { ...step.assignment!, id: id(9), card_id: id(12),
+      prompt: { ...step.assignment!.prompt, text: "кот", translations: ["кот"] } } });
+    await back.click();
+    await screen.findByText("кот", undefined, exchange);
+    expect(screen.queryByText("дом")).toBeNull();
+    await editable();
+    expect(besidesContext(kinds(a))).toEqual([]);
+  });
+
+  it("conjugation: the card opens over «Вход подтверждён» and Back returns to it; nothing is started or sent", async () => {
+    launch(`?card=${LAUNCH}`);
+    const back = fakeBack();
+    const a = app({ session: id(3), back });
+    const conjugation = { session_id: id(3), status: "active", mode: "conjugation", pair: "ru-de", direction: "conjugation",
+      local_date: "2026-10-01", close_reason: null, progress: { total: 3, completed: 1, correct: 1, wrong: 0 },
+      assignment: { id: id(5), card_id: id(8), status: "presented", kind: "conjugation", cycle_id: id(9),
+        slot_id: { cycle_id: id(9), pronoun_group: "du" }, base_verb_id: id(8), display_verb_id: id(18), tense: "present", pronoun_group: "du",
+        prompt: { verb: "ankommen", translation: "прибывать", language: "ru", pronoun: "du", tense: "present" },
+        answer_spec: { kind: "forms", labels: ["du"], part_count: 1, case_sensitive: false } }, summary: null,
+      capabilities: { answer_target: id(5), correct_target: null, grades: null, undo_target: null, stop: true, summary_home: false } };
+    a.route(async (url, init, base) => String(url).includes("/sessions/") ? response({ current: conjugation, state_version: "1" }) : base(url, init));
+    const card = serveLaunchCard(a.fetcher, LAUNCH, { learning: true });
+    render(<App />);
+    await screen.findByText("В очереди на изучение", undefined, exchange);
+    expect(card.views()).toEqual([`/api/v1/dictionary/cards/${LAUNCH}/view`]);
+    expect(card.origins()).toEqual(["?origin=message"]);
+    expect(LAUNCH).not.toBe(conjugation.assignment.card_id);
+    expect(screen.queryByText("Вход подтверждён")).toBeNull();
+    await waitFor(() => expect(kinds(a)).toEqual(["context.open"]));
+    await pause();
+    expect(besidesContext(kinds(a))).toEqual([]);
+
+    const opens = a.openReply.mock.calls.length;
+    await back.click();
+    await screen.findByText("Вход подтверждён", undefined, exchange);
+    expect(screen.queryByRole("main", { name: "Карточка" })).toBeNull();
+    await waitFor(() => expect(kinds(a)).toEqual(["context.open", "context.close"]));
+    await pause();
+    expect(besidesContext(kinds(a))).toEqual([]);
+    expect(a.openReply.mock.calls.length).toBe(opens);
+    expect(screen.queryByRole("textbox")).toBeNull(); expect(a.todayReply).not.toHaveBeenCalled();
+    expect(card.views()).toHaveLength(1);
+  });
+
+  it("oral: a session changed on the server while the card is open is shown as the server has it after Back", async () => {
+    launch(`?card=${LAUNCH}`);
+    const a = app({ session: id(3) });
+    const projection = (text: string, assignment: number) => ({ session_id: id(3), status: "active", mode: "oral", pair: "ru-de",
+      direction: "de-l1", local_date: "2026-10-01", bucket: "words", close_reason: null,
+      progress: { completed: 0, total: 2, correct: 0, wrong: 0 },
+      assignment: { id: id(assignment), card_id: id(assignment + 1), status: "presented", kind: "original",
+        prompt: { text, language: "de", conjunction_hint: { meaning_category: "Bedingung", verb_position: "am Ende" } }, revealed: false },
+      summary: null, practice: { pair: "ru-de", direction: "de-l1", local_date: "2026-10-01", time_zone: "UTC", count: 0 },
+      capabilities: { reveal_target: id(assignment), grade_target: null, stop: true, summary_home: false } });
+    let served = projection("wenn", 6);
+    a.route(async (url, init, base) => String(url).includes("/sessions/") ? response({ current: served, state_version: "1" }) : base(url, init));
+    serveLaunchCard(a.fetcher, LAUNCH, { learning: true });
+    render(<App />);
+    await screen.findByText("В очереди на изучение", undefined, exchange);
+    await waitFor(() => expect(kinds(a)).toEqual(["context.open"]));
+    served = projection("weil", 16);
+    fireEvent.click(screen.getByRole("button", { name: "Назад" }));
+    await screen.findByText("weil", undefined, exchange);
+    expect(screen.queryByText("wenn")).toBeNull();
+    await waitFor(() => expect(kinds(a)).toEqual(["context.open", "context.close"]));
+    expect(besidesContext(kinds(a))).toEqual([]);
+  });
+
+  it("oral: the question is committed as shown only after the card closes; the session stays open", async () => {
+    launch(`?card=${LAUNCH}`);
+    const a = app({ session: id(3) });
+    const oral = { session_id: id(3), status: "active", mode: "oral", pair: "ru-de", direction: "de-l1", local_date: "2026-10-01",
+      bucket: "words", close_reason: null, progress: { completed: 0, total: 2, correct: 0, wrong: 0 },
+      assignment: { id: id(6), card_id: id(7), status: "prefetched", kind: "original", prompt: { text: "wenn", language: "de",
+        conjunction_hint: { meaning_category: "Bedingung", verb_position: "am Ende" } }, revealed: false },
+      summary: null, practice: { pair: "ru-de", direction: "de-l1", local_date: "2026-10-01", time_zone: "UTC", count: 0 },
+      capabilities: { reveal_target: null, grade_target: null, stop: true, summary_home: false } };
+    a.route(async (url, init, base) => {
+      if (String(url).includes("/sessions/")) return response({ current: oral, state_version: "1" });
+      if (!isPost(init, "assignment.present")) return base(url, init);
+      const command = JSON.parse(String(init!.body));
+      return response({ command: { id: command.command_id, kind: command.kind, status: "applied", applied_at: "2026-10-01T12:00:00Z",
+        target_id: command.assignment_id, action_id: null, result_id: null, context_id: null, object_version: null },
+        current: { ...oral, assignment: { ...oral.assignment, status: "presented" }, capabilities: { ...oral.capabilities, reveal_target: id(6) } },
+        state_version: "2" });
+    });
+    const card = serveLaunchCard(a.fetcher, LAUNCH, { learning: true });
+    render(<App />);
+    await screen.findByText("В очереди на изучение", undefined, exchange);
+    expect(card.views()).toEqual([`/api/v1/dictionary/cards/${LAUNCH}/view`]);
+    expect(card.origins()).toEqual(["?origin=message"]);
+    expect(LAUNCH).not.toBe(oral.assignment.card_id);
+    await waitFor(() => expect(kinds(a)).toEqual(["context.open"]));
+    await pause();
+    expect(besidesContext(kinds(a))).toEqual([]);
+    expect(screen.queryByText("wenn")).toBeNull();
+
+    const opens = a.openReply.mock.calls.length;
+    fireEvent.click(screen.getByRole("button", { name: "Назад" }));
+    await screen.findByText("wenn", undefined, exchange);
+    await waitFor(() => expect((screen.getByRole("button", { name: "Раскрыть" }) as HTMLButtonElement).disabled).toBe(false));
+    // The present belongs to the oral quiz once its question is on screen; nothing else was sent.
+    expect(kinds(a)).toEqual(["context.open", "context.close", "assignment.present"]);
+    expect(a.posts().filter(post => post.kind === "session.stop")).toEqual([]);
+    expect(a.openReply.mock.calls.length).toBe(opens);
+    expect(screen.queryByRole("main", { name: "Карточка" })).toBeNull();
+    expect(a.todayReply).not.toHaveBeenCalled();
   });
 });
 

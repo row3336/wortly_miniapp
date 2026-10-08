@@ -16,7 +16,7 @@ import { BusyTodayHost } from "./TodayHost";
 import { createTodayApi } from "../today/todayApi";
 import { ApplicationDocument } from "./ApplicationDocument";
 import { LaunchHost } from "./LaunchScreen";
-import { LaunchCard, launchCardId } from "./launchCard";
+import { forgetLaunchCard, LaunchCard, launchCardId } from "./launchCard";
 import { useBackLayer } from "./navigationBack";
 import { SettingsPendingStore } from "../settings/settingsPending";
 import { RemoteStopPendingStore } from "../study/remoteStopPending";
@@ -47,7 +47,7 @@ export function App() {
   const [oralStores, setOralStores] = useState<OralStores | null>(null);
   const [documentCheck, setDocumentCheck] = useState(false);
   // Read once at launch; the opened document takes it after the ordinary entry (answer Q20).
-  const [launchCard] = useState(() => new LaunchCard(launchCardId(window.location.search)));
+  const [launchCard] = useState(() => new LaunchCard(launchCardId(window.location.search), () => forgetLaunchCard(window)));
   const openedRef = useRef<OpenedAccess | null>(null);
   const storageRef = useRef<AsyncStorage | null>(null);
   const observedLanguage = useRef<{ profileId: string; version: string } | null>(null);
