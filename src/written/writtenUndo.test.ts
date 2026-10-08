@@ -1,10 +1,10 @@
 // «Шаг назад» of the written quiz (M-UNDO): the right, the command, its reply, refusals, the summary and a restart.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WrittenViewController } from "./writtenViewController";
-import { id, writtenFixture, type ServerOptions } from "./writtenFixtures.test-support";
+import { id, tick, writtenFixture, type ServerOptions } from "./writtenFixtures.test-support";
 
 const owners: WrittenViewController[] = [];
-afterEach(() => { owners.splice(0).forEach(owner => owner.dispose()); });
+afterEach(() => { owners.splice(0).forEach(owner => owner.dispose()); vi.useRealTimers(); });
 function harness(options: ServerOptions = {}, mode: "normal" | "accelerated" = "normal") {
   const f = writtenFixture({ undo: true, ...options });
   const own = (sessionId: string | null = null) => {
@@ -176,31 +176,32 @@ describe("refusals (CT 2.2)", () => {
 
 describe("one command_id per undo (Т02)", () => {
   it("a lost reply is resolved by the same ID: the committed undo shows the new card, nothing is sent again", async () => {
-    const h = harness(); await h.started(); await h.answer("falsch");
+    vi.useFakeTimers(); const h = harness(); await h.started(); await h.answer("falsch");
     h.loseReply(); await h.view.undo();
     expect(h.view.snapshot()).toMatchObject({ phase: "unknown", canUndo: false });
     const first = h.undos()[0];
-    await h.view.refresh();
+    await tick();
     expect(h.gets(`/commands/${first.command_id}`)).toHaveLength(1);
     expect(h.undos()).toHaveLength(1);
     expect(h.view.snapshot()).toMatchObject({ phase: "question", question: { id: reissued(6), status: "presented" }, answer: null });
   });
-  it("a request that never arrived is checked, then retried with the same ID while the right still holds", async () => {
-    const h = harness(); await h.started(); await h.answer("falsch");
-    h.dropRequest(); await h.view.undo();
-    await h.view.refresh();
-    expect(h.view.snapshot()).toMatchObject({ phase: "unknown", canRetryPrimary: true });
-    await h.view.retry();
+  it("a request that never arrived is checked, then retried by itself with the same ID while the right still holds", async () => {
+    vi.useFakeTimers(); const h = harness(); await h.started(); await h.answer("falsch");
+    h.dropRequest(); await h.view.undo(); await tick();
+    expect(h.view.snapshot()).toMatchObject({ phase: "unknown", canRetryPrimary: false, commands: { recovery: { state: { name: "retry_wait" } } } });
+    await tick(2000); await tick();
     const [first, second] = h.undos();
     expect(second).toEqual(first);
     expect(h.view.snapshot()).toMatchObject({ phase: "question", question: { id: reissued(6) } });
   });
   it("an unknown undo whose right is gone is never retried: the right is not created again (CT 2.3)", async () => {
-    const h = harness(); await h.started(); await h.answer("falsch");
-    h.dropRequest(); await h.view.undo();
-    h.server.newDocument(); await h.view.refresh();
-    expect(h.view.snapshot()).toMatchObject({ canRetryPrimary: false, problem: "step_changed" });
-    await h.view.retry(); expect(h.undos()).toHaveLength(1);
+    vi.useFakeTimers(); const h = harness(); await h.started(); await h.answer("falsch");
+    // The right ends before the check of the lost request can see it.
+    h.dropRequest(); h.server.newDocument(); await h.view.undo(); await tick();
+    // The screen then shows the server's state: the answer whose undo ended stays, nothing claims the undo (CT §6.1 п. 7).
+    expect(h.view.snapshot()).toMatchObject({ phase: "result_wrong", canRetryPrimary: false, canUndo: false, problem: null,
+      commands: { primary: { pending: false }, recovery: { state: { name: "terminated", reason: "step_stale" } } } });
+    await tick(60_000); await h.view.retry(); expect(h.undos()).toHaveLength(1);
     expect(h.server.results.get(id(706))).toMatchObject({ status: "active" });
   });
 });
@@ -224,12 +225,13 @@ describe("restart and background (К05-073, К05-074)", () => {
     expect(restarted.snapshot()).toMatchObject({ phase: "summary", canSummaryHome: true, canUndo: false });
   });
   it("an undo left unknown before the restart is checked by its ID and not resent after its right ended", async () => {
-    const h = harness(); await h.started(); await h.answer("falsch");
+    vi.useFakeTimers(); const h = harness(); await h.started(); await h.answer("falsch");
+    // The old document is closed before its own recovery could check.
     h.dropRequest(); await h.view.undo();
     const sessionId = h.server.state.sessionId!, [first] = h.undos();
     h.view.dispose(); h.server.newDocument(); h.replace({ document_id: id(9) });
-    const restarted = h.own(sessionId); await restarted.refresh();
-    expect(h.gets(`/commands/${first.command_id}`)).toHaveLength(1);
+    const restarted = h.own(sessionId); await restarted.refresh(); await tick(60_000);
+    expect(h.gets(`/commands/${first.command_id}`).length).toBeGreaterThanOrEqual(1);
     expect(restarted.snapshot()).toMatchObject({ canRetryPrimary: false, canUndo: false });
     await restarted.retry(); expect(h.undos()).toHaveLength(1);
   });

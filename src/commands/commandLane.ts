@@ -81,7 +81,11 @@ export type LaneOptions<S extends LaneSpec> = {
   pendingStore: PendingSlot<LanePending<S["intent"]>>;
   isLive(): boolean;
   newId(): string;
-  send(intent: S["intent"]): Promise<S["reply"]>;
+  /**
+   * transmitted, when given, must be called right before the request starts (automatic recovery counts it as a send
+   * that may have gone out, CT §6.1 п. 4); a refusal before that point means nothing went out.
+   */
+  send(intent: S["intent"], transmitted?: () => void): Promise<S["reply"]>;
   /** Verifies the server fingerprint of the full intent; a different payload under this ID is an HTTP 409. */
   check(intent: S["intent"]): Promise<S["status"]>;
   read(sessionId: string): Promise<S["read"]>;
@@ -148,6 +152,8 @@ export abstract class LaneCore<I extends LaneIntent, Snapshot> {
   protected loaded = false;
   protected running: Promise<void> | null = null;
   protected retryVerified = false;
+  /** The raw error of the last step that failed, for automatic recovery to classify (CP2); null after a clean step. */
+  private failure: unknown = null;
 
   constructor(private readonly core: { profileId: string; pendingStore: PendingSlot<LanePending<I>>; isLive(): boolean;
     onUpdate(snapshot: Snapshot): void }) {}
@@ -158,8 +164,10 @@ export abstract class LaneCore<I extends LaneIntent, Snapshot> {
   protected run(action: () => Promise<void>): Promise<void> {
     if (!this.live()) return Promise.resolve();
     if (this.running) return this.running;
+    this.failure = null;
     const task = Promise.resolve().then(() => { if (this.live()) return action(); }).catch((error: unknown) => {
       if (!this.live()) return;
+      this.failure = error;
       this.retryVerified = false;
       // A failed local cleanup must not erase an already confirmed result.
       if (!this.outcome) this.clearCurrent();
@@ -183,6 +191,22 @@ export abstract class LaneCore<I extends LaneIntent, Snapshot> {
   /** A new intent needs a live, loaded and idle owner with no running step. */
   protected busy(): boolean {
     return !this.live() || !!this.running || !this.loaded || !!this.pending || !["idle", "settled"].includes(this.phase);
+  }
+  /** The error of the last step if it failed (a lost reply, a refusal, a closed handle); null otherwise. */
+  lastFailure(): unknown { return this.failure; }
+  /**
+   * Automatic recovery proved that this intent will never apply (a definite refusal, a changed step: CT §6.1 п. 7): its
+   * durable record is cleared as after a settled outcome, and the lane is free for the next action. A conflict
+   * (mismatch) is never released here: its record waits for the confirmed closure (Я17).
+   */
+  release(commandId: string): Promise<void> {
+    return this.run(async () => {
+      const pending = this.pending;
+      if (!pending || pending.mismatch || pending.intent.command_id !== commandId || this.outcome) return;
+      await this.core.pendingStore.clear(pending, this.lifetime.signal);
+      if (!this.live()) return;
+      this.pending = null; this.problem = null; this.retryVerified = false; this.phase = "idle";
+    });
   }
   dispose(): void { this.lifetime.abort(); this.clearCurrent(); this.phase = "disposed"; }
 }
@@ -340,7 +364,7 @@ export abstract class CommandLane<S extends LaneSpec, O extends LaneOptions<S> =
     this.retryVerified = false; this.problem = "stale_response"; this.phase = "unresolved";
     return false;
   }
-  private async sendPending(retry = false): Promise<void> {
+  private async sendPending(retry = false, transmitted?: () => void): Promise<void> {
     const pending = this.pending;
     if (!pending || !this.live()) return;
     if (retry && (!this.retryVerified || !this.retryFresh())) return;
@@ -348,7 +372,9 @@ export abstract class CommandLane<S extends LaneSpec, O extends LaneOptions<S> =
     if (!this.live() || retry && !this.retryFresh()) return;
     await this.options.pendingStore.save(pending, this.lifetime.signal);
     if (!this.live() || retry && !this.retryFresh()) return;
-    const reply = await this.options.send(this.mode.copy(pending.intent));
+    // A manual send passes no hook: its exchange stays exactly what it was before automatic recovery.
+    const intent = this.mode.copy(pending.intent);
+    const reply = await (transmitted ? this.options.send(intent, transmitted) : this.options.send(intent));
     if (!this.live()) return;
     if (reply.outcome === "mismatch") {
       this.observe(reply.state_version);
@@ -359,12 +385,27 @@ export abstract class CommandLane<S extends LaneSpec, O extends LaneOptions<S> =
     if (this.busy()) return this.running ?? Promise.resolve();
     const intent = this.intent(action);
     if (intent instanceof Error) return Promise.reject(intent);
+    return this.start(intent);
+  }
+  /** The intent of an action with its new command_id, not yet sent: automatic recovery counts its sends (CP2). */
+  prepare(action: WithoutId<S["intent"]>): S["intent"] | Error { return this.intent(action); }
+  /** Send a prepared intent once, as begin does; transmitted is told right before its request starts. */
+  start(intent: S["intent"], transmitted?: () => void): Promise<void> {
+    if (this.busy()) return this.running ?? Promise.resolve();
     const pending: LanePending<S["intent"]> = { schemaVersion: 1, profileId: this.options.profileId,
-      clientInstanceId: this.options.clientInstanceId, pair: this.options.pair, intent };
+      clientInstanceId: this.options.clientInstanceId, pair: this.options.pair, intent: this.mode.copy(intent) };
     return this.run(async () => {
       this.outcome = null; this.resolved = null; this.rejectionCode = null; this.pending = pending;
-      await this.sendPending();
+      await this.sendPending(false, transmitted);
     });
+  }
+  /**
+   * The automatic retry: exactly the retained intent, only while the check that just ran still grants it (canRetry).
+   * Unlike retry it checks nothing itself: the recovery machine has checked right before (Я15.6, CT §6.1 п. 5).
+   */
+  resend(transmitted?: () => void): Promise<void> {
+    if (!this.snapshot().canRetry) return this.running ?? Promise.resolve();
+    return this.run(() => this.sendPending(true, transmitted));
   }
   retry(): Promise<void> {
     if (!this.snapshot().canRetry) return this.running ?? Promise.resolve();

@@ -37,6 +37,17 @@ type LaneView = {
   stateVersion: string | null;
 };
 export type StudyLanes = DocumentLanesSnapshot<LaneView>;
+/** Recovery states that end without an outcome of the action: nothing is sent or checked any more. */
+const ENDED_RECOVERY: ReadonlySet<string> = new Set(["refused", "terminated", "conflict"]);
+/**
+ * The automatic recovery of the pending primary action ended without its outcome (CT §6.1 п. 7, 10): the view shows the
+ * server's state instead of an unknown action; "conflict" also keeps its own problem (Я17).
+ */
+function endedRecovery(state: StudyLanes): string | null {
+  const recovery = state.recovery, id = state.primary.pendingIntent?.command_id;
+  return recovery !== null && id !== undefined && recovery.commandId === id && ENDED_RECOVERY.has(recovery.state.name)
+    ? recovery.state.name : null;
+}
 type SessionRead = { state_version: string; current: object };
 type ResultRead = StudyAnswer & { state_version: string; step: object };
 /** The document command owner of a study view. */
@@ -47,6 +58,8 @@ export type StudyCommands = {
   refresh(): Promise<void>;
   readSession(sessionId: string): Promise<SessionRead>;
   readResult(address: ResultAddress): Promise<ResultRead>;
+  /** The activity of this view drives the automatic recovery of the primary action (Я15.3, Я15.7). */
+  setRecoveryActive(active: boolean): void;
   dispose(): void;
 };
 export type StudyViewOptions = {
@@ -128,6 +141,8 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
   protected pendingGradeAdvance: string | null = null;
   /** Where «Шаг назад» was tapped: a refusal returns there (the result or the summary). */
   private undoFrom: StudyPhase | null = null;
+  /** The last action whose automatic recovery this view has shown; each is shown once. */
+  private recoveredCommand: string | null = null;
 
   constructor(protected readonly options: StudyViewOptions & { onUpdate(snapshot: S): void }, private readonly rules: StudyViewRules,
     commands: (onUpdate: (state: StudyLanes) => void) => K) {
@@ -185,6 +200,14 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
   }
   private observe(state: StudyLanes): void {
     if (this.disposed || !state.live) return;
+    const recovery = state.recovery, ended = endedRecovery(state);
+    if (recovery && recovery.commandId !== this.recoveredCommand && (recovery.afterLoss && recovery.state.name === "settled" || ended)) {
+      this.recoveredCommand = recovery.commandId;
+      // The machine confirmed the outcome by the same ID: show it as a check by that ID does (the result, its timer
+      // from now, or the refusal). An ended recovery reads the session and shows its actual state (CT §6.1 п. 7).
+      // Outside this update: a read starts from here.
+      void Promise.resolve().then(() => this.refresh());
+    }
     this.capture(state.primary.current, state.primary.stateVersion);
     this.capture(state.stop.current, state.stop.stateVersion);
     const closure = this.closure(state);
@@ -194,7 +217,7 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
       if (state.stop.pending && state.stop.outcome === null) this.phase = "stopping";
       else if (this.is("stopping") && state.stop.outcome === "rejected") {
         this.phase = "stale"; this.problem = state.stop.rejectionCode ?? "stop_rejected";
-      } else if (state.primary.pending && state.primary.outcome === null) {
+      } else if (state.primary.pending && state.primary.outcome === null && !ended) {
         const kind = state.primary.kind;
         if (kind === "assignment.present") {
           if (!this.is("previous_result")) this.phase = this.question ? "visible_unconfirmed" : "unknown";
@@ -227,7 +250,9 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
       question: live && visibleQuestion ? structuredClone(this.question) : null, draft: live ? this.draft : "",
       answer: live ? structuredClone(this.answer) : null,
       submittedText: live && pending?.kind === "answer.submit" && payload && "text" in payload ? payload.text as string : null,
-      problem: this.problem ?? commands.primary.rejectionCode ?? commands.primary.problem ?? commands.stop.rejectionCode ?? commands.stop.problem,
+      // After an ended recovery the lane's reason is no instruction to the user; only a conflict names itself (Я17).
+      problem: this.problem ?? (["refused", "terminated"].includes(endedRecovery(commands) ?? "") ? null
+        : commands.primary.rejectionCode ?? commands.primary.problem) ?? commands.stop.rejectionCode ?? commands.stop.problem,
       commands, timer: live && ready ? this.timer.view() : null,
       canSubmit: ready && activeQuestion && this.draft.trim().length > 0,
       canEditDraft: live && interactive && !this.reading && this.is("question", "visible_unconfirmed") && !!this.question,
@@ -344,22 +369,33 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
     this.operation = task;
     return task;
   }
-  /** Background is not Stop. Keep the draft and receipt, never present unseen work, and let the result wait. */
-  suspend(): void {
+  /**
+   * Background is not Stop. Keep the draft and receipt, never present unseen work, and let the result wait.
+   * "disabled" (another route, unconfirmed settings) stops only the view: automatic recovery belongs to a visible window
+   * with a live document, whatever its route (Я15.7, RESULTS_VP 9.1.5).
+   */
+  suspend(reason: "background" | "disabled" = "background"): void {
     // pendingGradeAdvance is kept: an explicit grade acknowledged around the background still advances once on return (К05-047).
     // A revision with an unknown outcome keeps the old result on screen: it waits too. A lost answer.submit does not (no result seen yet).
     const kind = this.commands.snapshot().primary.pendingIntent?.kind;
     // A stale view that still holds the shown result (a failed read) keeps waiting for «Далее» after the return too.
     if (this.is("result_correct", "result_wrong", "changing_result") || this.is("stale") && !!this.answer?.result
       || this.is("unknown") && (kind === "result.correct" || kind === "result.grade")) this.waitNext = true;
-    this.active = false; this.activationGeneration++; this.cancelTimer(); this.emit();
+    this.active = false; this.activationGeneration++; this.cancelTimer();
+    if (reason === "background") this.commands.setRecoveryActive(false);
+    this.emit();
   }
+  /** The window is visible again with a fresh open handle: recovery checks and goes on with the rest of its budget (Я15.3). */
+  resumeRecovery(): void { if (this.live()) this.commands.setRecoveryActive(true); }
   /** Foreground callers must first supply a fresh open handle; route/config callers retain that boundary. */
   async resume(): Promise<void> {
-    this.suspend();
+    // A background has already stopped recovery; a return from another route must not interrupt it.
+    this.suspend("disabled");
     const generation = this.activationGeneration;
     await this.refresh();
-    if (!this.live() || generation !== this.activationGeneration || !this.enabled()) return;
+    if (!this.live() || generation !== this.activationGeneration) return;
+    this.resumeRecovery();
+    if (!this.enabled()) return;
     this.active = true;
     await this.continueView(); this.emit();
   }
@@ -413,7 +449,8 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
       if (!this.live() || this.is("closed", "stopping") || this.commands.snapshot().stop.pending) return;
       this.capture(read.current, read.state_version);
       if (this.is("closed")) return;
-      if (pending?.kind === "answer.submit") {
+      const ended = endedRecovery(state) !== null;
+      if (pending?.kind === "answer.submit" && !ended) {
         this.draftAssignmentId = pending.assignment_id!;
         this.draft = pending.payload && "text" in pending.payload ? pending.payload.text as string : "";
         const assignment = this.activeAssignment();
@@ -422,7 +459,7 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
       }
       if (this.consume()) return;
       if (await this.recoverAcceptedResult()) return;
-      if (this.commands.snapshot().primary.pending) {
+      if (this.commands.snapshot().primary.pending && !ended) {
         const assignment = this.activeAssignment();
         // A present intent always names its assignment.
         if (pending?.kind === "assignment.present" && assignment?.id === pending.assignment_id!) {

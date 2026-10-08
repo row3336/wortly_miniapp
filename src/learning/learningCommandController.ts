@@ -27,7 +27,8 @@ type Options = {
   pendingStore: PendingSlot<LearningSessionPending>;
   isLive(): boolean;
   newId(): string;
-  send(intent: LearningCommandIntent): Promise<Reply>;
+  /** transmitted, when given, is called right before the request starts (automatic recovery, CT §6.1 п. 4). */
+  send(intent: LearningCommandIntent, transmitted?: () => void): Promise<Reply>;
   check(intent: LearningCommandIntent): Promise<Status>;
   read(sessionId: string): Promise<LearningSessionRead>;
   readResult(intent: LearningResultIntent): Promise<LearningResultRead>;
@@ -37,6 +38,7 @@ type Options = {
 /**
  * Reconcile one command. A host owns the document, screens and the independent Stop lane. Learning keeps its own
  * lane algorithm (no lane check, retry without a second check, no shared-floor memory): only the identical checks are shared.
+ * Its study results are retried only by automatic recovery (resend after the machine's own check, M-RECOV-AUTO CP2).
  */
 export class LearningCommandController extends LaneCore<LearningCommandIntent, LearningCommandSnapshot> {
   private resolved: LearningCommandSnapshot["resolved"] = null;
@@ -166,14 +168,16 @@ export class LearningCommandController extends LaneCore<LearningCommandIntent, L
     });
   }
 
-  private async sendPending(): Promise<void> {
+  private async sendPending(transmitted?: () => void): Promise<void> {
     const pending = this.pending;
     if (!pending || !this.live()) return;
     this.phase = "sending"; this.problem = null; this.retryVerified = false; this.clearCurrent(); this.emit();
     if (!this.live()) return;
     await this.options.pendingStore.save(pending, this.lifetime.signal);
     if (!this.live()) return;
-    const reply = await this.options.send(copyLearningCommandIntent(pending.intent));
+    // A manual send passes no hook: its exchange stays exactly what it was before automatic recovery.
+    const intent = copyLearningCommandIntent(pending.intent);
+    const reply = await (transmitted ? this.options.send(intent, transmitted) : this.options.send(intent));
     if (!this.live()) return;
     if (reply.outcome === "mismatch") {
       this.observe(reply.state_version);
@@ -183,13 +187,31 @@ export class LearningCommandController extends LaneCore<LearningCommandIntent, L
   }
   begin(action: LearningTransition): Promise<void> {
     if (this.busy()) return this.running ?? Promise.resolve();
+    const intent = this.prepare(action);
+    if (intent instanceof Error) return Promise.reject(intent);
+    return this.start(intent);
+  }
+  /** The intent of an action with its new command_id, not yet sent: automatic recovery counts its sends (CP2). */
+  prepare(action: LearningTransition): LearningCommandIntent | Error {
     const intent = { ...action, command_id: this.options.newId() };
-    if (!validLearningCommandIntent(intent)) return Promise.reject(new Error("invalid Learning action"));
+    return validLearningCommandIntent(intent) ? copyLearningCommandIntent(intent) : new Error("invalid Learning action");
+  }
+  /** Send a prepared intent once, as begin does; transmitted is told right before its request starts. */
+  start(intent: LearningCommandIntent, transmitted?: () => void): Promise<void> {
+    if (this.busy()) return this.running ?? Promise.resolve();
     const pending: LearningSessionPending = { schemaVersion: 1, profileId: this.options.profileId,
       clientInstanceId: this.options.clientInstanceId, pair: this.options.pair, intent: copyLearningCommandIntent(intent) };
     return this.run(async () => {
-      this.outcome = null; this.resolved = null; this.rejectionCode = null; this.pending = pending; await this.sendPending();
+      this.outcome = null; this.resolved = null; this.rejectionCode = null; this.pending = pending; await this.sendPending(transmitted);
     });
+  }
+  /**
+   * The automatic retry: the retained intent, only while the check that just ran still grants it (canRetry needs
+   * retryVerified). The recovery machine checks right before every call (Я15.6), unlike the manual retry below.
+   */
+  resend(transmitted?: () => void): Promise<void> {
+    if (!this.snapshot().canRetry) return this.running ?? Promise.resolve();
+    return this.run(() => this.sendPending(transmitted));
   }
   retry(): Promise<void> {
     if (!this.snapshot().canRetry) return this.running ?? Promise.resolve();

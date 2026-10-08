@@ -91,7 +91,7 @@ describe("М08 written task screen", () => {
     await screen.findByText("слово 7");
   });
 
-  it("an ordinary request shows only its indicator; checking appears for an unknown outcome (TA табл. 5.1)", async () => {
+  it("an ordinary request shows only its indicator; a lost one is recovered by itself under a blurred cover (Я15, Я15.2)", async () => {
     const h = setup(); await h.start();
     fireEvent.change(h.field(), { target: { value: "Haus" } });
     const gate = h.hold(); fireEvent.click(h.button("Проверить"));
@@ -102,8 +102,14 @@ describe("М08 written task screen", () => {
     await waitFor(() => expect(h.field().readOnly).toBe(false));
     fireEvent.change(h.field(), { target: { value: "Haus" } });
     h.dropRequest(); fireEvent.click(h.button("Проверить"));
-    await screen.findByRole("button", { name: "Проверить состояние" });
+    // The lost answer is checked, then sent again with the same ID after the 2 s pause: no button at any point.
+    await waitFor(() => expect(document.querySelector(".recovery-overlay[role=status]")).not.toBeNull());
     expect(screen.getByText("Проверяем, сохранилось ли действие.")).toBeTruthy();
+    for (const name of ["Проверить состояние", "Повторить отправку"]) expect(screen.queryByRole("button", { name })).toBeNull();
+    await screen.findByText("Верно", undefined, { timeout: 5000 });
+    expect(document.querySelector(".recovery-overlay")).toBeNull();
+    const answers = h.posts().filter(post => post.kind === "answer.submit");
+    expect(answers).toHaveLength(3); expect(answers[2]).toEqual(answers[1]);
   });
 
   it("the previous result says that B is still being confirmed until its present commits (TA §5)", async () => {

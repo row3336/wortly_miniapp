@@ -1,9 +1,36 @@
+import { createHash } from "node:crypto";
 import { vi } from "vitest";
 import type { CardExamples, OpenedClient, Profile, PublicAssignment, SessionProjection, WrittenStep } from "../api/generated";
 import { createOpenedAccess, type OpenedAccess } from "../app/openedAccess";
 import type { AsyncStorage } from "../platform/storage";
 import { writtenIntentHash, type WrittenIntent } from "./writtenIntent";
 import { writtenPrimaryKey, writtenStopKey } from "./writtenPending";
+
+/**
+ * The intent hash of a status check is the only work of these exchanges that leaves the microtask queue (WebCrypto
+ * answers from a thread pool). Computed in place, the whole exchange settles in microtasks: a test on fake time then
+ * never depends on how fast the machine runs.
+ */
+function hashInPlace(): void {
+  const subtle = globalThis.crypto.subtle;
+  if (vi.isMockFunction(subtle.digest)) return;
+  vi.spyOn(subtle, "digest").mockImplementation(async (_algorithm, data) => {
+    const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+    return Uint8Array.from(createHash("sha256").update(bytes).digest()).buffer;
+  });
+}
+/**
+ * Lets the asynchronous work of the exchanges finish without moving fake time: automatic recovery runs on its own after
+ * an action, so a test waits for it to come to rest. Only microtasks: no wall clock is involved.
+ */
+export async function drain(): Promise<void> {
+  for (let round = 0; round < 500; round++) await Promise.resolve();
+}
+/** Fake time moves by ms (timers fire), then real work settles. */
+export async function tick(ms = 0): Promise<void> {
+  await vi.advanceTimersByTimeAsync(ms);
+  await drain();
+}
 
 export const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 export const profile = (version = "1"): Profile => ({ profile_id: id(50), role: "user", ui_language: "ru", dictionary_language: "ru",
@@ -250,6 +277,7 @@ export function writtenServer(options: ServerOptions = {}) {
 
 /** Real access, storage and transport around one synthetic server. */
 export function writtenFixture(options: ServerOptions & { saved?: Partial<Record<"primary" | "stop", WrittenIntent>> } = {}) {
+  hashInPlace();
   const values = new Map<string, string>([["unrelated", "keep"]]);
   if (options.saved?.primary) values.set(writtenPrimaryKey, JSON.stringify(pending(options.saved.primary)));
   if (options.saved?.stop) values.set(writtenStopKey, JSON.stringify(pending(options.saved.stop)));
@@ -280,7 +308,12 @@ export function writtenFixture(options: ServerOptions & { saved?: Partial<Record
   const loseReply = () => fetcher.mockImplementationOnce(async (...call) => { await server.handle(...call); throw new TypeError("network"); });
   /** The next request never reaches the server (a timeout before commit). */
   const dropRequest = () => fetcher.mockImplementationOnce(async () => { throw new TypeError("network"); });
+  /** Every later request fails like a lost connection until the returned restore is called. */
+  const offline = () => {
+    fetcher.mockImplementation(async () => { throw new TypeError("network"); });
+    return () => { fetcher.mockImplementation(server.handle); };
+  };
   const transport = { fetcher, timeoutMs: 30000, maxResponseBytes: 200000 };
   return { values, storage, access: () => access, replace, server, fetcher, newId, posts, gets, hold, loseReply, dropRequest,
-    transport, revoke: () => { live = false; } };
+    offline, transport, revoke: () => { live = false; } };
 }

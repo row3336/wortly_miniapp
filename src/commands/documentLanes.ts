@@ -4,6 +4,8 @@ import { ClosedAccessError, type OpenedAccess } from "../app/openedAccess";
 import type { AsyncStorage } from "../platform/storage";
 import type { ClosedSessionBoundary } from "../api/generated";
 import type { Pair } from "./commandLane";
+import { LaneRecovery, pageSendCounter, type RecoveryIntent, type RecoveryView } from "./laneRecovery";
+import { systemRecoveryClock } from "./recoveryClock";
 
 export type DocumentLane = "primary" | "stop";
 export type Credentials = Parameters<Parameters<OpenedAccess["run"]>[0]>[0];
@@ -13,14 +15,26 @@ type Step = { status: string; session_id?: string };
 type LaneState = {
   pending: boolean;
   phase: string;
+  kind: string | null;
   outcome: string | null;
   sessionId: string | null;
-  resolved: { kind: string; sessionId: string } | null;
+  pendingIntent: RecoveryIntent | null;
+  resolved: { commandId: string; kind: string; sessionId: string } | null;
+  problem: string | null;
+  canRetry: boolean;
   current: Step | null;
   closedSession: ClosedSessionBoundary | null;
   stateVersion: string | null;
 };
-type Lane<C, T> = { snapshot(): C; refresh(): Promise<void>; begin(action: T): Promise<void>; retry(): Promise<void>; dispose(): void };
+type Lane<C, T> = {
+  snapshot(): C; refresh(): Promise<void>; begin(action: T): Promise<void>; retry(): Promise<void>; dispose(): void;
+  /** Automatic recovery (CP2): an intent with its new ID, its first send, a send after the machine's check, the last error. */
+  prepare(action: T): RecoveryIntent | Error;
+  start(intent: RecoveryIntent, transmitted?: () => void): Promise<void>;
+  resend(transmitted?: () => void): Promise<void>;
+  lastFailure(): unknown;
+  release(commandId: string): Promise<void>;
+};
 export type DocumentLanesSnapshot<C> = {
   live: boolean;
   stateVersion: string;
@@ -29,6 +43,10 @@ export type DocumentLanesSnapshot<C> = {
   /** Lane readiness only; the screen also needs the current target's server capabilities. */
   canBegin: boolean;
   canStop: boolean;
+  /** Automatic recovery of the primary study action (CT §6.1); null when none was needed in this document. */
+  recovery: RecoveryView | null;
+  /** The primary lane holds a study result: it is recovered automatically, never by a manual check or retry. */
+  automaticPrimary: boolean;
 };
 export type DocumentLanesOptions<C> = {
   access(): OpenedAccess;
@@ -62,6 +80,11 @@ export type DocumentLanesMode<C, T, SR, RR> = {
   readSession(credentials: Credentials, sessionId: string, origin: LaneWiring<C>["origin"]): Promise<SR>;
   readResult(credentials: Credentials, address: ResultAddress, origin: LaneWiring<C>["origin"]): Promise<RR>;
   controller(wiring: LaneWiring<C>, reads: { read(sessionId: string): Promise<SR>; readResult(address: ResultAddress): Promise<RR> }): Lane<C, T>;
+  /**
+   * The primary kinds that pass the result of a study step: they recover automatically, without manual buttons
+   * (CT §6.1 п. 1–2). Every other kind keeps its manual check and retry.
+   */
+  automatic: readonly string[];
 };
 const ready = (state: LaneState) => !state.pending && ["idle", "settled"].includes(state.phase);
 
@@ -83,6 +106,8 @@ export class DocumentLanes<C extends LaneState, T extends { kind: string; sessio
   private floor: string;
   private disposed = false;
   private refreshing: Promise<void> | null = null;
+  private readonly automatic: ReadonlySet<string>;
+  private readonly recovery: LaneRecovery;
 
   constructor(private readonly options: DocumentLanesOptions<C>, mode: DocumentLanesMode<C, T, SR, RR>) {
     const access = options.access();
@@ -108,12 +133,24 @@ export class DocumentLanes<C extends LaneState, T extends { kind: string; sessio
       send: operation => {
         const source = this.sendSources[lane];
         // A saved intent may outlive this tap's open handle. Recover it by GET under the
-        // new handle; only an explicit retry may send it there.
+        // new handle; only an explicit retry or the recovery machine may send it there.
         if (!this.live() || !source?.isLive() || source !== options.access()) return Promise.reject(new ClosedAccessError());
         return source.run(operation);
       },
       onUpdate: state => this.observe(state),
     }, reads);
+    this.automatic = new Set(mode.automatic);
+    // Created before the lanes: a lane update reads the snapshot, which includes the recovery view.
+    this.recovery = new LaneRecovery({
+      automatic: kind => this.automatic.has(kind),
+      primary: () => this.controllers.primary.snapshot(),
+      failure: () => this.controllers.primary.lastFailure(),
+      send: (intent, first, transmitted) => this.recoverySend(intent, first, transmitted),
+      check: () => this.live() ? this.track("primary", () => this.controllers.primary.refresh()) : Promise.resolve(),
+      release: commandId => this.live() ? this.track("primary", () => this.controllers.primary.release(commandId)) : Promise.resolve(),
+      isLive: () => this.live(),
+      onUpdate: () => this.emit(),
+    }, pageSendCounter(options.storage), systemRecoveryClock);
     this.controllers = { primary: controller("primary"), stop: controller("stop") };
   }
 
@@ -167,10 +204,13 @@ export class DocumentLanes<C extends LaneState, T extends { kind: string; sessio
   private emit(): void { if (this.live()) this.options.onUpdate(this.snapshot()); }
   snapshot(): DocumentLanesSnapshot<C> {
     const stateVersion = this.minimumVersion(), live = this.live();
-    const primary = this.controllers.primary.snapshot(), stop = this.controllers.stop.snapshot();
+    const lane = this.controllers.primary.snapshot(), stop = this.controllers.stop.snapshot();
+    // A study result has no manual retry (Я15): only the machine resends it.
+    const automaticPrimary = lane.pending && this.automatic.has(lane.kind ?? "");
+    const primary = automaticPrimary ? { ...lane, canRetry: false } : lane;
     return { live, stateVersion, primary, stop,
-      canBegin: live && !this.refreshing && !this.work.primary && !this.work.stop && ready(primary) && ready(stop),
-      canStop: live && !this.work.stop && ready(stop) };
+      canBegin: live && !this.refreshing && !this.work.primary && !this.work.stop && ready(primary) && ready(stop) && !this.recovery.busy(),
+      canStop: live && !this.work.stop && ready(stop), recovery: live ? this.recovery.view() : null, automaticPrimary };
   }
 
   private track(lane: DocumentLane, operation: () => Promise<void>): Promise<void> {
@@ -180,6 +220,8 @@ export class DocumentLanes<C extends LaneState, T extends { kind: string; sessio
     const finish = () => {
       if (this.work[lane] === task) { this.work[lane] = null; this.sendSources[lane] = null; }
       this.reconcileClosedPrimary();
+      // A check may have found an automatic intent this owner does not drive yet (reload, another owner).
+      if (lane === "primary" && this.live() && !this.work.primary) this.recovery.sync();
       this.emit();
     };
     void task.then(finish, finish);
@@ -205,7 +247,11 @@ export class DocumentLanes<C extends LaneState, T extends { kind: string; sessio
         await this.track(lane, () => this.controllers[lane].refresh());
       }
     };
-    const task = Promise.all([refreshLane("primary"), refreshLane("stop")]).then(() => undefined).finally(() => {
+    // While the machine recovers the primary action, it alone checks it: a refresh only waits for its exchange in
+    // flight (a reply may still settle it), and Stop keeps its own check.
+    const primary = this.recovery.busy() ? (this.work.primary ?? Promise.resolve()).then(() => undefined, () => undefined)
+      : refreshLane("primary");
+    const task = Promise.all([primary, refreshLane("stop")]).then(() => undefined).finally(() => {
       if (this.refreshing === task) this.refreshing = null;
       this.emit();
     });
@@ -219,14 +265,32 @@ export class DocumentLanes<C extends LaneState, T extends { kind: string; sessio
     if (this.closed.has(action.session_id.toLowerCase())) return Promise.resolve();
     const state = this.snapshot();
     if (!(lane === "stop" ? state.canStop : state.canBegin)) return Promise.resolve();
+    if (lane === "primary" && this.automatic.has(action.kind)) {
+      const intent = this.controllers.primary.prepare(action);
+      return intent instanceof Error ? Promise.reject(intent) : this.recovery.begin(intent);
+    }
     this.sendSources[lane] = this.options.access();
     return this.track(lane, () => this.controllers[lane].begin(action));
   }
+  /**
+   * One send of the recovery machine. Like a retry it goes through the current open handle (DESIGN 5.8) and never
+   * overtakes Stop; a refusal here starts no request, which the machine counts as nothing sent.
+   */
+  private recoverySend(intent: RecoveryIntent, first: boolean, transmitted: () => void): Promise<void> {
+    if (!this.live() || this.work.primary || this.work.stop || !ready(this.controllers.stop.snapshot())
+      || this.closed.has(intent.session_id.toLowerCase())) return Promise.resolve();
+    this.sendSources.primary = this.options.access();
+    const lane = this.controllers.primary;
+    return this.track("primary", () => first ? lane.start(intent, transmitted) : lane.resend(transmitted));
+  }
+  /** The study view's activity (visible, fresh handle, study route on): the machine requests nothing otherwise. */
+  setRecoveryActive(active: boolean): void { this.recovery.setActive(active); }
   retry(lane: DocumentLane): Promise<void> {
     if (!this.live()) return Promise.resolve();
     if (this.work[lane]) return this.work[lane];
     const state = this.snapshot(), sessionId = state[lane].sessionId?.toLowerCase();
     if (sessionId && this.closed.has(sessionId)) return Promise.resolve();
+    if (lane === "primary" && this.automatic.has(state.primary.kind ?? "")) return Promise.resolve();
     if (lane === "primary" && (this.work.stop || !ready(state.stop))) return Promise.resolve();
     this.sendSources[lane] = this.options.access();
     return this.track(lane, () => this.controllers[lane].retry());
@@ -234,6 +298,7 @@ export class DocumentLanes<C extends LaneState, T extends { kind: string; sessio
   dispose(): void {
     this.disposed = true;
     this.sendSources.primary = this.sendSources.stop = null;
+    this.recovery.dispose();
     this.controllers.primary.dispose();
     this.controllers.stop.dispose();
   }

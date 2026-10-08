@@ -13,8 +13,9 @@ class FakeController {
   calls: string[] = [];
   constructor(readonly seed: string | null, readonly settings: StudyViewSettings<string>) {}
   snapshot(): string { return `view:${this.seed}`; }
-  suspend(): void { this.calls.push("suspend"); }
+  suspend(reason: "background" | "disabled" = "background"): void { this.calls.push(reason === "background" ? "suspend" : "suspend:disabled"); }
   async resume(): Promise<void> { this.calls.push("resume"); }
+  resumeRecovery(): void { this.calls.push("recover"); }
   async refresh(): Promise<void> { this.calls.push("refresh"); }
   dispose(): void { this.calls.push("dispose"); }
   setDraft(text: string): void { this.calls.push(`draft:${text}`); }
@@ -93,7 +94,8 @@ describe("shared study document owner", () => {
   it("a disabled owner stays mounted, suspended, and starts nothing", async () => {
     visibility();
     const f = setup(true, { enabled: false }), controller = f.created[0];
-    expect(controller.calls).toEqual(["suspend", "refresh", "suspend"]);
+    // A disabled route stops the view only: automatic recovery of the visible window goes on (Я15.7, RESULTS_VP 9.1.5).
+    expect(controller.calls).toEqual(["suspend:disabled", "refresh", "suspend:disabled"]);
     expect(controller.settings.enabled()).toBe(false);
     await act(async () => { await f.result.current.start(owner => owner.start()); });
     expect(controller.calls).not.toContain("start");

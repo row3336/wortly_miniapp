@@ -1,6 +1,8 @@
 import { useRef } from "react";
 import type { Language } from "../i18n/language";
+import { recoveryCopy } from "../commands/commandCopy";
 import { CommandRecovery } from "../commands/CommandRecovery";
+import { Loader, RecoveryOverlay, recoveryConflict, recoveryScreen } from "../commands/RecoveryOverlay";
 import { StepBackButton, stepBackCopy } from "../commands/StepBackButton";
 import { useEnterNext } from "../commands/useEnterNext";
 import { answerExampleSource } from "../study/answerExample";
@@ -86,18 +88,25 @@ export function WrittenScreen({ state, language, submitOnEnter, actions, onToday
   const practice = state.practice;
   // A refused «Шаг назад» says that this right is gone; the re-read state shows what holds now (CT 2.2).
   const refusedUndo = primary.outcome === "rejected" && primary.resolved?.kind === "result.undo" && problemCode === primary.rejectionCode;
-  const problem = refusedUndo && problemCode !== "SESSION_CLOSED" ? stepBackCopy[language].unavailable
+  // Я17 (CT §6.1 п. 10): the conflict's own text; its action is «Выйти» of the header.
+  const problem = recoveryConflict(state.commands) ? recoveryCopy[language].conflict
+    : refusedUndo && problemCode !== "SESSION_CLOSED" ? stepBackCopy[language].unavailable
     : problemCode === "NO_MATERIAL" ? phrases ? t.noPhrases : t.noMaterial : problemCode === "SESSION_BUSY" ? t.busy
     : problemCode === "SETUP_REQUIRED" ? t.setup : problemCode === "ASSIGNMENT_STALE" ? t.changed
     : problemCode === "SESSION_CLOSED" ? t.closed : problemCode === "storage" ? t.local
     : problemCode === "mismatch" || problemCode === "invalid_pending" || problemCode === "pending_changed" ? t.blocked
     : problemCode ? t.stale : null;
   const unresolved = primary.pending && primary.outcome === null || stop.pending && stop.outcome === null;
+  // A study result recovers by itself: no check or retry button for it (Я15, CT §6.1 п. 2); Stop keeps its own.
+  const automatic = state.commands.automaticPrimary;
+  const manualLanes = automatic ? [stop] : [primary, stop];
   // An ordinary request in flight shows only its indicator; checking and retry belong to an unknown outcome (TA табл. 5.1).
-  const unknownLane = [primary, stop].some(lane => lane.pending && lane.outcome === null && lane.phase !== "sending");
+  const unknownLane = manualLanes.some(lane => lane.pending && lane.outcome === null && lane.phase !== "sending");
   const isClosed = state.phase === "closed" || state.phase === "disposed";
   const summaryFailed = ownStop && closed?.summaryRead === "failed";
-  const showRecovery = !isClosed && (unknownLane || !!problem && state.phase !== "idle" || state.phase === "stale") || summaryFailed;
+  const showRecovery = !isClosed && (unknownLane || !automatic && (!!problem && state.phase !== "idle" || state.phase === "stale"))
+    || summaryFailed;
+  const recovering = isClosed ? null : recoveryScreen(state.commands);
   const status = state.phase === "submitting" ? t.saving : state.phase === "visible_unconfirmed" ? t.present
     : state.phase === "unknown" ? t.unknown : undefined;
   const pendingForgot = primary.pending && primary.outcome === null && primary.pendingIntent?.kind === "answer.submit"
@@ -111,11 +120,7 @@ export function WrittenScreen({ state, language, submitOnEnter, actions, onToday
   // Waiting for the summary of the own Stop looks like the application start, never like a zero result.
   if (ownStop && (closed.summaryRead === "pending" || closed.summaryRead === "reading")) return <main className="app-shell" lang={language} aria-busy="true">
     <div role="status" aria-label={t.summary}>
-      <svg className="wortly-loader" viewBox="0 0 24 24" aria-hidden="true">
-        <circle cx="12" cy="12" r="11" fill="var(--line)" />
-        <circle cx="12" cy="12" r="8" fill="none" stroke="var(--muted)" strokeWidth="2" />
-        <circle className="wortly-loader-arc" cx="12" cy="12" r="8" fill="none" stroke="var(--text)" strokeWidth="3" pathLength="100" />
-      </svg>
+      <Loader />
       <p>{t.loading}</p>
     </div>
   </main>;
@@ -158,9 +163,10 @@ export function WrittenScreen({ state, language, submitOnEnter, actions, onToday
     {state.phase === "closed" && !summary && <p role="status">{t.closed}</p>}
     {state.phase === "unknown" && !state.question && !unknownAnswer && !result && <p role="status">{t.unknown}</p>}
     {problem && !isClosed && <p role="status">{problem}</p>}
-    {showRecovery && <CommandRecovery className="written-recovery" language={language} lanes={[primary, stop]}
+    {showRecovery && <CommandRecovery className="written-recovery" language={language} lanes={manualLanes}
       canRetryPrimary={state.canRetryPrimary} canRetryStop={stop.canRetry}
       onCheck={() => { void actions.refresh(); }} onRetry={lane => { void actions.retry(lane); }} />}
+    {recovering && <RecoveryOverlay screen={recovering} language={language} />}
     {(state.phase === "idle" && !unresolved || summaryFailed) && <button type="button" className="written-today" onClick={onToday}>{t.today}</button>}
   </main>;
 }

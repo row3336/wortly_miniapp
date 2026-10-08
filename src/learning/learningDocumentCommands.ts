@@ -18,6 +18,8 @@ export class LearningDocumentCommands extends DocumentLanes<LearningCommandSnaps
     const sessions = createLearningSessionApi(options.transport), results = createLearningResultApi(options.transport);
     super(options, {
       label: "Learning",
+      // M-RECOV-AUTO CP2b turns on automatic recovery here; until then every Learning command keeps its manual check.
+      automatic: [],
       readSession: (credentials, sessionId, origin) => sessions.read(credentials.token, credentials.proof,
         { session_id: sessionId, ...origin(credentials) }),
       readResult: (credentials, address, origin) => results.read(credentials.token, credentials.proof,
@@ -28,8 +30,10 @@ export class LearningDocumentCommands extends DocumentLanes<LearningCommandSnaps
         isLive: wiring.isLive, newId: wiring.newId,
         pendingStore: wiring.lane === "primary" ? new LearningSessionPendingStore(options.storage) : new LearningStopPendingStore(options.storage),
         // Answers, their revisions and their undo go to the result endpoint; every other transition is a session command.
-        send: intent => wiring.send(async credentials => {
+        // transmitted is told inside the open handle, right before the request: a refusal before it sent nothing.
+        send: (intent, transmitted) => wiring.send(async credentials => {
           const address = wiring.origin(credentials);
+          transmitted?.();
           return resultCommand(intent)
             ? results.send(credentials.token, credentials.proof, { ...intent, ...address })
             : sessions.send(credentials.token, credentials.proof, { ...intent, ...address });

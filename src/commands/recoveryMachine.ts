@@ -93,13 +93,18 @@ export type RecoveryOptions<I extends { command_id: string }> = {
   ports: RecoveryPorts<I>;
   counter: SendCounter;
   clock: RecoveryClock;
-  /** The window is visible, its study route enabled and its settings confirmed (DESIGN 5.5). */
+  /**
+   * The window is visible and its document live (Я15.7, RESULTS_VP 9.1.5): a fresh open handle after a return. The study
+   * route and confirmed settings do not count.
+   */
   active: boolean;
   policy?: Partial<RecoveryPolicy>;
   onUpdate?(snapshot: RecoverySnapshot): void;
 };
 
-const FINAL: ReadonlySet<RecoveryState["name"]> = new Set(["settled", "refused", "exhausted", "conflict", "terminated", "disposed"]);
+/** States after which the machine sends and checks nothing any more. */
+export const FINAL_RECOVERY_STATES: ReadonlySet<RecoveryState["name"]> = new Set(["settled", "refused", "exhausted", "conflict", "terminated", "disposed"]);
+const FINAL = FINAL_RECOVERY_STATES;
 
 /** The pause before send number next (1 = the first send, which needs none). */
 function pauseBefore(next: number): number {

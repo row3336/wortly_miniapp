@@ -3,7 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenRequest } from "../api/generated";
 import { App } from "../app/App";
 import { staleCommand, staleRefusal } from "../app/openRules.test-support";
-import { app, answer, settingsRefusalText, compatibility, exchange, field, loseReply, pairText, requests, row, startWords, useWrittenAppEnvironment } from "./writtenApp.test-support";
+import { app, answer, settingsRefusalText, compatibility, exchange, field, loseReply, offlineStudy, pairText, requests, row, startWords,
+  useWrittenAppEnvironment } from "./writtenApp.test-support";
 import { deferred, id, profile, response } from "./writtenFixtures.test-support";
 
 useWrittenAppEnvironment();
@@ -147,12 +148,13 @@ describe("Written quiz through the actual App document", () => {
   it("В02 an unknown correction of the old document is resolved by its own ID before any change, never sent again (CT:109)", async () => {
     const a = app({ cards: [6, 7] }); const first = render(<App />);
     await startWords(); await answer("falsch");
-    loseReply(a, "result.correct");
+    // The old document cannot check the lost correction: it is left unknown there.
+    loseReply(a, "result.correct"); const online = offlineStudy(a);
     fireEvent.click(screen.getByRole("button", { name: "Исправить ответ" }));
     await screen.findByText("Проверяем изменение");
     const lost = a.posts().at(-1)!;
     expect(lost.kind).toBe("result.correct");
-    first.unmount();
+    first.unmount(); online();
     const mark = a.fetcher.mock.calls.length, posts = a.posts().length;
     render(<App />);
     await waitFor(() => expect(requests(a, mark)).toContain(`GET /api/v1/commands/${lost.command_id}`));

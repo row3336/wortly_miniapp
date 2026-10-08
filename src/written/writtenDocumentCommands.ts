@@ -5,6 +5,12 @@ import { writtenStores } from "./writtenPending";
 
 export type WrittenDocumentSnapshot = DocumentLanesSnapshot<WrittenCommandSnapshot>;
 export type WrittenDocumentOptions = DocumentLanesOptions<WrittenCommandSnapshot>;
+/**
+ * The written commands that pass the result of a study step (CT §6.1 п. 1, D-RECOV table 1.1.1 group (а)): the answer
+ * or «Не помню», a grade, a correction and «Шаг назад». session.start and assignment.present keep their manual
+ * recovery until the owner decides (4.6-В1, 4.6-В2); session.stop always does.
+ */
+export const writtenAutomaticKinds = ["answer.submit", "result.grade", "result.correct", "result.undo"] as const;
 
 /** Both durable command lanes of one opened document; views and drafts belong to the caller. */
 export class WrittenDocumentCommands extends DocumentLanes<WrittenCommandSnapshot, WrittenTransition, WrittenSessionRead, WrittenResultRead> {
@@ -12,6 +18,7 @@ export class WrittenDocumentCommands extends DocumentLanes<WrittenCommandSnapsho
     const api = createWrittenApi(options.transport), stores = writtenStores(options.storage);
     super(options, {
       label: "written",
+      automatic: writtenAutomaticKinds,
       readSession: (credentials, sessionId, origin) => api.read(credentials.token, credentials.proof,
         { session_id: sessionId, ...origin(credentials) }),
       readResult: (credentials, address, origin) => api.readResult(credentials.token, credentials.proof,
@@ -20,7 +27,11 @@ export class WrittenDocumentCommands extends DocumentLanes<WrittenCommandSnapsho
         profileId: wiring.profileId, clientInstanceId: wiring.clientInstanceId, pair: wiring.pair, lane: wiring.lane,
         pendingStore: stores[wiring.lane], stateVersion: wiring.stateVersion, minimumStateVersion: wiring.minimumStateVersion,
         isLive: wiring.isLive, newId: wiring.newId,
-        send: intent => wiring.send(credentials => api.send(credentials.token, credentials.proof, { ...intent, ...wiring.origin(credentials) })),
+        // transmitted is told inside the open handle, right before the request: a refusal before it sent nothing.
+        send: (intent, transmitted) => wiring.send(credentials => {
+          transmitted?.();
+          return api.send(credentials.token, credentials.proof, { ...intent, ...wiring.origin(credentials) });
+        }),
         check: intent => wiring.run(credentials => api.status(credentials.token, credentials.proof, { ...intent, ...wiring.origin(credentials) })),
         read: reads.read, readResult: intent => reads.readResult(intent), onUpdate: wiring.onUpdate,
       }),

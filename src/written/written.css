@@ -19,3 +19,5 @@
 .written-refine { justify-self: start; }
 .written-step-back { min-width: 48px; justify-self: start; font-size: 20px; line-height: 1; }
 .written-summary-actions { display: flex; flex-wrap: wrap; gap: 12px; }
+/* Above the blurred cover of automatic recovery (styles/app.css .recovery-overlay): Exit stays reachable. */
+.written-header { position: relative; z-index: 2; }

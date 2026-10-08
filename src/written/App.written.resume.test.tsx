@@ -2,7 +2,8 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { App } from "../app/App";
-import { app, answer, compatibility, dropRequest, field, loseReply, pairText, requests, row, startWords, useWrittenAppEnvironment } from "./writtenApp.test-support";
+import { app, answer, compatibility, dropRequest, field, loseReply, offlineStudy, pairText, requests, row, startWords,
+  useWrittenAppEnvironment } from "./writtenApp.test-support";
 import { id, profile, response } from "./writtenFixtures.test-support";
 
 useWrittenAppEnvironment();
@@ -40,13 +41,14 @@ describe("Written session resume after a relaunch (В02)", () => {
   it("an unknown answer of the old document is resolved by its ID before any POST and never submitted twice", async () => {
     const a = app({ cards: [6, 7] }); const first = render(<App />);
     await startWords();
-    loseReply(a, "answer.submit");
+    // The old document cannot check the lost answer: it is left unknown there.
+    loseReply(a, "answer.submit"); const online = offlineStudy(a);
     fireEvent.change(field(), { target: { value: "falsch" } });
     fireEvent.click(screen.getByRole("button", { name: "Проверить" }));
     await waitFor(() => expect(a.kinds()).toContain("answer.submit"));
     const lost = a.posts().at(-1)!;
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 50)); });
-    first.unmount();
+    first.unmount(); online();
     const mark = a.fetcher.mock.calls.length;
     render(<App />);
     await waitFor(() => expect(requests(a, mark)).toContain(`GET /api/v1/commands/${lost.command_id}`));

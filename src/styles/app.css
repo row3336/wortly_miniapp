@@ -114,6 +114,28 @@ button:focus-visible { outline: 2px solid var(--text); outline-offset: 3px; }
   background: var(--surface);
   color: var(--text);
 }
+/*
+ * Automatic recovery of a study action (Я15.2): the study content stays in place, blurred under an indicator and the
+ * connection status. The study header (title, Exit) is lifted above it by its screen.
+ */
+.recovery-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 16px;
+  padding: 24px;
+  text-align: center;
+  color: var(--text);
+  background: color-mix(in srgb, var(--bg) 60%, transparent);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  overflow-wrap: anywhere;
+}
+.recovery-overlay p { margin: 0; max-width: 420px; }
+.recovery-overlay .wortly-loader { margin-bottom: 0; }
 @keyframes wortly-loading { to { stroke-dasharray: 100 100; } }
 @media (prefers-reduced-motion: reduce) { .wortly-loader-arc { animation: none; stroke-dasharray: 50 100; } }
 @media (max-width: 359px) {

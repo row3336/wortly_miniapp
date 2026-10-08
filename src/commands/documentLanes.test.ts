@@ -6,17 +6,17 @@ import { DocumentLanes, type DocumentLane, type LaneWiring } from "./documentLan
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 type Action = { kind: "session.stop" | "item.mark"; session_id: string };
-type State = { pending: boolean; phase: string; outcome: string | null; sessionId: string | null;
-  resolved: { kind: string; sessionId: string } | null; current: { status: string; session_id?: string } | null;
-  closedSession: null; stateVersion: string | null };
+type State = { pending: boolean; phase: string; kind: string | null; outcome: string | null; sessionId: string | null;
+  pendingIntent: null; resolved: { commandId: string; kind: string; sessionId: string } | null; problem: string | null;
+  canRetry: boolean; current: { status: string; session_id?: string } | null; closedSession: null; stateVersion: string | null };
 type Read = { state_version: string; current: { status: string; session_id: string } };
 type ResultRead = { state_version: string; step: { status: string; session_id: string } };
 
 function deferred() { let resolve!: () => void; const promise = new Promise<void>(yes => { resolve = yes; }); return { promise, resolve }; }
 /** A scripted lane: begin sends through the document guard and records what the document asked of it. */
 function lane(wiring: LaneWiring<State>) {
-  const state: State = { pending: false, phase: "idle", outcome: null, sessionId: null, resolved: null, current: null,
-    closedSession: null, stateVersion: null };
+  const state: State = { pending: false, phase: "idle", kind: null, outcome: null, sessionId: null, pendingIntent: null,
+    resolved: null, problem: null, canRetry: false, current: null, closedSession: null, stateVersion: null };
   const lane = { wiring, state, gate: null as ReturnType<typeof deferred> | null,
     refresh: vi.fn(async () => { await lane.gate?.promise; }),
     begin: vi.fn(async (action: Action) => {
@@ -24,9 +24,12 @@ function lane(wiring: LaneWiring<State>) {
       await wiring.send(async credentials => credentials.token);
       await lane.gate?.promise;
       state.pending = false; state.phase = "settled"; state.outcome = "accepted";
-      state.resolved = { kind: action.kind, sessionId: action.session_id }; wiring.onUpdate({ ...state });
+      state.resolved = { commandId: id(100), kind: action.kind, sessionId: action.session_id }; wiring.onUpdate({ ...state });
     }),
-    retry: vi.fn(async () => {}), dispose: vi.fn(), snapshot: () => ({ ...state }) };
+    retry: vi.fn(async () => {}), dispose: vi.fn(), snapshot: () => ({ ...state }),
+    // No kind of this scripted mode recovers automatically: these are never reached.
+    prepare: vi.fn(() => new Error("manual mode")), start: vi.fn(async () => {}), resend: vi.fn(async () => {}),
+    lastFailure: () => null, release: vi.fn(async () => {}) };
   return lane;
 }
 const profile = (version = "5"): Profile => ({ profile_id: id(1), role: "user", ui_language: "ru", dictionary_language: "ru",
@@ -48,7 +51,7 @@ function fixture(minimum?: () => string | null) {
   const owner = new DocumentLanes<State, Action, Read, ResultRead>({ access: () => access,
     transport: { fetcher: vi.fn(), timeoutMs: 1, maxResponseBytes: 1 }, storage: { get: vi.fn(), set: vi.fn(), remove: vi.fn() },
     newId: () => id(100), minimumStateVersion: minimum, onUpdate: vi.fn() },
-  { label: "test", readSession, readResult, controller: wiring => (lanes[wiring.lane] = lane(wiring)) });
+  { label: "test", readSession, readResult, controller: wiring => (lanes[wiring.lane] = lane(wiring)), automatic: [] });
   return { owner, lanes: lanes as Record<DocumentLane, ReturnType<typeof lane>>, readSession, readResult, open,
     revoke: () => { live = false; } };
 }

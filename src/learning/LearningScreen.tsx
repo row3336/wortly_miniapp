@@ -1,6 +1,8 @@
 import { useRef, type ReactNode } from "react";
 import type { LearningPreviewAddress } from "../api/generated";
+import { recoveryCopy } from "../commands/commandCopy";
 import { CommandRecovery } from "../commands/CommandRecovery";
+import { RecoveryOverlay, recoveryConflict, recoveryScreen } from "../commands/RecoveryOverlay";
 import { StepBackButton, stepBackCopy } from "../commands/StepBackButton";
 import { useEnterNext } from "../commands/useEnterNext";
 import type { Language } from "../i18n/language";
@@ -65,7 +67,9 @@ export function LearningScreen({ state, language, submitOnEnter, actions, render
   const isClosed = state.phase === "closed" || state.phase === "disposed";
   // A refused «Шаг назад» says that this right is gone; the re-read state shows what holds now (CT 2.2).
   const refusedUndo = primary.outcome === "rejected" && primary.resolved?.kind === "result.undo" && state.problem === primary.rejectionCode;
-  const problem = refusedUndo && state.problem !== "SESSION_CLOSED" ? stepBackCopy[language].unavailable
+  // Я17 (CT §6.1 п. 10): the conflict's own text; its action is «Выйти» of the header.
+  const problem = recoveryConflict(state.commands) ? recoveryCopy[language].conflict
+    : refusedUndo && state.problem !== "SESSION_CLOSED" ? stepBackCopy[language].unavailable
     : state.problem === "NO_MATERIAL" ? t.noMaterial
     : state.problem === "SESSION_BUSY" ? t.busy
     : state.problem === "ASSIGNMENT_STALE" ? t.changed
@@ -73,8 +77,12 @@ export function LearningScreen({ state, language, submitOnEnter, actions, render
     : state.problem === "SESSION_CLOSED" ? t.closed
     : state.problem === "storage" ? primary.outcome === "accepted" || stop.outcome === "accepted" ? t.savedLocal : t.local
     : state.problem ? t.stale : null;
-  const unresolved = primary.pending && primary.outcome === null || stop.pending && stop.outcome === null;
-  const showRecovery = !isClosed && (unresolved || problem || state.phase === "stale");
+  // A study result recovers by itself: no check or retry button for it (Я15, CT §6.1 п. 2); Stop keeps its own.
+  const automatic = state.commands.automaticPrimary;
+  const manualLanes = automatic ? [stop] : [primary, stop];
+  const unresolved = manualLanes.some(lane => lane.pending && lane.outcome === null);
+  const showRecovery = !isClosed && (unresolved || !automatic && (problem || state.phase === "stale"));
+  const recovering = isClosed ? null : recoveryScreen(state.commands);
   const status = state.phase === "submitting" ? t.saving : state.phase === "visible_unconfirmed" ? t.present
     : state.phase === "unknown" ? t.unknown : undefined;
   const pendingForgot = primary.pending && primary.outcome === null && primary.pendingIntent?.kind === "answer.submit"
@@ -123,8 +131,9 @@ export function LearningScreen({ state, language, submitOnEnter, actions, render
     </p>}
     {state.phase === "unknown" && !state.question && !unknownAnswer && !result && <p role="status">{t.unknown}</p>}
     {problem && !isClosed && <p role="status">{problem}</p>}
-    {showRecovery && <CommandRecovery className="learning-recovery" language={language} lanes={[primary, stop]}
+    {showRecovery && <CommandRecovery className="learning-recovery" language={language} lanes={manualLanes}
       canRetryPrimary={state.canRetryPrimary} canRetryStop={stop.canRetry}
       onCheck={() => { void actions.refresh(); }} onRetry={lane => { void actions.retry(lane); }} />}
+    {recovering && <RecoveryOverlay screen={recovering} language={language} />}
   </main>;
 }

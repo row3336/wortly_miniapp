@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WrittenIntent } from "./writtenIntent";
 import { WrittenViewController } from "./writtenViewController";
-import { deferred, id, writtenFixture, type ServerOptions } from "./writtenFixtures.test-support";
+import { deferred, id, tick, writtenFixture, type ServerOptions } from "./writtenFixtures.test-support";
 
 const owners: WrittenViewController[] = [];
 afterEach(() => { owners.splice(0).forEach(owner => owner.dispose()); vi.useRealTimers(); });
@@ -50,46 +50,81 @@ describe("written start and question", () => {
 });
 
 describe("one command_id per intent (Т02)", () => {
-  it("a timeout before commit keeps the same command_id: check by GET, then a manual retry resends that ID", async () => {
-    const h = harness(); await h.started(); h.view.setDraft("Haus");
+  it("a timeout before commit keeps the same command_id: checked by GET at once, resent with that ID after 2 s (Я15, Я15.6)", async () => {
+    vi.useFakeTimers(); const h = harness(); await h.started(); h.view.setDraft("Haus");
     h.dropRequest(); await h.view.submit();
-    expect(h.view.snapshot()).toMatchObject({ phase: "unknown", draft: "Haus", canRetryPrimary: false, answer: null });
-    const first = h.posts().at(-1)!;
-    await h.view.refresh();
+    const first = h.posts().at(-1)!, ids = h.newId.mock.calls.length;
+    await tick(0);
     expect(h.gets(`/commands/${first.command_id}`)).toHaveLength(1);
-    expect(h.view.snapshot()).toMatchObject({ phase: "unknown", draft: "Haus", canRetryPrimary: true });
-    const ids = h.newId.mock.calls.length;
-    await h.view.retry();
+    // No manual retry: the machine waits for the pause of retry №1.
+    expect(h.view.snapshot()).toMatchObject({ phase: "unknown", draft: "Haus", canRetryPrimary: false, answer: null,
+      commands: { recovery: { commandId: first.command_id, state: { name: "retry_wait", attempt: 2 } } } });
+    await tick(1999);
+    expect(h.posts().filter(post => post.kind === "answer.submit")).toHaveLength(1);
+    await tick(1);
     const answers = h.posts().filter(post => post.kind === "answer.submit");
     expect(answers).toHaveLength(2); expect(answers[1]).toEqual(first);
+    // The check right before the retry asked by the same ID again.
+    expect(h.gets(`/commands/${first.command_id}`)).toHaveLength(2);
     expect(h.newId.mock.calls.length).toBe(ids);
-    expect(h.view.snapshot()).toMatchObject({ phase: "result_correct", answer: { result: { grade: 4 } } });
+    await tick(0);
+    expect(h.view.snapshot()).toMatchObject({ phase: "result_correct", answer: { result: { grade: 4 } }, timer: { durationMs: 3000 } });
   });
-  it("a reply lost after commit is resolved by the same ID without a second POST", async () => {
-    const h = harness(); await h.started(); h.view.setDraft("Haus");
+  it("a reply lost after commit is resolved by the same ID without a second POST, its timer runs from the confirmation", async () => {
+    vi.useFakeTimers(); const h = harness(); await h.started(); h.view.setDraft("Haus");
     h.loseReply(); await h.view.submit();
-    expect(h.view.snapshot().phase).toBe("unknown");
-    await h.view.refresh();
+    await tick(0);
     expect(h.kinds().filter(kind => kind === "answer.submit")).toHaveLength(1);
-    expect(h.view.snapshot()).toMatchObject({ phase: "result_correct", answer: { result: { grade: 4 } } });
+    expect(h.view.snapshot()).toMatchObject({ phase: "result_correct", answer: { result: { grade: 4 } }, timer: { durationMs: 3000 },
+      commands: { recovery: { state: { name: "settled" }, sends: 1 } } });
+    await tick(10000);
+    expect(h.kinds().filter(kind => kind === "answer.submit")).toHaveLength(1);
   });
-  it("after a reload a saved intent is checked by its original ID and never sent automatically", async () => {
+  it("after a reload a saved intent is checked by its original ID; with an unknown count it is never sent (CT §6.1 п. 4)", async () => {
+    vi.useFakeTimers();
     const saved: WrittenIntent = { command_id: id(400), session_id: id(3), kind: "answer.submit", assignment_id: id(6), payload: { text: "Haus" } };
     const h = harness({ active: true, saved: { primary: saved } }, "normal", id(3));
-    await h.view.refresh();
-    expect(h.gets(`/commands/${id(400)}`)).toHaveLength(1); expect(h.posts()).toEqual([]);
-    expect(h.view.snapshot()).toMatchObject({ phase: "unknown", draft: "Haus", canRetryPrimary: true });
-    await h.view.retry();
-    expect(h.posts()).toEqual([{ ...saved, client_instance_id: id(1), document_id: id(2) }]);
+    await h.view.refresh(); await tick(0);
+    expect(h.gets(`/commands/${id(400)}`).length).toBeGreaterThanOrEqual(1); expect(h.posts()).toEqual([]);
+    expect(h.view.snapshot()).toMatchObject({ phase: "unknown", draft: "Haus", canRetryPrimary: false,
+      commands: { recovery: { state: { name: "counter_unknown", cause: "unknown" }, sends: null } } });
+    const checks = h.gets(`/commands/${id(400)}`).length;
+    // Only checks on the probe schedule (5, 10, 20, then 30 s), never a POST and never an exhaustion:
+    // at 5, 15, 35, 65, … 275 s of these five minutes.
+    for (let second = 0; second < 300; second += 5) await tick(5000);
+    expect(h.posts()).toEqual([]);
+    expect(h.gets(`/commands/${id(400)}`).length).toBe(checks + 11);
+    expect(h.view.snapshot().commands.recovery?.state.name).toBe("counter_unknown");
+    await h.view.retry(); expect(h.posts()).toEqual([]);
   });
-  it("a saved answer for a question no longer shown is checked by its ID but never offered for retry (TA §9)", async () => {
+  it("a saved answer for a question no longer shown is never retried; the shown question takes a new answer (TA §9, CT §6.1 п. 7)", async () => {
+    vi.useFakeTimers();
     const saved: WrittenIntent = { command_id: id(401), session_id: id(3), kind: "answer.submit", assignment_id: id(7), payload: { text: "Haus" } };
     const h = harness({ active: true, saved: { primary: saved } }, "normal", id(3));
-    await h.view.refresh();
-    expect(h.gets(`/commands/${id(401)}`)).toHaveLength(1);
-    expect(h.view.snapshot()).toMatchObject({ problem: "step_changed", canRetryPrimary: false,
-      commands: { primary: { pending: true, canRetry: false } } });
+    await h.view.refresh(); await tick(0);
+    // The changed step is a final outcome: the record goes and the screen continues by the server's state (CT §6.1 п. 7).
+    expect(h.view.snapshot()).toMatchObject({ phase: "question", question: { id: id(6), status: "presented" }, problem: null,
+      canRetryPrimary: false, canForget: true, commands: { primary: { pending: false }, recovery: { state: { name: "terminated", reason: "step_stale" } } } });
+    expect(h.values.has("wortly.pending.written_session")).toBe(false);
+    const checks = h.gets(`/commands/${id(401)}`).length;
+    await tick(60_000);
+    expect(h.gets(`/commands/${id(401)}`)).toHaveLength(checks);
     await h.view.retry(); expect(h.posts()).toEqual([]);
+    h.view.setDraft("Haus"); await h.view.submit(); await tick();
+    expect(h.posts().map(post => [post.kind, post.assignment_id])).toEqual([["answer.submit", id(6)]]);
+    expect(h.posts()[0].command_id).not.toBe(id(401));
+    expect(h.view.snapshot().phase).toBe("result_correct");
+  });
+  it("a saved answer of a step that moved on to an unshown question: the next question is presented as usual", async () => {
+    vi.useFakeTimers();
+    const saved: WrittenIntent = { command_id: id(402), session_id: id(3), kind: "answer.submit", assignment_id: id(6), payload: { text: "Haus" } };
+    const h = harness({ active: true, saved: { primary: saved } }, "normal", id(3));
+    // The server already moved past card 6 (another answer of it was saved); card 7 is issued but not shown yet.
+    Object.assign(h.server.state, { index: 1, assignment: "prefetched", version: h.server.state.version + 1 });
+    await h.view.refresh(); await tick(0); await tick(0);
+    expect(h.posts().map(post => [post.kind, post.assignment_id])).toEqual([["assignment.present", id(7)]]);
+    expect(h.view.snapshot()).toMatchObject({ phase: "question", question: { id: id(7), status: "presented" },
+      commands: { primary: { pending: false } } });
   });
   it("a different payload under a saved ID is blocked, never resent", async () => {
     const h = harness({ active: true }, "normal", id(3));
@@ -134,19 +169,20 @@ describe("result timer (Т09, A02)", () => {
   });
   it("an unknown 4→5 does not claim 4 as current, blocks the next answer and is resolved by its own ID", async () => {
     vi.useFakeTimers(); const h = harness(); await h.started(); await h.answer("Haus");
-    h.loseReply(); await h.view.grade(5);
-    await vi.advanceTimersByTimeAsync(10000);
+    h.loseReply(); const online = h.offline(); await h.view.grade(5);
+    await tick(10000);
     expect(h.view.snapshot()).toMatchObject({ phase: "unknown", grades: [], canNext: false, timer: null,
-      commands: { primary: { pendingIntent: { kind: "result.grade", payload: { grade: 5 } } } } });
+      commands: { primary: { pendingIntent: { kind: "result.grade", payload: { grade: 5 } } }, recovery: { state: { name: "unreachable" } } } });
     expect(h.kinds().at(-1)).toBe("result.grade");
-    await h.view.refresh();
+    // The connection returns: the next check finds the grade by its ID; nothing is sent again.
+    online(); await tick(20000);
     expect(h.kinds().filter(kind => kind === "result.grade")).toHaveLength(1);
-    expect(h.view.snapshot()).toMatchObject({ answer: { result: { grade: 5, version: "2" } } });
+    expect(h.server.results.get(id(706))).toMatchObject({ grade: 5, version: 2 });
   });
   it.each(["normal", "accelerated"] as const)("%s: a wrong answer waits or moves on after 2 s", async mode => {
     vi.useFakeTimers(); const h = harness({}, mode); await h.started(); await h.answer("falsch");
     expect(h.view.snapshot().timer?.durationMs ?? null).toBe(mode === "normal" ? null : 2000);
-    await vi.advanceTimersByTimeAsync(5000);
+    await tick(5000);
     expect(h.kinds().at(-1)).toBe(mode === "normal" ? "answer.submit" : "assignment.present");
   });
   it("after background the result waits for «Далее» and no card is turned in the background (Т90)", async () => {
@@ -328,31 +364,29 @@ describe("written correction (C-WCORR: Т06, Т07/Т70, CT:111, TA:111)", () => 
     expect(h.kinds().filter(kind => kind === "assignment.present")).toHaveLength(2);
   });
   it("a correction whose reply is lost keeps one command_id; its unknown outcome blocks the answer to B", async () => {
+    vi.useFakeTimers();
     const h = harness({ cards: [6, 7, 8] }); await h.started(); await h.answer("falsch"); await h.view.next();
     h.view.setDraft("B text"); h.view.previousResult();
-    h.dropRequest(); await h.view.correct();
+    h.dropRequest(); const ids = h.newId.mock.calls.length; await h.view.correct();
     const first = h.posts().at(-1)!;
     expect(first).toMatchObject({ kind: "result.correct", result_id: id(706) });
+    await tick(0);
     expect(h.view.snapshot()).toMatchObject({ phase: "unknown", canNext: false, canSubmit: false, grades: [], canCorrect: false,
-      commands: { primary: { pendingIntent: { kind: "result.correct" } } } });
+      canRetryPrimary: false, commands: { primary: { pendingIntent: { kind: "result.correct" } }, recovery: { state: { name: "retry_wait" } } } });
     await h.view.submit(); await h.view.next();
     expect(h.kinds().filter(kind => kind === "answer.submit")).toHaveLength(1);
-    await h.view.refresh();
-    expect(h.gets(`/commands/${first.command_id}`)).toHaveLength(1);
-    expect(h.view.snapshot()).toMatchObject({ phase: "unknown", canRetryPrimary: true });
-    const ids = h.newId.mock.calls.length;
-    await h.view.retry();
+    await tick(2000);
     expect(h.posts().filter(post => post.kind === "result.correct")).toEqual([first, first]);
-    expect(h.newId.mock.calls.length).toBe(ids);
+    expect(h.newId.mock.calls.length).toBe(ids + 1);
+    await tick(0);
     expect(h.view.snapshot()).toMatchObject({ phase: "previous_result", answer: { result: { grade: 4 } }, draft: "B text" });
     await h.view.next(); await h.view.submit();
     expect(h.posts().at(-1)).toMatchObject({ kind: "answer.submit", assignment_id: id(7), payload: { text: "B text" } });
   });
   it("a correction committed but replied lost is resolved by its ID, never sent twice", async () => {
-    const h = harness(); await h.started(); await h.answer("falsch");
+    vi.useFakeTimers(); const h = harness(); await h.started(); await h.answer("falsch");
     h.loseReply(); await h.view.correct();
-    expect(h.view.snapshot().phase).toBe("unknown");
-    await h.view.refresh();
+    await tick(0);
     expect(h.kinds().filter(kind => kind === "result.correct")).toHaveLength(1);
     expect(h.view.snapshot()).toMatchObject({ phase: "result_correct", answer: { result: { grade: 4, version: "2" } }, grades: [3, 4, 5] });
   });
@@ -369,11 +403,11 @@ describe("written correction (C-WCORR: Т06, Т07/Т70, CT:111, TA:111)", () => 
   });
   it("an unknown correction keeps its result visible: after background it waits for «Далее» (TA:109)", async () => {
     vi.useFakeTimers(); const h = harness(); await h.started(); await h.answer("falsch");
-    h.loseReply(); await h.view.correct();
+    h.loseReply(); const online = h.offline(); await h.view.correct(); await tick(0);
     expect(h.view.snapshot().phase).toBe("unknown");
-    h.view.suspend(); h.replace(); await h.view.resume();
+    h.view.suspend(); online(); h.replace(); await h.view.resume(); await tick(0);
     expect(h.view.snapshot()).toMatchObject({ phase: "result_correct", answer: { result: { grade: 4 } }, timer: null, canNext: true });
-    await vi.advanceTimersByTimeAsync(10000); expect(h.kinds().at(-1)).toBe("result.correct");
+    await tick(10000); expect(h.kinds().at(-1)).toBe("result.correct");
     await h.view.next(); expect(h.kinds().at(-1)).toBe("assignment.present");
   });
   it("a correction confirmed in the foreground runs the ordinary result timer of a correct answer", async () => {

@@ -29,8 +29,11 @@ export type StudyViewSettings<S> = {
 };
 type StudyController<S> = {
   snapshot(): S;
-  suspend(): void;
+  /** "disabled": another route or unconfirmed settings; automatic recovery of the visible window goes on. */
+  suspend(reason?: "background" | "disabled"): void;
   resume(): Promise<void>;
+  /** A visible window got its fresh open handle while study stays disabled: recovery goes on (Я15.7). */
+  resumeRecovery(): void;
   refresh(): Promise<void>;
   dispose(): void;
   setDraft(text: string): void;
@@ -101,7 +104,7 @@ export function useStudyDocument<O extends StudyDocumentOptions, V extends Study
     document.addEventListener("visibilitychange", suspend, true);
     window.addEventListener("pageshow", suspend, true);
     if (document.visibilityState !== "visible") suspend();
-    else if (!bound.lastEnabled) controller.suspend();
+    else if (!bound.lastEnabled) controller.suspend("disabled");
     repaint();
     void controller.refresh();
     return () => {
@@ -127,14 +130,15 @@ export function useStudyDocument<O extends StudyDocumentOptions, V extends Study
     const returning = enabled && !bound.lastEnabled;
     if (!enabled && bound.lastEnabled) bound.startEpoch++;
     bound.lastEnabled = enabled;
-    if (!enabled) bound.controller.suspend();
+    if (!enabled) bound.controller.suspend("disabled");
     if (bound.lastAccess !== options.access) {
       bound.lastAccess = options.access;
       if (document.visibilityState !== "visible") {
         bound.waitingForAccess = options.access; bound.controller.suspend(); void bound.controller.refresh();
       } else if (bound.waitingForAccess !== options.access) {
         bound.waitingForAccess = null;
-        if (enabled) activate(); else void bound.controller.refresh();
+        if (enabled) activate();
+        else { bound.controller.resumeRecovery(); void bound.controller.refresh(); }
       }
     } else if (returning && !bound.waitingForAccess && document.visibilityState === "visible") activate();
     else if (advanced && !bound.waitingForAccess) void bound.controller.refresh();

@@ -104,3 +104,13 @@ export function dropRequest(a: ReturnType<typeof app>, kind: string) {
   });
 }
 
+/** Study reads (status checks by ID, session reads) fail like a lost connection until the returned restore is called. */
+export function offlineStudy(a: ReturnType<typeof app>) {
+  const base = a.fetcher.getMockImplementation()!;
+  a.fetcher.mockImplementation(async (url, init) => {
+    const path = new URL(String(url), "http://localhost").pathname;
+    if ((init?.method ?? "GET") === "GET" && (path.includes("/commands/") || path.includes("/sessions/"))) throw new TypeError("network");
+    return base(url, init);
+  });
+  return () => { a.fetcher.mockImplementation(base); };
+}

@@ -29,13 +29,19 @@ describe("WrittenScreen: correction", () => {
     fireEvent.change(field(), { target: { value: "falsch" } });
     fireEvent.click(screen.getByRole("button", { name: "Проверить" }));
     await screen.findByText("Есть ошибка");
-    f.loseReply();
+    // The reply is lost and the server stays unreachable for the check.
+    f.loseReply(); f.offline();
     fireEvent.click(screen.getByRole("button", { name: "Исправить ответ" }));
     await screen.findByText("Проверяем изменение");
+    // Automatic recovery waits for the server under a blurred cover with its status (Я15.2).
+    await screen.findByText("Нет связи с сервером. Ждём, когда связь восстановится…");
     // The submitted text stays visible; nothing claims the 4 yet and no revision is offered.
     expect(screen.getByText("falsch")).toBeTruthy();
     expect(screen.queryByText("Ответ исправлен")).toBeNull();
     expect(screen.queryByRole("button", { name: "Исправить ответ" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Легко" })).toBeNull();
+    // No manual check or resend (Я15); Exit (Stop) stays.
+    for (const name of ["Проверить состояние", "Повторить отправку"]) expect(screen.queryByRole("button", { name })).toBeNull();
+    expect(screen.getByRole("button", { name: "Выйти" })).toBeTruthy();
   });
 });
