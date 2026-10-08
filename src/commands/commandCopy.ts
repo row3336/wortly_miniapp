@@ -1,7 +1,9 @@
 /**
  * Labels of the command state controls, the same in every study screen: check by the same ID, resend, retry Stop.
  * updateDevice: the outcome is confirmed, only the local record could not be cleared; the control repeats that cleanup
- * and checks nothing (not the manual check CT §6.1 п. 2 forbids). Working text, pending owner approval.
+ * and checks nothing (not the manual check CT §6.1 п. 2 forbids).
+ * retryStop (the Q30 button): wording approved by the owner (R10, 08.10.2026); display conditions follow TA.
+ * check, retry and updateDevice: working text, pending owner approval.
  */
 export const commandCopy = {
   ru: { check: "Проверить состояние", retry: "Повторить отправку", retryStop: "Повторить завершение", updateDevice: "Обновить данные на устройстве" },
@@ -11,10 +13,11 @@ export const commandCopy = {
 
 /**
  * The status of the automatic recovery of a study action (Я15.2: a blurred screen, an indicator and a clear connection
- * status; no buttons). Working copy from D-RECOV RESULTS_VP table 9.2 (9.2.1–9.2.4); unsaved is a working text for
- * the exhausted budget until the automatic closure of CP4. root decision, pending owner (4.6-В8).
+ * status; no buttons). checking, offline, resending, maintenance, conflict (table 9.2.1–9.2.5):
+ * wording approved by the owner (R10, 08.10.2026); display conditions follow TA.
+ * unsaved: a working interim text for the exhausted budget until the automatic closure of CP4; it is NOT the text
+ * of 9.2.7 and stays pending owner approval (4.6-В8).
  * conflict: the same command_id carries another payload (Я17, CT §6.1 п. 10); its action is the screen's own «Выйти».
- * ru is the owner's text; uk and en follow table 9.2.5 — translation pending owner approval.
  */
 export const recoveryCopy = {
   ru: { checking: "Проверяем, сохранилось ли действие…", offline: "Нет связи с сервером. Ждём, когда связь восстановится…",
