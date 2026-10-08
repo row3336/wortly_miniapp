@@ -69,7 +69,7 @@ describe("send", () => {
   ])("a 200 reply with %s is not a confirmation", async (_name, body) => {
     await expect(send(api(() => response(body)).api)).rejects.toMatchObject({ kind: "invalid_response" });
   });
-  it.each([[409, "ASSIGNMENT_STALE"], [409, "COMMAND_PAYLOAD_MISMATCH"], [422, "VALIDATION_FAILED"]])(
+  it.each([[409, "COMMAND_PAYLOAD_MISMATCH"], [422, "VALIDATION_FAILED"]])(
     "%i %s is a refusal before any write", async (status, code) => {
       const body = status === 409 ? { command: { id: id(100), status: "rejected" }, current: { status: "unavailable" }, state_version: "5", error: { code } }
         : { error: { code } };

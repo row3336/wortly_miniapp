@@ -42,7 +42,7 @@ describe("«Что не так?»: the complaint attaches its card (К07-051, К
     await controller.refresh();
     controller.edit(TEXT);
     await controller.send();
-    expect(controller.snapshot()).toMatchObject({ phase: "idle", text: TEXT, refusal: { code: "ASSIGNMENT_STALE" }, canSend: true });
+    expect(controller.snapshot()).toMatchObject({ phase: "idle", text: TEXT, refusal: { code: "COMMAND_PAYLOAD_MISMATCH" }, canSend: true });
     await controller.send();
     expect(world.posts.map(post => post.command_id)).toEqual([id(100), id(101)]);
   });

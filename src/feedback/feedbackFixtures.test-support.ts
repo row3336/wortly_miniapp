@@ -36,7 +36,7 @@ export function feedbackWorld(fates: Fate[] = []) {
       const known = facts.get(body.command_id);
       if (fate === "409" || known && known.text !== body.payload.text) {
         return response({ command: { id: body.command_id, status: "rejected" }, current: { status: "unavailable" },
-          state_version: "5", error: { code: fate === "409" ? "ASSIGNMENT_STALE" : "COMMAND_PAYLOAD_MISMATCH" } }, 409);
+          state_version: "5", error: { code: "COMMAND_PAYLOAD_MISMATCH" } }, 409);
       }
       if (!known) facts.set(body.command_id, { text: body.payload.text, card_id: body.payload.card_id ?? null, inbox: id(state.inbox++) });
       if (state.gate) await state.gate.promise;

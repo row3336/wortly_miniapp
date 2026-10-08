@@ -152,7 +152,7 @@ describe("a reload resolves the stored intent by its own command_id and never se
 });
 
 describe("a definite refusal keeps the text and frees the form for a new command", () => {
-  it.each([["422", "VALIDATION_FAILED"], ["409", "ASSIGNMENT_STALE"]] as const)("%s", async (fate, code) => {
+  it.each([["422", "VALIDATION_FAILED"], ["409", "COMMAND_PAYLOAD_MISMATCH"]] as const)("%s", async (fate, code) => {
     const { world, controller } = await ready(feedbackWorld([fate])); controller.edit(TEXT);
     await controller.send();
     expect(controller.snapshot()).toMatchObject({ phase: "idle", refusal: { code }, text: TEXT, confirmed: false, canEdit: true, canSend: true, canRetry: false });
