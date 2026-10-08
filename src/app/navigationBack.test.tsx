@@ -1,3 +1,4 @@
+import { useLayoutEffect } from "react";
 import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useBackLayer, useUnsavedFieldBack, type BackLayer } from "./navigationBack";
@@ -118,3 +119,15 @@ describe("a document check holds Back", () => {
   });
 });
 
+// 2.33 tail: the check hides the screens in one commit, so Back must be bound in that same commit (layout phase),
+// not by a passive effect after the paint.
+describe("a document check binds Back within the commit that shows it", () => {
+  it("Back is already bound when the layout effects of the same commit run", () => {
+    const boundAtLayout: number[] = [];
+    function LayoutProbe() { useLayoutEffect(() => { boundAtLayout.push(back.handlers); }); return null; }
+    const view = render(<><Layer layer="check" handler={null} /><LayoutProbe /></>);
+    boundAtLayout.length = 0;
+    view.rerender(<><Layer layer="check" handler={vi.fn()} /><LayoutProbe /></>);
+    expect(boundAtLayout).toEqual([1]);
+  });
+});

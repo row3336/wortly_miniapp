@@ -433,7 +433,9 @@ export class ConjugationDocumentController implements ConjugationDocumentActions
     else if (display.kind === "step") phase = assignment?.status === "presented" ? "question" : "prefetched";
     else if (assignment?.status === "prefetched") phase = "prefetched";
     else if (step?.step.status === "summary") phase = "summary";
-    else phase = this.sessionId ? "stale" : "idle";
+    // A suspended owner hides its session until its window's foreground answers: that is loading, not a failed
+    // refresh. Otherwise every return from the background reads as an error (2.33; same as the oral owner).
+    else phase = this.sessionId ? this.foregroundBlocked ? "loading" : "stale" : "idle";
 
     return {
       phase, sessionId: live ? this.sessionId : null, stateVersion: this.floor, terminalSessionIds: [...this.terminal],

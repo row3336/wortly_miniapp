@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef } from "react";
+import { useLayoutEffect, useRef } from "react";
 import { bindBackButton } from "../platform/telegram";
 
 /**
@@ -46,13 +46,15 @@ function dispatcherOf(win: Window): BackDispatcher {
 
 /**
  * Supplies native Back for one layer while `handler` is present. Only a committed render supplies the handler,
- * and the binding follows presence alone: a new handler identity never hides and shows the button again.
+ * and the binding follows presence alone: a new handler identity never hides and shows the button again. The layer
+ * is bound in the layout phase of that commit, not after the paint: the document check hides the screens in the same
+ * commit, and a passive effect would leave one frame in which Back still reaches a screen that is out of sight.
  */
 export function useBackLayer(layer: BackLayer, handler: (() => void) | null): void {
   const current = useRef<() => void>(() => {});
   useLayoutEffect(() => { if (handler) current.current = handler; });
   const present = handler !== null;
-  useEffect(() => present ? dispatcherOf(window).add({ layer, run: () => current.current() }) : undefined, [layer, present]);
+  useLayoutEffect(() => present ? dispatcherOf(window).add({ layer, run: () => current.current() }) : undefined, [layer, present]);
 }
 
 /**

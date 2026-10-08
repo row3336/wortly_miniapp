@@ -520,7 +520,8 @@ describe("QA-3 background on the result (DC 2.19, К05-152) with the real contro
     ref.current.setActivity({ enabled: true, visible: false }); // what useConjugationDocument does on visibilitychange
     const hidden = d.show({ active: false });
     expect(d.running()).toHaveLength(0);
-    expect(hidden.screen).toBe("stale");
+    // A suspended owner waits for its window's foreground: loading, not a failed refresh (2.33).
+    expect(hidden.screen).toBe("loading");
     // Return: the host supplies a fresh access; the hook masks (state null) and builds a new controller with the retained address.
     const a2 = m.access(2);
     d.setAccess(a2); d.show({ state: null });

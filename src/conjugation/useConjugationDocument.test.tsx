@@ -167,7 +167,8 @@ describe("useConjugationDocument adapter", () => {
     expect(result.current.state).toMatchObject({ canSubmit: false, canStop: false });
     act(() => { setVisibility("visible"); document.dispatchEvent(new Event("visibilitychange")); });
     await act(async () => { await result.current.actions.refresh(); });
-    expect(result.current.state).toMatchObject({ canSubmit: false, canStop: false });
+    // Waiting for the window's foreground is loading, not a failed refresh (2.33).
+    expect(result.current.state).toMatchObject({ canSubmit: false, canStop: false, phase: "loading", problem: null });
     await act(async () => { await result.current.actions.stop("stop"); });
     expect(model.posted).toEqual([]);
     rerender({ ...first, access: access(id(2), 2) });

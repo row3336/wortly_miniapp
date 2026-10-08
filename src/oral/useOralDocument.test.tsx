@@ -388,3 +388,47 @@ describe("oral React Adapter: own closed address across same-identity access rep
     expect(ui.result.current.state?.sessionId).toBeNull(); expect(reads(f, id(90))).toBe(0);
   });
 });
+
+// 2.33 tail (QO-B1): the owner rebuilt on return from the background must not turn a busy session into a generic failure.
+describe("oral React Adapter: SESSION_BUSY across a return from the background", () => {
+  const busy = (init: { method?: string; body?: unknown } | undefined) => {
+    const command = init?.method === "POST" ? JSON.parse(String(init.body)) as OralCommand : null;
+    return new Response(JSON.stringify(command
+      ? { command: { id: command.command_id, status: "rejected" }, error: { code: "SESSION_BUSY" },
+        current: { session_id: command.session_id, status: "not_found" }, state_version: "9" }
+      : { error: { code: "SESSION_BUSY" } }), { status: 409 });
+  };
+  const background = (ui: { rerender(props: OralDocumentHookOptions): void }, f: ReturnType<typeof fixture>, options: OralDocumentHookOptions) => {
+    act(() => { visible("hidden"); document.dispatchEvent(new Event("visibilitychange")); });
+    act(() => { visible("visible"); document.dispatchEvent(new Event("visibilitychange")); });
+    ui.rerender({ ...options, access: f.replace({}, "fresh-synthetic-token") });
+  };
+
+  it("a start refused as SESSION_BUSY: while suspended only loading, after the fresh owner no generic failure", async () => {
+    const f = fixture(), options: OralDocumentHookOptions = { ...f.options, initialSessionId: null };
+    f.fetcher.mockImplementation(async (url, init) => init?.method === "POST" ? busy(init) : f.handler(url, init));
+    const ui = renderHook(useOralDocument, { initialProps: options });
+    await waitFor(() => expect(ui.result.current.state?.canStart).toBe(true));
+    await act(() => ui.result.current.actions.start("words"));
+    expect(ui.result.current.state).toMatchObject({ problem: "SESSION_BUSY" });
+    act(() => { visible("hidden"); document.dispatchEvent(new Event("visibilitychange")); });
+    expect(ui.result.current.state).toMatchObject({ phase: "loading", suspended: true });
+    act(() => { visible("visible"); document.dispatchEvent(new Event("visibilitychange")); });
+    ui.rerender({ ...options, access: f.replace({}, "fresh-synthetic-token") });
+    await waitFor(() => expect(ui.result.current.state?.phase).toBe("idle"));
+    // Nothing of the refused start survives the rebuild, and nothing claims a failed refresh either.
+    expect(ui.result.current.state).toMatchObject({ phase: "idle", sessionId: null, problem: null, canStart: true });
+  });
+
+  it("a read refused by the core as SESSION_BUSY is asked again by the fresh owner and says busy again", async () => {
+    const f = fixture(), options: OralDocumentHookOptions = { ...f.options };
+    f.fetcher.mockImplementation(async (_url, init) => busy(init));
+    const ui = renderHook(useOralDocument, { initialProps: options });
+    await waitFor(() => expect(ui.result.current.state).toMatchObject({ phase: "stale", problem: "SESSION_BUSY" }));
+    const reads = f.fetcher.mock.calls.length;
+    background(ui, f, options);
+    await waitFor(() => expect(f.fetcher.mock.calls.length).toBeGreaterThan(reads));
+    expect((f.fetcher.mock.calls.at(-1)![1]!.headers as Record<string, string>).Authorization).toBe("Bearer fresh-synthetic-token");
+    await waitFor(() => expect(ui.result.current.state).toMatchObject({ phase: "stale", problem: "SESSION_BUSY" }));
+  });
+});

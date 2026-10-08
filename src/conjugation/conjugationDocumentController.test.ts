@@ -590,6 +590,15 @@ describe("10. lifetime guards", () => {
     await f.controller.submit({ text: "kommst" }, B1);
     expect(f.posted).toEqual([]);
   });
+  it("a suspended owner with a session is loading until its window's foreground answers, never stale (2.33)", async () => {
+    const f = fixture();
+    await f.controller.refresh();
+    f.controller.setActivity({ enabled: true, visible: false });
+    expect(s(f.controller)).toMatchObject({ phase: "loading", problem: null, currentStep: null });
+    f.controller.setActivity({ enabled: true, visible: true });
+    await f.controller.refresh();
+    expect(s(f.controller)).toMatchObject({ phase: "loading", problem: null, canSubmit: false, canStop: false });
+  });
   it("snapshots are detached and carry no credentials", async () => {
     const f = fixture();
     const snap = await answered(f);
