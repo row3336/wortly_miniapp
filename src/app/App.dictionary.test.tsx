@@ -23,7 +23,8 @@ function dictionaryApp() {
   a.fetcher.mockImplementation(async (url, init) => {
     const target = new URL(String(url), "http://localhost");
     if (target.pathname.endsWith("/dictionary/history")) {
-      return response({ state_version: "1", items: history.map((n, k) => ({ card_id: cardId(n), opened_at: `2026-10-06T10:0${k}:00Z` })) });
+      return response({ state_version: "1", pair: "ru-de", items: history.map((n, k) => ({ card_id: cardId(n),
+        opened_at: `2026-10-06T10:0${k}:00Z`, lemma: `Karte${n}`, type: "noun", cefr: "A1" })) });
     }
     const card = /\/dictionary\/cards\/([0-9a-f-]+)$/.exec(target.pathname);
     if (card) return response({ state_version: "1", current: content(Number(card[1].slice(-3)) - 700) });

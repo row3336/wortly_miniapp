@@ -144,9 +144,9 @@ export type DictionaryExclusion = { "excluded": boolean; "version": (string | nu
 
 export type DictionaryFieldVersions = { "translation": string; "example": string; "association": string; };
 
-export type DictionaryHistoryItem = { "card_id": string; "opened_at": string; };
+export type DictionaryHistoryItem = { "card_id": string; "opened_at": string; "lemma": string; "type": "noun" | "verb" | "phrase" | "adjective" | "pronoun" | "adverb" | "preposition" | "conjunction" | "particle"; "cefr": ("A1" | "A2" | "B1" | "B2" | "C1" | "C2" | null); };
 
-export type DictionaryHistoryResponse = { "state_version": string; "items": Array<DictionaryHistoryItem>; };
+export type DictionaryHistoryResponse = { "state_version": string; "pair": "ru-de" | "uk-de" | "en-de"; "items": Array<DictionaryHistoryItem>; };
 
 export type DictionaryIntervalCapability = { "direction": "l1-de"; };
 

@@ -44,37 +44,25 @@ export function DictionaryHost(props: DictionaryHostProps) {
     limits: props.limits ?? DICTIONARY_SEARCH_LIMITS });
   const history = useDictionaryHistoryDocument({ access: props.access, transport: props.transport, enabled: shown });
   const seen = useRef<DictionaryVisit | null>(null);
-  // The card this section opened last: a return comes back from it.
-  const opened = useRef<string | null>(null);
-  const { enterFromSection } = search.actions, { refresh, forget } = history.actions;
+  const { enterFromSection } = search.actions, { refresh } = history.actions;
   // A layout effect: the entry's clearing and both reads leave with the passive commit of the same render.
   useLayoutEffect(() => {
     const visit = props.visit;
     if (visit === null || visit === seen.current) return;
     seen.current = visit;
-    if (visit.kind === "entry") {
-      enterFromSection();
-      // root decision, pending owner: В1/Н1 — an entry from another section rereads every card text: the cards may
-      // have been edited elsewhere (e.g. from a quiz).
-      forget();
-    } else {
-      // root decision, pending owner: В1/Н1 — a return rereads the text of the card it comes from (an own edit there);
-      // without a known card the whole cache goes.
-      forget(opened.current ?? undefined);
-      // root decision, pending owner: В4 — a return never rereads the search: query, mode, results and scroll stay (SP4e).
-    }
-    opened.current = null;
+    // root decision, pending owner: В4 — a return never rereads the search: query, mode, results and scroll stay (SP4e).
+    if (visit.kind === "entry") enterFromSection();
     // K11-013: every showing rereads the history; opening a card is an own change of it (only /view records it).
-    // root decision, pending owner: В6 — the history is the account's list, not filtered by mode or pair.
+    // The rows come with the list (P19), so an edit made elsewhere shows up with this read.
+    // root decision, pending owner: В6 — the history is the account's list, not filtered by mode.
     refresh();
-  }, [props.visit, enterFromSection, refresh, forget]);
+  }, [props.visit, enterFromSection, refresh]);
   const restoreScroll = props.visit?.kind === "return" ? props.visit.scroll : null;
   return <div hidden={!shown}>
     <DictionarySearchScreen state={search.state} actions={search.actions} history={history.state}
       historyActions={history.actions} language={props.language} restoreScroll={restoreScroll}
       onNavigate={props.onNavigate}
       onOpenCard={cardId => {
-        opened.current = cardId;
         props.onOpenCard(cardId, { search: { query: search.state.query, mode: search.state.material }, scroll: window.scrollY });
       }} />
   </div>;

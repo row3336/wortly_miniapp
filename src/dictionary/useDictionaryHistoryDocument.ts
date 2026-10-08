@@ -3,7 +3,6 @@ import type { HttpOptions } from "../api/http";
 import { version } from "../api/wireValidation";
 import type { OpenedAccess } from "../app/openedAccess";
 import { admitted, identityKey, pairOf, runCurrent, useSuspendedAccesses } from "./accessBinding";
-import { createDictionaryCardApi } from "./cardApi";
 import {
   DictionaryHistoryController,
   type DictionaryHistoryActions, type DictionaryHistoryIo, type DictionaryHistorySnapshot,
@@ -20,12 +19,8 @@ type Scope = { key: string; transport: HttpOptions };
 type Binding = { access: OpenedAccess; transport: HttpOptions; io: DictionaryHistoryIo };
 
 function historyIo(access: OpenedAccess, transport: HttpOptions, live: () => boolean): DictionaryHistoryIo {
-  const history = createDictionaryHistoryApi(transport), cards = createDictionaryCardApi(transport);
-  return {
-    live,
-    history: current => runCurrent(access, current, token => history.read(token)),
-    card: (cardId, current) => runCurrent(access, current, token => cards.read(token, cardId)),
-  };
+  const history = createDictionaryHistoryApi(transport);
+  return { live, history: current => runCurrent(access, current, token => history.read(token)) };
 }
 
 /**
@@ -45,7 +40,6 @@ export function useDictionaryHistoryDocument(options: DictionaryHistoryDocumentO
     const actions: DictionaryHistoryActions = Object.freeze({
       refresh: () => controller.refresh(),
       retry: () => controller.retry(),
-      forget: (cardId?: string) => controller.forget(cardId),
     });
     return { controller, actions };
   });

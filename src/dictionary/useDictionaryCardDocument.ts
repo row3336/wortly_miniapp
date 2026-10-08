@@ -3,7 +3,7 @@ import type { HttpOptions } from "../api/http";
 import { oneOf, uuid, version } from "../api/wireValidation";
 import { ClosedAccessError, type OpenedAccess } from "../app/openedAccess";
 import { DictionaryCardController, type DictionaryCardSnapshot, type DictionaryCardSource } from "./dictionaryCardController";
-import { createDictionaryViewApi } from "./viewApi";
+import { createDictionaryViewApi, type DictionaryViewOrigin } from "./viewApi";
 
 export type DictionaryCardDocumentOptions = {
   access: OpenedAccess;
@@ -11,6 +11,8 @@ export type DictionaryCardDocumentOptions = {
   cardId: string;
   enabled: boolean;
   minimumStateVersion?: string;
+  /** "study" for a card opened from a quiz: its reads do not enter the dictionary history. Default "dictionary". */
+  origin?: DictionaryViewOrigin;
 };
 type Pair = NonNullable<DictionaryCardSnapshot["pair"]>;
 type Identity = { key: string; transport: HttpOptions };
@@ -84,7 +86,7 @@ export function useDictionaryCardDocument(options: DictionaryCardDocumentOptions
       return access.run(async ({ token }) => {
         requireCurrent();
         try {
-          const data = await api.read(token, cardId);
+          const data = await api.read(token, cardId, current.origin ?? "dictionary");
           requireCurrent();
           return data;
         } catch (error) {
@@ -98,7 +100,7 @@ export function useDictionaryCardDocument(options: DictionaryCardDocumentOptions
     owner.current = bound;
     void controller.load(source, pairOf(access), current.cardId);
     return () => { active = false; controller.dispose(); if (owner.current === bound) owner.current = null; };
-  }, [options.access, options.transport, options.cardId, options.enabled, options.minimumStateVersion]);
+  }, [options.access, options.transport, options.cardId, options.enabled, options.minimumStateVersion, options.origin]);
   const refresh = useCallback(() => {
     const bound = find.current();
     return bound ? bound.controller.load(bound.source, pairOf(bound.access), bound.cardId) : Promise.resolve();

@@ -6,8 +6,14 @@ import { ApiError, createJsonTransport, httpError, type HttpOptions } from "../a
 import { count, date, exactKeys, oneOf, record, sameId, uuid, version } from "../api/wireValidation";
 import { validDictionaryViewContent } from "../study/referenceCardContent";
 
+/**
+ * Where the full card is opened from: only a dictionary opening enters the history; a card opened from a quiz
+ * («Уточнить поля») is "study" and is not recorded (2.26б.1).
+ */
+export type DictionaryViewOrigin = "dictionary" | "study";
+
 export interface DictionaryViewApi {
-  read(token: string, cardId: string): Promise<DictionaryCardViewResponse>;
+  read(token: string, cardId: string, origin?: DictionaryViewOrigin): Promise<DictionaryCardViewResponse>;
 }
 
 function calendarDate(value: unknown): value is string {
@@ -110,9 +116,12 @@ function validCardActions(value: unknown, study: DictionaryCardStudy): value is 
 export function createDictionaryViewApi(options: HttpOptions): DictionaryViewApi {
   const request = createJsonTransport(options);
   return {
-    async read(token, cardId) {
+    async read(token, cardId, origin = "dictionary") {
       if (typeof token !== "string" || !token || !uuid(cardId)) throw new Error("token and card ID are required");
-      const reply = await request(`/dictionary/cards/${cardId}/view`, { method: "GET", token });
+      if (origin !== "dictionary" && origin !== "study") throw new Error("unknown card view origin");
+      // The dictionary is the server default, so its read keeps the bare address.
+      const query = origin === "study" ? "?origin=study" : "";
+      const reply = await request(`/dictionary/cards/${cardId}/view${query}`, { method: "GET", token });
       if (!reply.ok) throw httpError(reply);
       if (reply.status !== 200 || !validDictionaryView(reply.value, cardId)) throw new ApiError("invalid_response");
       return reply.value;

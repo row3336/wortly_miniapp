@@ -96,10 +96,13 @@ describe("DictionarySearchScreen", () => {
     expect(props.historyActions.retry).toHaveBeenCalledTimes(1);
     expect(props.actions.retry).not.toHaveBeenCalled();
     // A refresh keeps the shown entries without a waiting text.
-    update({ history: history({ phase: "loading", items: [{ ...item(4), opened_at: "2026-10-06T10:00:00Z" }] }) });
+    update({ history: history({ phase: "loading", items: [{ card_id: id(4), opened_at: "2026-10-06T10:00:00Z", lemma: "Wort4",
+      type: "verb", cefr: "B2" }] }) });
     expect(within(region()).queryByRole("status")).toBeNull();
     expect(within(region()).getByRole("button").querySelector("[lang='de']")!.textContent).toBe("Wort4");
-    expect(within(region()).getByRole("button").querySelector("[lang='ru']")!.textContent).toBe("слово4");
+    // P18: German word, type and level, no translation.
+    expect(within(region()).getByRole("button").querySelector(".dictionary-search-translation")).toBeNull();
+    expect(within(region()).getByRole("button").textContent).toBe(`Wort4${{ ru: "Глагол", uk: "Дієслово", en: "Verb" }[language]}B2`);
     fireEvent.click(within(region()).getByRole("button"));
     expect(props.onOpenCard).toHaveBeenCalledExactlyOnceWith(id(4));
     // A typed query hides the history; similar cards get their own region after the results.

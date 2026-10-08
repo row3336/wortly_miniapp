@@ -57,11 +57,15 @@ const copy = {
 } as const;
 
 type Text = (typeof copy)[Language];
-/** What every row shows: a search result, a similar card and a history entry alike. */
-type Row = Pick<DictionaryReferenceCard, "lemma" | "type" | "cefr"> & { card_id: string; translation: CardTranslations };
+/**
+ * What every row shows: German word, type and level. A search result and a similar card add their translation;
+ * a history entry has none (P18: the full card shows it).
+ */
+type Row = Pick<DictionaryReferenceCard, "lemma" | "type" | "cefr"> & { card_id: string; translation?: CardTranslations };
 
 /** Ordinary card display: the personal translation when present, otherwise the common ones. */
 function translation(item: Row): string {
+  if (item.translation === undefined) return "";
   const personal = item.translation.personal;
   return personal !== null ? personal.value : item.translation.common.join(", ");
 }
@@ -175,7 +179,11 @@ export function DictionarySearchScreen(props: DictionarySearchScreenProps) {
   </main>;
 }
 
-/** RA table 6.1.14: an empty history, its loading and its failure are told apart. */
+/**
+ * RA table 6.1.14: an empty history, its loading and its failure are told apart. Rows the server left out (hidden in
+ * this pair, or not built this time) are just absent: there is no partial-failure message (P20). The list is read
+ * again on every showing; a whole-list failure offers the retry.
+ */
 function HistorySection(props: { id: string; history: DictionaryHistorySnapshot; t: Text; onRetry(): void; onOpenCard(cardId: string): void }) {
   const { history, t } = props;
   if (history.phase === "idle" || history.phase === "disposed") return null;
@@ -188,6 +196,6 @@ function HistorySection(props: { id: string; history: DictionaryHistorySnapshot;
       <p>{t.historyFailed}</p>
       <button type="button" className="dictionary-search-retry" onClick={props.onRetry}>{t.retry}</button>
     </div>}
-    {shown && <CardList items={history.items} t={t} lang={history.pair?.slice(0, 2)} onOpenCard={props.onOpenCard} />}
+    {shown && <CardList items={history.items} t={t} lang={undefined} onOpenCard={props.onOpenCard} />}
   </section>;
 }

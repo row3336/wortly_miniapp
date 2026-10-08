@@ -131,7 +131,10 @@ function app(options: { settings?: Promise<void> } = {}) {
   vi.stubGlobal("Telegram", { WebApp: { initData: "synthetic-init-data", initDataUnsafe: { user: { language_code: "ru" } },
     colorScheme: "light", HapticFeedback: { notificationOccurred: vi.fn() },
     BackButton: { show() {}, hide() {}, onClick() {}, offClick() {} } } });
-  return { card, oralKinds: () => oralPosts.map(post => post.kind), oralPosts };
+  // Full card reads with their query: the origin of the opening (2.26б.1).
+  const views = () => fetcher.mock.calls.map(([url]) => new URL(String(url), "http://localhost"))
+    .filter(url => url.pathname.endsWith(`/dictionary/cards/${CARD}/view`)).map(url => url.search);
+  return { card, oralKinds: () => oralPosts.map(post => post.kind), oralPosts, views };
 }
 const button = (name: string) => screen.getByRole("button", { name }) as HTMLButtonElement;
 async function startFromToday(row: RegExp) {
@@ -181,6 +184,9 @@ describe("M-ORAL-ENTRY: the oral quiz from Today and the card in М18 through th
     expect(screen.queryByText("дом")).toBeNull();
     expect(a.oralKinds()).toEqual(["session.start", "assignment.present"]);
     await waitFor(() => expect(a.card.posts.map(post => post.kind)).toEqual(["context.open", "context.close"]));
+    // 2.26б.1: the card opened from the oral quiz is read as a study opening, so it stays out of the history.
+    expect(a.views().length).toBeGreaterThan(0);
+    expect(new Set(a.views())).toEqual(new Set(["?origin=study"]));
   });
 
   it("E3 a card action from the revealed question keeps the card open and the oral quiz on the same question (К07-080, Т88)", async () => {
@@ -195,6 +201,9 @@ describe("M-ORAL-ENTRY: the oral quiz from Today and the card in М18 through th
     expect(screen.queryByText("das Haus")).toBeNull();
     expect(a.card.posts.map(post => post.kind)).toEqual(["context.open", "card.exclude"]);
     expect(a.oralKinds()).toEqual(["session.start", "assignment.present", "oral.reveal"]);
+    // 2.26б.1: the reread after the action is a study opening too, like the first read.
+    await waitFor(() => expect(a.views().length).toBeGreaterThanOrEqual(2));
+    expect(new Set(a.views())).toEqual(new Set(["?origin=study"]));
     fireEvent.click(button("Назад"));
     await screen.findByText("das Haus");
     await waitFor(() => expect(button("Правильно").disabled).toBe(false));

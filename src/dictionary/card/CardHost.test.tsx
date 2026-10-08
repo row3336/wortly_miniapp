@@ -218,6 +218,22 @@ describe("М12 card host: card read, card context, manual Learning choice, Back"
     expect(within(study()).getAllByRole("term").map(term => term.textContent)).toEqual(["Рус → Нем"]);
   });
 
+  it("H10 2.26б.1: a card opened from the written or oral quiz reads /view with origin=study, the dictionary without it", async () => {
+    const viewUrls = (f: ReturnType<typeof fixture>) => f.srv.fetcher.mock.calls.map(([url]) => String(url))
+      .filter(url => url.includes(`/dictionary/cards/${CARD}/view`));
+    const f = fixture(reviewing);
+    render(<CardHost {...f.props} />);
+    await screen.findByRole("heading", { level: 2 });
+    expect(viewUrls(f)).toEqual([`/api/v1/dictionary/cards/${CARD}/view`]);
+    for (const direction of ["l1-de", "de-l1"] as const) {
+      cleanup();
+      const q = fixture(reviewing);
+      render(<CardHost {...q.props} origin={{ kind: "quiz", direction }} />);
+      await screen.findByRole("heading", { level: 2 });
+      expect(viewUrls(q)).toEqual([`/api/v1/dictionary/cards/${CARD}/view?origin=study`]);
+    }
+  });
+
   it("H9 extension points receive the shown view and the card context", async () => {
     const f = fixture(reviewing);
     const renderActions = vi.fn((view: DictionaryCardView) => <p>actions {String(view.card_actions.exclude)}</p>);

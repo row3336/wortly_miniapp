@@ -1,7 +1,7 @@
 import { StrictMode, createElement, type ReactNode } from "react";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { DictionaryCardContent, OpenedClient } from "../api/generated";
+import type { OpenedClient } from "../api/generated";
 import { createOpenedAccess, type OpenedAccess } from "../app/openedAccess";
 import { useDictionaryHistoryDocument, type DictionaryHistoryDocumentOptions } from "./useDictionaryHistoryDocument";
 
@@ -10,14 +10,9 @@ const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status });
 function visible(state: "visible" | "hidden") { Object.defineProperty(document, "visibilityState", { value: state, configurable: true }); }
 const flush = () => act(async () => { for (let i = 0; i < 30; i++) await Promise.resolve(); });
-function content(n: number, pair: string): DictionaryCardContent {
-  return { pair: pair as DictionaryCardContent["pair"], card: { id: id(n), revision: "1", lemma: `Wort${n}`, type: "noun", cefr: null },
-    translations: { common: [`слово${n}`], personal: null }, grammar: null, reference_conjugations: [],
-    examples: { common: [], personal: null }, association: null };
-}
 afterEach(() => { cleanup(); visible("visible"); vi.restoreAllMocks(); });
 
-/** Real access, history and card APIs over a model server. */
+/** Real access and history API over a model server; any other route is a test failure. */
 function fixture() {
   const server = { history: [1, 2], pair: "ru-de", historyStatus: 200 };
   const live = new Set<OpenedAccess>();
@@ -39,10 +34,10 @@ function fixture() {
     const path = new URL(String(url), "https://model.invalid").pathname;
     if (path === "/api/v1/dictionary/history") {
       if (server.historyStatus !== 200) return json({ error: { code: "ACCESS_DENIED" } }, server.historyStatus);
-      return json({ state_version: "1", items: server.history.map((n, k) => ({ card_id: id(n), opened_at: `2026-10-06T10:0${k}:00Z` })) });
+      return json({ state_version: "1", pair: server.pair, items: server.history.map((n, k) => ({ card_id: id(n),
+        opened_at: `2026-10-06T10:0${k}:00Z`, lemma: `Wort${n}`, type: "noun", cefr: null })) });
     }
-    expect(path.startsWith("/api/v1/dictionary/cards/")).toBe(true);
-    return json({ state_version: "1", current: content(Number(path.slice(-12)), server.pair) });
+    throw new Error(`unexpected read ${path}`);
   });
   const options: DictionaryHistoryDocumentOptions = { access: access(), transport: { fetcher, timeoutMs: 30000, maxResponseBytes: 100000 },
     enabled: true };
@@ -57,13 +52,13 @@ function mount(f: ReturnType<typeof fixture>, strict = false) {
 }
 
 describe("dictionary history document with real access, APIs and controller", () => {
-  it("reads the history and its card texts once for an enabled access; renders read nothing more", async () => {
+  it("P19: one history request gives every row for an enabled access; renders read nothing more", async () => {
     const f = fixture(), h = mount(f); await flush();
     expect(h.state()).toMatchObject({ phase: "ready", pair: "ru-de", problem: null });
     expect(h.lemmas()).toEqual(["Wort1", "Wort2"]);
-    expect(f.fetcher).toHaveBeenCalledTimes(3);
+    expect(f.fetcher).toHaveBeenCalledOnce();
     h.ui.rerender({ ...f.options }); await flush();
-    expect(f.fetcher).toHaveBeenCalledTimes(3);
+    expect(f.fetcher).toHaveBeenCalledOnce();
   });
 
   it("a disabled document reads nothing until enabled; actions are stable", async () => {
@@ -79,7 +74,7 @@ describe("dictionary history document with real access, APIs and controller", ()
     expect(h.ui.result.current.actions).toBe(actions);
   });
 
-  it("K11-013: a new access object (foreground) rereads the list and the texts", async () => {
+  it("K11-013: a new access object (foreground) rereads the list", async () => {
     const f = fixture(), h = mount(f); await flush();
     f.server.history = [3, 1];
     h.ui.rerender({ ...f.options, access: f.access() }); await flush();
@@ -87,13 +82,11 @@ describe("dictionary history document with real access, APIs and controller", ()
     expect(h.lemmas()).toEqual(["Wort3", "Wort1"]);
   });
 
-  it("refresh rereads the list and only new card texts; forget() rereads them all", async () => {
+  it("refresh rereads the list with one request and nothing else", async () => {
     const f = fixture(), h = mount(f); await flush();
     f.server.history = [3, 1, 2];
     act(() => h.ui.result.current.actions.refresh()); await flush();
-    expect(f.fetcher).toHaveBeenCalledTimes(5);
-    act(() => { h.ui.result.current.actions.forget(); h.ui.result.current.actions.refresh(); }); await flush();
-    expect(f.fetcher).toHaveBeenCalledTimes(9);
+    expect(f.fetcher).toHaveBeenCalledTimes(2);
     expect(h.lemmas()).toEqual(["Wort3", "Wort1", "Wort2"]);
   });
 
@@ -108,7 +101,7 @@ describe("dictionary history document with real access, APIs and controller", ()
     expect(h.state().phase).toBe("ready");
   });
 
-  it("a denied read revokes the access and the document is disposed, without texts", async () => {
+  it("a denied read revokes the access and the document is disposed, without rows", async () => {
     const f = fixture(); f.server.historyStatus = 403;
     const h = mount(f); await flush();
     expect(f.denied).toHaveBeenCalledOnce();
@@ -124,7 +117,7 @@ describe("dictionary history document with real access, APIs and controller", ()
     expect(f.fetcher).not.toHaveBeenCalled();
   });
 
-  it("card texts of another pair than the access are pair_changed", async () => {
+  it("a list filtered for another pair than the access is pair_changed", async () => {
     const f = fixture(); f.server.pair = "uk-de";
     const h = mount(f); await flush();
     expect(h.state()).toMatchObject({ phase: "failed", problem: "pair_changed", items: [] });

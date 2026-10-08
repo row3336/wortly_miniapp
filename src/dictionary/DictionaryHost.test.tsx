@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { DictionaryCardContent, DictionarySearchResponse, DictionarySimilarItem, OpenedClient } from "../api/generated";
+import type { DictionarySearchResponse, DictionarySimilarItem, OpenedClient } from "../api/generated";
 import { createOpenedAccess, type OpenedAccess } from "../app/openedAccess";
 import { DICTIONARY_SEARCH_LIMITS, DictionaryHost, type DictionaryHostProps, type DictionaryVisit } from "./DictionaryHost";
 
@@ -13,21 +13,16 @@ function visible(state: "visible" | "hidden") { Object.defineProperty(document, 
 const flush = () => act(async () => { for (let i = 0; i < 30; i++) await Promise.resolve(); });
 const card = (n: number) => ({ card_id: id(n), revision: "1", lemma: `Wort${n}`, type: "noun" as const, cefr: null,
   translation: { common: [`слово${n}`], personal: null } });
-function content(n: number, text = `карта${n}`): DictionaryCardContent {
-  return { pair: "ru-de", card: { id: id(n), revision: "1", lemma: `Karte${n}`, type: "noun", cefr: "A2" },
-    translations: { common: [text], personal: null }, grammar: null, reference_conjugations: [],
-    examples: { common: [], personal: null }, association: null };
-}
 
 beforeEach(() => { visible("visible"); vi.spyOn(window, "scrollTo").mockImplementation(() => {}); });
 afterEach(() => { cleanup(); visible("visible"); vi.restoreAllMocks(); });
 
-/** Model server for search, history and card text; a held path answers only when released. */
+/** Model server for search and history; a held path answers only when released. No card is read to show the history. */
 function fixture() {
   const server = {
     history: [5, 6] as number[],
-    /** Common translation of a card where a test changed it on the server. */
-    texts: new Map<number, string>(),
+    /** Lemma of a card where a test changed it on the server. */
+    lemmas: new Map<number, string>(),
     /** Ordinary results and similar cards per raw query; an unknown query has neither. */
     results: new Map<string, number[]>([["Haus", [1, 2]], ["Ha", [3]]]),
     similar: new Map<string, number[]>([["Haus", [11]], ["Ha", [13]], ["Hause", [12]]]),
@@ -48,12 +43,10 @@ function fixture() {
       await gate.promise;
     }
     if (route === "history") {
-      return json({ state_version: "1", items: server.history.map((n, k) => ({ card_id: id(n), opened_at: `2026-10-06T10:0${k}:00Z` })) });
+      return json({ state_version: "1", pair: "ru-de", items: server.history.map((n, k) => ({ card_id: id(n),
+        opened_at: `2026-10-06T10:0${k}:00Z`, lemma: server.lemmas.get(n) ?? `Karte${n}`, type: "noun", cefr: "A2" })) });
     }
-    if (route.startsWith("cards/")) {
-      const n = Number(route.slice(-12));
-      return json({ state_version: "1", current: content(n, server.texts.get(n)) });
-    }
+    if (route !== "search") throw new Error(`unexpected read ${route}`);
     const query = target.searchParams.get("query")!, mode = target.searchParams.get("mode") as "words" | "phrases";
     const type = mode === "phrases" ? "phrase" as const : "noun" as const;
     const similar: DictionarySimilarItem[] = (server.similar.get(query) ?? []).map(n => ({ ...card(n), type }));
@@ -102,9 +95,13 @@ describe("DictionaryHost (М11) with real access, APIs, controllers and hooks", 
     expect(field().value).toBe("");
     expect(document.activeElement).toBe(field());
     expect(phrases().checked).toBe(false);
-    expect(f.sent).toEqual(["history", `cards/${id(5)}`, `cards/${id(6)}`]);
+    // P19: one request gives every row.
+    expect(f.sent).toEqual(["history"]);
     expect(lemmas("История")).toEqual(["Karte5", "Karte6"]);
-    expect(region("История").textContent).toContain("карта5");
+    // P18: German word, type and level; no translation.
+    expect(within(region("История")).getAllByRole("button").map(row => row.textContent))
+      .toEqual(["Karte5СуществительноеA2", "Karte6СуществительноеA2"]);
+    expect(region("История").querySelector(".dictionary-search-translation")).toBeNull();
   });
 
   it("K07-095: a history entry opens its card at once with the return address", async () => {
@@ -191,8 +188,7 @@ describe("DictionaryHost (М11) with real access, APIs, controllers and hooks", 
     expect(field().value).toBe("Haus");
     expect(phrases().checked).toBe(true);
     expect(lemmas("Результаты")).toEqual(["Wort1", "Wort2"]);
-    // В1 (root decision): texts already read for this access are not read again.
-    expect(f.sent.slice(before)).toEqual(["history", `cards/${id(9)}`]);
+    expect(f.sent.slice(before)).toEqual(["history"]);
     await ui.update({ visit: null });
     await ui.update({ visit: { kind: "return", scroll: 240 } });
     expect(lemmas("Результаты")).toEqual(["Wort1", "Wort2"]);
@@ -200,31 +196,33 @@ describe("DictionaryHost (М11) with real access, APIs, controllers and hooks", 
     expect(window.scrollTo).toHaveBeenLastCalledWith(0, 240);
   });
 
-  it("Н1 (root decision): a return rereads the text of the card it comes from; an entry rereads every text", async () => {
+  it("P19: a return and an entry each reread the list once; a row changed on the server shows at once", async () => {
     const f = fixture();
     const ui = mount(f); await flush();
-    const translations = () => within(region("История")).getAllByRole("button").map(row => row.querySelector("[lang='ru']")!.textContent);
     fireEvent.click(within(region("История")).getAllByRole("button")[1]);
     await ui.update({ visit: null });
-    // An own edit in the opened card, and an edit elsewhere of the other one.
-    f.server.texts.set(6, "моя карта"); f.server.texts.set(5, "чужая правка");
+    f.server.lemmas.set(6, "Karte6 neu"); f.server.history = [6, 5];
     const before = f.sent.length;
     await ui.update({ visit: { kind: "return", scroll: null } });
-    expect(f.sent.slice(before)).toEqual(["history", `cards/${id(6)}`]);
-    expect(translations()).toEqual(["карта5", "моя карта"]);
+    expect(f.sent.slice(before)).toEqual(["history"]);
+    expect(lemmas("История")).toEqual(["Karte6 neu", "Karte5"]);
     await ui.update({ visit: null });
+    f.server.lemmas.set(5, "Karte5 neu");
     await ui.update({ visit: { kind: "entry" } });
-    expect(f.sent.slice(before + 2)).toEqual(["history", `cards/${id(5)}`, `cards/${id(6)}`]);
-    expect(translations()).toEqual(["чужая правка", "моя карта"]);
+    expect(f.sent.slice(before + 1)).toEqual(["history"]);
+    expect(lemmas("История")).toEqual(["Karte6 neu", "Karte5 neu"]);
   });
 
-  it("Н1: a return without a card opened from here rereads every text", async () => {
-    const f = fixture();
+  it("P20: rows the server left out are absent without a message; the next showing brings them back", async () => {
+    const f = fixture(); f.server.history = [5];
     const ui = mount(f); await flush();
+    expect(lemmas("История")).toEqual(["Karte5"]);
+    expect(within(region("История")).queryByRole("alert")).toBeNull();
+    expect(within(region("История")).queryByRole("status")).toBeNull();
+    f.server.history = [5, 6];
     await ui.update({ visit: null });
-    const before = f.sent.length;
     await ui.update({ visit: { kind: "return", scroll: null } });
-    expect(f.sent.slice(before)).toEqual(["history", `cards/${id(5)}`, `cards/${id(6)}`]);
+    expect(lemmas("История")).toEqual(["Karte5", "Karte6"]);
   });
 
   it("K07-100/Т33: a new entry from another section clears the query and the phrase mode", async () => {
@@ -264,7 +262,7 @@ describe("DictionaryHost (М11) with real access, APIs, controllers and hooks", 
     f.server.results.set("Haus", [2]);
     await ui.update({ access: f.access() });
     expect(field().value).toBe("Haus");
-    expect(f.sent.slice(before).sort()).toEqual(["history", `cards/${id(5)}`, `cards/${id(6)}`, "search:Haus:words"].sort());
+    expect(f.sent.slice(before).sort()).toEqual(["history", "search:Haus:words"].sort());
     expect(lemmas("Результаты")).toEqual(["Wort2"]);
   });
 

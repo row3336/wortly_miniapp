@@ -81,6 +81,11 @@ describe("card actions from the written quiz through the actual App (M-ACTIONS)"
     expect(screen.getByRole("button", { name: "Далее" })).toBeTruthy();
     expect(quizKinds(a)).toEqual(["session.start", "assignment.present", "answer.submit"]);
     await waitFor(() => expect(a.card.posts.map(post => post.kind)).toEqual(["context.open", "context.close"]), exchange);
+    // 2.26б.1: the card opened from the written quiz is read as a study opening, so it stays out of the history.
+    const views = a.fetcher.mock.calls.map(([url]) => new URL(String(url), "http://localhost"))
+      .filter(url => url.pathname.endsWith(`/dictionary/cards/${CARD_6}/view`)).map(url => url.search);
+    expect(views.length).toBeGreaterThan(0);
+    expect(new Set(views)).toEqual(new Set(["?origin=study"]));
   });
 
   it("A2 «Не повторять» on the card opened from the quiz: after the commit the quiz goes on to the next question by itself", async () => {

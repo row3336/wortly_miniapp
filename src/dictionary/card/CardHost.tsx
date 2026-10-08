@@ -87,7 +87,9 @@ function manualControl({ state, actions }: ManualDocument, cardId: string, ready
  */
 export function CardHost(props: CardHostProps) {
   const leaving = props.leaving === true;
-  const card = useDictionaryCardDocument({ access: props.access, transport: props.transport, cardId: props.cardId, enabled: !leaving });
+  // A card opened from a quiz is not a dictionary opening and stays out of the history (2.26б.1).
+  const card = useDictionaryCardDocument({ access: props.access, transport: props.transport, cardId: props.cardId, enabled: !leaving,
+    origin: props.origin.kind === "quiz" ? "study" : "dictionary" });
   const pair = `${props.access.profile.dictionary_language}-de`;
   const last = useRef<DictionaryCardViewResponse | null>(null);
   if (card.state.phase === "ready" && card.state.data?.current.status === "available") last.current = card.state.data;

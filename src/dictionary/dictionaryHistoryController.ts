@@ -1,23 +1,18 @@
-import type { CardTranslations, DictionaryCardResponse, DictionaryHistoryResponse, DictionaryReferenceCard } from "../api/generated";
+import type { DictionaryHistoryItem, DictionaryHistoryResponse } from "../api/generated";
 import { oneOf, version } from "../api/wireValidation";
-import { validDictionaryCard } from "./cardApi";
 import { validDictionaryHistory } from "./historyApi";
 
 type Pair = "ru-de" | "uk-de" | "en-de";
 type Problem = "load" | "pair_changed" | "stale_response";
 const pairs = ["ru-de", "uk-de", "en-de"];
 
-/** One opened card of the history with the text of its current card (the history DTO carries only the address). */
-export type DictionaryHistoryEntry = Pick<DictionaryReferenceCard, "lemma" | "type" | "cefr"> & {
-  card_id: string;
-  opened_at: string;
-  translation: CardTranslations;
-};
+/** One opened card of the history with its list row as the server sent it (P18: no translation). */
+export type DictionaryHistoryEntry = DictionaryHistoryItem;
 export type DictionaryHistorySnapshot = {
   phase: "idle" | "loading" | "ready" | "failed" | "disposed";
   /** Newest first, as the server ordered them. Kept while a refresh reads, replaced at once. */
   items: DictionaryHistoryEntry[];
-  /** Pair of the shown card texts; null before the first accepted read and while another pair is current. */
+  /** Pair the shown rows were filtered for; null before the first accepted read and while another pair is current. */
   pair: Pair | null;
   problem: Problem | null;
 };
@@ -25,15 +20,12 @@ export type DictionaryHistoryActions = {
   /** K11-013: entry, a return from a card (its opening is an own change of the history). */
   refresh(): void;
   retry(): void;
-  /** Drop the cached text of one card, or of every card; call it right before `refresh`. */
-  forget(cardId?: string): void;
 };
 /** Reads for one opened access. `current` turns false once the read is obsolete. */
 export type DictionaryHistoryIo = {
   live(): boolean;
+  /** The one list read: its rows already carry their text (P19), so no card is read to show the list. */
   history(current: () => boolean): Promise<DictionaryHistoryResponse>;
-  /** The card route that records no opening (C-HIST: only /view writes the history). */
-  card(cardId: string, current: () => boolean): Promise<DictionaryCardResponse>;
 };
 export type DictionaryHistoryCommit = {
   /** A new object is a new opened access (e.g. foreground) and rereads the history. */
@@ -46,11 +38,7 @@ export type DictionaryHistoryCommit = {
   io: DictionaryHistoryIo | null;
 };
 export type DictionaryHistoryObserved = { access: object; pair: Pair; open: boolean };
-/** The text of one card for its history row; null for a card that is no longer available. */
-type CardText = Omit<DictionaryHistoryEntry, "card_id" | "opened_at"> | null;
-/** Card texts by lower-case card ID, for one opened access. */
-type Texts = Map<string, CardText>;
-type Read = { entries: DictionaryHistoryEntry[]; version: string; fresh: Texts } | Problem | null;
+type Read = { entries: DictionaryHistoryEntry[]; version: string } | Problem | null;
 
 /**
  * The account's history for the whole life of one dictionary document. Actions only owe a read;
@@ -67,10 +55,6 @@ export class DictionaryHistoryController implements DictionaryHistoryActions {
   private sequence = 0;
   private io: DictionaryHistoryIo | null = null;
   private seen: object | null = null;
-  // root decision, pending owner: В1 — card texts (and «no longer available») are kept per opened access, so a later
-  // showing reads only cards that are new in the list. A new access (foreground, another pair) starts with an empty
-  // cache; the host drops the card a return comes from and the whole cache on an entry (К11-013: own edits show up).
-  private texts: Texts = new Map();
   private scope: object | null = null;
   private floor = "1";
   private listener: (() => void) | null = null;
@@ -97,16 +81,6 @@ export class DictionaryHistoryController implements DictionaryHistoryActions {
     if (this.phase === "failed") this.refresh();
   }
 
-  forget(cardId?: string): void {
-    if (cardId === undefined) {
-      // A new map: a read still in flight cannot put old texts back into it.
-      this.texts = new Map();
-      return;
-    }
-    if (typeof cardId !== "string") throw new Error("card ID must be a string");
-    this.texts.delete(cardId.toLowerCase());
-  }
-
   /** Called once per committed render, after every layout effect of that commit. */
   commit(input: DictionaryHistoryCommit): void {
     if (this.listener === null) return;
@@ -124,10 +98,9 @@ export class DictionaryHistoryController implements DictionaryHistoryActions {
     this.io = input.io;
     if (input.access !== this.seen) {
       this.seen = input.access;
-      this.texts = new Map();
       this.owed = true;
       if (this.pair !== null && this.pair !== input.pair) {
-        // Card texts belong to the pair they were read for.
+        // Rows belong to the pair they were filtered for.
         this.items = [];
         this.pair = null;
       }
@@ -172,8 +145,7 @@ export class DictionaryHistoryController implements DictionaryHistoryActions {
     this.owed = false;
     const sequence = ++this.sequence;
     this.flight = io;
-    const texts = this.texts;
-    void this.read(io, pair, texts, () => this.current(sequence, io)).then(outcome => {
+    void this.read(io, pair, () => this.current(sequence, io)).then(outcome => {
       if (outcome === null || !this.current(sequence, io)) return;
       this.flight = null;
       if (typeof outcome === "string") {
@@ -186,53 +158,26 @@ export class DictionaryHistoryController implements DictionaryHistoryActions {
         this.problem = null;
         this.items = outcome.entries;
         this.pair = pair;
-        this.floor = outcome.version;
-        // Texts read for an access that has since been replaced never enter the new cache.
-        if (texts === this.texts) for (const [id, text] of outcome.fresh) texts.set(id, text);
+        if (BigInt(outcome.version) > BigInt(this.floor)) this.floor = outcome.version;
       }
       this.emit();
     });
   }
 
-  /** The list and the text of every listed card, accepted together or not at all. Cached texts are not read again. */
-  private async read(io: DictionaryHistoryIo, pair: Pair, texts: Texts, current: () => boolean): Promise<Read> {
-    // Parallel reads may be answered at different versions: each is checked against the floor at the start,
-    // and the new floor is the highest version accepted.
+  /**
+   * The one list read. A row the server could not build or hides in this pair is absent from the answer (P20, Ya14):
+   * the rest is shown as sent, with no partial-failure message. Only a failed or broken answer fails the list.
+   */
+  private async read(io: DictionaryHistoryIo, pair: Pair, current: () => boolean): Promise<Read> {
+    // The floor the read started from; a later commit may raise it while the answer is on its way.
     const start = BigInt(this.floor);
-    let floor = this.floor;
-    const accept = (stateVersion: string) => {
-      if (BigInt(stateVersion) < start) return false;
-      if (BigInt(stateVersion) > BigInt(floor)) floor = stateVersion;
-      return true;
-    };
     let list: unknown;
     try { list = structuredClone(await io.history(current)); }
     catch { return current() ? "load" : null; }
     if (!current()) return null;
     if (!validDictionaryHistory(list)) return "load";
-    if (!accept(list.state_version)) return "stale_response";
-    const ids = list.items.map(item => item.card_id).filter(id => !texts.has(id.toLowerCase()));
-    let cards: unknown[];
-    try { cards = structuredClone(await Promise.all(ids.map(id => io.card(id, current)))); }
-    catch { return current() ? "load" : null; }
-    if (!current()) return null;
-    const fresh: Texts = new Map();
-    for (const [index, id] of ids.entries()) {
-      const card = cards[index];
-      if (!validDictionaryCard(card, id)) return "load";
-      if (!accept(card.state_version)) return "stale_response";
-      if (!("pair" in card.current)) { fresh.set(id.toLowerCase(), null); continue; }
-      const content = card.current;
-      if (content.pair !== pair) return "pair_changed";
-      fresh.set(id.toLowerCase(), { lemma: content.card.lemma, type: content.card.type, cefr: content.card.cefr,
-        translation: content.translations });
-    }
-    const entries: DictionaryHistoryEntry[] = [];
-    for (const item of list.items) {
-      const key = item.card_id.toLowerCase(), text = fresh.has(key) ? fresh.get(key)! : texts.get(key)!;
-      // root decision, pending owner: В2 — a card that is no longer available has no text to show, so its entry is left out.
-      if (text !== null) entries.push({ card_id: item.card_id, opened_at: item.opened_at, ...structuredClone(text) });
-    }
-    return { entries, version: floor, fresh };
+    if (BigInt(list.state_version) < start) return "stale_response";
+    if (list.pair !== pair) return "pair_changed";
+    return { entries: list.items, version: list.state_version };
   }
 }

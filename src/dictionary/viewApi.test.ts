@@ -57,6 +57,15 @@ describe("coherent dictionary view", () => {
     expect(Object.keys(fetcher.mock.calls[0][1]?.headers ?? {})).toEqual(["Authorization"]);
     expect(response).toEqual(before);
   });
+  it("2.26б.1: a card opened from a quiz is read with origin=study; the dictionary keeps the bare address", async () => {
+    const { api, fetcher } = transport(body());
+    await api.read("synthetic", cardId, "study");
+    await api.read("synthetic", cardId, "dictionary");
+    expect(fetcher.mock.calls.map(call => call[0])).toEqual([
+      `/api/v1/dictionary/cards/${cardId}/view?origin=study`, `/api/v1/dictionary/cards/${cardId}/view`]);
+    await expect(api.read("synthetic", cardId, "quiz" as never)).rejects.toThrow("unknown card view origin");
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
   it("accepts opaque unavailable without leaking the requested card", async () => {
     const response = { state_version: "1", current: { status: "unavailable" } };
     const { api } = transport(response);
