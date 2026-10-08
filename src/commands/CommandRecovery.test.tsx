@@ -2,7 +2,7 @@
 import { useRef } from "react";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CommandRecovery } from "./CommandRecovery";
+import { CommandRecovery, recoveryCover } from "./CommandRecovery";
 import { commandCopy } from "./commandCopy";
 import { useEnterNext } from "./useEnterNext";
 
@@ -54,5 +54,21 @@ describe("Enter on a result", () => {
     ui.rerender(<Probe result={{}} canNext={false} next={next} />); fireEvent.keyDown(document.body, { key: "Enter" });
     ui.rerender(<Probe result={{}} canNext submitOnEnter={false} next={next} />); fireEvent.keyDown(document.body, { key: "Enter" });
     expect(next).not.toHaveBeenCalled();
+  });
+});
+
+describe("the blurred cover of a waiting recovery (Q25.2, QA CP2c З2)", () => {
+  const waiting = { kind: "waiting", status: "resending", pauseSeconds: null } as const;
+  const lanes = (kind: string) => ({ primary: { pendingIntent: { kind } } });
+  it("is lifted only for the mark that a question was shown", () => {
+    expect(recoveryCover(waiting, lanes("assignment.present"))).toBeNull();
+  });
+  it.each(["answer.submit", "result.grade", "result.correct", "result.undo"])("keeps the cover for a lost %s", kind => {
+    expect(recoveryCover(waiting, lanes(kind))).toBe(waiting);
+  });
+  it("keeps the unsaved screen even for the mark of a shown question and passes no screen through", () => {
+    const unsaved = { kind: "unsaved" } as const;
+    expect(recoveryCover(unsaved, lanes("assignment.present"))).toBe(unsaved);
+    expect(recoveryCover(null, lanes("assignment.present"))).toBeNull();
   });
 });

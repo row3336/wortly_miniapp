@@ -270,9 +270,24 @@ describe("Learning screen with its real command owner", () => {
     expect(screen.getByText("Есть ошибка")).toBeTruthy(); expect(screen.queryByRole("button", { name: "Повторить отправку" })).toBeNull();
     // The outcome is confirmed: the control only repeats the local cleanup and is named so, not as a check (CT §6.1 п. 2).
     expect(screen.queryByRole("button", { name: "Проверить состояние" })).toBeNull();
-    click("Обновить данные на устройстве"); await waitFor(() => expect(f.values.has(primaryKey)).toBe(false));
+    click("Продолжить"); await waitFor(() => expect(f.values.has(primaryKey)).toBe(false));
     expect(f.posts().map(post => post.kind)).toEqual(["answer.submit"]);
-    await waitFor(() => expect(screen.queryByRole("button", { name: "Обновить данные на устройстве" })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Продолжить" })).toBeNull());
+  });
+  it("a repeated local cleanup refusal keeps the real state and the same control until the cleanup succeeds (S07)", async () => {
+    const { f } = await mount({ wrong: true });
+    vi.mocked(f.storage.remove).mockRejectedValueOnce(new Error("storage unavailable")).mockRejectedValueOnce(new Error("storage unavailable"));
+    await answer(f);
+    click("Продолжить");
+    await waitFor(() => expect(vi.mocked(f.storage.remove)).toHaveBeenCalledTimes(2));
+    // Still refused: the record stays, the saved result is still named, nothing is resent and there is no way forward yet.
+    expect(f.values.has(primaryKey)).toBe(true);
+    expect(screen.getByText("Действие сохранено. Не удалось обновить данные на этом устройстве.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Продолжить" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Повторить отправку" })).toBeNull();
+    click("Продолжить"); await waitFor(() => expect(f.values.has(primaryKey)).toBe(false));
+    expect(f.posts().map(post => post.kind)).toEqual(["answer.submit"]);
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Продолжить" })).toBeNull());
   });
   it("an unavailable projection hides the question and explains recovery without exposing wire errors", async () => {
     const { f } = await mount(); fireEvent.change(input(), { target: { value: "retained draft" } });

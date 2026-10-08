@@ -212,9 +212,9 @@ describe("a confirmed answer whose local record could not be cleared (QA CP2b Н
     expect(h.overlay()).toBeNull();
     h.noManual();
     const posts = h.posts().length;
-    fireEvent.click(screen.getByRole("button", { name: "Обновить данные на устройстве" })); await h.step();
+    fireEvent.click(screen.getByRole("button", { name: "Продолжить" })); await h.step();
     expect(h.values.has("wortly.pending.written_session")).toBe(false);
     expect(h.posts()).toHaveLength(posts);
-    expect(screen.queryByRole("button", { name: "Обновить данные на устройстве" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Продолжить" })).toBeNull();
   });
 });

@@ -3,12 +3,13 @@
  * updateDevice: the outcome is confirmed, only the local record could not be cleared; the control repeats that cleanup
  * and checks nothing (not the manual check CT §6.1 п. 2 forbids).
  * retryStop (the Q30 button): wording approved by the owner (R10, 08.10.2026); display conditions follow TA.
- * check, retry and updateDevice: working text, pending owner approval.
+ * updateDevice: wording approved by the owner (S07, 08.10.2026); display conditions follow TA.
+ * check and retry: working text, pending owner approval.
  */
 export const commandCopy = {
-  ru: { check: "Проверить состояние", retry: "Повторить отправку", retryStop: "Повторить завершение", updateDevice: "Обновить данные на устройстве" },
-  uk: { check: "Перевірити стан", retry: "Повторити надсилання", retryStop: "Повторити завершення", updateDevice: "Оновити дані на пристрої" },
-  en: { check: "Check status", retry: "Retry sending", retryStop: "Retry ending the session", updateDevice: "Update data on this device" },
+  ru: { check: "Проверить состояние", retry: "Повторить отправку", retryStop: "Повторить завершение", updateDevice: "Продолжить" },
+  uk: { check: "Перевірити стан", retry: "Повторити надсилання", retryStop: "Повторити завершення", updateDevice: "Продовжити" },
+  en: { check: "Check status", retry: "Retry sending", retryStop: "Retry ending the session", updateDevice: "Continue" },
 } as const;
 
 /**
