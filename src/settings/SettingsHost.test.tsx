@@ -26,14 +26,14 @@ function setup(minimumStateVersion?: string) {
   const ui = render(<Host {...props} />);
   return { f, data, get, props, ...ui };
 }
-const group = () => within(screen.getByRole("group", { name: "Новых слов в группе" }));
+const group = () => within(screen.getByRole("group", { name: "Новых карточек в группе" }));
 async function ready() { await waitFor(() => expect(group().getByRole("textbox").hasAttribute("disabled")).toBe(false)); }
 
 describe("Settings host uses the shared confirmed version", () => {
   it("does not publish a first stale read as confirmed settings", async () => {
     const { data, get, props } = setup("9");
     await screen.findByText("Не удалось получить актуальные настройки. Обнови их.");
-    expect(props.onCurrent).not.toHaveBeenCalled(); expect(screen.queryByRole("group", { name: "Новых слов в группе" })).toBeNull();
+    expect(props.onCurrent).not.toHaveBeenCalled(); expect(screen.queryByRole("group", { name: "Новых карточек в группе" })).toBeNull();
     data.state_version = "9"; fireEvent.click(screen.getByRole("button", { name: "Обновить настройки" })); await ready();
     expect(get).toHaveBeenCalledTimes(2); expect(props.onCurrent).toHaveBeenCalledWith(expect.objectContaining({ version: "9" }));
   });

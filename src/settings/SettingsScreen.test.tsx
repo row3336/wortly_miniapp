@@ -98,14 +98,14 @@ describe("settings screen fields", () => {
     const radios = field("Проверять степени сравнения").getAllByRole("radio") as HTMLInputElement[];
     expect(radios.every(radio => !radio.checked)).toBe(true);
     expect(field("Проверять степени сравнения").getByText("Не задано")).toBeDefined();
-    expect((field("Новых слов в группе").getByRole("textbox") as HTMLInputElement).value).toBe("");
+    expect((field("Новых карточек в группе").getByRole("textbox") as HTMLInputElement).value).toBe("");
     fireEvent.click(radios[1]); expect(f.actions.edit).toHaveBeenCalledExactlyOnceWith("include_comparative", false);
   });
 
   it("displays actual bounds and leaves invalid input intact, without saving on Enter", () => {
     const f = fixture(); f.snapshot.data!.constraints.learning_group_size = { type: "integer", minimum: 2, maximum: 11 };
     f.snapshot.drafts.learning_group_size = draft("1e2", { valid: false, error: "invalid", canSave: false });
-    render(<SettingsScreen {...f} />); const group = field("Новых слов в группе");
+    render(<SettingsScreen {...f} />); const group = field("Новых карточек в группе");
     const input = group.getByRole("textbox") as HTMLInputElement;
     expect(input.value).toBe("1e2"); expect(input.getAttribute("aria-invalid")).toBe("true");
     expect(group.getByText("Целое число от 2 до 11.")).toBeDefined();
@@ -118,7 +118,7 @@ describe("settings screen fields", () => {
   it("submits only the explicitly chosen field, with command creation left to its controller", () => {
     const f = fixture(); f.snapshot.drafts.learning_group_size = draft("7");
     render(<SettingsScreen {...f} />);
-    fireEvent.click(field("Новых слов в группе").getByRole("button", { name: "Сохранить" }));
+    fireEvent.click(field("Новых карточек в группе").getByRole("button", { name: "Сохранить" }));
     expect(f.actions.save).toHaveBeenCalledExactlyOnceWith("learning_group_size");
     expect(screen.queryByText("Сохранено")).toBeNull();
   });
@@ -141,7 +141,7 @@ describe("settings conflict and recovery presentation", () => {
   it("keeps the draft, shows current, and offers both explicit conflict decisions", () => {
     const f = fixture(); f.snapshot.data!.settings.learning_group_size = { value: 9, version: "2" };
     f.snapshot.drafts.learning_group_size = draft("7", { conflict: true, error: "conflict", canSave: false, canKeepMine: true });
-    render(<SettingsScreen {...f} />); const group = field("Новых слов в группе");
+    render(<SettingsScreen {...f} />); const group = field("Новых карточек в группе");
     expect((group.getByRole("textbox") as HTMLInputElement).value).toBe("7");
     expect(group.getByText("Сейчас сохранено: 9")).toBeDefined();
     expect(group.queryByRole("button", { name: "Сохранить" })).toBeNull();
@@ -154,7 +154,7 @@ describe("settings conflict and recovery presentation", () => {
   it("does not offer saving an invalid conflict or expose field versions to the user", () => {
     const f = fixture(); f.snapshot.drafts.learning_group_size = draft("bad", {
       valid: false, conflict: true, error: "invalid", canSave: false, canKeepMine: false });
-    render(<SettingsScreen {...f} />); const group = field("Новых слов в группе");
+    render(<SettingsScreen {...f} />); const group = field("Новых карточек в группе");
     expect((group.getByRole("button", { name: "Сохранить моё значение" }) as HTMLButtonElement).disabled).toBe(true);
     expect(document.body.textContent).not.toContain(big);
   });
@@ -166,7 +166,7 @@ describe("settings conflict and recovery presentation", () => {
         kind: "setting.save", expected_field_version: "1", payload: { key: "learning_group_size", value: 7 } } },
       drafts: { learning_group_size: draft("7", { canSave: false }) } };
     render(<SettingsScreen {...f} />);
-    expect((field("Новых слов в группе").getByRole("textbox") as HTMLInputElement).disabled).toBe(true);
+    expect((field("Новых карточек в группе").getByRole("textbox") as HTMLInputElement).disabled).toBe(true);
     expect(screen.queryByText("Сохранено")).toBeNull(); expect(document.body.textContent).not.toContain("RAW_INTERNAL_CODE");
     fireEvent.click(screen.getByRole("button", { name: "Повторить отправку" }));
     expect(f.actions.retry).toHaveBeenCalledExactlyOnceWith(); expect(f.actions.save).not.toHaveBeenCalled();
@@ -275,7 +275,7 @@ describe("material settings", () => {
     expect((screen.getByRole("searchbox") as HTMLInputElement).value).toBe("kueche");
     expect(screen.getByRole("group", { name: "Список тем" })).toBe(list); expect(list.scrollTop).toBe(45);
     expect((field("Учебный материал").getByRole("button", { name: "Сохранить" }) as HTMLButtonElement).disabled).toBe(true);
-    expect((field("Новых слов в группе").getByRole("button", { name: "Сохранить" }) as HTMLButtonElement).disabled).toBe(false);
+    expect((field("Новых карточек в группе").getByRole("button", { name: "Сохранить" }) as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(screen.getByRole("button", { name: "Обновить список тем" })); expect(f.onReloadTopics).toHaveBeenCalledOnce();
     f.catalog = { ...f.catalog, phase: "ready" }; rerender(<SettingsScreen {...f} />);
     expect((field("Учебный материал").getByRole("button", { name: "Сохранить" }) as HTMLButtonElement).disabled).toBe(false);
@@ -310,11 +310,11 @@ describe("settings language and navigation", () => {
 
 describe("review error mode, learning content and Mix explanation (M-SET)", () => {
   const labels = {
-    ru: { strict: "Строгий режим повторов", content: "Состав Learning", mix: "Перемешивать темы новых слов",
+    ru: { strict: "Строгий режим повторов", content: "Состав Learning", mix: "Перемешивать темы",
       modes: ["Строгий", "Мягкий"], contents: ["Слова", "Фразы", "Слова + фразы"], strictHint: /не проверка регистра/, mixHint: /темы идут по порядку/, contentHint: /следующий автоматический набор/ },
-    uk: { strict: "Суворий режим повторень", content: "Склад Learning", mix: "Перемішувати теми нових слів",
+    uk: { strict: "Суворий режим повторень", content: "Склад Learning", mix: "Перемішувати теми",
       modes: ["Суворий", "М’який"], contents: ["Слова", "Фрази", "Слова + фрази"], strictHint: /не перевірка регістру/, mixHint: /теми йдуть по порядку/, contentHint: /наступний автоматичний набір/ },
-    en: { strict: "Strict review mode", content: "Learning content", mix: "Mix topics for new words",
+    en: { strict: "Strict review mode", content: "Learning content", mix: "Mix topics",
       modes: ["Strict", "Soft"], contents: ["Words", "Phrases", "Words + phrases"], strictHint: /not the letter-case check/, mixHint: /topics go in order/, contentHint: /next automatic set/ },
   } as const;
 
@@ -416,7 +416,7 @@ describe("review error mode, learning content and Mix explanation (M-SET)", () =
     const radio = field("Строгий режим повторов").getAllByRole("radio")[0];
     const hint = document.getElementById(radio.getAttribute("aria-describedby")!.split(" ")[0]);
     expect(hint?.textContent).toMatch(/не проверка регистра/);
-    const mixRadio = field("Перемешивать темы новых слов").getAllByRole("radio")[0];
+    const mixRadio = field("Перемешивать темы").getAllByRole("radio")[0];
     expect(document.getElementById(mixRadio.getAttribute("aria-describedby")!.split(" ")[0])?.textContent)
       .toMatch(/темы идут по порядку/);
   });
@@ -428,7 +428,7 @@ describe("Mix with the material chosen by CEFR level (M-SET-MIX-LEVEL, 2.21г)",
     const f = fixture(); f.snapshot.data!.settings.material.value = material as never;
     f.snapshot.data!.settings.learning_mix.value = mix; return f;
   }
-  const mixRadios = () => field("Перемешивать темы новых слов").getAllByRole("radio") as HTMLInputElement[];
+  const mixRadios = () => field("Перемешивать темы").getAllByRole("radio") as HTMLInputElement[];
 
   it("disables and mutes the stored Mix choice, explains why and keeps the value", async () => {
     const f = levelFixture(true), { container } = render(<SettingsScreen {...f} />); openAdditional(container);
@@ -437,15 +437,15 @@ describe("Mix with the material chosen by CEFR level (M-SET-MIX-LEVEL, 2.21г)",
     expect(f.actions.edit).not.toHaveBeenCalled();
     expect(mixRadios().every(r => r.disabled)).toBe(true);
     expect(mixRadios().map(r => r.checked)).toEqual([true, false]);
-    expect(field("Перемешивать темы новых слов").getByText(/перемешивание тем не применяется\. Значение сохранено/)).toBeDefined();
-    expect(screen.getByRole("group", { name: "Перемешивать темы новых слов", hidden: true }).className).toContain("settings-field-muted");
+    expect(field("Перемешивать темы").getByText(/перемешивание тем не применяется\. Значение сохранено/)).toBeDefined();
+    expect(screen.getByRole("group", { name: "Перемешивать темы", hidden: true }).className).toContain("settings-field-muted");
     expect(f.actions.edit).not.toHaveBeenCalled();
   });
 
   it("stays settable while no Mix value is stored, because the core still requires it (pending C-LSEL-LEVEL-RANDOM)", () => {
     const f = levelFixture(null), { container } = render(<SettingsScreen {...f} />); openAdditional(container);
     expect(mixRadios().some(r => r.disabled)).toBe(false);
-    expect(field("Перемешивать темы новых слов").getByText(/нужно задать, чтобы начать занятие/)).toBeDefined();
+    expect(field("Перемешивать темы").getByText(/нужно задать, чтобы начать занятие/)).toBeDefined();
     fireEvent.click(mixRadios()[0]);
     expect(f.actions.edit).toHaveBeenCalledWith("learning_mix", true);
   });
@@ -467,8 +467,8 @@ describe("Mix with the material chosen by CEFR level (M-SET-MIX-LEVEL, 2.21г)",
     for (const material of [{ mode: "topics", selected_level: null, topic_ids: [id(8)] }, null]) {
       const f = levelFixture(true, material), { container, unmount } = render(<SettingsScreen {...f} />); openAdditional(container);
       expect(mixRadios().some(r => r.disabled)).toBe(false);
-      expect(field("Перемешивать темы новых слов").getByText(/темы идут по порядку/)).toBeDefined();
-      expect(screen.getByRole("group", { name: "Перемешивать темы новых слов", hidden: true }).className).not.toContain("muted");
+      expect(field("Перемешивать темы").getByText(/темы идут по порядку/)).toBeDefined();
+      expect(screen.getByRole("group", { name: "Перемешивать темы", hidden: true }).className).not.toContain("muted");
       unmount();
     }
   });

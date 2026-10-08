@@ -195,7 +195,7 @@ describe("Settings in the real App document", () => {
     fireEvent.click(await waitFor(() => todayNav().getByRole("button", { name: "Настройки" })));
     await waitFor(() => settingsSection("Языки").getByRole("group", { name: "Язык интерфейса" }));
     await waitFor(() => expect(settingsHeader().getByRole("button", { name: "Обновить настройки" }).hasAttribute("disabled")).toBe(false));
-    const learning = () => within(settingsSection("Обучение").getByRole("group", { name: "Новых слов в группе" }));
+    const learning = () => within(settingsSection("Обучение").getByRole("group", { name: "Новых карточек в группе" }));
     const field = learning().getByRole("textbox");
     const search = screen.getByRole("searchbox"); fireEvent.change(search, { target: { value: "ku" } });
     fireEvent.change(field, { target: { value: "17" } }); f.profile.state_version = "11";
@@ -219,15 +219,15 @@ describe("Settings in the real App document", () => {
   it("retains unsent text, topic query and picker node across Today and foreground", async () => {
     const f = fixture(); f.data.settings.material.value = { mode: "topics", topic_ids: [id(8)] };
     render(<App />); await settings();
-    const input = group("Новых слов в группе").getByRole("textbox");
+    const input = group("Новых карточек в группе").getByRole("textbox");
     fireEvent.change(input, { target: { value: "1e2" } });
     const search = screen.getByRole("searchbox"); fireEvent.change(search, { target: { value: "kue" } });
     search.parentElement!.scrollTop = 42;
     fireEvent.click(screen.getByRole("button", { name: "Сегодня" }));
     await screen.findByText("Активная пара: Украинский ↔ Немецкий");
-    expect(screen.queryByRole("group", { name: "Новых слов в группе" })).toBeNull();
+    expect(screen.queryByRole("group", { name: "Новых карточек в группе" })).toBeNull();
     await settings(); await foreground();
-    expect((group("Новых слов в группе").getByRole("textbox") as HTMLInputElement).value).toBe("1e2");
+    expect((group("Новых карточек в группе").getByRole("textbox") as HTMLInputElement).value).toBe("1e2");
     expect(screen.getByRole("searchbox")).toBe(search);
     expect((search as HTMLInputElement).value).toBe("kue"); expect(search.parentElement!.scrollTop).toBe(42);
     expect(f.settingsReply).toHaveBeenCalledTimes(3); expect(f.topicsReply).toHaveBeenCalledTimes(3);
@@ -287,12 +287,12 @@ describe("Settings in the real App document", () => {
   });
   it("keeps a foreground conflict's input and lets the user choose the stored value", async () => {
     const f = fixture(); render(<App />); await settings();
-    fireEvent.change(group("Новых слов в группе").getByRole("textbox"), { target: { value: "7" } });
+    fireEvent.change(group("Новых карточек в группе").getByRole("textbox"), { target: { value: "7" } });
     f.data.settings.learning_group_size = { value: 9, version: "2" }; f.data.state_version = f.profile.state_version = "11";
     await foreground(); await screen.findByText("Сохранённое значение изменилось. Твой ввод остался.");
-    expect((group("Новых слов в группе").getByRole("textbox") as HTMLInputElement).value).toBe("7");
-    fireEvent.click(group("Новых слов в группе").getByRole("button", { name: "Принять сохранённое" }));
-    expect((group("Новых слов в группе").getByRole("textbox") as HTMLInputElement).value).toBe("9");
+    expect((group("Новых карточек в группе").getByRole("textbox") as HTMLInputElement).value).toBe("7");
+    fireEvent.click(group("Новых карточек в группе").getByRole("button", { name: "Принять сохранённое" }));
+    expect((group("Новых карточек в группе").getByRole("textbox") as HTMLInputElement).value).toBe("9");
     expect(f.commandReply).not.toHaveBeenCalled();
   });
   it("supports edits and saves inside React StrictMode", async () => {
@@ -319,9 +319,9 @@ describe("Settings in the real App document", () => {
   });
   it("discards memory drafts on a new document epoch", async () => {
     const f = fixture(); render(<App />); await settings();
-    fireEvent.change(group("Новых слов в группе").getByRole("textbox"), { target: { value: "7" } });
+    fireEvent.change(group("Новых карточек в группе").getByRole("textbox"), { target: { value: "7" } });
     f.state.epoch = "2"; await foreground(); await screen.findByText("Активная пара: Украинский ↔ Немецкий");
-    await settings(); expect((group("Новых слов в группе").getByRole("textbox") as HTMLInputElement).value).toBe("");
+    await settings(); expect((group("Новых карточек в группе").getByRole("textbox") as HTMLInputElement).value).toBe("");
     expect(f.commandReply).not.toHaveBeenCalled();
   });
   it("does not send when persisting the intent fails", async () => {
