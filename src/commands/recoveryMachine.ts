@@ -6,9 +6,10 @@ import { copyMarks, validMarks, type SendCounter, type SendMarks } from "./sendC
 export { MAX_SENDS, PROBE_DELAYS_MS, RETRY_PAUSES_MS };
 
 /**
- * The counting rules that an owner answer may still change. Every field is a root decision, pending owner
- * (S/questions/questions_recov_20261008.md, question 11); the defaults are the assumptions of DESIGN D-RECOV table 8.
- * No policy changes the limit: at most six sends of one action, every send that may have gone out counts.
+ * The counting rules of question 11 (S/questions/questions_recov_20261008.md). The defaults are the owner's answers of
+ * 08.10.2026 (Q35.1–Q35.3, answer А each) and the only values the product uses; the other values are the rejected
+ * variants, kept so the tests can show what each answer changes. No policy changes the limit: at most six sends of one
+ * action, every send that may have gone out counts.
  */
 export type RecoveryPolicy = {
   /** 11.1: check the fact at once after a lost reply, or only after the pause of the next retry (that pause counts). */
@@ -191,11 +192,13 @@ export class RecoveryMachine<I extends { command_id: string }> {
     // Nothing runs before begin/resume or after the end; a final snapshot is not repeated.
     if (FINAL.has(this.state.name) || this.state.name === "idle") return;
     if (!active) { this.enter({ name: "suspended" }); return; }
-    // Inside a planned pause a return starts with a probe (not before the announced end), never with a check or a POST.
-    if (this.paused) { this.probeAfter(0); return; }
-    // A return checks the fact at once, not a light probe (question 11.3), and starts a new probe episode.
+    // A return restarts the light probes at 5 s (Q35.3), inside a planned pause as well; the spent sends stay spent.
     if (this.policy.probeSchedule === "per_episode") this.probes = 0;
     this.unknownChecks = 0;
+    // Inside a planned pause a return starts with a probe (not before the announced end), never with a check or a POST.
+    // Like the fact check of an ordinary return it stands before the series, so the series still starts at 5 s.
+    if (this.paused) { this.probeAfter(0, this.pauseSeconds, false); return; }
+    // A return checks the fact at once, not a light probe (question 11.3); a failed check starts a new episode.
     void this.check("checking");
   }
 
@@ -461,15 +464,17 @@ export class RecoveryMachine<I extends { command_id: string }> {
     this.probeAfter(probeDelay(this.probes + 1), pauseSeconds);
   }
 
-  private probeAfter(delayMs: number, pauseSeconds = this.pauseSeconds): void {
+  /** inSeries false: a probe outside the schedule (a return in a pause); it does not move the series on. */
+  private probeAfter(delayMs: number, pauseSeconds = this.pauseSeconds, inSeries = true): void {
     const probe = this.probes + 1;
     this.enter(this.paused
       ? { name: "maintenance", probe, pauseSeconds, budgetSpent: (this.marks?.reserved ?? 0) >= MAX_SENDS }
       : { name: "unreachable", probe, pauseSeconds });
     const now = this.clock.now();
-    this.after(this.held(now + delayMs) - now, () => { void this.runProbe(probe, pauseSeconds); });
+    this.after(this.held(now + delayMs) - now, () => { void this.runProbe(inSeries ? probe : this.probes, pauseSeconds); });
   }
 
+  /** probe: the place in the series once this probe has run (unchanged for a probe outside it). */
   private async runProbe(probe: number, pauseSeconds: number | null): Promise<void> {
     if (!this.liveOrTerminate()) return;
     const generation = this.generation;

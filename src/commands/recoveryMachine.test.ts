@@ -93,6 +93,11 @@ function rig(script: {
   };
 }
 
+/** A reply that arrives after ms on the fake clock (a slow server, or a timeout that ends in a lost reply). */
+function later<T>(reply: T, ms: number): Promise<T> {
+  return new Promise((resolve) => { setTimeout(() => resolve(reply), ms); });
+}
+
 /** Let the fake time pass; every reply of the fakes is a resolved promise, so the chains settle in between. */
 async function pass(ms: number): Promise<void> {
   await vi.advanceTimersByTimeAsync(ms);
@@ -620,6 +625,101 @@ describe("automatic recovery of one action", () => {
     await pass(200_000);
     expect(r.at("probe")).toEqual([5_000, 15_000, 35_000, 65_000, 95_000, 125_000, 155_000, 185_000]);
     expect(r.at("check")).toEqual([0, 5_000, 15_000, 35_000, 65_000, 95_000, 125_000, 155_000, 185_000]);
+  });
+
+  it("Q35.1 a reply lost by a 15 s timeout: the fact check runs at 15 s, before any retry pause; checks spend no send", async () => {
+    const r = rig({ send: (n) => n === 1 ? later(LOST, 15_000) : ACCEPTED, check: (n) => n <= 8 ? DOWN : ABSENT });
+    r.machine.begin();
+    await pass(15_000);
+    expect(r.calls.map(({ at, op }) => [at, op])).toEqual([[0, "send"], [15_000, "check"]]);
+    await pass(184_000);
+    // Eight checks failed meanwhile; the budget is still the one of a single send.
+    expect(r.at("check")).toEqual([15_000, 20_000, 30_000, 50_000, 80_000, 110_000, 140_000, 170_000]);
+    expect(r.machine.snapshot()).toMatchObject({ sends: 1, transmitted: 1, remaining: 5 });
+    await pass(1_000);
+    expect(r.posts()).toEqual([0, 200_000]);
+    expect(r.machine.snapshot()).toMatchObject({ state: { name: "settled" }, sends: 2, remaining: 4 });
+  });
+
+  it("Q35.2 the retry pause runs from the detected loss: not from the send, not from the confirming check", async () => {
+    // The reply is lost at 15 s (timeout); the confirming check takes 1.5 s. Retry №1 waits 2 s from 15 s.
+    const r = rig({ send: (n) => n === 1 ? later(LOST, 15_000) : ACCEPTED, check: (n) => n === 1 ? later(ABSENT, 1_500) : ABSENT });
+    r.machine.begin();
+    await pass(600_000);
+    expect(r.calls.map(({ at, op }) => [at, op])).toEqual([[0, "send"], [15_000, "check"], [17_000, "check"], [17_000, "send"]]);
+    expectCheckBeforeEveryRetry(r);
+  });
+
+  it("Q35.2 a retry pause that passed while the server was away is not waited again: the retry follows the check at once", async () => {
+    const back = 30_000;
+    const r = rig({ send: (n) => n <= 2 ? LOST : ACCEPTED, check: (n, t) => n >= 3 && t < back ? DOWN : ABSENT, probe: (_n, t) => t >= back });
+    r.machine.begin();
+    await pass(600_000);
+    // Loss №2 at 2 s, pause №2 of 5 s due at 7 s; the server answers again at the probe of 37 s.
+    expect(r.calls.filter((call) => call.at >= 37_000).map(({ at, op }) => [at, op])).toEqual([[37_000, "probe"], [37_000, "check"], [37_000, "send"]]);
+    expect(r.posts()).toEqual([0, 2_000, 37_000]);
+    expectCheckBeforeEveryRetry(r);
+  });
+
+  it("Q35.2 a passed retry pause does not lift a planned pause: no probe and no POST before its announced end", async () => {
+    // Loss at 0 (pause №1 due at 2 s); the check after the probe of 5 s meets MAINTENANCE with 60 s.
+    const r = rig({ send: (n) => n === 1 ? LOST : ACCEPTED,
+      check: (n) => n === 1 ? DOWN : n === 2 ? new ApiError("http", 503, "MAINTENANCE", { waitSeconds: 60 }) : ABSENT });
+    r.machine.begin();
+    await pass(600_000);
+    expect(r.calls.map(({ at, op }) => [at, op])).toEqual([[0, "send"], [0, "check"], [5_000, "probe"], [5_000, "check"],
+      [65_000, "probe"], [65_000, "check"], [65_000, "send"]]);
+    expect(r.state()).toBe("settled");
+  });
+
+  it("Q35.3 a return from the background checks at once, then restarts the probes at 5 s; the spent sends stay spent", async () => {
+    let up = false;
+    const r = rig({ send: (n) => n <= 2 ? LOST : ACCEPTED, check: (n) => n <= 2 || up ? ABSENT : DOWN, probe: () => up });
+    r.machine.begin();
+    await pass(100_000);
+    // Loss №2 at 2 s, the check fails: probes 5, 10, 20, then 30 s from there.
+    expect(r.at("probe")).toEqual([7_000, 17_000, 37_000, 67_000, 97_000]);
+    r.machine.setActive(false);
+    await pass(100_000);
+    expect(r.calls.filter((call) => call.at > 100_000)).toEqual([]);
+    r.machine.setActive(true);
+    await pass(60_000);
+    expect(r.at("check").filter((at) => at >= 200_000)).toEqual([200_000]);
+    expect(r.at("probe").filter((at) => at >= 200_000)).toEqual([205_000, 215_000, 235_000]);
+    expect(r.machine.snapshot()).toMatchObject({ state: { name: "unreachable" }, sends: 2, transmitted: 2, remaining: 4 });
+    up = true;
+    await pass(30_000);
+    expect(r.posts()).toEqual([0, 2_000, 265_000]);
+    expect(r.machine.snapshot()).toMatchObject({ state: { name: "settled" }, sends: 3 });
+  });
+
+  it("Q35.3 a return inside a planned pause: a probe at once, then the series again from 5 s (probe refused)", async () => {
+    const r = rig({ send: () => new ApiError("http", 503, "MAINTENANCE"), probe: () => false });
+    r.machine.begin();
+    await pass(130_000);
+    expect(r.at("probe")).toEqual([5_000, 15_000, 35_000, 65_000, 95_000, 125_000]);
+    r.machine.setActive(false);
+    await pass(70_000);
+    r.machine.setActive(true);
+    await pass(70_000);
+    expect(r.at("probe").filter((at) => at >= 200_000)).toEqual([200_000, 205_000, 215_000, 235_000, 265_000]);
+    expect(r.at("check")).toEqual([]);
+    expect(r.machine.snapshot()).toMatchObject({ state: { name: "maintenance" }, sends: 1, transmitted: 1 });
+  });
+
+  it("Q35.3 a return inside a planned pause, product form (the probe always answers): checks at once, then 5, 10, 20 s", async () => {
+    const r = rig({ send: () => new ApiError("http", 503, "MAINTENANCE"), check: () => new ApiError("http", 503, "MAINTENANCE"),
+      probe: () => true });
+    r.machine.begin();
+    await pass(100_000);
+    expect(r.at("check")).toEqual([5_000, 15_000, 35_000, 65_000, 95_000]);
+    r.machine.setActive(false);
+    await pass(100_000);
+    r.machine.setActive(true);
+    await pass(40_000);
+    expect(r.at("check").filter((at) => at >= 200_000)).toEqual([200_000, 205_000, 215_000, 235_000]);
+    expect(r.posts()).toEqual([0]);
+    expect(r.machine.snapshot()).toMatchObject({ state: { name: "maintenance" }, sends: 1 });
   });
 
   it("a monotonic clock: a wall-clock jump back neither stretches nor restarts a passed retry pause", async () => {
