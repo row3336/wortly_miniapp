@@ -67,6 +67,9 @@ export class EntryController {
   private reapplyIntent: ReapplyIntent | null = null;
   private conflictedIntentId: string | null = null;
   private conflictedAccessVersion: string | null = null;
+  // The profile whose reapply the core refused with 403 ACCESS_REJECTED (two refusals, CT §6.3). It outlives
+  // retry(): the closure is final, and an older core's profile has no reapply_closed to say so again.
+  private reapplyClosedFor: string | null = null;
   private proofIssuedThisSession = false;
   private running: Promise<void> | null = null;
   private foregroundRunning = false;
@@ -334,7 +337,7 @@ export class EntryController {
         }
         this.conflictedAccessVersion = null;
       }
-      this.emit({ kind: "rejected", reason: profile.access.reason ?? undefined }, profile);
+      this.emit(this.rejected(profile), profile);
       return;
     }
     this.emit({ kind: "opening" }, profile);
@@ -352,6 +355,14 @@ export class EntryController {
       await this.register(session.access_token, generation);
       if (this.current(generation)) await this.open(session.access_token, generation);
     }
+  }
+
+  /** The refusal screen of a rejected profile; closed once no reapplication is left (CT §6.3). */
+  private rejected(profile: Profile): EntryState {
+    // An older core sends no reapply_closed: it reads as open, and its 403 to the reapply closes it below.
+    const closed = profile.reapply_closed === true || this.reapplyClosedFor === profile.profile_id;
+    const reason = profile.access.reason ?? undefined;
+    return closed ? { kind: "rejected", reason, closed: true } : { kind: "rejected", reason };
   }
 
   /** Pending access means any earlier reapply was settled: its saved ID must not be resent later. */
@@ -590,7 +601,7 @@ export class EntryController {
     if (this.running) return this.running;
     if (this.conflictedIntentId || this.conflictedAccessVersion) return Promise.resolve();
     const session = this.session;
-    if (!session || this.state.kind !== "rejected") return Promise.resolve();
+    if (!session || this.state.kind !== "rejected" || this.state.closed) return Promise.resolve();
     const reason = this.state.reason;
     const generation = ++this.generation;
     this.emit({ kind: "reapplying", reason });
@@ -628,10 +639,24 @@ export class EntryController {
       } else if (response.current.access.status === "admitted") {
         await this.execute(generation, false);
       } else {
-        this.emit({ kind: "rejected", reason: response.current.access.reason ?? undefined }, response.current);
+        this.emit(this.rejected(response.current), response.current);
       }
     })().catch(async (error: unknown) => {
       if (!this.current(generation)) return;
+      if (!confirmed && error instanceof EntryApiError && error.kind === "http" && error.status === 403
+        && error.code === "ACCESS_REJECTED") {
+        // The core refused a third application and wrote nothing (CT §6.3). The sign-in still works, so the
+        // session stays; the screen is the closed refusal, not "unavailable" with a retry that leads back here.
+        this.reapplyClosedFor = session.profile.profile_id;
+        this.reapplyIntent = null;
+        try {
+          await clearReapplyIntent(this.options.storage, session.profile.profile_id);
+        } catch {
+          // The saved ID was never applied; with no reapply button left it is never sent again.
+        }
+        if (this.current(generation)) this.emit(this.rejected(session.profile), session.profile);
+        return;
+      }
       this.resetInvalidSession(error);
       if (error instanceof EntryApiError && error.kind === "http" && error.status === 409
         && error.code === "VERSION_CONFLICT") {

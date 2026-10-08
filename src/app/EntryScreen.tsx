@@ -30,7 +30,7 @@ export function EntryScreen({ state, language, onRetry, onReapply,
     : state.kind === "pending"
       ? copy.pending
       : state.kind === "rejected"
-        ? state.pause ? copy.maintenance : copy.rejected
+        ? state.pause ? copy.maintenance : state.closed ? copy.rejectedClosed : copy.rejected
         : busy
           ? copy.busy
           : state.kind === "opened"
@@ -45,7 +45,7 @@ export function EntryScreen({ state, language, onRetry, onReapply,
     : state.kind === "pending"
       ? copy.pendingDetail
       : state.kind === "rejected"
-        ? state.pause ? copy.maintenanceDetail : copy.rejectedDetail
+        ? state.pause ? copy.maintenanceDetail : state.closed ? copy.rejectedClosedDetail : copy.rejectedDetail
         : busy
           ? copy.busyDetail
           : state.kind === "opened"
@@ -71,7 +71,7 @@ export function EntryScreen({ state, language, onRetry, onReapply,
         <p>{detail}</p>
         {wait && <p className="maintenance-wait">{wait}</p>}
         {state.kind === "rejected" && state.reason && <p className="access-reason">{state.reason}</p>}
-        {state.kind === "rejected" && onReapply && (
+        {state.kind === "rejected" && !state.closed && onReapply && (
           <button className="primary-action" type="button" onClick={onReapply}>
             {copy.reapply}
           </button>

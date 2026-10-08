@@ -7,7 +7,9 @@ export type EntryState =
   | { kind: "pending" }
   // pause: the last reapply met a planned pause (503 MAINTENANCE, К14-021). It is the same refusal screen with the
   // same reapply button and the same saved command ID, plus a note; waitSeconds is the server's estimate (0 = passed).
-  | { kind: "rejected"; reason?: string; pause?: { waitSeconds?: number } }
+  // closed: the second refusal in the profile's life ended reapplication (CT §6.3). The same refusal screen, calm
+  // wording and no reapply button; it is also where a 403 ACCESS_REJECTED to a reapply lands, never "unavailable".
+  | { kind: "rejected"; reason?: string; pause?: { waitSeconds?: number }; closed?: true }
   | { kind: "reapplying"; reason?: string }
   | { kind: "busy"; remoteTarget?: string }
   // A newer window of this installation took the document over (decision 2.3). Terminal: this window closes

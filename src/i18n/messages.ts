@@ -8,6 +8,10 @@ const messages = {
     pendingDetail: "Коли доступ буде схвалено, відкрий Wortly знову через бота.",
     rejected: "Доступ поки не надано",
     rejectedDetail: "Ти можеш подати заявку ще раз.",
+    // Working wording for a reapplication closed after two refusals (CT §6.3); the owner approves it.
+    // The contact form waits for answer 4.4-Б3.3, so nothing here mentions a contact.
+    rejectedClosed: "Доступ не надано",
+    rejectedClosedDetail: "Подати заявку ще раз уже не можна.",
     reapply: "Подати заявку ще раз",
     unavailable: "Не вдалося відкрити Wortly",
     unavailableDetail: "Спробуй відкрити застосунок пізніше.",
@@ -36,6 +40,8 @@ const messages = {
     pendingDetail: "Once access is approved, open Wortly again from the bot.",
     rejected: "Access is not available yet",
     rejectedDetail: "You can apply again.",
+    rejectedClosed: "Access was not granted",
+    rejectedClosedDetail: "You can no longer apply again.",
     reapply: "Apply again",
     unavailable: "Wortly could not open",
     unavailableDetail: "Please try opening the app later.",
@@ -64,6 +70,8 @@ const messages = {
     pendingDetail: "Когда доступ одобрят, открой Wortly снова через бота.",
     rejected: "Доступ пока не предоставлен",
     rejectedDetail: "Ты можешь подать заявку ещё раз.",
+    rejectedClosed: "Доступ не предоставлен",
+    rejectedClosedDetail: "Подать заявку ещё раз уже нельзя.",
     reapply: "Подать заявку ещё раз",
     unavailable: "Не удалось открыть Wortly",
     unavailableDetail: "Попробуй открыть приложение позже.",

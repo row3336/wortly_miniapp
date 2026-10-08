@@ -58,6 +58,8 @@ export function validProfile(value: unknown): value is Profile {
     && validVersion(value.access.version)
     && (value.access.status === "admitted" || value.access.status === "pending" || value.access.status === "rejected")
     && (value.access.reason === null || typeof value.access.reason === "string")
+    // An older core does not send reapply_closed: absent reads as "not closed", so either rollout order works.
+    && (value.reapply_closed === undefined || typeof value.reapply_closed === "boolean")
     && (value.role === "owner" || value.role === "user")
     && language(value.ui_language)
     && language(value.dictionary_language)

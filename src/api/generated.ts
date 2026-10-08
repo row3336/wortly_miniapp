@@ -354,7 +354,7 @@ export type PrepositionPairRole = { "value": (string | null); "version": string;
 
 export type PresentCommand = { "command_id": string; "client_instance_id": string; "document_id": string; "session_id": string; "kind": "assignment.present"; "assignment_id": string; "payload": EmptyPayload; };
 
-export type Profile = { "profile_id": string; "access": Access; "role": "owner" | "user"; "ui_language": "uk" | "en" | "ru"; "dictionary_language": "uk" | "en" | "ru"; "time_zone": (string | null); "state_version": string; };
+export type Profile = { "profile_id": string; "access": Access; "reapply_closed"?: boolean; "role": "owner" | "user"; "ui_language": "uk" | "en" | "ru"; "dictionary_language": "uk" | "en" | "ru"; "time_zone": (string | null); "state_version": string; };
 
 export type PublicAnswerSpec = { "kind": "word" | "forms" | "phrase"; "labels": Array<string>; "part_count": number; "case_sensitive": boolean; };
 
