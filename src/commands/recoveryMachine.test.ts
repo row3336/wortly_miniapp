@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../api/http";
 import { ClosedAccessError } from "../app/openedAccess";
 import { systemRecoveryClock } from "./recoveryClock";
-import { RecoveryMachine, type RecoveryPolicy, type RecoverySnapshot } from "./recoveryMachine";
+import { RecoveryMachine, type RecoverySnapshot } from "./recoveryMachine";
 import type { CheckResult, SendResult } from "./recoveryReplies";
 import { MemorySendCounter, type SendCounter } from "./sendCounter";
 
@@ -42,7 +42,6 @@ function rig(script: {
   /** The window check after DOCUMENT_STALE; default: the answer of live(). */
   windowCheck?: () => Promise<boolean>;
   active?: boolean;
-  policy?: Partial<RecoveryPolicy>;
   counter?: SendCounter;
   /** Whether send n reports its start; default true for every request that reaches the network. */
   transmit?: (n: number) => boolean;
@@ -56,7 +55,7 @@ function rig(script: {
   };
   const counter = script.counter ?? new MemorySendCounter();
   const machine = new RecoveryMachine<Intent>({
-    intent: INTENT, counter, clock: systemRecoveryClock, active: script.active ?? true, policy: script.policy,
+    intent: INTENT, counter, clock: systemRecoveryClock, active: script.active ?? true,
     onUpdate: (snapshot) => updates.push(snapshot),
     ports: {
       send: (intent, transmitted) => {
@@ -584,39 +583,13 @@ describe("automatic recovery of one action", () => {
     expect(found.machine.snapshot().state).toEqual({ name: "settled", outcome: "rejected" });
   });
 
-  it("11.2 the other answer: the retry pause runs from the confirming check", async () => {
-    const outage = 60_000;
-    const r = rig({ check: (_n, t) => t < outage ? DOWN : ABSENT, probe: (_n, t) => t >= outage,
-      send: (n) => n === 1 ? LOST : ACCEPTED, policy: { retryPauseFrom: "confirmation" } });
+  it("11.3 every unreachable episode starts probing at 5 s again", async () => {
+    // Down; the third probe answers and the check confirms absence; the retry is lost and the server is down again.
+    const r = rig({ check: (n) => n === 2 ? ABSENT : DOWN, probe: (n) => n === 3 });
     r.machine.begin();
-    await pass(600_000);
-    // Probes 5, 15, 35, 65 s; the check at 65 s confirms, the retry waits the full 2 s after it.
-    expect(r.calls.slice(-4).map(({ at, op }) => [at, op])).toEqual([[65_000, "probe"], [65_000, "check"], [67_000, "check"], [67_000, "send"]]);
-  });
-
-  it("11.1 the other answer: the first check waits for the pause of the next retry", async () => {
-    const r = rig({ send: (n) => n === 1 ? LOST : ACCEPTED, policy: { checkAfterLoss: "after_pause" } });
-    r.machine.begin();
-    await pass(600_000);
-    expect(r.calls.map(({ at, op }) => [at, op])).toEqual([[0, "send"], [2_000, "check"], [2_000, "send"]]);
-  });
-
-  it("11.3 every unreachable episode starts probing at 5 s again; the other answer continues the schedule", async () => {
-    const script = (probeSchedule: RecoveryPolicy["probeSchedule"]) => rig({
-      // Down; the third probe answers and the check confirms absence; the retry is lost and the server is down again.
-      check: (n) => n === 2 ? ABSENT : DOWN,
-      probe: (n) => n === 3,
-      policy: { probeSchedule },
-    });
-    const fresh = script("per_episode");
-    fresh.machine.begin();
     await pass(200_000);
-    expect(fresh.posts()).toEqual([0, 35_000]);
-    expect(fresh.at("probe").slice(0, 5)).toEqual([5_000, 15_000, 35_000, 40_000, 50_000]);
-    const continued = script("continue");
-    continued.machine.begin();
-    await pass(200_000);
-    expect(continued.at("probe").slice(0, 5)).toEqual([5_000, 15_000, 35_000, 65_000, 95_000]);
+    expect(r.posts()).toEqual([0, 35_000]);
+    expect(r.at("probe").slice(0, 5)).toEqual([5_000, 15_000, 35_000, 40_000, 50_000]);
   });
 
   it("Н7 the probe answers but the fact check keeps failing: the same episode, pauses still grow 5, 10, 20, 30 s", async () => {
@@ -788,7 +761,7 @@ describe("automatic recovery of one action", () => {
     expect(r.state()).toBe("settled");
   });
 
-  it("Q21/Q23 the hard limit: no policy and no mix of answers ever gets more than 6 POST; no request in the background", async () => {
+  it("Q21/Q23 the hard limit: no mix of answers ever gets more than 6 POST; no request in the background", async () => {
     let seed = 20261008;
     const random = () => {
       seed = (seed + 0x6d2b79f5) | 0;
@@ -801,56 +774,35 @@ describe("automatic recovery of one action", () => {
       for (const [weight, make] of items) { x -= weight; if (x < 0) return make(); }
       return items[items.length - 1][1]();
     };
-    const policies: Partial<RecoveryPolicy>[] = [];
-    for (const checkAfterLoss of ["immediate", "after_pause"] as const)
-      for (const retryPauseFrom of ["loss", "confirmation"] as const)
-        for (const probeSchedule of ["per_episode", "continue"] as const) policies.push({ checkAfterLoss, retryPauseFrom, probeSchedule });
     let exhausted = 0;
-    for (const policy of policies) {
-      for (let run = 0; run < 25; run++) {
-        const r = rig({
-          policy,
-          transmit: () => random() < 0.9,
-          send: () => pick<Reply<SendResult>>([
-            [40, () => LOST], [15, () => new ApiError("http", 503, "WRITE_UNAVAILABLE")],
-            [15, () => new ApiError("http", 503, "MAINTENANCE", { waitSeconds: random() < 0.5 ? null : Math.floor(random() * 200) })],
-            [10, () => new ClosedAccessError()], [2, () => new ApiError("http", 409, "CLIENT_INCOMPATIBLE")], [3, () => ACCEPTED],
-          ]),
-          check: () => pick<Reply<CheckResult>>([
-            [55, () => ABSENT], [20, () => DOWN], [10, () => ({ kind: "stale" })],
-            [10, () => new ApiError("http", 503, "MAINTENANCE", { waitSeconds: Math.floor(random() * 100) })], [5, () => RECORDED],
-          ]),
-          probe: () => random() < 0.7,
-        });
-        r.machine.begin();
-        for (let step = 0; step < 300; step++) {
-          if (random() < 0.05) r.machine.setActive(!r.machine.snapshot().active);
-          await pass(Math.floor(random() * 15_000));
-        }
-        const snapshot = r.machine.snapshot();
-        expect(r.posts().length).toBeLessThanOrEqual(6);
-        expect(r.calls.every((call) => call.active)).toBe(true);
-        if (snapshot.sends !== null) expect(r.posts().length).toBeLessThanOrEqual(snapshot.sends);
-        if (snapshot.state.name === "exhausted") { exhausted++; expect(snapshot.transmitted).toBe(6); }
-        r.machine.dispose();
+    for (let run = 0; run < 200; run++) {
+      const r = rig({
+        transmit: () => random() < 0.9,
+        send: () => pick<Reply<SendResult>>([
+          [40, () => LOST], [15, () => new ApiError("http", 503, "WRITE_UNAVAILABLE")],
+          [15, () => new ApiError("http", 503, "MAINTENANCE", { waitSeconds: random() < 0.5 ? null : Math.floor(random() * 200) })],
+          [10, () => new ClosedAccessError()], [2, () => new ApiError("http", 409, "CLIENT_INCOMPATIBLE")], [3, () => ACCEPTED],
+        ]),
+        check: () => pick<Reply<CheckResult>>([
+          [55, () => ABSENT], [20, () => DOWN], [10, () => ({ kind: "stale" })],
+          [10, () => new ApiError("http", 503, "MAINTENANCE", { waitSeconds: Math.floor(random() * 100) })], [5, () => RECORDED],
+        ]),
+        probe: () => random() < 0.7,
+      });
+      r.machine.begin();
+      for (let step = 0; step < 300; step++) {
+        if (random() < 0.05) r.machine.setActive(!r.machine.snapshot().active);
+        await pass(Math.floor(random() * 15_000));
       }
+      const snapshot = r.machine.snapshot();
+      expect(r.posts().length).toBeLessThanOrEqual(6);
+      expect(r.calls.every((call) => call.active)).toBe(true);
+      if (snapshot.sends !== null) expect(r.posts().length).toBeLessThanOrEqual(snapshot.sends);
+      if (snapshot.state.name === "exhausted") { exhausted++; expect(snapshot.transmitted).toBe(6); }
+      r.machine.dispose();
     }
     expect(exhausted).toBeGreaterThan(0); // the mix does reach the limit, so the bound is exercised
   }, 30_000); // hundreds of fake-clock runs: the default 5 s is too tight under a loaded machine
-
-  it("Q22 checkAfterLoss=after_pause with retryPauseFrom=confirmation: one pause, not two; after an outage the full pause", async () => {
-    const plain = rig({ send: (n) => n === 1 ? LOST : ACCEPTED, policy: { checkAfterLoss: "after_pause", retryPauseFrom: "confirmation" } });
-    plain.machine.begin();
-    await pass(600_000);
-    expect(plain.calls.map(({ at, op }) => [at, op])).toEqual([[0, "send"], [2_000, "check"], [2_000, "send"]]);
-    const outage = rig({ send: (n) => n === 1 ? LOST : ACCEPTED, check: (n) => n === 1 ? DOWN : ABSENT,
-      policy: { checkAfterLoss: "after_pause", retryPauseFrom: "confirmation" } });
-    outage.machine.begin();
-    await pass(600_000);
-    // Check at 2 s fails, probe at 7 s answers and the check confirms; the retry then waits the full 2 s.
-    expect(outage.calls.map(({ at, op }) => [at, op])).toEqual([[0, "send"], [2_000, "check"], [7_000, "probe"], [7_000, "check"],
-      [9_000, "check"], [9_000, "send"]]);
-  });
 
   it("Q24 422 VALIDATION_FAILED and 409 VERSION_CONFLICT: a definite refusal, one POST, no checks, no retries", async () => {
     for (const [status, code] of [[422, "VALIDATION_FAILED"], [409, "VERSION_CONFLICT"]] as const) {

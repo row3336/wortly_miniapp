@@ -5,27 +5,6 @@ import { copyMarks, validMarks, type SendCounter, type SendMarks } from "./sendC
 
 export { MAX_SENDS, PROBE_DELAYS_MS, RETRY_PAUSES_MS };
 
-/**
- * The counting rules of question 11 (S/questions/questions_recov_20261008.md). The defaults are the owner's answers of
- * 08.10.2026 (Q35.1–Q35.3, answer А each) and the only values the product uses; the other values are the rejected
- * variants, kept so the tests can show what each answer changes. No policy changes the limit: at most six sends of one
- * action, every send that may have gone out counts.
- */
-export type RecoveryPolicy = {
-  /** 11.1: check the fact at once after a lost reply, or only after the pause of the next retry (that pause counts). */
-  checkAfterLoss: "immediate" | "after_pause";
-  /** 11.2: a retry pause runs from the loss of the reply, or in full from the check that confirmed absence. */
-  retryPauseFrom: "loss" | "confirmation";
-  /** 11.3: every new unreachable episode starts probing at 5 s again, or continues the earlier schedule. */
-  probeSchedule: "per_episode" | "continue";
-};
-
-export const DEFAULT_RECOVERY_POLICY: Readonly<RecoveryPolicy> = Object.freeze({
-  checkAfterLoss: "immediate",
-  retryPauseFrom: "loss",
-  probeSchedule: "per_episode",
-});
-
 /** DESIGN D-RECOV table 3. attempt is the number of the send (1–6) the state performs or prepares. */
 export type RecoveryState =
   | { name: "idle" }
@@ -99,7 +78,6 @@ export type RecoveryOptions<I extends { command_id: string }> = {
    * route and confirmed settings do not count.
    */
   active: boolean;
-  policy?: Partial<RecoveryPolicy>;
   onUpdate?(snapshot: RecoverySnapshot): void;
 };
 
@@ -128,7 +106,6 @@ export class RecoveryMachine<I extends { command_id: string }> {
   private readonly ports: RecoveryPorts<I>;
   private readonly counter: SendCounter;
   private readonly clock: RecoveryClock;
-  private readonly policy: Readonly<RecoveryPolicy>;
   private readonly onUpdate: ((snapshot: RecoverySnapshot) => void) | undefined;
   private state: RecoveryState = { name: "idle" };
   private marks: SendMarks | null = null;
@@ -140,7 +117,6 @@ export class RecoveryMachine<I extends { command_id: string }> {
   /** Counter writes in call order, so a late release can never overwrite a newer reservation. */
   private writes: Promise<void> = Promise.resolve();
   private emitted: string | null = null;
-  private lostAt: number | null = null;
   private retryDueAt: number | null = null;
   /** The end of a planned pause the server announced: no probe and no send before it. */
   private holdUntil: number | null = null;
@@ -155,7 +131,6 @@ export class RecoveryMachine<I extends { command_id: string }> {
     this.ports = options.ports;
     this.counter = options.counter;
     this.clock = options.clock;
-    this.policy = Object.freeze({ ...DEFAULT_RECOVERY_POLICY, ...options.policy });
     this.onUpdate = options.onUpdate;
     this.active = options.active;
   }
@@ -193,7 +168,7 @@ export class RecoveryMachine<I extends { command_id: string }> {
     if (FINAL.has(this.state.name) || this.state.name === "idle") return;
     if (!active) { this.enter({ name: "suspended" }); return; }
     // A return restarts the light probes at 5 s (Q35.3), inside a planned pause as well; the spent sends stay spent.
-    if (this.policy.probeSchedule === "per_episode") this.probes = 0;
+    this.probes = 0;
     this.unknownChecks = 0;
     // Inside a planned pause a return starts with a probe (not before the announced end), never with a check or a POST.
     // Like the fact check of an ordinary return it stands before the series, so the series still starts at 5 s.
@@ -328,7 +303,7 @@ export class RecoveryMachine<I extends { command_id: string }> {
         // Pauses in a row (a probe that answers during the pause) keep growing the probe schedule.
         this.pause(result.waitSeconds, streak);
         return;
-      case "lost": this.lose(); this.afterLoss(); return;
+      case "lost": this.lose(); void this.check("checking"); return;
       // Nothing went out (e.g. a closed access handle): wait on the probe schedule, then check; never a tight loop.
       case "not_sent": this.unreachable(null, false); return;
     }
@@ -352,19 +327,7 @@ export class RecoveryMachine<I extends { command_id: string }> {
   }
 
   private lose(): void {
-    this.lostAt = this.clock.now();
-    this.retryDueAt = this.policy.retryPauseFrom === "loss" && this.marks !== null
-      ? this.lostAt + pauseBefore(this.marks.reserved + 1) : null;
-  }
-
-  private afterLoss(): void {
-    if (this.policy.checkAfterLoss === "immediate" || this.marks === null || this.marks.reserved >= MAX_SENDS) {
-      void this.check("checking");
-      return;
-    }
-    // The waited pause is the retry pause: a check that confirms absence at its end sends at once (no second pause).
-    this.retryDueAt = this.retryDueAt ?? this.lostAt! + pauseBefore(this.marks.reserved + 1);
-    this.retryWait(this.retryDueAt);
+    this.retryDueAt = this.marks !== null ? this.clock.now() + pauseBefore(this.marks.reserved + 1) : null;
   }
 
   private retryWait(dueAt: number): void {
@@ -434,7 +397,7 @@ export class RecoveryMachine<I extends { command_id: string }> {
       return;
     }
     const now = this.clock.now();
-    // No known loss time (a resumed action) or a pause from the confirmation: the full pause from now.
+    // No known loss time (a resumed action): the full pause from now.
     if (this.retryDueAt === null) this.retryDueAt = now + pauseBefore(marks.reserved + 1);
     const due = this.held(this.retryDueAt);
     if (now >= due) void this.send();
@@ -446,9 +409,7 @@ export class RecoveryMachine<I extends { command_id: string }> {
    * right after an answering probe continues the episode; anything else starts a new one (question 11.3).
    */
   private unreachable(pauseSeconds: number | null, sameEpisode: boolean): void {
-    if (this.policy.probeSchedule === "per_episode" && !sameEpisode) this.probes = 0;
-    // Question 11.2, the other answer: after the connection returns, always the full pause.
-    if (this.policy.retryPauseFrom === "confirmation") this.retryDueAt = null;
+    if (!sameEpisode) this.probes = 0;
     this.unknownChecks = 0;
     this.nextProbe(pauseSeconds);
   }
