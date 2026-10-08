@@ -186,7 +186,7 @@ export type DirectionCounts = { "l1-de": ReadyCount; "de-l1": ReadyCount; };
 
 export type EmptyPayload = {  };
 
-export type ErrorDetail = { "code": string; "estimated_end_at"?: (string | null); "wait_seconds"?: (number | null); };
+export type ErrorDetail = { "code": string; "estimated_end_at"?: (string | null); "wait_seconds"?: (number | null); "diagnostic_id"?: (string | null); };
 
 export type ErrorResponse = { "error": ErrorDetail; };
 
