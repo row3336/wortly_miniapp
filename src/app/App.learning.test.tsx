@@ -731,14 +731,14 @@ describe("Learning while the window checks its document (2.33)", () => {
     await waitFor(() => expect(r.foregrounds()).toBe(1));
     await settled();
     expect(wrapperDisplay()).toBe("none");
-    expect(screen.getByRole("heading", { name: "Открываем Wortly" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Обновляем Wortly" })).toBeTruthy();
     expect(back.handlers).toBe(1); // One Telegram binding, whatever layers supply handlers.
     const before = a.studyPosts().length;
     await back.click(); await settled();
     expect(a.studyPosts().slice(before)).toEqual([]);
     await act(async () => { hold.open(); }); await settled();
     await waitFor(() => expect(wrapperDisplay()).toBe("contents"));
-    expect(screen.queryByRole("heading", { name: "Открываем Wortly" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Обновляем Wortly" })).toBeNull();
   });
 
   it("Enter on body during the check never reaches the hidden Learning result's «next»", async () => {

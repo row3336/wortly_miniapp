@@ -17,7 +17,7 @@ export type ConjugationTestScreenProps = {
   submitOnEnter: boolean;
 };
 
-// Working copy for G05.
+// Working copy for G05, except the loading line (Б4.3.3 / Б4.3.4): wording approved by the owner (R10, 08.10.2026); display conditions follow TA.
 const copy = {
   ru: { title: "Тест спряжений", stop: "Завершить", loading: "Загружаем занятие…", presenting: "Подтверждаем показ вопроса…",
     submitting: "Сохраняем ответ…", unknown: "Ответ ещё не подтверждён. Проверь статус.", forgot: "Отправлено: «Забыл…»",
@@ -29,7 +29,7 @@ const copy = {
     stopping: "Завершуємо заняття…", previous: "Попередня відповідь", previousMode: "Попередня відповідь", barrier: "Підтверджуємо показ наступного питання…",
     recovery: "Дію ще не підтверджено. Перевір статус.", stale: "Не вдалося оновити заняття.", refresh: "Перевірити статус",
     refreshSummary: "Оновити підсумок", retryStudy: "Повторити дію", retryStop: "Повторити завершення" },
-  en: { title: "Conjugation test", stop: "End", loading: "Loading the session…", presenting: "Confirming the displayed question…",
+  en: { title: "Conjugation test", stop: "End", loading: "Loading your session…", presenting: "Confirming the displayed question…",
     submitting: "Saving the answer…", unknown: "The answer is not confirmed yet. Check status.", forgot: "Sent: “I forgot…”",
     stopping: "Ending the session…", previous: "Previous answer", previousMode: "Previous answer", barrier: "Confirming the next question…",
     recovery: "The action is not confirmed yet. Check status.", stale: "Could not refresh the session.", refresh: "Check status",

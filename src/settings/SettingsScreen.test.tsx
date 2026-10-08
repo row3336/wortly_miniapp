@@ -438,7 +438,7 @@ describe("Mix with the material chosen by CEFR level (M-SET-MIX-LEVEL, 2.21г)",
     expect(f.actions.edit).not.toHaveBeenCalled();
     expect(mixRadios().every(r => r.disabled)).toBe(true);
     expect(mixRadios().map(r => r.checked)).toEqual([true, false]);
-    expect(field("Перемешивать темы").getByText(/перемешивание тем не применяется\. Значение здесь не меняется/)).toBeDefined();
+    expect(field("Перемешивать темы").getByText(/поэтому «Перемешивать темы» не действует\. Сохранённое значение снова начнёт действовать/)).toBeDefined();
     expect(screen.getByRole("group", { name: "Перемешивать темы", hidden: true }).className).toContain("settings-field-muted");
     expect(f.actions.edit).not.toHaveBeenCalled();
   });
@@ -475,7 +475,7 @@ describe("Mix with the material chosen by CEFR level (M-SET-MIX-LEVEL, 2.21г)",
     }
   });
 
-  it.each([["uk", /перемішування тем не застосовується/], ["en", /topic mixing does not apply/]] as const)("explains in %s", (language, text) => {
+  it.each([["uk", /тому «Перемішувати теми» не діє/], ["en", /so “Mix topics” has no effect/]] as const)("explains in %s", (language, text) => {
     const f = levelFixture(false); f.language = language;
     const { container } = render(<SettingsScreen {...f} />); openAdditional(container);
     expect(screen.getAllByText(text).length).toBeGreaterThan(0);
@@ -484,6 +484,6 @@ describe("Mix with the material chosen by CEFR level (M-SET-MIX-LEVEL, 2.21г)",
   it("links the note to the radios", () => {
     const f = levelFixture(true), { container } = render(<SettingsScreen {...f} />); openAdditional(container);
     const ids = mixRadios()[0].getAttribute("aria-describedby")!.split(" ");
-    expect(ids.map(item => document.getElementById(item)?.textContent).join(" ")).toMatch(/Значение здесь не меняется/);
+    expect(ids.map(item => document.getElementById(item)?.textContent).join(" ")).toMatch(/Сохранённое значение снова начнёт действовать/);
   });
 });

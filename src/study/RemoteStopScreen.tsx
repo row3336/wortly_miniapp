@@ -2,7 +2,8 @@ import { useEffect, useRef } from "react";
 import type { Language } from "../i18n/language";
 import type { EntryState } from "../app/entryState";
 
-// uk/en changedDetail: root decision, pending owner (O24); ru is the owner-approved text (В4, TA §12.1).
+// Wording approved by the owner (R10, 08.10.2026); display conditions follow TA. Covers changedDetail (ru/uk/en),
+// the "End session" / "Cancel" buttons and the "Please wait" line; the ru text was already approved earlier (В4, TA §12.1).
 const copy = {
   ru: {
     busy: "Занятие на другом устройстве", busyDetail: "Ты можешь завершить его здесь. Учебный прогресс сохранится.",

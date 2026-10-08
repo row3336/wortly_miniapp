@@ -18,7 +18,7 @@ const busyTitle = "Wortly уже открыт";
 const busyText = "Вернись в другое открытое окно или на другое устройство.";
 const unconfirmed = "Учебное действие ещё не подтверждено.";
 const oralRefusal = "Не удалось обновить занятие. Проверь состояние.";
-const checkingTitle = "Открываем Wortly";
+const checkingTitle = "Обновляем Wortly";
 const settle = () => new Promise(resolve => setTimeout(resolve, 30));
 
 function today(): TodayResponse {

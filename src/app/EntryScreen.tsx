@@ -13,10 +13,12 @@ type Props = {
   onRemoteConfirm?: () => void;
   onRemoteCheck?: () => void;
   onRemoteRetry?: () => void;
+  /** The check of a window whose request got DOCUMENT_STALE: only its title differs from the ordinary entry. */
+  afterStale?: boolean;
 };
 
 export function EntryScreen({ state, language, onRetry, onReapply,
-  onRemoteRequest, onRemoteCancel, onRemoteConfirm, onRemoteCheck, onRemoteRetry }: Props) {
+  onRemoteRequest, onRemoteCancel, onRemoteConfirm, onRemoteCheck, onRemoteRetry, afterStale }: Props) {
   if (state.kind === "remote" || state.kind === "remote_confirm" || state.kind === "busy" && state.remoteTarget) {
     return <RemoteStopScreen state={state} language={language} onRequest={onRemoteRequest}
       onCancel={onRemoteCancel} onConfirm={onRemoteConfirm} onCheck={onRemoteCheck} onRetry={onRemoteRetry} />;
@@ -26,7 +28,7 @@ export function EntryScreen({ state, language, onRetry, onReapply,
   // A window whose document a newer one took over reads as «already open», without buttons, until Q54 is answered.
   const busy = state.kind === "busy" || state.kind === "replaced";
   const title = loading
-    ? copy.loading
+    ? afterStale ? copy.updating : copy.loading
     : state.kind === "pending"
       ? copy.pending
       : state.kind === "rejected"

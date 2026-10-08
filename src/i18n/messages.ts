@@ -4,11 +4,14 @@ const messages = {
   uk: {
     loading: "Відкриваємо Wortly",
     loadingDetail: "Зачекай трохи.",
+    // Wording approved by the owner (R10, 08.10.2026); display conditions follow TA. Check after DOCUMENT_STALE (Б4.3.1).
+    updating: "Оновлюємо Wortly",
     pending: "Заявку надіслано",
     pendingDetail: "Коли доступ буде схвалено, відкрий Wortly знову через бота.",
     rejected: "Доступ поки не надано",
     rejectedDetail: "Ти можеш подати заявку ще раз.",
-    // Working wording for a reapplication closed after two refusals (CT §6.3); the owner approves it.
+    // Wording approved by the owner (R10, 08.10.2026); display conditions follow TA.
+    // Reapplication closed after two refusals (CT §6.3).
     // The contact form waits for answer 4.4-Б3.3, so nothing here mentions a contact.
     rejectedClosed: "Доступ не надано",
     rejectedClosedDetail: "Подати заявку ще раз уже не можна.",
@@ -36,6 +39,8 @@ const messages = {
   en: {
     loading: "Opening Wortly",
     loadingDetail: "Please wait a moment.",
+    // Wording approved by the owner (R10, 08.10.2026); display conditions follow TA. Check after DOCUMENT_STALE (Б4.3.1).
+    updating: "Updating Wortly",
     pending: "Request sent",
     pendingDetail: "Once access is approved, open Wortly again from the bot.",
     rejected: "Access is not available yet",
@@ -66,6 +71,8 @@ const messages = {
   ru: {
     loading: "Открываем Wortly",
     loadingDetail: "Подожди немного.",
+    // Wording approved by the owner (R10, 08.10.2026); display conditions follow TA. Check after DOCUMENT_STALE (Б4.3.1).
+    updating: "Обновляем Wortly",
     pending: "Заявка отправлена",
     pendingDetail: "Когда доступ одобрят, открой Wortly снова через бота.",
     rejected: "Доступ пока не предоставлен",

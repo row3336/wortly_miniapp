@@ -201,7 +201,7 @@ export function App() {
             storage={storage} oralStores={oralStores} newId={newId} language={language} foreground={foreground} onCurrent={observeSettings}
             launchCard={launchCard} />
         </div>
-        {documentCheck && <EntryScreen state={{ kind: "checking" }} language={language} />}
+        {documentCheck && <EntryScreen state={{ kind: "checking" }} language={language} afterStale />}
       </>;
     }
     if (entryState.kind === "busy" && busyAccess && transport && controller) {
