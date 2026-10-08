@@ -69,7 +69,7 @@ function app(options: { session?: string | null; status?: TodayResponse["learnin
     dictionary_language: stored.settings.dictionary_language.value as Profile["dictionary_language"] });
   const settingsReply = vi.fn(async () => response(settingsData()));
   const save = (command: SettingCommand) => {
-    const setting = stored.settings[command.payload.key];
+    const setting = stored.settings[command.payload.key as keyof SettingsResponse["settings"]];
     const changedPair = command.payload.key === "dictionary_language" && command.payload.value !== setting.value;
     Object.assign(setting, { value: structuredClone(command.payload.value), version: String(BigInt(setting.version) + 1n) });
     version++;

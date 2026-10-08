@@ -3,7 +3,7 @@ import type { OpenedClient, Profile, SavedCommandFact, SettingsResponse } from "
 import { ApiError } from "../api/http";
 import { createOpenedAccess, type OpenedAccess } from "../app/openedAccess";
 import type { AsyncStorage } from "../platform/storage";
-import { type SettingIntent, type SettingSaveReply, type SettingStatusReply, type SettingsApi } from "./settingsApi";
+import { type EditableSettingIntent, type SettingIntent, type SettingKey, type SettingSaveReply, type SettingStatusReply, type SettingsApi } from "./settingsApi";
 import { SettingsController, type SettingsSnapshot } from "./settingsController";
 import { SettingsPendingStore, type SettingsPending } from "./settingsPending";
 
@@ -17,8 +17,7 @@ function current(state = big): SettingsResponse {
     time_zone: { value: "UTC", version: "1" }, retry_gap: { value: null, version: "1" },
     retry_count: { value: 3, version: big }, learning_group_size: { value: null, version: "1" },
     learning_intervals_seconds: { value: [120, 30, 120], version: "1" },
-    learning_poll_seconds: { value: null, version: "1" }, learning_reminder_pause_seconds: { value: null, version: "1" },
-    learning_ready_percent: { value: null, version: "1" }, learning_mix: { value: null, version: "1" },
+    learning_reminder_pause_seconds: { value: null, version: "1" }, learning_mix: { value: null, version: "1" },
     strict_case: { value: true, version: "1" }, include_preterite: { value: false, version: "1" },
     include_comparative: { value: null, version: "1" }, transition_mode: { value: null, version: "1" },
     review_error_mode: { value: "strict", version: "1" },
@@ -30,9 +29,7 @@ function current(state = big): SettingsResponse {
     retry_gap: { type: "integer", minimum: 1, maximum: 2147483647 },
     retry_count: { type: "integer", minimum: 1, maximum: 2147483647 },
     learning_group_size: { type: "integer", minimum: 1, maximum: 2147483647 },
-    learning_poll_seconds: { type: "integer", minimum: 10, maximum: 2147483647 },
     learning_reminder_pause_seconds: { type: "integer", minimum: 60, maximum: 2147483647 },
-    learning_ready_percent: { type: "integer", minimum: 1, maximum: 100 },
     learning_intervals_seconds: { type: "ordered_integer_list", nonempty: true, item_minimum: 1, item_maximum: 2147483647 },
     learning_mix: { type: "boolean" }, strict_case: { type: "boolean" }, include_preterite: { type: "boolean" },
     include_comparative: { type: "boolean" }, transition_mode: { type: "enum", values: ["normal", "accelerated"] },
@@ -47,7 +44,7 @@ const profile = (): Profile => ({ profile_id: id(1), access: { status: "admitted
 const opened = (): OpenedClient => ({ status: "opened", client_instance_id: id(2), document_id: id(3),
   document_epoch: "1", proof_version: "1", profile: profile(), session: null,
   compatibility: { compatible: true, contract_version: "1" } });
-const intent = (): SettingIntent => ({ command_id: id(100), kind: "setting.save", expected_field_version: big,
+const intent = (): EditableSettingIntent => ({ command_id: id(100), kind: "setting.save", expected_field_version: big,
   payload: { key: "retry_count", value: 4 } });
 const pending = (): SettingsPending => ({ schemaVersion: 1, profileId: id(1), clientInstanceId: id(2), intent: intent() });
 const fact = (request: SettingIntent = intent()): SavedCommandFact => ({ id: request.command_id, kind: "setting.save", status: "applied",
@@ -55,7 +52,7 @@ const fact = (request: SettingIntent = intent()): SavedCommandFact => ({ id: req
   object_version: String(BigInt(request.expected_field_version) + 1n) });
 function accepted(request: SettingIntent = intent()): SettingSaveReply {
   const data = current(next);
-  Object.assign(data.settings[request.payload.key], { value: structuredClone(request.payload.value),
+  Object.assign(data.settings[request.payload.key as SettingKey], { value: structuredClone(request.payload.value),
     version: String(BigInt(request.expected_field_version) + 1n) });
   return { outcome: "accepted", command: fact(request), current: data, state_version: data.state_version };
 }
@@ -367,6 +364,31 @@ describe("settings recovery storage", () => {
       expect(f.controller.snapshot()).toMatchObject({ problem: { reason: "invalid_pending" }, canEdit: false });
       expect(f.api.get).not.toHaveBeenCalled(); expect(f.api.save).not.toHaveBeenCalled();
       expect(f.disk.values.get(slot)).toBe(raw);
+    });
+
+  it.each(["learning_poll_seconds", "learning_ready_percent"])(
+    "an unfinished save of the retired %s does not block editing: it is dropped and a new save goes through", async key => {
+      const disk = persisted(); const report = vi.spyOn(console, "warn").mockImplementation(() => {});
+      disk.values.set(slot, JSON.stringify({ ...pending(), intent: { ...intent(), payload: { key, value: 80 } } }));
+      const f = fixture({ disk }); await f.controller.refresh();
+      expect(f.controller.snapshot()).toMatchObject({ problem: null, pending: null, canEdit: true, phase: "ready" });
+      expect(disk.values.has(slot)).toBe(false); expect(report).toHaveBeenCalledOnce();
+      f.controller.edit("retry_count", 5); await f.controller.save("retry_count");
+      expect(f.api.save).toHaveBeenCalledOnce();
+      expect(f.api.save.mock.calls[0][3].payload).toEqual({ key: "retry_count", value: 5 });
+      expect(f.api.status).not.toHaveBeenCalled();
+      report.mockRestore();
+    });
+
+  it.each(["get", "remove"] as const)(
+    "shows a storage problem, not a network one, when %s fails while dropping a retired slot", async method => {
+      const disk = persisted(); const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      disk.values.set(slot, JSON.stringify({ ...pending(), intent: { ...intent(), payload: { key: "learning_poll_seconds", value: 80 } } }));
+      vi.mocked(disk.storage[method]).mockRejectedValueOnce(new Error("private-details"));
+      const f = fixture({ disk }); await f.controller.refresh();
+      expect(f.controller.snapshot()).toMatchObject({ problem: { reason: "storage" }, canEdit: false });
+      expect(JSON.stringify(f.states)).not.toContain("private-details");
+      warn.mockRestore();
     });
 
   it("cannot overwrite an intent placed in the slot by another controller", async () => {

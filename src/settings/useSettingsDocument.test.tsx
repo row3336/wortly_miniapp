@@ -2,7 +2,7 @@ import { StrictMode, useLayoutEffect, type PropsWithChildren } from "react";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SettingCommand } from "../api/generated";
-import type { SettingIntent } from "./settingsApi";
+import type { EditableSettingIntent, SettingIntent, SettingKey } from "./settingsApi";
 import { deferred, fixture, id, profile, response } from "../learning/learningFixtures.test-support";
 import { SettingsPendingStore, type SettingsPending } from "./settingsPending";
 import { settingsResponse } from "./settingsRead.test-support";
@@ -10,7 +10,7 @@ import { useSettingsDocument, type SettingsDocument } from "./useSettingsDocumen
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 const slot = "wortly.pending.setting";
-const intent: SettingIntent = { command_id: id(100), kind: "setting.save", expected_field_version: "1",
+const intent: EditableSettingIntent = { command_id: id(100), kind: "setting.save", expected_field_version: "1",
   payload: { key: "retry_count", value: 4 } };
 const pending: SettingsPending = { schemaVersion: 1, profileId: id(50), clientInstanceId: id(1), intent };
 type Options = Parameters<typeof useSettingsDocument>[0];
@@ -23,7 +23,7 @@ function setup(saved?: "accepted" | "missing" | "invalid", strict = false, befor
   const facts = new Map<string, SettingIntent>();
   const apply = (request: SettingIntent) => {
     facts.set(request.command_id, request); data.state_version = String(BigInt(data.state_version) + 1n);
-    Object.assign(data.settings[request.payload.key], { value: request.payload.value,
+    Object.assign(data.settings[request.payload.key as SettingKey], { value: request.payload.value,
       version: String(BigInt(request.expected_field_version) + 1n) });
   };
   if (saved) f.values.set(slot, saved === "invalid" ? "broken" : JSON.stringify(pending));

@@ -13,8 +13,7 @@ function current(state = big): SettingsResponse {
     time_zone: { value: "UTC", version: "1" }, retry_gap: { value: null, version: "1" },
     retry_count: { value: 3, version: big }, learning_group_size: { value: null, version: "1" },
     learning_intervals_seconds: { value: [120, 30, 120], version: "1" },
-    learning_poll_seconds: { value: null, version: "1" }, learning_reminder_pause_seconds: { value: null, version: "1" },
-    learning_ready_percent: { value: null, version: "1" }, learning_mix: { value: null, version: "1" },
+    learning_reminder_pause_seconds: { value: null, version: "1" }, learning_mix: { value: null, version: "1" },
     strict_case: { value: true, version: "1" }, include_preterite: { value: false, version: "1" },
     include_comparative: { value: null, version: "1" }, transition_mode: { value: null, version: "1" },
     review_error_mode: { value: "strict", version: "1" },
@@ -26,9 +25,7 @@ function current(state = big): SettingsResponse {
     retry_gap: { type: "integer", minimum: 1, maximum: 2147483647 },
     retry_count: { type: "integer", minimum: 1, maximum: 2147483647 },
     learning_group_size: { type: "integer", minimum: 1, maximum: 2147483647 },
-    learning_poll_seconds: { type: "integer", minimum: 10, maximum: 2147483647 },
     learning_reminder_pause_seconds: { type: "integer", minimum: 60, maximum: 2147483647 },
-    learning_ready_percent: { type: "integer", minimum: 1, maximum: 100 },
     learning_intervals_seconds: { type: "ordered_integer_list", nonempty: true, item_minimum: 1, item_maximum: 2147483647 },
     learning_mix: { type: "boolean" }, strict_case: { type: "boolean" }, include_preterite: { type: "boolean" },
     include_comparative: { type: "boolean" }, transition_mode: { type: "enum", values: ["normal", "accelerated"] },
@@ -75,7 +72,11 @@ describe("settings screen fields", () => {
     const f = fixture(), { container } = render(<SettingsScreen {...f} />);
     expect(screen.getByRole("heading", { level: 1, name: "Настройки" })).toBeDefined();
     expect(container.querySelector("details")?.open).toBe(false);
-    expect(container.querySelectorAll(".settings-field")).toHaveLength(17);
+    expect(container.querySelectorAll(".settings-field")).toHaveLength(15);
+    // P12/P14: the readiness fields are gone from the screen, the reminder pause stays.
+    expect(screen.queryByText(/Проверять готовность/)).toBeNull();
+    expect(screen.queryByText(/Готовность Learning/)).toBeNull();
+    expect(screen.getByRole("group", { name: "Пауза между напоминаниями, секунды", hidden: true })).toBeDefined();
     expect((field("Язык интерфейса").getByRole("combobox") as HTMLSelectElement).value).toBe("ru");
     expect((field("Язык словаря").getByRole("combobox") as HTMLSelectElement).value).toBe("uk");
     expect([...container.querySelectorAll<HTMLButtonElement>(".settings-field button")].filter(button => button.textContent === "Сохранить")

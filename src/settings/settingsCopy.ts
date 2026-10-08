@@ -59,8 +59,8 @@ export const settingsCopy: Record<Language, Copy> = {
       strict_case: "Проверять регистр букв", include_preterite: "Проверять Präteritum",
       include_comparative: "Проверять степени сравнения", learning_mix: "Перемешивать темы",
       learning_intervals_seconds: "Интервалы Learning, секунды", retry_gap: "Карточек между повторами ошибки",
-      retry_count: "Повторов после ошибки", learning_poll_seconds: "Проверять готовность Learning каждые, секунды",
-      learning_reminder_pause_seconds: "Пауза между напоминаниями, секунды", learning_ready_percent: "Готовность Learning для напоминания, %",
+      retry_count: "Повторов после ошибки",
+      learning_reminder_pause_seconds: "Пауза между напоминаниями, секунды",
       review_error_mode: "Строгий режим повторов", learning_content: "Состав Learning",
     },
     problems: {
@@ -112,8 +112,8 @@ export const settingsCopy: Record<Language, Copy> = {
       strict_case: "Перевіряти регістр літер", include_preterite: "Перевіряти Präteritum",
       include_comparative: "Перевіряти ступені порівняння", learning_mix: "Перемішувати теми",
       learning_intervals_seconds: "Інтервали Learning, секунди", retry_gap: "Карток між повтореннями помилки",
-      retry_count: "Повторень після помилки", learning_poll_seconds: "Перевіряти готовність Learning кожні, секунди",
-      learning_reminder_pause_seconds: "Пауза між нагадуваннями, секунди", learning_ready_percent: "Готовність Learning для нагадування, %",
+      retry_count: "Повторень після помилки",
+      learning_reminder_pause_seconds: "Пауза між нагадуваннями, секунди",
       review_error_mode: "Суворий режим повторень", learning_content: "Склад Learning",
     },
     problems: {
@@ -165,8 +165,8 @@ export const settingsCopy: Record<Language, Copy> = {
       strict_case: "Check letter case", include_preterite: "Check Präteritum",
       include_comparative: "Check comparison forms", learning_mix: "Mix topics",
       learning_intervals_seconds: "Learning intervals, seconds", retry_gap: "Cards between error retries",
-      retry_count: "Retries after an error", learning_poll_seconds: "Check Learning readiness every, seconds",
-      learning_reminder_pause_seconds: "Pause between reminders, seconds", learning_ready_percent: "Learning readiness for reminders, %",
+      retry_count: "Retries after an error",
+      learning_reminder_pause_seconds: "Pause between reminders, seconds",
       review_error_mode: "Strict review mode", learning_content: "Learning content",
     },
     problems: {

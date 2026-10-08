@@ -5,10 +5,16 @@ import type {
 import { validProfile } from "../api/entryApi";
 import { ApiError, createJsonTransport, errorCode, httpError, type HttpOptions } from "../api/http";
 
-// Every key of the wire command is editable here, including review_error_mode and learning_content.
-export type SettingKey = SettingCommand["payload"]["key"];
-export type SettingIntent = Pick<SettingCommand, "command_id" | "kind" | "expected_field_version"> & {
-  payload: SettingCommand["payload"];
+// root decision (C+M-SET-READINESS-FIELDS, P12/P14): the server may still carry these two keys while an older
+// build is deployed. They are skipped when decoding and never edited or sent from here.
+export const retiredKeys = ["learning_poll_seconds", "learning_ready_percent"] as const;
+// Every other key of the wire command is editable here, including review_error_mode and learning_content.
+export type SettingKey = Exclude<SettingCommand["payload"]["key"], (typeof retiredKeys)[number]>;
+/** As the wire carries it, possibly naming a retired key. */
+export type SettingIntent = Pick<SettingCommand, "command_id" | "kind" | "expected_field_version" | "payload">;
+/** An intent this build may create, keep as the pending slot and send. */
+export type EditableSettingIntent = Omit<SettingIntent, "payload"> & {
+  payload: Omit<SettingCommand["payload"], "key"> & { key: SettingKey };
 };
 type Current = { current: SettingsProjection; state_version: string };
 export type SettingSaveReply = Current & (
@@ -26,8 +32,7 @@ export interface SettingsApi {
   status(token: string, profileId: string, intent: SettingIntent): Promise<SettingStatusReply>;
 }
 
-const integers = ["retry_gap", "retry_count", "learning_group_size", "learning_poll_seconds",
-  "learning_reminder_pause_seconds", "learning_ready_percent"] as const;
+const integers = ["retry_gap", "retry_count", "learning_group_size", "learning_reminder_pause_seconds"] as const;
 const booleans = ["learning_mix", "strict_case", "include_preterite", "include_comparative"] as const;
 const languages = ["ru", "uk", "en"];
 const levels = ["A1", "A2", "B1", "B2", "C1", "C2"];
@@ -49,6 +54,15 @@ function record(value: unknown): value is Record<string, unknown> {
 }
 function exact(value: Record<string, unknown>, fields: readonly string[]): boolean {
   return Object.keys(value).length === fields.length && fields.every(key => Object.hasOwn(value, key));
+}
+/** Every wanted field is present; any further field must be a retired key (ignored, not validated). */
+function exactOrRetired(value: Record<string, unknown>, fields: readonly string[]): boolean {
+  return fields.every(key => Object.hasOwn(value, key))
+    && Object.keys(value).every(key => fields.includes(key) || oneOf(key, retiredKeys));
+}
+function withoutRetired<T extends { settings: object; constraints: object }>(current: T): T {
+  const drop = (group: object) => Object.fromEntries(Object.entries(group).filter(([key]) => !oneOf(key, retiredKeys)));
+  return { ...current, settings: drop(current.settings), constraints: drop(current.constraints) } as T;
 }
 function oneOf(value: unknown, choices: readonly string[]): value is string {
   return typeof value === "string" && choices.includes(value);
@@ -122,8 +136,8 @@ function constraint(key: SettingKey, value: unknown): boolean {
 
 export function validSettingsCurrent(value: unknown): value is SettingsProjection {
   if (!record(value) || typeof value.needs_setup !== "boolean" || !record(value.settings)
-    || !exact(value.settings, [...keys, "time_zone"]) || !record(value.constraints)
-    || !exact(value.constraints, keys)) return false;
+    || !exactOrRetired(value.settings, [...keys, "time_zone"]) || !record(value.constraints)
+    || !exactOrRetired(value.constraints, keys)) return false;
   for (const key of keys) {
     const setting = value.settings[key];
     if (!record(setting) || !version(setting.version) || !Object.hasOwn(setting, "value")
@@ -152,7 +166,7 @@ export function allowedSettingValue(current: SettingsProjection, key: SettingKey
   return rule.type === "boolean";
 }
 
-export function validSettingIntent(value: unknown): value is SettingIntent {
+export function validSettingIntent(value: unknown): value is EditableSettingIntent {
   return record(value) && exact(value, ["command_id", "kind", "expected_field_version", "payload"])
     && uuid(value.command_id) && value.kind === "setting.save" && version(value.expected_field_version)
     && BigInt(value.expected_field_version) < 9223372036854775807n && record(value.payload)
@@ -160,7 +174,8 @@ export function validSettingIntent(value: unknown): value is SettingIntent {
     && valueShape(value.payload.key, value.payload.value);
 }
 
-function snapshot(value: SettingIntent): SettingIntent {
+// The wire command may still name a retired key; only an editable one passes.
+function snapshot(value: unknown): EditableSettingIntent {
   if (!validSettingIntent(value)) throw new Error("invalid setting intent");
   return structuredClone(value);
 }
@@ -184,7 +199,7 @@ export function createSettingsApi(options: HttpOptions): SettingsApi {
       if (!reply.ok) throw httpError(reply);
       if (reply.status !== 200 || !record(reply.value) || !version(reply.value.state_version)
         || reply.value.error != null || !validSettingsCurrent(reply.value)) throw new ApiError("invalid_response");
-      return reply.value as SettingsResponse;
+      return withoutRetired(reply.value as SettingsResponse);
     },
     async save(token, proof, profileId, command) {
       requireSubject(token, profileId);
@@ -197,7 +212,7 @@ export function createSettingsApi(options: HttpOptions): SettingsApi {
       const reply = await request("/commands", { method: "POST", token, proof, body });
       const value = reply.value;
       if (record(value) && validSettingsCurrent(value.current) && version(value.state_version)) {
-        const current = { current: value.current, state_version: value.state_version };
+        const current = { current: withoutRetired(value.current), state_version: value.state_version };
         if (reply.status === 200 && acceptedFact(value.command, profileId, intent) && value.error == null) {
           return { ...current, outcome: "accepted", command: value.command };
         }
@@ -227,7 +242,7 @@ export function createSettingsApi(options: HttpOptions): SettingsApi {
       }
       if (acceptedFact(fact, profileId, intent) && fact.status === "already_applied") {
         if (validSettingsCurrent(value.current)) return { outcome: "accepted", command: fact as StoredCommandFact,
-          current: value.current, state_version: value.state_version };
+          current: withoutRetired(value.current), state_version: value.state_version };
         if (record(value.current) && exact(value.current, ["status"]) && value.current.status === "unavailable") {
           return { outcome: "accepted", command: fact as StoredCommandFact,
             current: { status: "unavailable" }, state_version: value.state_version };

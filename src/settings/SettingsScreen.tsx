@@ -28,7 +28,7 @@ const groups: Array<{ name: "languages" | "learning" | "checking" | "additional"
   { name: "learning", fields: ["material", "learning_group_size", "learning_content", "review_error_mode", "transition_mode"] },
   { name: "checking", fields: ["strict_case", "include_preterite", "include_comparative"] },
   { name: "additional", fields: ["learning_intervals_seconds", "learning_mix", "retry_gap", "retry_count",
-    "learning_poll_seconds", "learning_reminder_pause_seconds", "learning_ready_percent"] },
+    "learning_reminder_pause_seconds"] },
 ];
 
 function displayValue(value: unknown, key: SettingKey, language: Language, topics: readonly Topic[] | null = null): string {

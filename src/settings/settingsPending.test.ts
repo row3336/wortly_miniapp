@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AsyncStorage } from "../platform/storage";
 import { ManualPendingStore, type ManualPending } from "../learning/manualPending";
-import type { SettingIntent } from "./settingsApi";
+import type { EditableSettingIntent } from "./settingsApi";
 import { SettingsPendingStore, type SettingsPending } from "./settingsPending";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -21,7 +21,7 @@ function setup(raw: string | null = null) {
 }
 
 describe("temporary settings intent storage", () => {
-  const payloads: SettingIntent["payload"][] = [
+  const payloads: EditableSettingIntent["payload"][] = [
     { key: "strict_case", value: false }, { key: "retry_count", value: 3 },
     { key: "learning_intervals_seconds", value: [120, 30, 120] },
     { key: "ui_language", value: "uk" }, { key: "transition_mode", value: "accelerated" },
@@ -116,6 +116,56 @@ describe("temporary settings intent storage", () => {
     await expect(store.load(id(1), signal())).rejects.toMatchObject({ kind: "invalid" });
     await expect(store.save(pending(), signal())).rejects.toMatchObject({ kind: "invalid" });
     expect([...values.values()]).toEqual([raw]);
+  });
+
+  it.each(["learning_poll_seconds", "learning_ready_percent"])(
+    "drops an unfinished save of the retired %s with a technical record, and then accepts new intents", async key => {
+      const retired = JSON.stringify({ ...pending(), intent: { ...pending().intent, payload: { key, value: 80 } } });
+      const { storage, values } = setup(retired); const report = vi.fn();
+      const store = new SettingsPendingStore(storage, report);
+      expect(await store.load(id(1), signal())).toBeNull();
+      expect(values.size).toBe(0);
+      expect(report).toHaveBeenCalledOnce();
+      expect(report.mock.calls[0][0]).toContain(key);
+      expect(report.mock.calls[0][0]).not.toMatch(/80|token|proof/);
+      await store.save(pending(), signal());
+      expect(await store.load(id(1), signal())).toEqual(pending());
+      expect(report).toHaveBeenCalledOnce();
+    });
+
+  const retiredRaw = () => JSON.stringify({ ...pending(), intent: { ...pending().intent,
+    payload: { key: "learning_poll_seconds", value: 80 } } });
+
+  it.each(["get", "remove"] as const)("turns a failing storage %s on a retired slot into an unavailable store", async method => {
+    const { storage, values } = setup(retiredRaw()); const report = vi.fn();
+    vi.mocked(storage[method]).mockRejectedValueOnce(new Error("private-details"));
+    await expect(new SettingsPendingStore(storage, report).load(id(1), signal())).rejects.toMatchObject({ kind: "unavailable" });
+    expect(report).not.toHaveBeenCalled();
+    if (method === "remove") expect(values.size).toBe(1);
+  });
+
+  it("neither removes nor reports a retired slot when the signal is already cancelled or cancelled during the read", async () => {
+    const { storage, values } = setup(retiredRaw()); const report = vi.fn();
+    const store = new SettingsPendingStore(storage, report); const owner = new AbortController(); owner.abort();
+    await expect(store.load(id(1), owner.signal)).rejects.toMatchObject({ kind: "cancelled" });
+    const during = new AbortController();
+    vi.mocked(storage.get).mockImplementationOnce(async () => { during.abort(); return retiredRaw(); });
+    await expect(store.load(id(1), during.signal)).rejects.toMatchObject({ kind: "cancelled" });
+    expect(storage.remove).not.toHaveBeenCalled(); expect(report).not.toHaveBeenCalled(); expect(values.size).toBe(1);
+  });
+
+  it("removes a retired slot once with a live signal and reports the key name only", async () => {
+    const { storage } = setup(retiredRaw()); const report = vi.fn();
+    expect(await new SettingsPendingStore(storage, report).load(id(1), signal())).toBeNull();
+    expect(storage.remove).toHaveBeenCalledOnce();
+    expect(report).toHaveBeenCalledOnce(); expect(report).toHaveBeenCalledWith(expect.stringContaining("learning_poll_seconds"));
+    expect(report.mock.calls[0][0]).not.toMatch(/80|token|proof/);
+  });
+
+  it("reports nothing and keeps the slot when the stored intent is an ordinary one", async () => {
+    const { storage, values } = setup(JSON.stringify(pending())); const report = vi.fn();
+    expect(await new SettingsPendingStore(storage, report).load(id(1), signal())).toEqual(pending());
+    expect(report).not.toHaveBeenCalled(); expect(values.size).toBe(1);
   });
 
   it("does not persist after disposal during the read before a write", async () => {

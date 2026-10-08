@@ -4,7 +4,7 @@ import { clientContractVersion } from "../api/http";
 import type { Profile, SavedCommandFact, SettingCommand, SettingsResponse } from "../api/generated";
 import {
   allowedSettingValue, createSettingsApi, validSettingIntent,
-  type SettingIntent,
+  type EditableSettingIntent, type SettingIntent,
 } from "./settingsApi";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -99,7 +99,8 @@ describe("Settings current and constraints", () => {
     // The recorded text is served as a string (not a re-serialized object); its key order is the sorted one.
     const fetcher = vi.fn<typeof fetch>(async () => new Response(coreNewProfile, { status: 200 }));
     const read = await createSettingsApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 20000 }).get("synthetic");
-    expect(read).toEqual(recorded);
+    // The recorded reply comes from a core that still served the two retired readiness keys: they are skipped.
+    expect(read).toEqual(withoutRetired(recorded));
     expect(read.settings.learning_content).toEqual({ value: "words", version: "1" });
     expect(read.constraints.learning_content).toEqual({ type: "enum", values: ["words", "phrases", "mixed"] });
     // The same reply carried by a saved command and by a command status.
@@ -109,6 +110,52 @@ describe("Settings current and constraints", () => {
     const status = await setup({ command: { ...fact(), status: "already_applied" }, current: recorded, state_version: big })
       .api.status("synthetic", subject, intent());
     expect(status).toMatchObject({ outcome: "accepted", current: { settings: { learning_content: { value: "words" } } } });
+  });
+
+  const retired = ["learning_poll_seconds", "learning_ready_percent"];
+  function withoutRetired(data: SettingsResponse): SettingsResponse {
+    const copy = structuredClone(data) as unknown as Record<string, Record<string, unknown>>;
+    for (const key of retired) { delete copy.settings[key]; delete copy.constraints[key]; }
+    return copy as unknown as SettingsResponse;
+  }
+  function withRetired(data: SettingsResponse): SettingsResponse {
+    const copy = structuredClone(data) as unknown as Record<string, Record<string, unknown>>;
+    copy.settings.learning_poll_seconds = { value: null, version: "1" };
+    copy.settings.learning_ready_percent = { value: 80, version: "4" };
+    copy.constraints.learning_poll_seconds = { type: "integer", minimum: 10, maximum: 2147483647 };
+    // Retired entries are skipped, never validated: even a shape this build could not read is harmless.
+    copy.constraints.learning_ready_percent = { type: "unknown" };
+    return copy as unknown as SettingsResponse;
+  }
+
+  it("decodes a reply with and without the two retired readiness keys to the same settings (P12/P14)", async () => {
+    const plain = current();
+    expect(Object.keys(plain.settings)).not.toContain("learning_poll_seconds");
+    await expect(setup(plain).api.get("synthetic")).resolves.toEqual(plain);
+    await expect(setup(withRetired(plain)).api.get("synthetic")).resolves.toEqual(plain);
+    const saved = await setup({ command: fact(), current: withRetired(plain), state_version: big })
+      .api.save("synthetic", "proof", subject, command());
+    expect(saved).toMatchObject({ outcome: "accepted", current: plain });
+    const status = await setup({ command: { ...fact(), status: "already_applied" }, current: withRetired(plain), state_version: big })
+      .api.status("synthetic", subject, intent());
+    expect(status).toMatchObject({ outcome: "accepted", current: plain });
+  });
+
+  it("still refuses an unknown extra key and a missing editable key next to retired ones", async () => {
+    const extra = withRetired(current()); Object.assign(extra.settings, { learning_unknown: { value: null, version: "1" } });
+    await expect(setup(extra).api.get("synthetic")).rejects.toMatchObject({ kind: "invalid_response" });
+    const missing = withRetired(current()); Reflect.deleteProperty(missing.constraints, "retry_count");
+    await expect(setup(missing).api.get("synthetic")).rejects.toMatchObject({ kind: "invalid_response" });
+  });
+
+  it("never creates or sends a save for a retired key", async () => {
+    for (const key of retired) {
+      expect(validSettingIntent({ ...intent(), payload: { key, value: 10 } })).toBe(false);
+      const { api, fetcher } = setup(reply());
+      const request = command(); request.payload = { key: key as "learning_poll_seconds", value: 10 };
+      await expect(api.save("synthetic", "proof", subject, request)).rejects.toThrow("invalid setting intent");
+      expect(fetcher).not.toHaveBeenCalled();
+    }
   });
 
   it("does not display a successful projection carrying a contradictory error", async () => {
@@ -164,7 +211,7 @@ describe("Settings current and constraints", () => {
     ["wrong constraint type", x => { x.constraints.strict_case.type = "integer"; }],
     ["missing maximum", x => { Reflect.deleteProperty(x.constraints.retry_count, "maximum"); }],
     ["fractional bound", x => { x.constraints.retry_count.minimum = 1.5; }],
-    ["reversed bounds", x => { x.constraints.learning_ready_percent.minimum = 101; }],
+    ["reversed bounds", x => { x.constraints.learning_reminder_pause_seconds.minimum = 2147483648; }],
     ["missing list maximum", x => { Reflect.deleteProperty(x.constraints.learning_intervals_seconds, "item_maximum"); }],
     ["nonboolean list rule", x => { Object.assign(x.constraints.learning_intervals_seconds, { nonempty: 1 }); }],
     ["empty enum", x => { x.constraints.ui_language.values = []; }],
@@ -212,11 +259,10 @@ describe("Settings current and constraints", () => {
 });
 
 describe("Settings command exchange", () => {
-  const values: SettingCommand["payload"][] = [
+  const values: EditableSettingIntent["payload"][] = [
     { key: "ui_language", value: "ru" }, { key: "dictionary_language", value: "uk" },
     { key: "retry_gap", value: 1 }, { key: "retry_count", value: 2 }, { key: "learning_group_size", value: 10 },
-    { key: "learning_poll_seconds", value: 10 }, { key: "learning_reminder_pause_seconds", value: 60 },
-    { key: "learning_ready_percent", value: 80 }, { key: "learning_intervals_seconds", value: [120, 30, 120] },
+    { key: "learning_reminder_pause_seconds", value: 60 }, { key: "learning_intervals_seconds", value: [120, 30, 120] },
     { key: "strict_case", value: false }, { key: "learning_mix", value: true },
     { key: "include_preterite", value: true }, { key: "include_comparative", value: false },
     { key: "transition_mode", value: "accelerated" }, { key: "material", value: { mode: "level", selected_level: "A1" } },
