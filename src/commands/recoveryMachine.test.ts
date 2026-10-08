@@ -45,6 +45,7 @@ function rig(script: {
   counter?: SendCounter;
   /** Whether send n reports its start; default true for every request that reaches the network. */
   transmit?: (n: number) => boolean;
+  keepChecking?: boolean;
 } = {}): Rig {
   const start = performance.now();
   const calls: Call[] = [], updates: RecoverySnapshot[] = [];
@@ -56,6 +57,7 @@ function rig(script: {
   const counter = script.counter ?? new MemorySendCounter();
   const machine = new RecoveryMachine<Intent>({
     intent: INTENT, counter, clock: systemRecoveryClock, active: script.active ?? true,
+    ...(script.keepChecking === undefined ? {} : { keepChecking: script.keepChecking }),
     onUpdate: (snapshot) => updates.push(snapshot),
     ports: {
       send: (intent, transmitted) => {
@@ -526,6 +528,7 @@ describe("automatic recovery of one action", () => {
   it("8.20 a failed counter write: the POST does not go out, the count is unknown, only checks follow", async () => {
     const failing: SendCounter = {
       load: async () => null,
+      forbidSends: async () => undefined,
       save: async () => { throw new Error("quota"); },
       clear: async () => undefined,
     };
@@ -542,6 +545,7 @@ describe("automatic recovery of one action", () => {
     const counter = new MemorySendCounter();
     const flaky: SendCounter = {
       load: (id) => counter.load(id),
+      forbidSends: (id) => counter.forbidSends(id),
       save: (id, marks) => fail ? Promise.reject(new Error("quota")) : counter.save(id, marks),
       clear: (id) => counter.clear(id),
     };
@@ -818,7 +822,7 @@ describe("automatic recovery of one action", () => {
     const corrupt: unknown[] = [7, -1, 2.5, Number.NaN, "3", { reserved: 7, transmitted: 7 }, { reserved: -1, transmitted: 0 },
       { reserved: 2.5, transmitted: 1 }, { reserved: 3, transmitted: 4 }, { reserved: 3 }, { reserved: 6, transmitted: 6, lastMaintenance: "yes" }, null];
     for (const value of corrupt) {
-      const counter: SendCounter = { load: async () => value as never, save: async () => undefined, clear: async () => undefined };
+      const counter: SendCounter = { load: async () => value as never, save: async () => undefined, forbidSends: async () => undefined, clear: async () => undefined };
       const r = rig({ counter });
       r.machine.resume();
       await pass(600_000);
@@ -861,6 +865,7 @@ describe("automatic recovery of one action", () => {
     let first = true;
     const slow: SendCounter = {
       load: (id) => memory.load(id),
+      forbidSends: (id) => memory.forbidSends(id),
       save: (id, marks) => {
         if (!first) return memory.save(id, marks);
         first = false;
@@ -937,5 +942,157 @@ describe("automatic recovery of one action", () => {
     lost.machine.begin();
     await pass(0);
     expect(lost.machine.snapshot()).toMatchObject({ sends: 1, transmitted: 0 });
+  });
+});
+
+describe("keepChecking: checks without sends (D-CP2C-START 2.4.1б.3, C038 п. 3; session.cancel_start)", () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+  const REFUSED: SendResult = { kind: "refused", code: "SESSION_BUSY" };
+  const MISMATCH: SendResult = { kind: "mismatch" };
+
+  it("off by default and when false: the exhaustion, a refusal and a conflict stay final, nothing runs afterwards", async () => {
+    for (const keepChecking of [undefined, false]) {
+      const r = rig({ keepChecking });
+      r.machine.begin();
+      await pass(600_000);
+      expect(r.posts()).toEqual([0, 2_000, 7_000, 17_000, 37_000, 67_000]);
+      expect(r.state()).toBe("exhausted");
+      expect(r.calls.at(-1)).toEqual({ at: 67_000, op: "check", active: true });
+      r.machine.dispose();
+      for (const [reply, end] of [[REFUSED, "refused"], [MISMATCH, "conflict"]] as const) {
+        const once = rig({ keepChecking, send: () => reply });
+        once.machine.begin();
+        await pass(600_000);
+        expect(once.ops()).toEqual(["send"]);
+        expect(once.state()).toBe(end);
+        once.machine.dispose();
+      }
+    }
+  });
+
+  it("six sends, then only checks at 5, 10, 20, 30 s steps; never a seventh POST; a fact found later settles it", async () => {
+    const r = rig({ keepChecking: true, check: (_n, t) => t >= 300_000 ? RECORDED : ABSENT });
+    r.machine.begin();
+    await pass(67_000);
+    expect(r.machine.snapshot()).toEqual({ state: { name: "checks_only", check: 1, cause: "exhausted", code: null },
+      sends: 6, transmitted: 6, remaining: 0, active: true });
+    await pass(400_000);
+    expect(r.posts()).toEqual([0, 2_000, 7_000, 17_000, 37_000, 67_000]);
+    const after = r.at("check").filter((t) => t > 67_000);
+    expect(after.slice(0, 6)).toEqual([72_000, 82_000, 102_000, 132_000, 162_000, 192_000]);
+    expect(r.at("probe")).toEqual([]);
+    expect(r.state()).toBe("settled");
+    expect(r.updates.map((u) => u.state.name)).not.toContain("exhausted");
+  });
+
+  it("a definite refusal of a send: no further POST, even with the budget left; checks at 5, 15, 35 s; a fact found later settles", async () => {
+    const counter = new MemorySendCounter();
+    const r = rig({ keepChecking: true, counter, send: () => REFUSED, check: (_n, t) => t >= 60_000 ? RECORDED : ABSENT });
+    r.machine.begin();
+    await pass(0);
+    // The closure is stored with the count (C053): one send went out, none is left for any owner.
+    expect(r.machine.snapshot()).toMatchObject({ state: { name: "checks_only", check: 1, cause: "refused", code: "SESSION_BUSY" },
+      sends: 1, transmitted: 1, remaining: 0 });
+    expect(await counter.load(INTENT.command_id)).toEqual({ reserved: 1, transmitted: 1, forbidden: true });
+    await pass(600_000);
+    expect(r.posts()).toEqual([0]);
+    expect(r.at("check")).toEqual([5_000, 15_000, 35_000, 65_000]);
+    expect(r.state()).toBe("settled");
+  });
+
+  it("another payload answered to a send: no POST again; the check of the same ID confirms the conflict and ends the work", async () => {
+    const r = rig({ keepChecking: true, send: () => MISMATCH, check: () => ({ kind: "mismatch" }) });
+    r.machine.begin();
+    await pass(0);
+    expect(r.state()).toBe("checks_only");
+    await pass(600_000);
+    expect(r.ops()).toEqual(["send", "check"]);
+    expect(r.at("check")).toEqual([5_000]);
+    expect(r.state()).toBe("conflict");
+  });
+
+  it("C053 (а, б) a later owner or a reloaded machine on the same count after a refusal or a conflict: only checks, never a POST", async () => {
+    for (const reply of [REFUSED, MISMATCH]) {
+      const counter = new MemorySendCounter();
+      const a = rig({ keepChecking: true, counter, send: () => reply });
+      a.machine.begin();
+      await pass(1_000);
+      a.machine.dispose();
+      expect(await counter.load(INTENT.command_id)).toEqual({ reserved: 1, transmitted: 1, forbidden: true });
+      // A trustworthy count alone allows no POST once a proven refusal closed the sends.
+      const b = rig({ keepChecking: true, counter, send: () => ACCEPTED });
+      b.machine.resume();
+      await pass(600_000);
+      expect(b.posts()).toEqual([]);
+      expect(b.machine.snapshot()).toMatchObject({ state: { name: "checks_only", cause: "forbidden" }, sends: 1, transmitted: 1, remaining: 0 });
+    }
+  });
+
+  it("C053 the ban is part of the count: a corrupt flag is an unknown count; a later save cannot lift it; a machine without keepChecking honours it", async () => {
+    const corrupt: SendCounter = { load: async () => ({ reserved: 1, transmitted: 1, forbidden: "maybe" } as never),
+      save: async () => undefined, forbidSends: async () => undefined, clear: async () => undefined };
+    const r = rig({ keepChecking: true, counter: corrupt, send: () => ACCEPTED });
+    r.machine.resume();
+    await pass(120_000);
+    expect(r.posts()).toEqual([]);
+    expect(r.state()).toBe("counter_unknown");
+    const closed = new MemorySendCounter();
+    await closed.save(INTENT.command_id, { reserved: 1, transmitted: 1 });
+    await closed.forbidSends(INTENT.command_id);
+    await closed.forbidSends(INTENT.command_id);
+    await closed.save(INTENT.command_id, { reserved: 1, transmitted: 1 });
+    expect(await closed.load(INTENT.command_id)).toEqual({ reserved: 1, transmitted: 1, forbidden: true });
+    const plain = rig({ counter: closed, send: () => ACCEPTED });
+    plain.machine.resume();
+    await pass(120_000);
+    expect(plain.posts()).toEqual([]);
+  });
+
+  it("C053 (в) the ban cannot be stored: the count is dropped, so the next owner only checks", async () => {
+    const memory = new MemorySendCounter();
+    const failing: SendCounter = { load: id => memory.load(id), clear: id => memory.clear(id), save: (id, marks) => memory.save(id, marks),
+      forbidSends: async () => { throw new Error("storage"); } };
+    const a = rig({ keepChecking: true, counter: failing, send: () => REFUSED });
+    a.machine.begin();
+    await pass(1_000);
+    a.machine.dispose();
+    expect(await memory.load(INTENT.command_id)).toBeNull();
+    const b = rig({ keepChecking: true, counter: failing, send: () => ACCEPTED });
+    b.machine.resume();
+    await pass(600_000);
+    expect(b.posts()).toEqual([]);
+    expect(b.state()).toBe("counter_unknown");
+  });
+
+  it("not final: the background stops the checks, a return checks at once and restarts the series at 5 s, then 10 s; no POST", async () => {
+    const r = rig({ keepChecking: true });
+    r.machine.begin();
+    // Several quiet checks first (72, 82, 102, 132, …): the return must not continue that series at 30 s.
+    await pass(400_000);
+    r.machine.setActive(false);
+    const before = r.calls.length;
+    await pass(100_000);
+    expect(r.calls.length).toBe(before);
+    expect(r.state()).toBe("suspended");
+    r.machine.setActive(true);
+    await pass(16_000);
+    expect(r.calls.slice(before).map((c) => [c.at, c.op])).toEqual([[500_000, "check"], [505_000, "check"], [515_000, "check"]]);
+    expect(r.posts()).toHaveLength(6);
+  });
+
+  it("a resumed command at six proven sends goes straight to checks; an unknown count stays counter_unknown", async () => {
+    const spent = new MemorySendCounter();
+    await spent.save(INTENT.command_id, { reserved: 6, transmitted: 6 });
+    const a = rig({ keepChecking: true, counter: spent });
+    a.machine.resume();
+    await pass(0);
+    expect(a.state()).toBe("checks_only");
+    const b = rig({ keepChecking: true });
+    b.machine.resume();
+    await pass(120_000);
+    expect(b.posts()).toEqual([]);
+    expect(b.state()).toBe("counter_unknown");
+    expect(b.updates.map((u) => u.state.name)).not.toContain("checks_only");
   });
 });

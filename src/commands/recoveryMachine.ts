@@ -32,10 +32,22 @@ export type RecoveryState =
   | { name: "refused"; code: string }
   /** Six sends provably went out and the server confirmed absence: the session must be closed (Я15.8, done by CP4). */
   | { name: "exhausted" }
+  /**
+   * keepChecking: no send may follow any more (cause), but the fact may still appear, so it is checked on the probe
+   * schedule; a recorded fact still settles it. check is the place in that series; code names a refusal.
+   */
+  | { name: "checks_only"; check: number; cause: ChecksOnlyCause; code: string | null }
   /** Я17: the same command_id carries another payload; nothing is sent any more. */
   | { name: "conflict" }
   | { name: "terminated"; reason: TerminationReason }
   | { name: "disposed" };
+
+/**
+ * Why a keepChecking command sends nothing more: six sends provably went out and absence is confirmed ("exhausted"),
+ * a send got a definite refusal ("refused"), a send was answered with another payload under its ID ("mismatch"), or
+ * the shared count says an earlier owner forbade the sends for one of those reasons ("forbidden"; the reason is not kept).
+ */
+export type ChecksOnlyCause = "exhausted" | "refused" | "mismatch" | "forbidden";
 
 export type RecoverySnapshot = {
   state: RecoveryState;
@@ -78,6 +90,14 @@ export type RecoveryOptions<I extends { command_id: string }> = {
    * route and confirmed settings do not count.
    */
   active: boolean;
+  /**
+   * Keep checking the fact of a command that may not send any more, instead of stopping (checks_only). For
+   * session.cancel_start (D-CP2C-START 2.4.1б.3; C038 п. 3): after a proven exhaustion, a definite refusal of a send or
+   * another payload answered to a send, a copy sent earlier may still apply, and only a check finds it. No POST follows
+   * any of them; a recorded fact settles it, a conflict confirmed by a check ends it. Off by default: a study action
+   * stops there (CP4 closes its session after the exhaustion, Я17 shows the conflict).
+   */
+  keepChecking?: boolean;
   onUpdate?(snapshot: RecoverySnapshot): void;
 };
 
@@ -107,6 +127,7 @@ export class RecoveryMachine<I extends { command_id: string }> {
   private readonly counter: SendCounter;
   private readonly clock: RecoveryClock;
   private readonly onUpdate: ((snapshot: RecoverySnapshot) => void) | undefined;
+  private readonly keepChecking: boolean;
   private state: RecoveryState = { name: "idle" };
   private marks: SendMarks | null = null;
   private active: boolean;
@@ -121,7 +142,10 @@ export class RecoveryMachine<I extends { command_id: string }> {
   /** The end of a planned pause the server announced: no probe and no send before it. */
   private holdUntil: number | null = null;
   private probes = 0;
-  private unknownChecks = 0;
+  /** The place in the series of checks that may not send (counter_unknown, checks_only). */
+  private quietChecks = 0;
+  /** keepChecking: set once no send may follow any more; never cleared. */
+  private sendsClosed: { cause: ChecksOnlyCause; code: string | null } | null = null;
   /** Inside a planned pause until a probe answers; survives the background. */
   private paused = false;
   private pauseSeconds: number | null = null;
@@ -132,13 +156,14 @@ export class RecoveryMachine<I extends { command_id: string }> {
     this.counter = options.counter;
     this.clock = options.clock;
     this.onUpdate = options.onUpdate;
+    this.keepChecking = options.keepChecking ?? false;
     this.active = options.active;
   }
 
   snapshot(): RecoverySnapshot {
     const marks = this.marks;
     return { state: { ...this.state }, sends: marks?.reserved ?? null, transmitted: marks?.transmitted ?? null,
-      remaining: marks === null ? null : MAX_SENDS - marks.reserved, active: this.active };
+      remaining: marks === null ? null : this.sendsClosed ? 0 : MAX_SENDS - marks.reserved, active: this.active };
   }
 
   /** A new action: the first send. */
@@ -154,7 +179,10 @@ export class RecoveryMachine<I extends { command_id: string }> {
     if (this.state.name !== "idle") return;
     // A check waits for the count, so a return from the background meanwhile cannot check against "unknown".
     this.ready = this.counter.load(this.intent.command_id).then((marks) => marks, () => null).then((marks) => {
-      if (this.state.name !== "disposed") this.marks = validMarks(marks) ? copyMarks({ ...marks, lastMaintenance: marks.lastMaintenance || undefined }) : null;
+      if (this.state.name === "disposed") return;
+      this.marks = validMarks(marks) ? copyMarks({ ...marks, lastMaintenance: marks.lastMaintenance || undefined }) : null;
+      // A ban stored with the count (another owner, a durable count after a reload): only checks from now on.
+      if (this.marks?.forbidden && !this.sendsClosed) this.sendsClosed = { cause: "forbidden", code: null };
     });
     if (this.active) void this.check("checking");
     else this.enter({ name: "suspended" });
@@ -169,7 +197,7 @@ export class RecoveryMachine<I extends { command_id: string }> {
     if (!active) { this.enter({ name: "suspended" }); return; }
     // A return restarts the light probes at 5 s (Q35.3), inside a planned pause as well; the spent sends stay spent.
     this.probes = 0;
-    this.unknownChecks = 0;
+    this.quietChecks = 0;
     // Inside a planned pause a return starts with a probe (not before the announced end), never with a check or a POST.
     // Like the fact check of an ordinary return it stands before the series, so the series still starts at 5 s.
     if (this.paused) { this.probeAfter(0, this.pauseSeconds, false); return; }
@@ -289,11 +317,12 @@ export class RecoveryMachine<I extends { command_id: string }> {
     if (result.kind !== "not_sent") this.markMaintenance(result.kind === "maintenance");
     switch (result.kind) {
       case "settled": this.settle(result.outcome); return;
-      case "mismatch": this.enter({ name: "conflict" }); return;
+      // keepChecking: the conflict is confirmed by a check of the same ID before it ends the work; never sent again.
+      case "mismatch": if (this.keepChecking) this.closeSends("mismatch", null); else this.enter({ name: "conflict" }); return;
       case "terminated": this.enter({ name: "terminated", reason: result.reason }); return;
       // As after a lost reply: the next pause runs from this answer once the window check keeps the window.
       case "window_stale": this.lose(); void this.windowCheck(); return;
-      case "refused": this.enter({ name: "refused", code: result.code }); return;
+      case "refused": if (this.keepChecking) this.closeSends("refused", result.code); else this.enter({ name: "refused", code: result.code }); return;
       // The spent send stays spent; no further POST is possible for this client version.
       case "incompatible": this.enter({ name: "terminated", reason: "client_incompatible" }); return;
       case "maintenance":
@@ -386,13 +415,14 @@ export class RecoveryMachine<I extends { command_id: string }> {
 
   /** The server confirmed absence right now: send, wait for the pause, or stop at the limit. */
   private notRecorded(): void {
+    if (this.sendsClosed) { this.checksOnly(); return; }
     const marks = this.marks;
     if (marks === null) { this.counterUnknown(); return; }
     if (marks.reserved >= MAX_SENDS) {
       // A planned pause must not close the quiz: the last send met it, so wait in the pause instead (TC §11).
       if (marks.lastMaintenance) this.pause(this.pauseSeconds, true);
       // Only six sends that provably went out make the budget truly spent (Я15.8).
-      else if (marks.transmitted >= MAX_SENDS) this.enter({ name: "exhausted" });
+      else if (marks.transmitted >= MAX_SENDS) this.exhausted();
       else this.counterUnknown();
       return;
     }
@@ -410,7 +440,7 @@ export class RecoveryMachine<I extends { command_id: string }> {
    */
   private unreachable(pauseSeconds: number | null, sameEpisode: boolean): void {
     if (!sameEpisode) this.probes = 0;
-    this.unknownChecks = 0;
+    this.quietChecks = 0;
     this.nextProbe(pauseSeconds);
   }
 
@@ -451,11 +481,41 @@ export class RecoveryMachine<I extends { command_id: string }> {
 
   /** Absence confirmed but no send allowed: only checks on the probe schedule, never a send or an exhaustion. */
   private counterUnknown(): void {
-    const check = this.unknownChecks + 1;
     const cause = this.marks === null ? "unknown" : "unconfirmed";
-    this.enter({ name: "counter_unknown", check, cause });
+    this.quiet(check => ({ name: "counter_unknown", check, cause }));
+  }
+
+  /** Six sends provably went out and absence is confirmed: the end, or only checks from now on (keepChecking). */
+  private exhausted(): void {
+    if (this.keepChecking) this.closeSends("exhausted", null);
+    else this.enter({ name: "exhausted" });
+  }
+
+  /** keepChecking: no send from now on, only checks of the fact (checks_only). */
+  private closeSends(cause: ChecksOnlyCause, code: string | null): void {
+    this.sendsClosed = { cause, code };
+    // The ban goes into the shared count (forbidSends), so every later owner of this command_id — another document in
+    // this page, a durable count after a reload — only checks it (C053). A failed ban must never leave the older, open
+    // record behind: the count is then dropped, and an unknown count forbids a send as well.
+    if (cause !== "exhausted") {
+      if (this.marks !== null) this.marks = copyMarks({ ...this.marks, forbidden: true });
+      const id = this.intent.command_id;
+      this.writes = this.writes.then(() => this.counter.forbidSends(id))
+        .catch(() => this.counter.clear(id)).catch(() => undefined);
+    }
+    this.checksOnly();
+  }
+  private checksOnly(): void {
+    const { cause, code } = this.sendsClosed!;
+    this.quiet(check => ({ name: "checks_only", check, cause, code }));
+  }
+
+  /** The next check of a series that may not send, after the probe delay of its place in the series. */
+  private quiet(state: (check: number) => RecoveryState): void {
+    const check = this.quietChecks + 1;
+    this.enter(state(check));
     this.after(probeDelay(check), () => {
-      this.unknownChecks = check;
+      this.quietChecks = check;
       void this.check("checking");
     });
   }

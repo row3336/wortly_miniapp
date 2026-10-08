@@ -13,23 +13,31 @@ export type SendMarks = {
    * re-created machine at six sends waits in the pause instead of exhausting (TC §11). Absent (older records) = false.
    */
   lastMaintenance?: true;
+  /**
+   * forbidSends was called for this command_id: a proven refusal or a payload conflict closed its sends for good
+   * (D-CP2C-START, C038 п. 3, C053). No owner may send it again, whatever the count allows. Absent = not forbidden;
+   * a record that cannot be read or validated is an unknown count, which forbids a send as well.
+   */
+  forbidden?: true;
 };
 
 /** The canonical copy: lastMaintenance only when set, so records with and without the flag compare stably. */
 export function copyMarks(marks: SendMarks): SendMarks {
-  return { reserved: marks.reserved, transmitted: marks.transmitted, ...(marks.lastMaintenance ? { lastMaintenance: true } : {}) };
+  return { reserved: marks.reserved, transmitted: marks.transmitted, ...(marks.lastMaintenance ? { lastMaintenance: true } : {}),
+    ...(marks.forbidden ? { forbidden: true } : {}) };
 }
 
 /**
- * Integers with 0 <= transmitted <= reserved <= 6 and, when present, a boolean lastMaintenance; anything else (a corrupt
- * or foreign record) is an unknown count.
+ * Integers with 0 <= transmitted <= reserved <= 6 and, when present, a boolean lastMaintenance and a boolean forbidden;
+ * anything else (a corrupt or foreign record) is an unknown count.
  */
 export function validMarks(value: unknown): value is SendMarks {
   if (typeof value !== "object" || value === null) return false;
-  const { reserved, transmitted, lastMaintenance } = value as Record<string, unknown>;
+  const { reserved, transmitted, lastMaintenance, forbidden } = value as Record<string, unknown>;
   return Number.isInteger(reserved) && Number.isInteger(transmitted)
     && (transmitted as number) >= 0 && (transmitted as number) <= (reserved as number) && (reserved as number) <= MAX_SENDS
-    && (lastMaintenance === undefined || typeof lastMaintenance === "boolean");
+    && (lastMaintenance === undefined || typeof lastMaintenance === "boolean")
+    && (forbidden === undefined || typeof forbidden === "boolean");
 }
 
 /**
@@ -39,6 +47,12 @@ export function validMarks(value: unknown): value is SendMarks {
 export interface SendCounter {
   load(commandId: string): Promise<SendMarks | null>;
   save(commandId: string, marks: SendMarks): Promise<void>;
+  /**
+   * Forbid every further send of commandId for good (idempotent; the same name as the durable store of CP5a). load()
+   * then answers forbidden: true, and a later save() without the flag does not lift it. A rejection means the ban may
+   * be missing: the caller must make the count unknown (clear) instead of relying on it.
+   */
+  forbidSends(commandId: string): Promise<void>;
   clear(commandId: string): Promise<void>;
 }
 
@@ -49,16 +63,22 @@ export interface SendCounter {
  */
 export class MemorySendCounter implements SendCounter {
   private readonly marks = new Map<string, SendMarks>();
+  private readonly forbidden = new Set<string>();
 
   async load(commandId: string): Promise<SendMarks | null> {
     const marks = this.marks.get(commandId);
-    return marks ? copyMarks(marks) : null;
+    // Without marks the count is unknown, which forbids a send anyway.
+    return marks ? copyMarks({ ...marks, ...(this.forbidden.has(commandId) ? { forbidden: true } : {}) }) : null;
   }
   async save(commandId: string, marks: SendMarks): Promise<void> {
     if (!validMarks(marks)) throw new Error("invalid send marks");
     this.marks.set(commandId, copyMarks(marks));
   }
+  async forbidSends(commandId: string): Promise<void> {
+    this.forbidden.add(commandId);
+  }
   async clear(commandId: string): Promise<void> {
     this.marks.delete(commandId);
+    this.forbidden.delete(commandId);
   }
 }
