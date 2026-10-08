@@ -50,7 +50,7 @@ export type ClosedSessionBoundary = { "session_id": string; "status": "closed"; 
 
 export type CommandFact = { "id": string; "status": "applied" | "already_applied"; "applied_at": string; "target_id": (string | null); "object_version": string; };
 
-export type CommandStatusResponse = { "command": (StoredCommandFact | MissingCommandFact); "current": (Profile | ModeState | UnavailableCurrent | SettingsProjection | SessionProjection | LearningSessionProjection | OralSessionProjection | ConjugationSessionProjection | UnavailableSession | RemoteSessionProjection | LearningCurrentProjection | ConjugationCatalog | FeedbackCurrent | OnboardingProjection); "state_version": string; "closed_session"?: (ClosedSessionBoundary | null); "verified_intent_hash"?: (string | null); };
+export type CommandStatusResponse = { "command": (StoredCommandFact | MissingCommandFact); "current": (Profile | ModeState | UnavailableCurrent | SettingsProjection | SessionProjection | LearningSessionProjection | OralSessionProjection | ConjugationSessionProjection | UnavailableSession | RemoteSessionProjection | SessionStartCancelProjection | LearningCurrentProjection | ConjugationCatalog | FeedbackCurrent | OnboardingProjection); "state_version": string; "closed_session"?: (ClosedSessionBoundary | null); "verified_intent_hash"?: (string | null); };
 
 export type CommonFieldSavePayload = { "card_id": string; "field_name": ("translation" | "gender" | "singular" | "plural" | "article" | "infinitive" | "preterite" | "participle_ii" | "auxiliary" | "separability" | "positive" | "comparative" | "superlative"); "scope": "common"; "language": ("uk" | "en" | "ru" | null); "value": (Array<string> | CommonGrammarForm | "separable" | "inseparable" | "unknown"); };
 
@@ -404,6 +404,10 @@ export type RevealedOralAssignment = { "id": string; "card_id": string; "status"
 
 export type SavedCommandFact = { "id": string; "kind": string; "status": "applied" | "already_applied"; "applied_at": string; "target_id": (string | null); "action_id": (string | null); "result_id": (string | null); "context_id": (string | null); "object_version": (string | null); };
 
+export type SessionCancelStartCommand = { "command_id": string; "client_instance_id": string; "document_id": string; "session_id": string; "kind": "session.cancel_start"; "payload": EmptyPayload; };
+
+export type SessionCancelStartResponse = { "command": (SavedCommandFact | RejectedCommandFact); "current": (SessionStartCancelProjection | UnavailableSession); "state_version": string; "error"?: (ErrorDetail | null); };
+
 export type SessionCommandResponse = { "command": (SavedCommandFact | RejectedCommandFact); "current": (SessionProjection | LearningSessionProjection | OralSessionProjection | ConjugationSessionProjection | UnavailableSession); "state_version": string; "error"?: (ErrorDetail | null); };
 
 export type SessionProjection = { "session_id": string; "status": "active" | "summary" | "closed"; "mode": "written"; "pair": "ru-de" | "uk-de" | "en-de"; "direction": "l1-de"; "local_date": string; "bucket": ("words" | "phrases" | null); "close_reason": ("midnight" | "pair_changed" | "timezone_date_changed" | "stop" | "remote_stop" | "summary_home" | null); "progress": WrittenProgress; "assignment": (PublicAssignment | null); "summary": (WrittenSummary | null); };
@@ -411,6 +415,8 @@ export type SessionProjection = { "session_id": string; "status": "active" | "su
 export type SessionReference = { "id": string; "phase": "active" | "summary"; };
 
 export type SessionResponse = { "current": (SessionProjection | LearningSessionProjection | OralSessionProjection | ConjugationSessionProjection | UnavailableSession); "state_version": string; };
+
+export type SessionStartCancelProjection = { "session_id": string; "outcome": "cancelled" | "session_exists"; };
 
 export type SessionStartCommand = { "command_id": string; "client_instance_id": string; "document_id": string; "session_id": string; "kind": "session.start"; "payload": (SessionStartPayload | LearningStartPayload | OralStartPayload | ConjugationStartPayload); };
 
