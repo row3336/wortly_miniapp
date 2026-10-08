@@ -103,6 +103,13 @@ describe("statistics screen: composition of K9", () => {
   });
 
   it.each([
+    ["ru", "Нет такого направления"], ["uk", "Такого напрямку немає"], ["en", "No such direction"],
+  ] as const)("gives each «—» of the reverse column an accessible name in %s", (language, name) => {
+    show(ready(), { language });
+    expect(screen.getAllByLabelText(name)).toHaveLength(7);
+  });
+
+  it.each([
     ["ru", "Практика по дням", "Немецкий → родной", "В письменном квизе такого направления нет"],
     ["uk", "Практика за днями", "Німецька → рідна", "У письмовому квізі такого напрямку немає"],
     ["en", "Practice by day", "German → native", "The written quiz has no such direction"],

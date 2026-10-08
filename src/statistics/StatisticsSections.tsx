@@ -45,7 +45,7 @@ export function PeriodGroup({ data, language }: Props) {
         <thead><tr><th scope="col">{t.day}</th><th scope="col">{t.words}</th><th scope="col">{t.phrases}</th><th scope="col">{t.reverseDirection}</th></tr></thead>
         <tbody>{days.map(item => <tr key={item.local_date}>
           <th scope="row">{formatDay(item.local_date, language, { weekday: "short", day: "numeric", month: "short" })}</th>
-          <td>{item.words}</td><td>{item.phrases}</td><td>—</td>
+          <td>{item.words}</td><td>{item.phrases}</td><td aria-label={t.reverseNone}>—</td>
         </tr>)}</tbody>
       </table>
     </section>

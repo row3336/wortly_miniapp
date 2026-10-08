@@ -23,11 +23,11 @@ export function eventTime(value: unknown): boolean {
   const parsed = new Date(value);
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 19) === value.slice(0, 19);
 }
-export function oneOf(value: unknown, values: string[]): boolean {
+export function oneOf(value: unknown, values: readonly string[]): boolean {
   return typeof value === "string" && values.includes(value);
 }
 /** Every close_reason the client decodes. save_failed is accepted ahead of the core release that writes it (R2a); the shown text falls back to the generic closed text. */
-export const CLOSE_REASONS: string[] = ["midnight", "pair_changed", "timezone_date_changed", "stop", "remote_stop", "summary_home", "save_failed"];
+export const CLOSE_REASONS: readonly string[] = ["midnight", "pair_changed", "timezone_date_changed", "stop", "remote_stop", "summary_home", "save_failed"];
 export function validClosedSessionBoundary(value: unknown, sessionId: string): value is ClosedSessionBoundary {
   return record(value) && exactKeys(value, ["session_id", "status", "close_reason"])
     && sameId(value.session_id, sessionId) && value.status === "closed"
