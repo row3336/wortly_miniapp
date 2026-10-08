@@ -564,3 +564,54 @@ describe("OralScreen: «Уточнить поля» before the self-assessment",
     expect(opened).not.toHaveBeenCalled(); f.controller.dispose();
   });
 });
+
+// 2.33: an owner suspended on return from the background waits for its window's foreground answer. It shows only
+// «loading»; a busy or failed-refresh line of before would read as a failure of this return.
+describe("a suspended owner shows only loading (2.33)", () => {
+  const noActions: OralDocumentActions = { refresh: async () => {}, start: async () => {}, shown: async () => {},
+    reveal: async () => {}, grade: async () => {}, stop: async () => {}, retry: async () => {} };
+  const show = (controller: OralDocumentController) =>
+    render(<OralScreen state={controller.snapshot()} actions={noActions} language="ru" active onToday={() => {}} />);
+
+  it("a start refused as SESSION_BUSY: the busy line while active, only «loading» once suspended", async () => {
+    const f = fixture("prefetched");
+    const controller = new OralDocumentController({ ...f.options, initialSessionId: null, onUpdate() {} });
+    f.fetcher.mockImplementation(async (url, init) => {
+      if (init?.method !== "POST") return f.handler(url, init);
+      const command = JSON.parse(String(init.body)) as OralCommand;
+      return response({ command: { id: command.command_id, status: "rejected" }, error: { code: "SESSION_BUSY" },
+        current: { session_id: command.session_id, status: "not_found" }, state_version: "9" }, 409);
+    });
+    await controller.refresh(); await controller.start("words");
+    const ui = show(controller);
+    expect(screen.getByText("Занятие открыто на другом устройстве")).toBeTruthy();
+    ui.unmount();
+    controller.setActivity({ enabled: true, visible: false });
+    expect(controller.snapshot()).toMatchObject({ phase: "loading", suspended: true });
+    show(controller);
+    expect(screen.getByText("Загружаем занятие…")).toBeTruthy();
+    expect(screen.queryByText("Занятие открыто на другом устройстве")).toBeNull();
+    expect(screen.queryByRole("region", { name: "Проверка состояния" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Проверить состояние" })).toBeNull();
+    controller.dispose();
+  });
+
+  it("a failed session read: the error while active, only «loading» once suspended", async () => {
+    const f = fixture("prefetched");
+    const controller = new OralDocumentController({ ...f.options, onUpdate() {} });
+    f.fetcher.mockImplementation(async (url, init) => init?.method === "POST" ? f.handler(url, init)
+      : response({ error: { code: "INTERNAL" } }, 500));
+    await controller.refresh();
+    expect(controller.snapshot().suspended).toBeUndefined();
+    const ui = show(controller);
+    expect(screen.queryAllByText("Не удалось обновить занятие. Проверь состояние.").length).toBeGreaterThan(0);
+    ui.unmount();
+    controller.setActivity({ enabled: true, visible: false });
+    show(controller);
+    expect(screen.getByText("Загружаем занятие…")).toBeTruthy();
+    expect(screen.queryAllByText("Не удалось обновить занятие. Проверь состояние.")).toHaveLength(0);
+    expect(screen.queryByRole("button", { name: "Проверить состояние" })).toBeNull();
+    controller.dispose();
+  });
+});
+

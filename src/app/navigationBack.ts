@@ -2,11 +2,12 @@ import { useEffect, useLayoutEffect, useRef } from "react";
 import { bindBackButton } from "../platform/telegram";
 
 /**
- * Native Back runs the same transition as the visible control (TA:86). Priority: a modal window closes first,
- * then an unsaved personal field asks its own confirmation, then the current screen handles Back.
+ * Native Back runs the same transition as the visible control (TA:86). Priority: a document check holds Back (its
+ * screens are out of sight, so none of them may act, 2.33), then a modal window closes, then an unsaved personal
+ * field asks its own confirmation, then the current screen handles Back.
  */
-export type BackLayer = "overlay" | "guard" | "screen";
-const priority: readonly BackLayer[] = ["overlay", "guard", "screen"];
+export type BackLayer = "check" | "overlay" | "guard" | "screen";
+const priority: readonly BackLayer[] = ["check", "overlay", "guard", "screen"];
 
 type Entry = { layer: BackLayer; run(): void };
 

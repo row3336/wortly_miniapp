@@ -39,6 +39,11 @@ export type EntryControllerOptions = {
   onUpdate(snapshot: EntrySnapshot): void;
   /** Closes this window when the platform can (the Telegram Mini App); otherwise the replaced screen stays. */
   closeWindow?(): void;
+  /**
+   * True from a DOCUMENT_STALE until its foreground check has settled. The window keeps its screens mounted but out
+   * of sight meanwhile, so a replaced window closes without showing a module's refusal first (2.33).
+   */
+  onDocumentCheck?(checking: boolean): void;
 };
 
 export class EntryController {
@@ -53,6 +58,8 @@ export class EntryController {
   private claim: object | null = null;
   // A request of this document got DOCUMENT_STALE and no open has confirmed the document since.
   private staleHint = false;
+  // The foreground check that a DOCUMENT_STALE asked for is still running.
+  private checking = false;
   // A newer window of this installation took the document over: nothing here is sent for it again.
   private replaced = false;
   private profileVersion: string | null = null;
@@ -214,7 +221,18 @@ export class EntryController {
   documentStale(): void {
     if (this.disposed || this.replaced) return;
     this.staleHint = true;
-    setTimeout(() => { if (this.staleHint) void this.foreground(); }, 0);
+    if (this.checking) return; // The running check answers this refusal too.
+    // Synchronously: the module reads the refusal after this returns and must not be seen showing it (2.33).
+    this.setChecking(true);
+    setTimeout(() => {
+      void (this.staleHint ? this.foreground() : Promise.resolve()).finally(() => this.setChecking(false));
+    }, 0);
+  }
+
+  private setChecking(checking: boolean): void {
+    if (this.checking === checking) return;
+    this.checking = checking;
+    if (!this.disposed) this.options.onDocumentCheck?.(checking);
   }
 
   /** A newer window of this installation took the document over (decision 2.3). Terminal for this window. */

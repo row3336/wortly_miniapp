@@ -1,10 +1,11 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { DictionarySearchResponse } from "../api/generated";
 import { cardIdOf, cardView } from "../dictionary/card/cardTestData.test-support";
 import { app, pairText, useWrittenAppEnvironment } from "../written/writtenApp.test-support";
 import { response } from "../written/writtenFixtures.test-support";
 import { App } from "./App";
+import { gate, refuseOnce, watchFlash } from "./flashWatch.test-support";
 
 useWrittenAppEnvironment();
 
@@ -107,3 +108,31 @@ describe("M-EDIT own translation in the actual App document (М12)", () => {
     await waitFor(() => expect(a.kinds()).toEqual(["context.open", "context.close"]));
   });
 });
+
+// 2.33: a live window whose save is refused once as DOCUMENT_STALE (a closed card context) is hidden only during the
+// check; it is the same mounted document afterwards, not a new one: the card, the editor node and its draft stay.
+describe("the live card through a document check (2.33)", () => {
+  it("hidden while the check runs, then the same card, the same editor node and its draft", async () => {
+    const a = editApp();
+    fireEvent.click(await openCard(a));
+    const region = screen.getByRole("region", { name: "Перевод" });
+    const box = within(region).getByRole("textbox") as HTMLTextAreaElement;
+    fireEvent.change(box, { target: { value: "домишко" } });
+    const hold = gate();
+    const r = refuseOnce(a.fetcher, (path, init) => init?.method === "POST" && path.endsWith("/commands")
+      && JSON.parse(String(init!.body)).kind === "field.save", hold.promise);
+    const watch = watchFlash(document.body, ["Не удалось", "Повторить"]);
+    fireEvent.click(within(region).getByRole("button", { name: "Сохранить" }));
+    await waitFor(() => expect(r.foregrounds()).toBe(1));
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 50)); });
+    expect(watch.seen).toEqual([]);
+    watch.stop();
+    expect((document.querySelector(".document-check") as HTMLElement).style.display).toBe("none");
+    await act(async () => { hold.open(); await new Promise(resolve => setTimeout(resolve, 100)); });
+    await waitFor(() => expect((document.querySelector(".document-check") as HTMLElement).style.display).toBe("contents"));
+    expect(screen.getByRole("main", { name: "Карточка" })).toBeTruthy();
+    expect(box.isConnected).toBe(true);
+    expect(box.value).toBe("домишко");
+  });
+});
+

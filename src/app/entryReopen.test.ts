@@ -67,10 +67,12 @@ function device(lock: DocumentLock, options: { remote?: boolean } = {}) {
   const window = () => {
     const states: EntryState[] = [];
     const closeWindow = vi.fn();
+    const checks: boolean[] = [];
     const controller = new EntryController({ api, storage, lock, initData: "signed", savedLanguage: "ru",
       browserLanguage: "ru", clientVersion: "0.0.0", contractVersion: "1", timeZone: () => "UTC",
-      newId: () => id(next++), onUpdate: ({ state }) => { states.push(state); }, closeWindow, ...remote });
-    return { controller, states, closeWindow, latest: () => states.at(-1) };
+      newId: () => id(next++), onUpdate: ({ state }) => { states.push(state); }, closeWindow,
+      onDocumentCheck: checking => { checks.push(checking); }, ...remote });
+    return { controller, states, closeWindow, checks, latest: () => states.at(-1) };
   };
   const bodies = () => vi.mocked(api.open).mock.calls.map(call => call[2]);
   return { server, api, window, bodies };
@@ -153,6 +155,51 @@ describe("a new window takes the document over at once (decision 2.3, CT:186)", 
     expect(d.bodies().slice(2)).toEqual([{ ...d.bodies()[0], event: "foreground" }]);
     expect(first.latest()).toEqual({ kind: "replaced" });
     expect(first.closeWindow).toHaveBeenCalledOnce();
+  });
+
+  it("the check is announced before the module reads the refusal and ends with its foreground, once per doubt (2.33)", async () => {
+    const { d, first } = await twoWindows(noLocks());
+    first.controller.documentStale();
+    // Synchronously, before the module that got the refusal renders it.
+    expect(first.checks).toEqual([true]);
+    first.controller.documentStale();
+    expect(first.checks).toEqual([true]);
+    await settle();
+    expect(first.latest()).toEqual({ kind: "replaced" });
+    expect(first.checks).toEqual([true, false]);
+    expect(d.bodies().slice(2).map(body => body.event)).toEqual(["foreground"]);
+  });
+
+  it("a second DOCUMENT_STALE during the check is answered by it: no new check after it confirms the live document", async () => {
+    const d = device(noLocks());
+    const only = d.window(); await only.controller.start();
+    const original = vi.mocked(d.api.open).getMockImplementation()!;
+    let resume!: () => void;
+    vi.mocked(d.api.open).mockImplementationOnce(async (...args) => {
+      await new Promise<void>(resolve => { resume = resolve; });
+      return original(...args);
+    });
+    only.controller.documentStale();
+    await settle();
+    only.controller.documentStale(); // While the check's foreground is in flight.
+    resume();
+    await settle(); await settle();
+    expect(only.latest()).toEqual({ kind: "opened" });
+    expect(d.bodies().slice(1).map(body => body.event)).toEqual(["foreground"]);
+    expect(only.checks).toEqual([true, false]);
+  });
+
+  it.each([
+    ["confirms the live document", false],
+    ["is lost", true],
+  ])("the check ends too when its foreground %s", async (_case, lost) => {
+    const d = device(noLocks());
+    const only = d.window(); await only.controller.start();
+    if (lost) vi.mocked(d.api.open).mockRejectedValueOnce(new EntryApiError("network"));
+    only.controller.documentStale();
+    await settle();
+    expect(only.checks).toEqual([true, false]);
+    expect(only.latest()).toEqual(lost ? { kind: "unavailable" } : { kind: "opened" });
   });
 
   it("a DOCUMENT_STALE of the live window (a closed card context) keeps it open: its foreground confirms the document", async () => {

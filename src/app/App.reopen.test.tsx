@@ -1,12 +1,13 @@
 // Two windows of one installation through the real App after decision 2.3 (M-REOPEN-2): the new window takes the
 // document over at once; the old one closes itself on DOCUMENT_STALE or on the lost lock, over /client/open as core
 // answers it after C-REOPEN-2.
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, isInaccessible, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenRequest, OralSessionProjection, Profile, TodayResponse } from "../api/generated";
 import { settingsResponse } from "../settings/settingsRead.test-support";
 import { App } from "./App";
 import { keysOf, openDocument, openRequestKeys, staleCommand, staleDocument, staleRefusal } from "./openRules.test-support";
+import { watchFlash } from "./flashWatch.test-support";
 
 type Fetch = (url: string | URL | Request, init?: RequestInit) => Promise<Response>;
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -16,6 +17,8 @@ const pairText = "Активная пара: Русский ↔ Немецкий
 const busyTitle = "Wortly уже открыт";
 const busyText = "Вернись в другое открытое окно или на другое устройство.";
 const unconfirmed = "Учебное действие ещё не подтверждено.";
+const oralRefusal = "Не удалось обновить занятие. Проверь состояние.";
+const checkingTitle = "Открываем Wortly";
 const settle = () => new Promise(resolve => setTimeout(resolve, 30));
 
 function today(): TodayResponse {
@@ -53,7 +56,7 @@ function installLocks() {
  * One device over one synthetic core: every open makes its document the live one; a foreground, a write or a session
  * read of a replaced document is DOCUMENT_STALE (identity/clients.py, study/coordinator.py after C-REOPEN-2).
  */
-function device(options: { locks?: boolean; session?: boolean; close?: boolean } = {}) {
+function device(options: { locks?: boolean; session?: boolean; close?: boolean; holdForeground?: boolean } = {}) {
   const server = { document: null as string | null, epoch: 0, version: 8, session: options.session ? id(3) : null, refuseReads: 0 };
   const locks = options.locks ? installLocks() : null;
   const close = vi.fn();
@@ -62,7 +65,11 @@ function device(options: { locks?: boolean; session?: boolean; close?: boolean }
   const account = (): Profile => ({ profile_id: id(50), role: "user", ui_language: "ru", dictionary_language: "ru", time_zone: "UTC",
     state_version: String(server.version), access: { status: "admitted", version: "1", reason: null } });
   const refused: string[] = [];
-  const open = (body: OpenRequest) => {
+  // holdForeground: every foreground open waits until release(), so a test can look at the window while it checks.
+  const waiting: Array<() => void> = [];
+  const release = () => { waiting.splice(0).forEach(resume => resume()); };
+  const open = async (body: OpenRequest) => {
+    if (options.holdForeground && body.event === "foreground") await new Promise<void>(resume => waiting.push(resume));
     const changed = openDocument(server, body);
     if (changed === "stale") return response(staleRefusal, 409);
     if (changed) server.version += 1;
@@ -102,7 +109,7 @@ function device(options: { locks?: boolean; session?: boolean; close?: boolean }
   const calls = (suffix: string) => fetcher.mock.calls.filter(([url]) => String(url).endsWith(suffix));
   /** The events of every open that named this document. */
   const eventsOf = (document: string) => opens().filter(body => body.document_id === document).map(body => body.event);
-  return { server, locks, close, opens, posts, calls, refused, eventsOf };
+  return { server, locks, close, opens, posts, calls, refused, eventsOf, release, held: () => waiting.length };
 }
 const foreground = () => {
   vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
@@ -241,5 +248,83 @@ describe("a live window's read refused as DOCUMENT_STALE", () => {
     expect(d.close).not.toHaveBeenCalled();
     expect(within(a.container).queryByRole("heading", { name: busyTitle })).toBeNull();
     expect(d.server.document).toBe(own);
+  });
+});
+
+/** Every element with the text is hidden from the user (display: none keeps the module mounted but out of sight). */
+const unseen = (container: HTMLElement, text: string) =>
+  within(container).queryAllByText(text).every(element => isInaccessible(element));
+
+describe("no false error while the window checks its document (2.33, contracts §6.4)", () => {
+  it("Ф1: the replaced window hides its module's refusal during the foreground check and then closes", async () => {
+    const d = device({ session: true, holdForeground: true });
+    const a = render(<App />); await within(a.container).findByText("wenn");
+    const b = render(<App />); await within(b.container).findByText("wenn");
+    const reveal = within(a.container).getByRole("button", { name: "Раскрыть" }) as HTMLButtonElement;
+    await waitFor(() => expect(reveal.disabled).toBe(false));
+    // Every screen update of A is watched: not one commit may show the refusal (a check announced late would).
+    const watch = watchFlash(a.container);
+    fireEvent.click(reveal);
+    await waitFor(() => expect(d.held()).toBe(1));
+    await settle();
+    // The module has settled its refusal (nothing left in the shared storage), but the user does not see it.
+    expect(localStorage.getItem("wortly.pending.oral_session")).toBeNull();
+    expect(within(a.container).queryAllByText(oralRefusal)).not.toHaveLength(0);
+    expect(unseen(a.container, oralRefusal)).toBe(true);
+    expect(unseen(a.container, "wenn")).toBe(true);
+    expect(within(a.container).getByRole("heading", { name: checkingTitle })).toBeTruthy();
+    expect(d.close).not.toHaveBeenCalled();
+    d.release();
+    await waitFor(() => expect(d.close).toHaveBeenCalledOnce());
+    await within(a.container).findByRole("heading", { name: busyTitle });
+    expect(within(a.container).queryAllByText(oralRefusal)).toHaveLength(0);
+    watch.stop();
+    expect(watch.seen).toEqual([]);
+    await within(b.container).findByText("wenn");
+    expect(unseen(b.container, "wenn")).toBe(false);
+  });
+
+  it("a live window's refused read: the module is hidden only while the check runs, then shown again", async () => {
+    const d = device({ session: true, holdForeground: true });
+    d.server.refuseReads = 1;
+    const a = render(<App />);
+    await waitFor(() => expect(d.held()).toBe(1));
+    await settle();
+    expect(within(a.container).getByRole("heading", { name: checkingTitle })).toBeTruthy();
+    d.release();
+    await waitFor(() => expect(within(a.container).queryByRole("heading", { name: checkingTitle })).toBeNull());
+    await within(a.container).findByText("wenn");
+    expect(unseen(a.container, "wenn")).toBe(false);
+    expect(d.close).not.toHaveBeenCalled();
+    expect(d.eventsOf(d.opens()[0].document_id)).toEqual(["open", "foreground"]);
+  });
+
+  it("a replaced window coming back from the background shows no module error before it closes", async () => {
+    const d = device({ session: true, holdForeground: true });
+    const a = render(<App />); await within(a.container).findByText("wenn");
+    const b = render(<App />); await within(b.container).findByText("wenn");
+    await settle();
+    foreground(); // Both windows of the test share one document: B checks too and keeps its document.
+    await waitFor(() => expect(d.held()).toBe(2));
+    await settle();
+    expect(unseen(a.container, oralRefusal)).toBe(true);
+    d.release();
+    await waitFor(() => expect(d.close).toHaveBeenCalledOnce());
+    await within(a.container).findByRole("heading", { name: busyTitle });
+  });
+
+  it("a live window coming back: while its foreground runs the oral screen loads, it reports no failed refresh", async () => {
+    const d = device({ session: true, holdForeground: true });
+    const a = render(<App />); await within(a.container).findByText("wenn");
+    await settle();
+    foreground();
+    await waitFor(() => expect(d.held()).toBe(1));
+    await settle();
+    expect(within(a.container).queryAllByText(oralRefusal)).toHaveLength(0);
+    expect(within(a.container).getByText("Загружаем занятие…")).toBeTruthy();
+    d.release();
+    await within(a.container).findByText("wenn");
+    expect(within(a.container).queryAllByText(oralRefusal)).toHaveLength(0);
+    expect(d.close).not.toHaveBeenCalled();
   });
 });

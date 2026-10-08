@@ -103,14 +103,18 @@ export function OralScreen({ state, actions, language, active, onToday, onRefine
     : phase === "question" ? t.remember : phase === "revealed" ? t.grade : null;
   const localProblem = state?.problem === "storage" || lanes.some(lane => lane.problem === "storage");
   const blocked = lanes.some(lane => lane.problem === "mismatch" || lane.problem === "invalid_pending" || lane.problem === "pending_changed");
+  // A suspended owner shows only «loading» until its window's foreground answers: an earlier refusal or busy line
+  // beside it would read as a failure of this return (2.33). The fresh owner after the foreground shows real problems.
+  const suspended = state?.suspended === true;
   // Same wording as the written quiz: a refused start names the other device, not a generic refresh failure.
-  const problem = localProblem ? t.cleanup : blocked ? t.blocked : busyRefused ? t.busy : state?.problem ? t.stale : null;
+  const problem = suspended ? null
+    : localProblem ? t.cleanup : blocked ? t.blocked : busyRefused ? t.busy : state?.problem ? t.stale : null;
   const summary = state?.current?.status === "summary" ? state.current.summary : closedSummary?.summary ?? null;
   const progress = closedSummary ? closedSummary.progress : state?.current?.progress;
   const remaining = progress ? progress.total - progress.completed : null;
   const usable = active && !!state && phase !== "disposed";
   const refreshBusy = lanes.some(lane => lane.phase === "loading" || lane.phase === "checking");
-  const showRecovery = usable && (phase === "unknown" || phase === "stale" || phase === "closed"
+  const showRecovery = usable && !suspended && (phase === "unknown" || phase === "stale" || phase === "closed"
     || !!problem || lanes.some(lane => lane.pending) || state!.canRetry.study || state!.canRetry.stop);
   const allowed = (capability: boolean | undefined) => usable && capability === true;
   const toToday = closedSummary !== null || allowed(state?.canSummaryHome);

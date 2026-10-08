@@ -32,6 +32,8 @@ export type OralDocumentSnapshot = {
   canStart: boolean; canReveal: boolean; canGrade: boolean; canStop: boolean; canSummaryHome: boolean;
   canRetry: Record<OralCommandLane, boolean>;
   closed: OralClosed | null;
+  /** Loading only because the owner waits for its window's foreground answer: nothing else of it is to be shown (2.33). */
+  suspended?: true;
 };
 const busyRefusal = (commands: Record<OralCommandLane, OralCommandSnapshot>): "SESSION_BUSY" | null =>
   commands.study.rejectionCode === "SESSION_BUSY" || commands.stop.rejectionCode === "SESSION_BUSY" ? "SESSION_BUSY" : null;
@@ -250,7 +252,9 @@ export class OralDocumentController {
     else if (!this.recovered || this.refreshing) phase = "loading";
     else if (current?.status === "summary") phase = "summary";
     else if (assignment) phase = assignment.status === "prefetched" ? "prefetched" : assignment.revealed ? "revealed" : "question";
-    else phase = this.sessionId ? "stale" : "idle";
+    // A suspended owner hides its session until its window's foreground answers: that is loading, not a failed
+    // refresh. Otherwise every return, and a replaced window before it closes, reads as an error (2.33).
+    else phase = this.sessionId ? this.foregroundBlocked ? "loading" : "stale" : "idle";
     return { phase, sessionId: live ? this.sessionId : null, current: structuredClone(current), stateVersion: this.floor,
       terminalSessionIds: [...this.terminal], commands,
       // A start refused as SESSION_BUSY is a fact of the core, not a lost reply: it outranks the generic problem that the
@@ -266,7 +270,8 @@ export class OralDocumentController {
         && assignment.revealed && sameId(current!.capabilities.grade_target, assignment.id),
       canStop: canStop && !!right?.stop, canSummaryHome: canStop && !!right?.home,
       canRetry: { study: this.active("study") && commands.study.canRetry, stop: this.active("stop") && commands.stop.canRetry },
-      closed: live && closed ? this.closedSnapshot(this.sessionId!) : null };
+      closed: live && closed ? this.closedSnapshot(this.sessionId!) : null,
+      ...(live && this.foregroundBlocked && phase === "loading" ? { suspended: true as const } : {}) };
   }
   private closedSnapshot(sessionId: string): OralClosed {
     const facts = this.closedFacts && sameId(this.closedFacts.sessionId, sessionId) ? this.closedFacts : null;

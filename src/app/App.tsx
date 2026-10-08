@@ -28,6 +28,9 @@ import packageJson from "../../package.json";
 /** The entry is still being decided: the launch screen keeps waiting (М20). Every other state is an answer, success or refusal. */
 const undecided: ReadonlySet<EntryState["kind"]> = new Set(["checking", "opening", "reapplying"]);
 
+/** Back while the document is checked: nothing on screen may act until the check has answered. */
+const holdBack = () => {};
+
 /** The single identity source for entry and study commands. */
 const newId = () => window.crypto.randomUUID();
 
@@ -41,6 +44,7 @@ export function App() {
   const [pendingStore, setPendingStore] = useState<SettingsPendingStore | null>(null);
   const [storage, setStorage] = useState<AsyncStorage | null>(null);
   const [oralStores, setOralStores] = useState<OralStores | null>(null);
+  const [documentCheck, setDocumentCheck] = useState(false);
   const openedRef = useRef<OpenedAccess | null>(null);
   const storageRef = useRef<AsyncStorage | null>(null);
   const observedLanguage = useRef<{ profileId: string; version: string } | null>(null);
@@ -120,6 +124,7 @@ export function App() {
           timeZone: () => Intl.DateTimeFormat().resolvedOptions().timeZone || null,
           newId,
           closeWindow: () => closeMiniApp(window),
+          onDocumentCheck(checking) { if (active) setDocumentCheck(checking); },
           onUpdate(snapshot) {
             if (!active) return;
             setEntryState(snapshot.state);
@@ -170,6 +175,8 @@ export function App() {
   // The remote-stop confirmation is a modal step: native Back closes it like «Отмена» (tz_app:86).
   const remoteConfirm = language !== null && entryState.kind === "remote_confirm" ? controller : null;
   useBackLayer("overlay", remoteConfirm ? () => remoteConfirm.cancelRemoteStop() : null);
+  // The hidden document keeps its Back handlers mounted: while it is checked, Back reaches none of them (2.33).
+  useBackLayer("check", documentCheck ? holdBack : null);
 
   const content = (): ReactNode => {
     if (language === null) {
@@ -181,8 +188,16 @@ export function App() {
       );
     }
     if (entryState.kind === "opened" && access && transport && pendingStore && storage && oralStores) {
-      return <ApplicationDocument key={access.key} access={access} transport={transport} pendingStore={pendingStore}
-        storage={storage} oralStores={oralStores} newId={newId} language={language} foreground={foreground} onCurrent={observeSettings} />;
+      // While a DOCUMENT_STALE is being checked the document stays mounted (a live window goes on as it was) but out
+      // of sight, so a replaced window never shows its module's refusal before it closes (2.33). The wrapper is
+      // always there: adding it only for the check would remount the document.
+      return <>
+        <div className="document-check" style={{ display: documentCheck ? "none" : "contents" }}>
+          <ApplicationDocument key={access.key} access={access} transport={transport} pendingStore={pendingStore}
+            storage={storage} oralStores={oralStores} newId={newId} language={language} foreground={foreground} onCurrent={observeSettings} />
+        </div>
+        {documentCheck && <EntryScreen state={{ kind: "checking" }} language={language} />}
+      </>;
     }
     if (entryState.kind === "busy" && busyAccess && transport && controller) {
       return <BusyTodayHost access={busyAccess} transport={transport} language={language}

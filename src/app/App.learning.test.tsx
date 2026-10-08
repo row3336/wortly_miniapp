@@ -8,6 +8,7 @@ import { current, deferred, id, missing, profile, response } from "../learning/l
 import { settingsResponse } from "../settings/settingsRead.test-support";
 import { SessionResumeController } from "../study/sessionResumeController";
 import { App } from "./App";
+import { gate, refuseOnce, replaceDocument, watchFlash } from "./flashWatch.test-support";
 
 type Fetch = (url: string | URL | Request, init?: RequestInit) => Promise<Response>;
 type Route = (url: string | URL | Request, init: RequestInit | undefined, base: Fetch) => Promise<Response>;
@@ -699,3 +700,44 @@ describe("M-NAV bottom navigation around a Learning session", () => {
     expect(screen.getByRole("navigation", { name: "Основная навигация" })).toBeTruthy();
   });
 });
+
+// 2.33: while a DOCUMENT_STALE is checked, the document is out of sight; nothing of it may show or act.
+describe("Learning while the window checks its document (2.33)", () => {
+  const wrapperDisplay = () => (document.querySelector(".document-check") as HTMLElement | null)?.style.display;
+
+  it("replaced window: an answer refused as DOCUMENT_STALE never shows a refusal on any screen update", async () => {
+    const a = app(); const input = await startToQuestion(a);
+    fireEvent.change(input, { target: { value: "Haus" } });
+    const hold = gate(); const r = replaceDocument(a.fetcher, hold.promise);
+    const watch = watchFlash(document.body);
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
+    await waitFor(() => expect(r.foregrounds()).toBe(1));
+    await settled();
+    expect(watch.seen).toEqual([]);
+    await act(async () => { hold.open(); }); await settled();
+    await screen.findByRole("heading", { name: "Wortly уже открыт" });
+    watch.stop();
+    expect(watch.seen).toEqual([]);
+  });
+
+  it("native Back during the check reaches no hidden module: no stop is sent; after the check the module is shown again", async () => {
+    const back = fakeBack(), a = app({ back }); const input = await startToQuestion(a);
+    fireEvent.change(input, { target: { value: "Haus" } });
+    const hold = gate();
+    const r = refuseOnce(a.fetcher, (path, init) => init?.method === "POST" && path.endsWith("/commands")
+      && JSON.parse(String(init!.body)).kind === "answer.submit", hold.promise);
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
+    await waitFor(() => expect(r.foregrounds()).toBe(1));
+    await settled();
+    expect(wrapperDisplay()).toBe("none");
+    expect(screen.getByRole("heading", { name: "Открываем Wortly" })).toBeTruthy();
+    expect(back.handlers).toBe(1); // One Telegram binding, whatever layers supply handlers.
+    const before = a.studyPosts().length;
+    await back.click(); await settled();
+    expect(a.studyPosts().slice(before)).toEqual([]);
+    await act(async () => { hold.open(); }); await settled();
+    await waitFor(() => expect(wrapperDisplay()).toBe("contents"));
+    expect(screen.queryByRole("heading", { name: "Открываем Wortly" })).toBeNull();
+  });
+});
+

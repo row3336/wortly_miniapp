@@ -100,3 +100,21 @@ describe("layer priority does not depend on registration order", () => {
     expect(confirm).toHaveBeenCalledOnce(); expect(screen).not.toHaveBeenCalled();
   });
 });
+
+// 2.33: while the window checks its document, its screens are out of sight and none of them may act on Back.
+describe("a document check holds Back", () => {
+  it("outranks a later overlay, guard and screen; once it ends, the highest of them runs again", async () => {
+    const check = vi.fn(), overlay = vi.fn(), confirm = vi.fn(), screen = vi.fn();
+    const view = render(<><Layer layer="check" handler={check} /><Layer layer="screen" handler={screen} /></>);
+    view.rerender(<><Layer layer="check" handler={check} /><Layer layer="screen" handler={screen} />
+      <Guard confirm={confirm} /><Layer layer="overlay" handler={overlay} /></>);
+    await back.click();
+    expect(check).toHaveBeenCalledOnce();
+    expect(overlay).not.toHaveBeenCalled(); expect(confirm).not.toHaveBeenCalled(); expect(screen).not.toHaveBeenCalled();
+    view.rerender(<><Layer layer="check" handler={null} /><Layer layer="screen" handler={screen} />
+      <Guard confirm={confirm} /><Layer layer="overlay" handler={overlay} /></>);
+    await back.click();
+    expect(overlay).toHaveBeenCalledOnce(); expect(check).toHaveBeenCalledOnce();
+  });
+});
+
