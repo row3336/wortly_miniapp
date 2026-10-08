@@ -20,14 +20,14 @@ export type ConjugationTestScreenProps = {
 // Working copy for G05.
 const copy = {
   ru: { title: "Тест спряжений", stop: "Завершить", loading: "Загружаем занятие…", presenting: "Подтверждаем показ вопроса…",
-    submitting: "Сохраняем ответ…", unknown: "Ответ ещё не подтверждён. Проверьте статус.", forgot: "Отправлено: «Забыл…»",
+    submitting: "Сохраняем ответ…", unknown: "Ответ ещё не подтверждён. Проверь статус.", forgot: "Отправлено: «Забыл…»",
     stopping: "Завершаем занятие…", previous: "Предыдущий ответ", previousMode: "Предыдущий ответ", barrier: "Подтверждаем показ следующего вопроса…",
-    recovery: "Действие ещё не подтверждено. Проверьте статус.", stale: "Не удалось обновить занятие.", refresh: "Проверить статус",
+    recovery: "Действие ещё не подтверждено. Проверь статус.", stale: "Не удалось обновить занятие.", refresh: "Проверить статус",
     refreshSummary: "Обновить итог", retryStudy: "Повторить действие", retryStop: "Повторить завершение" },
   uk: { title: "Тест дієвідмін", stop: "Завершити", loading: "Завантажуємо заняття…", presenting: "Підтверджуємо показ питання…",
-    submitting: "Зберігаємо відповідь…", unknown: "Відповідь ще не підтверджено. Перевірте статус.", forgot: "Надіслано: «Не пам’ятаю…»",
+    submitting: "Зберігаємо відповідь…", unknown: "Відповідь ще не підтверджено. Перевір статус.", forgot: "Надіслано: «Не пам’ятаю…»",
     stopping: "Завершуємо заняття…", previous: "Попередня відповідь", previousMode: "Попередня відповідь", barrier: "Підтверджуємо показ наступного питання…",
-    recovery: "Дію ще не підтверджено. Перевірте статус.", stale: "Не вдалося оновити заняття.", refresh: "Перевірити статус",
+    recovery: "Дію ще не підтверджено. Перевір статус.", stale: "Не вдалося оновити заняття.", refresh: "Перевірити статус",
     refreshSummary: "Оновити підсумок", retryStudy: "Повторити дію", retryStop: "Повторити завершення" },
   en: { title: "Conjugation test", stop: "End", loading: "Loading the session…", presenting: "Confirming the displayed question…",
     submitting: "Saving the answer…", unknown: "The answer is not confirmed yet. Check status.", forgot: "Sent: “I forgot…”",

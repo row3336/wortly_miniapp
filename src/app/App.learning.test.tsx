@@ -9,6 +9,7 @@ import { settingsResponse } from "../settings/settingsRead.test-support";
 import { SessionResumeController } from "../study/sessionResumeController";
 import { App } from "./App";
 import { gate, refuseOnce, replaceDocument, watchFlash } from "./flashWatch.test-support";
+import { staleRefusal } from "./openRules.test-support";
 
 type Fetch = (url: string | URL | Request, init?: RequestInit) => Promise<Response>;
 type Route = (url: string | URL | Request, init: RequestInit | undefined, base: Fetch) => Promise<Response>;
@@ -738,6 +739,36 @@ describe("Learning while the window checks its document (2.33)", () => {
     await act(async () => { hold.open(); }); await settled();
     await waitFor(() => expect(wrapperDisplay()).toBe("contents"));
     expect(screen.queryByRole("heading", { name: "Открываем Wortly" })).toBeNull();
+  });
+
+  it("Enter on body during the check never reaches the hidden Learning result's «next»", async () => {
+    const a = app(); const input = await startToQuestion(a); a.f.wrong();
+    fireEvent.change(input, { target: { value: "Haus" } });
+    fireEvent.click(screen.getByRole("button", { name: "Проверить" }));
+    await screen.findByRole("region", { name: "Есть ошибка" }); await settled();
+    // A foreground re-reads the result; that read is refused once as DOCUMENT_STALE, and the check's own foreground is held.
+    const hold = gate(), base = a.fetcher.getMockImplementation()!;
+    let foregrounds = 0, refused = 0;
+    a.fetcher.mockImplementation(async (url, init) => {
+      const u = new URL(String(url), "http://localhost"), body = init?.body ? JSON.parse(String(init.body)) : null;
+      if (u.pathname.endsWith("/client/open") && body?.event === "foreground" && ++foregrounds > 1) { await hold.promise; return base(url, init); }
+      if (refused === 0 && init?.method !== "POST" && u.pathname.includes("/sessions/") && u.searchParams.has("result_id")) {
+        refused++; return new Response(JSON.stringify(staleRefusal), { status: 409 });
+      }
+      return base(url, init);
+    });
+    await act(async () => { window.dispatchEvent(new Event("pageshow")); });
+    await waitFor(() => expect(wrapperDisplay()).toBe("none"));
+    await settled();
+    expect(refused).toBe(1);
+    const next = within(document.querySelector(".document-check") as HTMLElement).queryByRole("button", { name: "Далее", hidden: true });
+    const before = a.studyPosts().length;
+    fireEvent.keyDown(document.body, { key: "Enter", code: "Enter" }); await settled();
+    expect({ next: !!next, sent: a.studyPosts().slice(before).map(post => post.kind) }).toEqual({ next: true, sent: [] });
+    expect(document.querySelector(".document-check")!.hasAttribute("inert")).toBe(true);
+    await act(async () => { hold.open(); }); await settled();
+    await waitFor(() => expect(wrapperDisplay()).toBe("contents"));
+    expect(document.querySelector(".document-check")!.hasAttribute("inert")).toBe(false);
   });
 });
 

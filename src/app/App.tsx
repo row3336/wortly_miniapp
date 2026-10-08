@@ -190,9 +190,10 @@ export function App() {
     if (entryState.kind === "opened" && access && transport && pendingStore && storage && oralStores) {
       // While a DOCUMENT_STALE is being checked the document stays mounted (a live window goes on as it was) but out
       // of sight, so a replaced window never shows its module's refusal before it closes (2.33). The wrapper is
-      // always there: adding it only for the check would remount the document.
+      // always there: adding it only for the check would remount the document. Inert stops focus and clicks, and the
+      // Enter shortcuts (useEnterNext) read it, so the hidden screens do nothing meanwhile.
       return <>
-        <div className="document-check" style={{ display: documentCheck ? "none" : "contents" }}>
+        <div className="document-check" style={{ display: documentCheck ? "none" : "contents" }} inert={documentCheck}>
           <ApplicationDocument key={access.key} access={access} transport={transport} pendingStore={pendingStore}
             storage={storage} oralStores={oralStores} newId={newId} language={language} foreground={foreground} onCurrent={observeSettings} />
         </div>

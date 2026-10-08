@@ -165,7 +165,7 @@ describe("ConjugationTestScreen question", () => {
         pendingIntent: { command_id: id(70), kind: "answer.submit", session_id: S1, assignment_id: B1, payload: { text: " gehst  " } } }), stop: command() } }));
     expect((h.field() as HTMLTextAreaElement).value).toBe(" gehst  ");
     expect((h.field() as HTMLTextAreaElement).readOnly).toBe(true);
-    expect(screen.getByText("Ответ ещё не подтверждён. Проверьте статус.")).toBeTruthy();
+    expect(screen.getByText("Ответ ещё не подтверждён. Проверь статус.")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Повторить действие" }));
     expect(h.actions.retry.mock.calls).toEqual([["study"]]);
     expect(screen.queryByRole("button", { name: "Повторить завершение" })).toBeNull();
@@ -187,7 +187,7 @@ describe("ConjugationTestScreen question", () => {
     const h = setup(snap({ phase: "unknown", sessionId: null, canSubmit: false, currentStep: null, display: { kind: "none" },
       commands: { study: command({ phase: "unresolved", pending: true, kind: "answer.submit", sessionId: S1,
         pendingIntent: { command_id: id(70), kind: "answer.submit", session_id: S1, assignment_id: B1, payload: { text: "x" } } }), stop: command() } }));
-    expect(screen.getByText("Действие ещё не подтверждено. Проверьте статус.")).toBeTruthy();
+    expect(screen.getByText("Действие ещё не подтверждено. Проверь статус.")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Проверить статус" }));
     expect(h.actions.refresh).toHaveBeenCalledTimes(1);
     cleanup();

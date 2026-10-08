@@ -13,6 +13,8 @@ export function useEnterNext(root: RefObject<HTMLElement | null>, composing: Ref
       if (event.repeat || composing.current || event.isComposing || event.keyCode === 229) return;
       const target = event.target;
       if (!(target instanceof Element)) return;
+      // The listener is on the document: a screen made inert (hidden during a document check) must not hear Enter from the body.
+      if (root.current?.closest("[inert]")) return;
       if (target !== document.body && !root.current?.contains(target)) return;
       // A focused control owns Enter; bubbling must not bypass its selected grade or action.
       if (target.closest('button, a, input, textarea, select, [contenteditable="true"], [role="dialog"]')) return;
