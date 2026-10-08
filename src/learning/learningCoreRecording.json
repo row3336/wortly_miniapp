@@ -1,0 +1,3265 @@
+{
+ "source": "core create_app via TestClient (tools/record_learning_session.py), disposable wortly_test schema",
+ "exchanges": [
+  {
+   "name": "start",
+   "method": "POST",
+   "path": "/api/v1/commands",
+   "query": {},
+   "body": {
+    "command_id": "00000000-0000-4000-8000-000000000100",
+    "client_instance_id": "00000000-0000-4000-8000-000000000001",
+    "document_id": "00000000-0000-4000-8000-000000000002",
+    "session_id": "00000000-0000-4000-8000-000000000004",
+    "kind": "session.start",
+    "payload": {
+     "mode": "learning"
+    }
+   },
+   "status": 200,
+   "response": {
+    "command": {
+     "id": "00000000-0000-4000-8000-000000000100",
+     "kind": "session.start",
+     "status": "applied",
+     "applied_at": "2026-09-29T12:00:00Z",
+     "target_id": "00000000-0000-4000-8000-000000000004",
+     "action_id": null,
+     "result_id": null,
+     "context_id": null,
+     "object_version": null
+    },
+    "current": {
+     "session_id": "00000000-0000-4000-8000-000000000004",
+     "status": "active",
+     "mode": "learning",
+     "pair": "ru-de",
+     "local_date": "2026-09-29",
+     "close_reason": null,
+     "group": {
+      "id": "00000000-0000-4000-9000-000000000001",
+      "status": "assembling",
+      "version": "1",
+      "preview_position": 0,
+      "total": 2
+     },
+     "preview": {
+      "id": "00000000-0000-4000-9000-000000000002",
+      "card_id": "00000000-0000-4000-8000-000000000010",
+      "position": 1,
+      "total": 2,
+      "content": {
+       "pair": "ru-de",
+       "card": {
+        "id": "00000000-0000-4000-8000-000000000010",
+        "revision": "1",
+        "lemma": "Haus",
+        "type": "noun",
+        "cefr": "A1"
+       },
+       "translations": {
+        "common": [
+         "дом"
+        ],
+        "personal": null
+       },
+       "grammar": {
+        "gender": "neuter",
+        "gender_status": "applicable",
+        "singular": "Haus",
+        "singular_status": "applicable",
+        "plural": "Häuser",
+        "plural_status": "applicable",
+        "article_status": "applicable"
+       },
+       "reference_conjugations": [],
+       "examples": {
+        "common": [
+         {
+          "id": "00000000-0000-4000-8000-000000000030",
+          "text": "Das Haus ist alt.",
+          "role": "general",
+          "highlighted_parts": []
+         }
+        ],
+        "personal": null
+       },
+       "association": null
+      }
+     },
+     "assignment": null
+    },
+    "state_version": "4"
+   },
+   "schema": [
+    "SessionCommandResponse"
+   ]
+  },
+  {
+   "name": "status_start",
+   "method": "GET",
+   "path": "/api/v1/commands/00000000-0000-4000-8000-000000000100",
+   "query": {
+    "client_instance_id": "00000000-0000-4000-8000-000000000001",
+    "document_id": "00000000-0000-4000-8000-000000000002",
+    "session_id": "00000000-0000-4000-8000-000000000004"
+   },
+   "body": null,
+   "status": 200,
+   "response": {
+    "command": {
+     "id": "00000000-0000-4000-8000-000000000100",
+     "kind": "session.start",
+     "status": "already_applied",
+     "applied_at": "2026-09-29T12:00:00Z",
+     "target_id": "00000000-0000-4000-8000-000000000004",
+     "action_id": null,
+     "result_id": null,
+     "context_id": null,
+     "object_version": null
+    },
+    "current": {
+     "session_id": "00000000-0000-4000-8000-000000000004",
+     "status": "active",
+     "mode": "learning",
+     "pair": "ru-de",
+     "local_date": "2026-09-29",
+     "close_reason": null,
+     "group": {
+      "id": "00000000-0000-4000-9000-000000000001",
+      "status": "assembling",
+      "version": "1",
+      "preview_position": 0,
+      "total": 2
+     },
+     "preview": {
+      "id": "00000000-0000-4000-9000-000000000002",
+      "card_id": "00000000-0000-4000-8000-000000000010",
+      "position": 1,
+      "total": 2,
+      "content": {
+       "pair": "ru-de",
+       "card": {
+        "id": "00000000-0000-4000-8000-000000000010",
+        "revision": "1",
+        "lemma": "Haus",
+        "type": "noun",
+        "cefr": "A1"
+       },
+       "translations": {
+        "common": [
+         "дом"
+        ],
+        "personal": null
+       },
+       "grammar": {
+        "gender": "neuter",
+        "gender_status": "applicable",
+        "singular": "Haus",
+        "singular_status": "applicable",
+        "plural": "Häuser",
+        "plural_status": "applicable",
+        "article_status": "applicable"
+       },
+       "reference_conjugations": [],
+       "examples": {
+        "common": [
+         {
+          "id": "00000000-0000-4000-8000-000000000030",
+          "text": "Das Haus ist alt.",
+          "role": "general",
+          "highlighted_parts": []
+         }
+        ],
+        "personal": null
+       },
+       "association": null
+      }
+     },
+     "assignment": null
+    },
+    "state_version": "4"
+   },
+   "schema": [
+    "CommandStatusResponse"
+   ]
+  },
+  {
+   "name": "read_preview",
+   "method": "GET",
+   "path": "/api/v1/sessions/00000000-0000-4000-8000-000000000004",
+   "query": {
+    "client_instance_id": "00000000-0000-4000-8000-000000000001",
+    "document_id": "00000000-0000-4000-8000-000000000002"
+   },
+   "body": null,
+   "status": 200,
+   "response": {
+    "current": {
+     "session_id": "00000000-0000-4000-8000-000000000004",
+     "status": "active",
+     "mode": "learning",
+     "pair": "ru-de",
+     "local_date": "2026-09-29",
+     "close_reason": null,
+     "group": {
+      "id": "00000000-0000-4000-9000-000000000001",
+      "status": "assembling",
+      "version": "1",
+      "preview_position": 0,
+      "total": 2
+     },
+     "preview": {
+      "id": "00000000-0000-4000-9000-000000000002",
+      "card_id": "00000000-0000-4000-8000-000000000010",
+      "position": 1,
+      "total": 2,
+      "content": {
+       "pair": "ru-de",
+       "card": {
+        "id": "00000000-0000-4000-8000-000000000010",
+        "revision": "1",
+        "lemma": "Haus",
+        "type": "noun",
+        "cefr": "A1"
+       },
+       "translations": {
+        "common": [
+         "дом"
+        ],
+        "personal": null
+       },
+       "grammar": {
+        "gender": "neuter",
+        "gender_status": "applicable",
+        "singular": "Haus",
+        "singular_status": "applicable",
+        "plural": "Häuser",
+        "plural_status": "applicable",
+        "article_status": "applicable"
+       },
+       "reference_conjugations": [],
+       "examples": {
+        "common": [
+         {
+          "id": "00000000-0000-4000-8000-000000000030",
+          "text": "Das Haus ist alt.",
+          "role": "general",
+          "highlighted_parts": []
+         }
+        ],
+        "personal": null
+       },
+       "association": null
+      }
+     },
+     "assignment": null
+    },
+    "state_version": "4"
+   },
+   "schema": [
+    "SessionResponse"
+   ]
+  },
+  {
+   "name": "preview_first",
+   "method": "POST",
+   "path": "/api/v1/commands",
+   "query": {},
+   "body": {
+    "command_id": "00000000-0000-4000-8000-000000000101",
+    "client_instance_id": "00000000-0000-4000-8000-000000000001",
+    "document_id": "00000000-0000-4000-8000-000000000002",
+    "session_id": "00000000-0000-4000-8000-000000000004",
+    "kind": "learning.preview_next",
+    "preview_id": "00000000-0000-4000-9000-000000000002",
+    "payload": {}
+   },
+   "status": 200,
+   "response": {
+    "command": {
+     "id": "00000000-0000-4000-8000-000000000101",
+     "kind": "learning.preview_next",
+     "status": "applied",
+     "applied_at": "2026-09-29T12:00:00Z",
+     "target_id": "00000000-0000-4000-9000-000000000002",
+     "action_id": null,
+     "result_id": null,
+     "context_id": null,
+     "object_version": "2"
+    },
+    "current": {
+     "session_id": "00000000-0000-4000-8000-000000000004",
+     "status": "active",
+     "mode": "learning",
+     "pair": "ru-de",
+     "local_date": "2026-09-29",
+     "close_reason": null,
+     "group": {
+      "id": "00000000-0000-4000-9000-000000000001",
+      "status": "assembling",
+      "version": "2",
+      "preview_position": 1,
+      "total": 2
+     },
+     "preview": {
+      "id": "00000000-0000-4000-9000-000000000003",
+      "card_id": "00000000-0000-4000-8000-000000000011",
+      "position": 2,
+      "total": 2,
+      "content": {
+       "pair": "ru-de",
+       "card": {
+        "id": "00000000-0000-4000-8000-000000000011",
+        "revision": "1",
+        "lemma": "Buch",
+        "type": "noun",
+        "cefr": "A1"
+       },
+       "translations": {
+        "common": [
+         "книга"
+        ],
+        "personal": null
+       },
+       "grammar": {
+        "gender": "neuter",
+        "gender_status": "applicable",
+        "singular": "Buch",
+        "singular_status": "applicable",
+        "plural": "Bücher",
+        "plural_status": "applicable",
+        "article_status": "applicable"
+       },
+       "reference_conjugations": [],
+       "examples": {
+        "common": [
+         {
+          "id": "00000000-0000-4000-8000-000000000031",
+          "text": "Das Buch liegt auf dem Tisch.",
+          "role": "general",
+          "highlighted_parts": []
+         }
+        ],
+        "personal": null
+       },
+       "association": null
+      }
+     },
+     "assignment": null
+    },
+    "state_version": "5"
+   },
+   "schema": [
+    "SessionCommandResponse"
+   ]
+  },
+  {
+   "name": "preview_second",
+   "method": "POST",
+   "path": "/api/v1/commands",
+   "query": {},
+   "body": {
+    "command_id": "00000000-0000-4000-8000-000000000102",
+    "client_instance_id": "00000000-0000-4000-8000-000000000001",
+    "document_id": "00000000-0000-4000-8000-000000000002",
+    "session_id": "00000000-0000-4000-8000-000000000004",
+    "kind": "learning.preview_next",
+    "preview_id": "00000000-0000-4000-9000-000000000003",
+    "payload": {}
+   },
+   "status": 200,
+   "response": {
+    "command": {
+     "id": "00000000-0000-4000-8000-000000000102",
+     "kind": "learning.preview_next",
+     "status": "applied",
+     "applied_at": "2026-09-29T12:00:00Z",
+     "target_id": "00000000-0000-4000-9000-000000000003",
+     "action_id": null,
+     "result_id": null,
+     "context_id": null,
+     "object_version": "3"
+    },
+    "current": {
+     "session_id": "00000000-0000-4000-8000-000000000004",
+     "status": "active",
+     "mode": "learning",
+     "pair": "ru-de",
+     "local_date": "2026-09-29",
+     "close_reason": null,
+     "group": {
+      "id": "00000000-0000-4000-9000-000000000001",
+      "status": "active",
+      "version": "3",
+      "preview_position": 2,
+      "total": 2
+     },
+     "preview": null,
+     "assignment": {
+      "id": "00000000-0000-4000-9000-000000000004",
+      "card_id": "00000000-0000-4000-8000-000000000010",
+      "status": "prefetched",
+      "kind": "learning",
+      "prompt": {
+       "text": "дом",
+       "language": "ru",
+       "translations": [
+        "дом"
+       ],
+       "personal_translation_version": null,
+       "conjunction_hint": null
+      },
+      "answer_spec": {
+       "kind": "forms",
+       "labels": [
+        "Singular",
+        "Plural"
+       ],
+       "part_count": 2,
+       "case_sensitive": true
+      }
+     }
+    },
+    "state_version": "6"
+   },
+   "schema": [
+    "SessionCommandResponse"
+   ]
+  },
+  {
+   "name": "present_first",
+   "method": "POST",
+   "path": "/api/v1/commands",
+   "query": {},
+   "body": {
+    "command_id": "00000000-0000-4000-8000-000000000103",
+    "client_instance_id": "00000000-0000-4000-8000-000000000001",
+    "document_id": "00000000-0000-4000-8000-000000000002",
+    "session_id": "00000000-0000-4000-8000-000000000004",
+    "kind": "assignment.present",
+    "assignment_id": "00000000-0000-4000-9000-000000000004",
+    "payload": {}
+   },
+   "status": 200,
+   "response": {
+    "command": {
+     "id": "00000000-0000-4000-8000-000000000103",
+     "kind": "assignment.present",
+     "status": "applied",
+     "applied_at": "2026-09-29T12:00:00Z",
+     "target_id": "00000000-0000-4000-9000-000000000004",
+     "action_id": null,
+     "result_id": null,
+     "context_id": null,
+     "object_version": null
+    },
+    "current": {
+     "session_id": "00000000-0000-4000-8000-000000000004",
+     "status": "active",
+     "mode": "learning",
+     "pair": "ru-de",
+     "local_date": "2026-09-29",
+     "close_reason": null,
+     "group": {
+      "id": "00000000-0000-4000-9000-000000000001",
+      "status": "active",
+      "version": "3",
+      "preview_position": 2,
+      "total": 2
+     },
+     "preview": null,
+     "assignment": {
+      "id": "00000000-0000-4000-9000-000000000004",
+      "card_id": "00000000-0000-4000-8000-000000000010",
+      "status": "presented",
+      "kind": "learning",
+      "prompt": {
+       "text": "дом",
+       "language": "ru",
+       "translations": [
+        "дом"
+       ],
+       "personal_translation_version": null,
+       "conjunction_hint": null
+      },
+      "answer_spec": {
+       "kind": "forms",
+       "labels": [
+        "Singular",
+        "Plural"
+       ],
+       "part_count": 2,
+       "case_sensitive": true
+      }
+     }
+    },
+    "state_version": "7"
+   },
+   "schema": [
+    "SessionCommandResponse"
+   ]
+  },
+  {
+   "name": "answer_first",
+   "method": "POST",
+   "path": "/api/v1/commands",
+   "query": {},
+   "body": {
+    "command_id": "00000000-0000-4000-8000-000000000104",
+    "client_instance_id": "00000000-0000-4000-8000-000000000001",
+    "document_id": "00000000-0000-4000-8000-000000000002",
+    "session_id": "00000000-0000-4000-8000-000000000004",
+    "kind": "answer.submit",
+    "assignment_id": "00000000-0000-4000-9000-000000000004",
+    "payload": {
+     "text": "das Haus Häuser"
+    }
+   },
+   "status": 200,
+   "response": {
+    "action": {
+     "action_id": "00000000-0000-4000-9000-000000000005",
+     "kind": "answer.submit",
+     "version": "1",
+     "status": "active"
+    },
+    "result": {
+     "result_id": "00000000-0000-4000-9000-000000000006",
+     "assignment_id": "00000000-0000-4000-9000-000000000004",
+     "version": "1",
+     "grade": 4,
+     "correct": true,
+     "status": "active",
+     "accepted_at": "2026-09-29T12:00:00Z",
+     "answer_date": "2026-09-29",
+     "detail": {
+      "input": {
+       "kind": "text",
+       "text": "das Haus Häuser"
+      },
+      "initial_check": {
+       "correct": true,
+       "variant_index": 0,
+       "correct_answer": "das Haus / Häuser",
+       "other_answers": [],
+       "matched_spans": [
+        {
+         "start": 0,
+         "end": 8
+        },
+        {
+         "start": 9,
+         "end": 15
+        }
+       ],
+       "input_errors": [],
+       "answer_errors": [],
+       "span_unit": "unicode_code_point",
+       "span_bounds": "start_inclusive_end_exclusive"
+      },
+      "variants": [
+       {
+        "parts": [
+         "das Haus",
+         "Häuser"
+        ]
+       }
+      ],
+      "conjunction_hint": null,
+      "examples": {
+       "common": [
+        {
+         "id": "00000000-0000-4000-8000-000000000030",
+         "text": "Das Haus ist alt.",
+         "role": "general",
+         "highlighted_parts": []
+        }
+       ],
+       "personal": null
+      }
+     }
+    },
+    "step": {
+     "session_id": "00000000-0000-4000-8000-000000000004",
+     "status": "active",
+     "mode": "learning",
+     "pair": "ru-de",
+     "local_date": "2026-09-29",
+     "close_reason": null,
+     "group": {
+      "id": "00000000-0000-4000-9000-000000000001",
+      "status": "active",
+      "version": "3",
+      "preview_position": 2,
+      "total": 2
+     },
+     "preview": null,
+     "assignment": {
+      "id": "00000000-0000-4000-9000-000000000007",
+      "card_id": "00000000-0000-4000-8000-000000000011",
+      "status": "prefetched",
+      "kind": "learning",
+      "prompt": {
+       "text": "книга",
+       "language": "ru",
+       "translations": [
+        "книга"
+       ],
+       "personal_translation_version": null,
+       "conjunction_hint": null
+      },
+      "answer_spec": {
+       "kind": "forms",
+       "labels": [
+        "Singular",
+        "Plural"
+       ],
+       "part_count": 2,
+       "case_sensitive": true
+      }
+     }
+    },
+    "capabilities": {
+     "answer_target": null,
+     "grades": {
+      "session_id": "00000000-0000-4000-8000-000000000004",
+      "assignment_id": "00000000-0000-4000-9000-000000000004",
+      "result_id": "00000000-0000-4000-9000-000000000006",
+      "expected_result_version": "1",
+      "values": [
+       3,
+       4,
+       5
+      ]
+     },
+     "correct_target": null,
+     "undo_target": {
+      "session_id": "00000000-0000-4000-8000-000000000004",
+      "assignment_id": "00000000-0000-4000-9000-000000000004",
+      "result_id": "00000000-0000-4000-9000-000000000006",
+      "expected_result_version": "1",
+      "action_id": "00000000-0000-4000-9000-000000000005",
+      "kind": "answer.submit"
+     },
+     "stop": true,
+     "summary_home": false
+    },
+    "command": {
+     "id": "00000000-0000-4000-8000-000000000104",
+     "kind": "answer.submit",
+     "status": "applied",
+     "applied_at": "2026-09-29T12:00:00Z",
+     "target_id": "00000000-0000-4000-9000-000000000004",
+     "action_id": "00000000-0000-4000-9000-000000000005",
+     "result_id": "00000000-0000-4000-9000-000000000006",
+     "context_id": null,
+     "object_version": "1"
+    },
+    "state_version": "8"
+   },
+   "schema": [
+    "LearningAnswerResponse"
+   ]
+  },
+  {
+   "name": "status_answer",
+   "method": "GET",
+   "path": "/api/v1/commands/00000000-0000-4000-8000-000000000104",
+   "query": {
+    "client_instance_id": "00000000-0000-4000-8000-000000000001",
+    "document_id": "00000000-0000-4000-8000-000000000002",
+    "session_id": "00000000-0000-4000-8000-000000000004"
+   },
+   "body": null,
+   "status": 200,
+   "response": {
+    "action": {
+     "action_id": "00000000-0000-4000-9000-000000000005",
+     "kind": "answer.submit",
+     "version": "1",
+     "status": "active"
+    },
+    "result": {
+     "result_id": "00000000-0000-4000-9000-000000000006",
+     "assignment_id": "00000000-0000-4000-9000-000000000004",
+     "version": "1",
+     "grade": 4,
+     "correct": true,
+     "status": "active",
+     "accepted_at": "2026-09-29T12:00:00Z",
+     "answer_date": "2026-09-29",
+     "detail": {
+      "input": {
+       "kind": "text",
+       "text": "das Haus Häuser"
+      },
+      "initial_check": {
+       "correct": true,
+       "variant_index": 0,
+       "correct_answer": "das Haus / Häuser",
+       "other_answers": [],
+       "matched_spans": [
+        {
+         "start": 0,
+         "end": 8
+        },
+        {
+         "start": 9,
+         "end": 15
+        }
+       ],
+       "input_errors": [],
+       "answer_errors": [],
+       "span_unit": "unicode_code_point",
+       "span_bounds": "start_inclusive_end_exclusive"
+      },
+      "variants": [
+       {
+        "parts": [
+         "das Haus",
+         "Häuser"
+        ]
+       }
+      ],
+      "conjunction_hint": null,
+      "examples": {
+       "common": [
+        {
+         "id": "00000000-0000-4000-8000-000000000030",
+         "text": "Das Haus ist alt.",
+         "role": "general",
+         "highlighted_parts": []
+        }
+       ],
+       "personal": null
+      }
+     }
+    },
+    "step": {
+     "session_id": "00000000-0000-4000-8000-000000000004",
+     "status": "active",
+     "mode": "learning",
+     "pair": "ru-de",
+     "local_date": "2026-09-29",
+     "close_reason": null,
+     "group": {
+      "id": "00000000-0000-4000-9000-000000000001",
+      "status": "active",
+      "version": "3",
+      "preview_position": 2,
+      "total": 2
+     },
+     "preview": null,
+     "assignment": {
+      "id": "00000000-0000-4000-9000-000000000007",
+      "card_id": "00000000-0000-4000-8000-000000000011",
+      "status": "prefetched",
+      "kind": "learning",
+      "prompt": {
+       "text": "книга",
+       "language": "ru",
+       "translations": [
+        "книга"
+       ],
+       "personal_translation_version": null,
+       "conjunction_hint": null
+      },
+      "answer_spec": {
+       "kind": "forms",
+       "labels": [
+        "Singular",
+        "Plural"
+       ],
+       "part_count": 2,
+       "case_sensitive": true
+      }
+     }
+    },
+    "capabilities": {
+     "answer_target": null,
+     "grades": {
+      "session_id": "00000000-0000-4000-8000-000000000004",
+      "assignment_id": "00000000-0000-4000-9000-000000000004",
+      "result_id": "00000000-0000-4000-9000-000000000006",
+      "expected_result_version": "1",
+      "values": [
+       3,
+       4,
+       5
+      ]
+     },
+     "correct_target": null,
+     "undo_target": {
+      "session_id": "00000000-0000-4000-8000-000000000004",
+      "assignment_id": "00000000-0000-4000-9000-000000000004",
+      "result_id": "00000000-0000-4000-9000-000000000006",
+      "expected_result_version": "1",
+      "action_id": "00000000-0000-4000-9000-000000000005",
+      "kind": "answer.submit"
+     },
+     "stop": true,
+     "summary_home": false
+    },
+    "command": {
+     "id": "00000000-0000-4000-8000-000000000104",
+     "kind": "answer.submit",
+     "status": "already_applied",
+     "applied_at": "2026-09-29T12:00:00Z",
+     "target_id": "00000000-0000-4000-9000-000000000004",
+     "action_id": "00000000-0000-4000-9000-000000000005",
+     "result_id": "00000000-0000-4000-9000-000000000006",
+     "context_id": null,
+     "object_version": "1"
+    },
+    "state_version": "8"
+   },
+   "schema": [
+    "LearningAnswerStatusResponse"
+   ]
+  },
+  {
+   "name": "grade_first",
+   "method": "POST",
+   "path": "/api/v1/commands",
+   "query": {},
+   "body": {
+    "command_id": "00000000-0000-4000-8000-000000000105",
+    "client_instance_id": "00000000-0000-4000-8000-000000000001",
+    "document_id": "00000000-0000-4000-8000-000000000002",
+    "session_id": "00000000-0000-4000-8000-000000000004",
+    "kind": "result.grade",
+    "assignment_id": "00000000-0000-4000-9000-000000000004",
+    "result_id": "00000000-0000-4000-9000-000000000006",
+    "expected_result_version": "1",
+    "payload": {
+     "grade": 5
+    }
+   },
+   "status": 200,
+   "response": {
+    "action": {
+     "action_id": "00000000-0000-4000-9000-000000000005",
+     "kind": "answer.submit",
+     "version": "2",
+     "status": "active"
+    },
+    "result": {
+     "result_id": "00000000-0000-4000-9000-000000000006",
+     "assignment_id": "00000000-0000-4000-9000-000000000004",
+     "version": "2",
+     "grade": 5,
+     "correct": true,
+     "status": "active",
+     "accepted_at": "2026-09-29T12:00:00Z",
+     "answer_date": "2026-09-29",
+     "detail": {
+      "input": {
+       "kind": "text",
+       "text": "das Haus Häuser"
+      },
+      "initial_check": {
+       "correct": true,
+       "variant_index": 0,
+       "correct_answer": "das Haus / Häuser",
+       "other_answers": [],
+       "matched_spans": [
+        {
+         "start": 0,
+         "end": 8
+        },
+        {
+         "start": 9,
+         "end": 15
+        }
+       ],
+       "input_errors": [],
+       "answer_errors": [],
+       "span_unit": "unicode_code_point",
+       "span_bounds": "start_inclusive_end_exclusive"
+      },
+      "variants": [
+       {
+        "parts": [
+         "das Haus",
+         "Häuser"
+        ]
+       }
+      ],
+      "conjunction_hint": null,
+      "examples": {
+       "common": [
+        {
+         "id": "00000000-0000-4000-8000-000000000030",
+         "text": "Das Haus ist alt.",
+         "role": "general",
+         "highlighted_parts": []
+        }
+       ],
+       "personal": null
+      }
+     }
+    },
+    "step": {
+     "session_id": "00000000-0000-4000-8000-000000000004",
+     "status": "active",
+     "mode": "learning",
+     "pair": "ru-de",
+     "local_date": "2026-09-29",
+     "close_reason": null,
+     "group": {
+      "id": "00000000-0000-4000-9000-000000000001",
+      "status": "active",
+      "version": "3",
+      "preview_position": 2,
+      "total": 2
+     },
+     "preview": null,
+     "assignment": {
+      "id": "00000000-0000-4000-9000-000000000007",
+      "card_id": "00000000-0000-4000-8000-000000000011",
+      "status": "prefetched",
+      "kind": "learning",
+      "prompt": {
+       "text": "книга",
+       "language": "ru",
+       "translations": [
+        "книга"
+       ],
+       "personal_translation_version": null,
+       "conjunction_hint": null
+      },
+      "answer_spec": {
+       "kind": "forms",
+       "labels": [
+        "Singular",
+        "Plural"
+       ],
+       "part_count": 2,
+       "case_sensitive": true
+      }
+     }
+    },
+    "capabilities": {
+     "answer_target": null,
+     "grades": {
+      "session_id": "00000000-0000-4000-8000-000000000004",
+      "assignment_id": "00000000-0000-4000-9000-000000000004",
+      "result_id": "00000000-0000-4000-9000-000000000006",
+      "expected_result_version": "2",
+      "values": [
+       3,
+       4,
+       5
+      ]
+     },
+     "correct_target": null,
+     "undo_target": {
+      "session_id": "00000000-0000-4000-8000-000000000004",
+      "assignment_id": "00000000-0000-4000-9000-000000000004",
+      "result_id": "00000000-0000-4000-9000-000000000006",
+      "expected_result_version": "2",
+      "action_id": "00000000-0000-4000-9000-000000000005",
+      "kind": "answer.submit"
+     },
+     "stop": true,
+     "summary_home": false
+    },
+    "command": {
+     "id": "00000000-0000-4000-8000-000000000105",
+     "kind": "result.grade",
+     "status": "applied",
+     "applied_at": "2026-09-29T12:00:00Z",
+     "target_id": "00000000-0000-4000-9000-000000000004",
+     "action_id": "00000000-0000-4000-9000-000000000005",
+     "result_id": "00000000-0000-4000-9000-000000000006",
+     "context_id": null,
+     "object_version": "2"
+    },
+    "state_version": "9"
+   },
+   "schema": [
+    "LearningAnswerResponse"
+   ]
+  },
+  {
+   "name": "present_second",
+   "method": "POST",
+   "path": "/api/v1/commands",
+   "query": {},
+   "body": {
+    "command_id": "00000000-0000-4000-8000-000000000106",
+    "client_instance_id": "00000000-0000-4000-8000-000000000001",
+    "document_id": "00000000-0000-4000-8000-000000000002",
+    "session_id": "00000000-0000-4000-8000-000000000004",
+    "kind": "assignment.present",
+    "assignment_id": "00000000-0000-4000-9000-000000000007",
+    "payload": {}
+   },
+   "status": 200,
+   "response": {
+    "command": {
+     "id": "00000000-0000-4000-8000-000000000106",
+     "kind": "assignment.present",
+     "status": "applied",
+     "applied_at": "2026-09-29T12:00:00Z",
+     "target_id": "00000000-0000-4000-9000-000000000007",
+     "action_id": null,
+     "result_id": null,
+     "context_id": null,
+     "object_version": null
+    },
+    "current": {
+     "session_id": "00000000-0000-4000-8000-000000000004",
+     "status": "active",
+     "mode": "learning",
+     "pair": "ru-de",
+     "local_date": "2026-09-29",
+     "close_reason": null,
+     "group": {
+      "id": "00000000-0000-4000-9000-000000000001",
+      "status": "active",
+      "version": "3",
+      "preview_position": 2,
+      "total": 2
+     },
+     "preview": null,
+     "assignment": {
+      "id": "00000000-0000-4000-9000-000000000007",
+      "card_id": "00000000-0000-4000-8000-000000000011",
+      "status": "presented",
+      "kind": "learning",
+      "prompt": {
+       "text": "книга",
+       "language": "ru",
+       "translations": [
+        "книга"
+       ],
+       "personal_translation_version": null,
+       "conjunction_hint": null
+      },
+      "answer_spec": {
+       "kind": "forms",
+       "labels": [
+        "Singular",
+        "Plural"
+       ],
+       "part_count": 2,
+       "case_sensitive": true
+      }
+     }
+    },
+    "state_version": "10"
+   },
+   "schema": [
+    "SessionCommandResponse"
+   ]
+  },
+  {
+   "name": "read_first",
+   "method": "GET",
+   "path": "/api/v1/sessions/00000000-0000-4000-8000-000000000004",
+   "query": {
+    "assignment_id": "00000000-0000-4000-9000-000000000004",
+    "result_id": "00000000-0000-4000-9000-000000000006",
+    "client_instance_id": "00000000-0000-4000-8000-000000000001",
+    "document_id": "00000000-0000-4000-8000-000000000002"
+   },
+   "body": null,
+   "status": 200,
+   "response": {
+    "action": {
+     "action_id": "00000000-0000-4000-9000-000000000005",
+     "kind": "answer.submit",
+     "version": "2",
+     "status": "active"
+    },
+    "result": {
+     "result_id": "00000000-0000-4000-9000-000000000006",
+     "assignment_id": "00000000-0000-4000-9000-000000000004",
+     "version": "2",
+     "grade": 5,
+     "correct": true,
+     "status": "active",
+     "accepted_at": "2026-09-29T12:00:00Z",
+     "answer_date": "2026-09-29",
+     "detail": {
+      "input": {
+       "kind": "text",
+       "text": "das Haus Häuser"
+      },
+      "initial_check": {
+       "correct": true,
+       "variant_index": 0,
+       "correct_answer": "das Haus / Häuser",
+       "other_answers": [],
+       "matched_spans": [
+        {
+         "start": 0,
+         "end": 8
+        },
+        {
+         "start": 9,
+         "end": 15
+        }
+       ],
+       "input_errors": [],
+       "answer_errors": [],
+       "span_unit": "unicode_code_point",
+       "span_bounds": "start_inclusive_end_exclusive"
+      },
+      "variants": [
+       {
+        "parts": [
+         "das Haus",
+         "Häuser"
+        ]
+       }
+      ],
+      "conjunction_hint": null,
+      "examples": {
+       "common": [
+        {
+         "id": "00000000-0000-4000-8000-000000000030",
+         "text": "Das Haus ist alt.",
+         "role": "general",
+         "highlighted_parts": []
+        }
+       ],
+       "personal": null
+      }
+     }
+    },
+    "step": {
+     "session_id": "00000000-0000-4000-8000-000000000004",
+     "status": "active",
+     "mode": "learning",
+     "pair": "ru-de",
+     "local_date": "2026-09-29",
+     "close_reason": null,
+     "group": {
+      "id": "00000000-0000-4000-9000-000000000001",
+      "status": "active",
+      "version": "3",
+      "preview_position": 2,
+      "total": 2
+     },
+     "preview": null,
+     "assignment": {
+      "id": "00000000-0000-4000-9000-000000000007",
+      "card_id": "00000000-0000-4000-8000-000000000011",
+      "status": "presented",
+      "kind": "learning",
+      "prompt": {
+       "text": "книга",
+       "language": "ru",
+       "translations": [
+        "книга"
+       ],
+       "personal_translation_version": null,
+       "conjunction_hint": null
+      },
+      "answer_spec": {
+       "kind": "forms",
+       "labels": [
+        "Singular",
+        "Plural"
+       ],
+       "part_count": 2,
+       "case_sensitive": true
+      }
+     }
+    },
+    "capabilities": {
+     "answer_target": "00000000-0000-4000-9000-000000000007",
+     "grades": {
+      "session_id": "00000000-0000-4000-8000-000000000004",
+      "assignment_id": "00000000-0000-4000-9000-000000000004",
+      "result_id": "00000000-0000-4000-9000-000000000006",
+      "expected_result_version": "2",
+      "values": [
+       3,
+       4,
+       5
+      ]
+     },
+     "correct_target": null,
+     "undo_target": {
+      "session_id": "00000000-0000-4000-8000-000000000004",
+      "assignment_id": "00000000-0000-4000-9000-000000000004",
+      "result_id": "00000000-0000-4000-9000-000000000006",
+      "expected_result_version": "2",
+      "action_id": "00000000-0000-4000-9000-000000000005",
+      "kind": "answer.submit"
+     },
+     "stop": true,
+     "summary_home": false
+    },
+    "state_version": "10"
+   },
+   "schema": [
+    "LearningResultReadResponse"
+   ]
+  },
+  {
+   "name": "answer_second",
+   "method": "POST",
+   "path": "/api/v1/commands",
+   "query": {},
+   "body": {
+    "command_id": "00000000-0000-4000-8000-000000000107",
+    "client_instance_id": "00000000-0000-4000-8000-000000000001",
+    "document_id": "00000000-0000-4000-8000-000000000002",
+    "session_id": "00000000-0000-4000-8000-000000000004",
+    "kind": "answer.submit",
+    "assignment_id": "00000000-0000-4000-9000-000000000007",
+    "payload": {
+     "text": "falsch"
+    }
+   },
+   "status": 200,
+   "response": {
+    "action": {
+     "action_id": "00000000-0000-4000-9000-000000000008",
+     "kind": "answer.submit",
+     "version": "1",
+     "status": "active"
+    },
+    "result": {
+     "result_id": "00000000-0000-4000-9000-000000000009",
+     "assignment_id": "00000000-0000-4000-9000-000000000007",
+     "version": "1",
+     "grade": 2,
+     "correct": false,
+     "status": "active",
+     "accepted_at": "2026-09-29T12:00:00Z",
+     "answer_date": "2026-09-29",
+     "detail": {
+      "input": {
+       "kind": "text",
+       "text": "falsch"
+      },
+      "initial_check": {
+       "correct": false,
+       "variant_index": null,
+       "correct_answer": "das Buch / Bücher",
+       "other_answers": [],
+       "matched_spans": [],
+       "input_errors": [
+        {
+         "start": 0,
+         "end": 1
+        },
+        {
+         "start": 2,
+         "end": 3
+        }
+       ],
+       "answer_errors": [
+        {
+         "start": 0,
+         "end": 1
+        },
+        {
+         "start": 3,
+         "end": 6
+        },
+        {
+         "start": 8,
+         "end": 17
+        }
+       ],
+       "span_unit": "unicode_code_point",
+       "span_bounds": "start_inclusive_end_exclusive"
+      },
+      "variants": [
+       {
+        "parts": [
+         "das Buch",
+         "Bücher"
+        ]
+       }
+      ],
+      "conjunction_hint": null,
+      "examples": {
+       "common": [
+        {
+         "id": "00000000-0000-4000-8000-000000000031",
+         "text": "Das Buch liegt auf dem Tisch.",
+         "role": "general",
+         "highlighted_parts": []
+        }
+       ],
+       "personal": null
+      }
+     }
+    },
+    "step": {
+     "session_id": "00000000-0000-4000-8000-000000000004",
+     "status": "active",
+     "mode": "learning",
+     "pair": "ru-de",
+     "local_date": "2026-09-29",
+     "close_reason": null,
+     "group": {
+      "id": "00000000-0000-4000-9000-000000000001",
+      "status": "active",
+      "version": "3",
+      "preview_position": 2,
+      "total": 2
+     },
+     "preview": null,
+     "assignment": {
+      "id": "00000000-0000-4000-9000-00000000000a",
+      "card_id": "00000000-0000-4000-8000-000000000010",
+      "status": "prefetched",
+      "kind": "learning",
+      "prompt": {
+       "text": "дом",
+       "language": "ru",
+       "translations": [
+        "дом"
+       ],
+       "personal_translation_version": null,
+       "conjunction_hint": null
+      },
+      "answer_spec": {
+       "kind": "forms",
+       "labels": [
+        "Singular",
+        "Plural"
+       ],
+       "part_count": 2,
+       "case_sensitive": true
+      }
+     }
+    },
+    "capabilities": {
+     "answer_target": null,
+     "grades": null,
+     "correct_target": {
+      "session_id": "00000000-0000-4000-8000-000000000004",
+      "assignment_id": "00000000-0000-4000-9000-000000000007",
+      "result_id": "00000000-0000-4000-9000-000000000009",
+      "expected_result_version": "1"
+     },
+     "undo_target": {
+      "session_id": "00000000-0000-4000-8000-000000000004",
+      "assignment_id": "00000000-0000-4000-9000-000000000007",
+      "result_id": "00000000-0000-4000-9000-000000000009",
+      "expected_result_version": "1",
+      "action_id": "00000000-0000-4000-9000-000000000008",
+      "kind": "answer.submit"
+     },
+     "stop": true,
+     "summary_home": false
+    },
+    "command": {
+     "id": "00000000-0000-4000-8000-000000000107",
+     "kind": "answer.submit",
+     "status": "applied",
+     "applied_at": "2026-09-29T12:00:00Z",
+     "target_id": "00000000-0000-4000-9000-000000000007",
+     "action_id": "00000000-0000-4000-9000-000000000008",
+     "result_id": "00000000-0000-4000-9000-000000000009",
+     "context_id": null,
+     "object_version": "1"
+    },
+    "state_version": "11"
+   },
+   "schema": [
+    "LearningAnswerResponse"
+   ]
+  },
+  {
+   "name": "correct_second",
+   "method": "POST",
+   "path": "/api/v1/commands",
+   "query": {},
+   "body": {
+    "command_id": "00000000-0000-4000-8000-000000000108",
+    "client_instance_id": "00000000-0000-4000-8000-000000000001",
+    "document_id": "00000000-0000-4000-8000-000000000002",
+    "session_id": "00000000-0000-4000-8000-000000000004",
+    "kind": "result.correct",
+    "assignment_id": "00000000-0000-4000-9000-000000000007",
+    "result_id": "00000000-0000-4000-9000-000000000009",
+    "expected_result_version": "1",
+    "payload": {}
+   },
+   "status": 200,
+   "response": {
+    "action": {
+     "action_id": "00000000-0000-4000-9000-000000000008",
+     "kind": "answer.submit",
+     "version": "2",
+     "status": "active"
+    },
+    "result": {
+     "result_id": "00000000-0000-4000-9000-000000000009",
+     "assignment_id": "00000000-0000-4000-9000-000000000007",
+     "version": "2",
+     "grade": 4,
+     "correct": true,
+     "status": "active",
+     "accepted_at": "2026-09-29T12:00:00Z",
+     "answer_date": "2026-09-29",
+     "detail": {
+      "input": {
+       "kind": "text",
+       "text": "falsch"
+      },
+      "initial_check": {
+       "correct": false,
+       "variant_index": null,
+       "correct_answer": "das Buch / Bücher",
+       "other_answers": [],
+       "matched_spans": [],
+       "input_errors": [
+        {
+         "start": 0,
+         "end": 1
+        },
+        {
+         "start": 2,
+         "end": 3
+        }
+       ],
+       "answer_errors": [
+        {
+         "start": 0,
+         "end": 1
+        },
+        {
+         "start": 3,
+         "end": 6
+        },
+        {
+         "start": 8,
+         "end": 17
+        }
+       ],
+       "span_unit": "unicode_code_point",
+       "span_bounds": "start_inclusive_end_exclusive"
+      },
+      "variants": [
+       {
+        "parts": [
+         "das Buch",
+         "Bücher"
+        ]
+       }
+      ],
+      "conjunction_hint": null,
+      "examples": {
+       "common": [
+        {
+         "id": "00000000-0000-4000-8000-000000000031",
+         "text": "Das Buch liegt auf dem Tisch.",
+         "role": "general",
+         "highlighted_parts": []
+        }
+       ],
+       "personal": null
+      }
+     }
+    },
+    "step": {
+     "session_id": "00000000-0000-4000-8000-000000000004",
+     "status": "active",
+     "mode": "learning",
+     "pair": "ru-de",
+     "local_date": "2026-09-29",
+     "close_reason": null,
+     "group": {
+      "id": "00000000-0000-4000-9000-000000000001",
+      "status": "active",
+      "version": "3",
+      "preview_position": 2,
+      "total": 2
+     },
+     "preview": null,
+     "assignment": {
+      "id": "00000000-0000-4000-9000-00000000000a",
+      "card_id": "00000000-0000-4000-8000-000000000010",
+      "status": "prefetched",
+      "kind": "learning",
+      "prompt": {
+       "text": "дом",
+       "language": "ru",
+       "translations": [
+        "дом"
+       ],
+       "personal_translation_version": null,
+       "conjunction_hint": null
+      },
+      "answer_spec": {
+       "kind": "forms",
+       "labels": [
+        "Singular",
+        "Plural"
+       ],
+       "part_count": 2,
+       "case_sensitive": true
+      }
+     }
+    },
+    "capabilities": {
+     "answer_target": null,
+     "grades": {
+      "session_id": "00000000-0000-4000-8000-000000000004",
+      "assignment_id": "00000000-0000-4000-9000-000000000007",
+      "result_id": "00000000-0000-4000-9000-000000000009",
+      "expected_result_version": "2",
+      "values": [
+       3,
+       4,
+       5
+      ]
+     },
+     "correct_target": null,
+     "undo_target": {
+      "session_id": "00000000-0000-4000-8000-000000000004",
+      "assignment_id": "00000000-0000-4000-9000-000000000007",
+      "result_id": "00000000-0000-4000-9000-000000000009",
+      "expected_result_version": "2",
+      "action_id": "00000000-0000-4000-9000-000000000008",
+      "kind": "answer.submit"
+     },
+     "stop": true,
+     "summary_home": false
+    },
+    "command": {
+     "id": "00000000-0000-4000-8000-000000000108",
+     "kind": "result.correct",
+     "status": "applied",
+     "applied_at": "2026-09-29T12:00:00Z",
+     "target_id": "00000000-0000-4000-9000-000000000007",
+     "action_id": "00000000-0000-4000-9000-000000000008",
+     "result_id": "00000000-0000-4000-9000-000000000009",
+     "context_id": null,
+     "object_version": "2"
+    },
+    "state_version": "12"
+   },
+   "schema": [
+    "LearningAnswerResponse"
+   ]
+  },
+  {
+   "name": "present_third",
+   "method": "POST",
+   "path": "/api/v1/commands",
+   "query": {},
+   "body": {
+    "command_id": "00000000-0000-4000-8000-000000000109",
+    "client_instance_id": "00000000-0000-4000-8000-000000000001",
+    "document_id": "00000000-0000-4000-8000-000000000002",
+    "session_id": "00000000-0000-4000-8000-000000000004",
+    "kind": "assignment.present",
+    "assignment_id": "00000000-0000-4000-9000-00000000000a",
+    "payload": {}
+   },
+   "status": 200,
+   "response": {
+    "command": {
+     "id": "00000000-0000-4000-8000-000000000109",
+     "kind": "assignment.present",
+     "status": "applied",
+     "applied_at": "2026-09-29T12:00:00Z",
+     "target_id": "00000000-0000-4000-9000-00000000000a",
+     "action_id": null,
+     "result_id": null,
+     "context_id": null,
+     "object_version": null
+    },
+    "current": {
+     "session_id": "00000000-0000-4000-8000-000000000004",
+     "status": "active",
+     "mode": "learning",
+     "pair": "ru-de",
+     "local_date": "2026-09-29",
+     "close_reason": null,
+     "group": {
+      "id": "00000000-0000-4000-9000-000000000001",
+      "status": "active",
+      "version": "3",
+      "preview_position": 2,
+      "total": 2
+     },
+     "preview": null,
+     "assignment": {
+      "id": "00000000-0000-4000-9000-00000000000a",
+      "card_id": "00000000-0000-4000-8000-000000000010",
+      "status": "presented",
+      "kind": "learning",
+      "prompt": {
+       "text": "дом",
+       "language": "ru",
+       "translations": [
+        "дом"
+       ],
+       "personal_translation_version": null,
+       "conjunction_hint": null
+      },
+      "answer_spec": {
+       "kind": "forms",
+       "labels": [
+        "Singular",
+        "Plural"
+       ],
+       "part_count": 2,
+       "case_sensitive": true
+      }
+     }
+    },
+    "state_version": "13"
+   },
+   "schema": [
+    "SessionCommandResponse"
+   ]
+  },
+  {
+   "name": "read_second",
+   "method": "GET",
+   "path": "/api/v1/sessions/00000000-0000-4000-8000-000000000004",
+   "query": {
+    "assignment_id": "00000000-0000-4000-9000-000000000007",
+    "result_id": "00000000-0000-4000-9000-000000000009",
+    "client_instance_id": "00000000-0000-4000-8000-000000000001",
+    "document_id": "00000000-0000-4000-8000-000000000002"
+   },
+   "body": null,
+   "status": 200,
+   "response": {
+    "action": {
+     "action_id": "00000000-0000-4000-9000-000000000008",
+     "kind": "answer.submit",
+     "version": "2",
+     "status": "active"
+    },
+    "result": {
+     "result_id": "00000000-0000-4000-9000-000000000009",
+     "assignment_id": "00000000-0000-4000-9000-000000000007",
+     "version": "2",
+     "grade": 4,
+     "correct": true,
+     "status": "active",
+     "accepted_at": "2026-09-29T12:00:00Z",
+     "answer_date": "2026-09-29",
+     "detail": {
+      "input": {
+       "kind": "text",
+       "text": "falsch"
+      },
+      "initial_check": {
+       "correct": false,
+       "variant_index": null,
+       "correct_answer": "das Buch / Bücher",
+       "other_answers": [],
+       "matched_spans": [],
+       "input_errors": [
+        {
+         "start": 0,
+         "end": 1
+        },
+        {
+         "start": 2,
+         "end": 3
+        }
+       ],
+       "answer_errors": [
+        {
+         "start": 0,
+         "end": 1
+        },
+        {
+         "start": 3,
+         "end": 6
+        },
+        {
+         "start": 8,
+         "end": 17
+        }
+       ],
+       "span_unit": "unicode_code_point",
+       "span_bounds": "start_inclusive_end_exclusive"
+      },
+      "variants": [
+       {
+        "parts": [
+         "das Buch",
+         "Bücher"
+        ]
+       }
+      ],
+      "conjunction_hint": null,
+      "examples": {
+       "common": [
+        {
+         "id": "00000000-0000-4000-8000-000000000031",
+         "text": "Das Buch liegt auf dem Tisch.",
+         "role": "general",
+         "highlighted_parts": []
+        }
+       ],
+       "personal": null
+      }
+     }
+    },
+    "step": {
+     "session_id": "00000000-0000-4000-8000-000000000004",
+     "status": "active",
+     "mode": "learning",
+     "pair": "ru-de",
+     "local_date": "2026-09-29",
+     "close_reason": null,
+     "group": {
+      "id": "00000000-0000-4000-9000-000000000001",
+      "status": "active",
+      "version": "3",
+      "preview_position": 2,
+      "total": 2
+     },
+     "preview": null,
+     "assignment": {
+      "id": "00000000-0000-4000-9000-00000000000a",
+      "card_id": "00000000-0000-4000-8000-000000000010",
+      "status": "presented",
+      "kind": "learning",
+      "prompt": {
+       "text": "дом",
+       "language": "ru",
+       "translations": [
+        "дом"
+       ],
+       "personal_translation_version": null,
+       "conjunction_hint": null
+      },
+      "answer_spec": {
+       "kind": "forms",
+       "labels": [
+        "Singular",
+        "Plural"
+       ],
+       "part_count": 2,
+       "case_sensitive": true
+      }
+     }
+    },
+    "capabilities": {
+     "answer_target": "00000000-0000-4000-9000-00000000000a",
+     "grades": {
+      "session_id": "00000000-0000-4000-8000-000000000004",
+      "assignment_id": "00000000-0000-4000-9000-000000000007",
+      "result_id": "00000000-0000-4000-9000-000000000009",
+      "expected_result_version": "2",
+      "values": [
+       3,
+       4,
+       5
+      ]
+     },
+     "correct_target": null,
+     "undo_target": {
+      "session_id": "00000000-0000-4000-8000-000000000004",
+      "assignment_id": "00000000-0000-4000-9000-000000000007",
+      "result_id": "00000000-0000-4000-9000-000000000009",
+      "expected_result_version": "2",
+      "action_id": "00000000-0000-4000-9000-000000000008",
+      "kind": "answer.submit"
+     },
+     "stop": true,
+     "summary_home": false
+    },
+    "state_version": "13"
+   },
+   "schema": [
+    "LearningResultReadResponse"
+   ]
+  },
+  {
+   "name": "answer_third",
+   "method": "POST",
+   "path": "/api/v1/commands",
+   "query": {},
+   "body": {
+    "command_id": "00000000-0000-4000-8000-000000000110",
+    "client_instance_id": "00000000-0000-4000-8000-000000000001",
+    "document_id": "00000000-0000-4000-8000-000000000002",
+    "session_id": "00000000-0000-4000-8000-000000000004",
+    "kind": "answer.submit",
+    "assignment_id": "00000000-0000-4000-9000-00000000000a",
+    "payload": {
+     "forgot": true
+    }
+   },
+   "status": 200,
+   "response": {
+    "action": {
+     "action_id": "00000000-0000-4000-9000-00000000000b",
+     "kind": "answer.submit",
+     "version": "1",
+     "status": "active"
+    },
+    "result": {
+     "result_id": "00000000-0000-4000-9000-00000000000c",
+     "assignment_id": "00000000-0000-4000-9000-00000000000a",
+     "version": "1",
+     "grade": 2,
+     "correct": false,
+     "status": "active",
+     "accepted_at": "2026-09-29T12:00:00Z",
+     "answer_date": "2026-09-29",
+     "detail": {
+      "input": {
+       "kind": "forgot"
+      },
+      "initial_check": {
+       "correct": false,
+       "variant_index": null,
+       "correct_answer": "das Haus / Häuser",
+       "other_answers": [],
+       "matched_spans": [],
+       "input_errors": [],
+       "answer_errors": [],
+       "span_unit": "unicode_code_point",
+       "span_bounds": "start_inclusive_end_exclusive"
+      },
+      "variants": [
+       {
+        "parts": [
+         "das Haus",
+         "Häuser"
+        ]
+       }
+      ],
+      "conjunction_hint": null,
+      "examples": {
+       "common": [
+        {
+         "id": "00000000-0000-4000-8000-000000000030",
+         "text": "Das Haus ist alt.",
+         "role": "general",
+         "highlighted_parts": []
+        }
+       ],
+       "personal": null
+      }
+     }
+    },
+    "step": {
+     "session_id": "00000000-0000-4000-8000-000000000004",
+     "status": "active",
+     "mode": "learning",
+     "pair": "ru-de",
+     "local_date": "2026-09-29",
+     "close_reason": null,
+     "group": {
+      "id": "00000000-0000-4000-9000-000000000001",
+      "status": "active",
+      "version": "3",
+      "preview_position": 2,
+      "total": 2
+     },
+     "preview": null,
+     "assignment": {
+      "id": "00000000-0000-4000-9000-00000000000d",
+      "card_id": "00000000-0000-4000-8000-000000000011",
+      "status": "prefetched",
+      "kind": "learning",
+      "prompt": {
+       "text": "книга",
+       "language": "ru",
+       "translations": [
+        "книга"
+       ],
+       "personal_translation_version": null,
+       "conjunction_hint": null
+      },
+      "answer_spec": {
+       "kind": "forms",
+       "labels": [
+        "Singular",
+        "Plural"
+       ],
+       "part_count": 2,
+       "case_sensitive": true
+      }
+     }
+    },
+    "capabilities": {
+     "answer_target": null,
+     "grades": null,
+     "correct_target": {
+      "session_id": "00000000-0000-4000-8000-000000000004",
+      "assignment_id": "00000000-0000-4000-9000-00000000000a",
+      "result_id": "00000000-0000-4000-9000-00000000000c",
+      "expected_result_version": "1"
+     },
+     "undo_target": {
+      "session_id": "00000000-0000-4000-8000-000000000004",
+      "assignment_id": "00000000-0000-4000-9000-00000000000a",
+      "result_id": "00000000-0000-4000-9000-00000000000c",
+      "expected_result_version": "1",
+      "action_id": "00000000-0000-4000-9000-00000000000b",
+      "kind": "answer.submit"
+     },
+     "stop": true,
+     "summary_home": false
+    },
+    "command": {
+     "id": "00000000-0000-4000-8000-000000000110",
+     "kind": "answer.submit",
+     "status": "applied",
+     "applied_at": "2026-09-29T12:00:00Z",
+     "target_id": "00000000-0000-4000-9000-00000000000a",
+     "action_id": "00000000-0000-4000-9000-00000000000b",
+     "result_id": "00000000-0000-4000-9000-00000000000c",
+     "context_id": null,
+     "object_version": "1"
+    },
+    "state_version": "14"
+   },
+   "schema": [
+    "LearningAnswerResponse"
+   ]
+  },
+  {
+   "name": "undo",
+   "method": "POST",
+   "path": "/api/v1/commands",
+   "query": {},
+   "body": {
+    "command_id": "00000000-0000-4000-8000-000000000111",
+    "client_instance_id": "00000000-0000-4000-8000-000000000001",
+    "document_id": "00000000-0000-4000-8000-000000000002",
+    "session_id": "00000000-0000-4000-8000-000000000004",
+    "kind": "result.undo",
+    "assignment_id": "00000000-0000-4000-9000-00000000000a",
+    "result_id": "00000000-0000-4000-9000-00000000000c",
+    "expected_result_version": "1",
+    "payload": {}
+   },
+   "status": 200,
+   "response": {
+    "action": {
+     "action_id": "00000000-0000-4000-9000-00000000000b",
+     "kind": "answer.submit",
+     "version": "2",
+     "status": "undone"
+    },
+    "result": {
+     "result_id": "00000000-0000-4000-9000-00000000000c",
+     "assignment_id": "00000000-0000-4000-9000-00000000000a",
+     "version": "2",
+     "grade": 2,
+     "correct": false,
+     "status": "undone",
+     "accepted_at": "2026-09-29T12:00:00Z",
+     "answer_date": "2026-09-29",
+     "detail": null
+    },
+    "step": {
+     "session_id": "00000000-0000-4000-8000-000000000004",
+     "status": "active",
+     "mode": "learning",
+     "pair": "ru-de",
+     "local_date": "2026-09-29",
+     "close_reason": null,
+     "group": {
+      "id": "00000000-0000-4000-9000-000000000001",
+      "status": "active",
+      "version": "3",
+      "preview_position": 2,
+      "total": 2
+     },
+     "preview": null,
+     "assignment": {
+      "id": "00000000-0000-4000-9000-00000000000e",
+      "card_id": "00000000-0000-4000-8000-000000000010",
+      "status": "prefetched",
+      "kind": "learning",
+      "prompt": {
+       "text": "дом",
+       "language": "ru",
+       "translations": [
+        "дом"
+       ],
+       "personal_translation_version": null,
+       "conjunction_hint": null
+      },
+      "answer_spec": {
+       "kind": "forms",
+       "labels": [
+        "Singular",
+        "Plural"
+       ],
+       "part_count": 2,
+       "case_sensitive": true
+      }
+     }
+    },
+    "capabilities": {
+     "answer_target": null,
+     "grades": null,
+     "correct_target": null,
+     "undo_target": null,
+     "stop": true,
+     "summary_home": false
+    },
+    "command": {
+     "id": "00000000-0000-4000-8000-000000000111",
+     "kind": "result.undo",
+     "status": "applied",
+     "applied_at": "2026-09-29T12:00:00Z",
+     "target_id": "00000000-0000-4000-9000-00000000000a",
+     "action_id": "00000000-0000-4000-9000-00000000000b",
+     "result_id": "00000000-0000-4000-9000-00000000000c",
+     "context_id": null,
+     "object_version": "2"
+    },
+    "state_version": "15"
+   },
+   "schema": [
+    "LearningAnswerResponse"
+   ]
+  },
+  {
+   "name": "status_undo",
+   "method": "GET",
+   "path": "/api/v1/commands/00000000-0000-4000-8000-000000000111",
+   "query": {
+    "client_instance_id": "00000000-0000-4000-8000-000000000001",
+    "document_id": "00000000-0000-4000-8000-000000000002",
+    "session_id": "00000000-0000-4000-8000-000000000004"
+   },
+   "body": null,
+   "status": 200,
+   "response": {
+    "action": {
+     "action_id": "00000000-0000-4000-9000-00000000000b",
+     "kind": "answer.submit",
+     "version": "2",
+     "status": "undone"
+    },
+    "result": {
+     "result_id": "00000000-0000-4000-9000-00000000000c",
+     "assignment_id": "00000000-0000-4000-9000-00000000000a",
+     "version": "2",
+     "grade": 2,
+     "correct": false,
+     "status": "undone",
+     "accepted_at": "2026-09-29T12:00:00Z",
+     "answer_date": "2026-09-29",
+     "detail": null
+    },
+    "step": {
+     "session_id": "00000000-0000-4000-8000-000000000004",
+     "status": "active",
+     "mode": "learning",
+     "pair": "ru-de",
+     "local_date": "2026-09-29",
+     "close_reason": null,
+     "group": {
+      "id": "00000000-0000-4000-9000-000000000001",
+      "status": "active",
+      "version": "3",
+      "preview_position": 2,
+      "total": 2
+     },
+     "preview": null,
+     "assignment": {
+      "id": "00000000-0000-4000-9000-00000000000e",
+      "card_id": "00000000-0000-4000-8000-000000000010",
+      "status": "prefetched",
+      "kind": "learning",
+      "prompt": {
+       "text": "дом",
+       "language": "ru",
+       "translations": [
+        "дом"
+       ],
+       "personal_translation_version": null,
+       "conjunction_hint": null
+      },
+      "answer_spec": {
+       "kind": "forms",
+       "labels": [
+        "Singular",
+        "Plural"
+       ],
+       "part_count": 2,
+       "case_sensitive": true
+      }
+     }
+    },
+    "capabilities": {
+     "answer_target": null,
+     "grades": null,
+     "correct_target": null,
+     "undo_target": null,
+     "stop": true,
+     "summary_home": false
+    },
+    "command": {
+     "id": "00000000-0000-4000-8000-000000000111",
+     "kind": "result.undo",
+     "status": "already_applied",
+     "applied_at": "2026-09-29T12:00:00Z",
+     "target_id": "00000000-0000-4000-9000-00000000000a",
+     "action_id": "00000000-0000-4000-9000-00000000000b",
+     "result_id": "00000000-0000-4000-9000-00000000000c",
+     "context_id": null,
+     "object_version": "2"
+    },
+    "state_version": "15"
+   },
+   "schema": [
+    "LearningAnswerStatusResponse"
+   ]
+  },
+  {
+   "name": "present_again",
+   "method": "POST",
+   "path": "/api/v1/commands",
+   "query": {},
+   "body": {
+    "command_id": "00000000-0000-4000-8000-000000000112",
+    "client_instance_id": "00000000-0000-4000-8000-000000000001",
+    "document_id": "00000000-0000-4000-8000-000000000002",
+    "session_id": "00000000-0000-4000-8000-000000000004",
+    "kind": "assignment.present",
+    "assignment_id": "00000000-0000-4000-9000-00000000000e",
+    "payload": {}
+   },
+   "status": 200,
+   "response": {
+    "command": {
+     "id": "00000000-0000-4000-8000-000000000112",
+     "kind": "assignment.present",
+     "status": "applied",
+     "applied_at": "2026-09-29T12:00:00Z",
+     "target_id": "00000000-0000-4000-9000-00000000000e",
+     "action_id": null,
+     "result_id": null,
+     "context_id": null,
+     "object_version": null
+    },
+    "current": {
+     "session_id": "00000000-0000-4000-8000-000000000004",
+     "status": "active",
+     "mode": "learning",
+     "pair": "ru-de",
+     "local_date": "2026-09-29",
+     "close_reason": null,
+     "group": {
+      "id": "00000000-0000-4000-9000-000000000001",
+      "status": "active",
+      "version": "3",
+      "preview_position": 2,
+      "total": 2
+     },
+     "preview": null,
+     "assignment": {
+      "id": "00000000-0000-4000-9000-00000000000e",
+      "card_id": "00000000-0000-4000-8000-000000000010",
+      "status": "presented",
+      "kind": "learning",
+      "prompt": {
+       "text": "дом",
+       "language": "ru",
+       "translations": [
+        "дом"
+       ],
+       "personal_translation_version": null,
+       "conjunction_hint": null
+      },
+      "answer_spec": {
+       "kind": "forms",
+       "labels": [
+        "Singular",
+        "Plural"
+       ],
+       "part_count": 2,
+       "case_sensitive": true
+      }
+     }
+    },
+    "state_version": "16"
+   },
+   "schema": [
+    "SessionCommandResponse"
+   ]
+  },
+  {
+   "name": "stop",
+   "method": "POST",
+   "path": "/api/v1/commands",
+   "query": {},
+   "body": {
+    "command_id": "00000000-0000-4000-8000-000000000113",
+    "client_instance_id": "00000000-0000-4000-8000-000000000001",
+    "document_id": "00000000-0000-4000-8000-000000000002",
+    "session_id": "00000000-0000-4000-8000-000000000004",
+    "kind": "session.stop",
+    "payload": {
+     "reason": "stop"
+    }
+   },
+   "status": 200,
+   "response": {
+    "command": {
+     "id": "00000000-0000-4000-8000-000000000113",
+     "kind": "session.stop",
+     "status": "applied",
+     "applied_at": "2026-09-29T12:00:00Z",
+     "target_id": "00000000-0000-4000-8000-000000000004",
+     "action_id": null,
+     "result_id": null,
+     "context_id": null,
+     "object_version": null
+    },
+    "current": {
+     "session_id": "00000000-0000-4000-8000-000000000004",
+     "status": "closed",
+     "mode": "learning",
+     "pair": "ru-de",
+     "local_date": "2026-09-29",
+     "close_reason": "stop",
+     "group": {
+      "id": "00000000-0000-4000-9000-000000000001",
+      "status": "active",
+      "version": "3",
+      "preview_position": 2,
+      "total": 2
+     },
+     "preview": null,
+     "assignment": null
+    },
+    "state_version": "18"
+   },
+   "schema": [
+    "SessionCommandResponse"
+   ]
+  },
+  {
+   "name": "read_closed",
+   "method": "GET",
+   "path": "/api/v1/sessions/00000000-0000-4000-8000-000000000004",
+   "query": {
+    "assignment_id": "00000000-0000-4000-9000-00000000000a",
+    "result_id": "00000000-0000-4000-9000-00000000000c",
+    "client_instance_id": "00000000-0000-4000-8000-000000000001",
+    "document_id": "00000000-0000-4000-8000-000000000002"
+   },
+   "body": null,
+   "status": 200,
+   "response": {
+    "action": {
+     "action_id": "00000000-0000-4000-9000-00000000000b",
+     "kind": "answer.submit",
+     "version": "2",
+     "status": "undone"
+    },
+    "result": {
+     "result_id": "00000000-0000-4000-9000-00000000000c",
+     "assignment_id": "00000000-0000-4000-9000-00000000000a",
+     "version": "2",
+     "grade": 2,
+     "correct": false,
+     "status": "undone",
+     "accepted_at": "2026-09-29T12:00:00Z",
+     "answer_date": "2026-09-29",
+     "detail": null
+    },
+    "step": {
+     "session_id": "00000000-0000-4000-8000-000000000004",
+     "status": "closed",
+     "mode": "learning",
+     "pair": "ru-de",
+     "local_date": "2026-09-29",
+     "close_reason": "stop",
+     "group": {
+      "id": "00000000-0000-4000-9000-000000000001",
+      "status": "active",
+      "version": "3",
+      "preview_position": 2,
+      "total": 2
+     },
+     "preview": null,
+     "assignment": null
+    },
+    "capabilities": {
+     "answer_target": null,
+     "grades": null,
+     "correct_target": null,
+     "undo_target": null,
+     "stop": false,
+     "summary_home": false
+    },
+    "state_version": "18"
+   },
+   "schema": [
+    "LearningResultReadResponse"
+   ]
+  },
+  {
+   "name": "status_missing",
+   "method": "GET",
+   "path": "/api/v1/commands/00000000-0000-4000-8000-000000000099",
+   "query": {
+    "client_instance_id": "00000000-0000-4000-8000-000000000001",
+    "document_id": "00000000-0000-4000-8000-000000000002",
+    "session_id": "00000000-0000-4000-8000-000000000004"
+   },
+   "body": null,
+   "status": 200,
+   "response": {
+    "command": {
+     "id": "00000000-0000-4000-8000-000000000099",
+     "status": "not_found"
+    },
+    "current": {
+     "profile_id": "00000000-0000-4000-9000-00000000000f",
+     "access": {
+      "status": "admitted",
+      "version": "1",
+      "reason": null
+     },
+     "reapply_closed": false,
+     "role": "user",
+     "ui_language": "ru",
+     "dictionary_language": "ru",
+     "time_zone": "UTC",
+     "state_version": "18"
+    },
+    "state_version": "18",
+    "closed_session": {
+     "session_id": "00000000-0000-4000-8000-000000000004",
+     "status": "closed",
+     "close_reason": "stop"
+    }
+   },
+   "schema": [
+    "CommandStatusResponse"
+   ]
+  },
+  {
+   "name": "start_again",
+   "method": "POST",
+   "path": "/api/v1/commands",
+   "query": {},
+   "body": {
+    "command_id": "00000000-0000-4000-8000-000000000114",
+    "client_instance_id": "00000000-0000-4000-8000-000000000001",
+    "document_id": "00000000-0000-4000-8000-000000000002",
+    "session_id": "00000000-0000-4000-8000-000000000004",
+    "kind": "session.start",
+    "payload": {
+     "mode": "learning"
+    }
+   },
+   "status": 409,
+   "response": {
+    "command": {
+     "id": "00000000-0000-4000-8000-000000000114",
+     "status": "rejected"
+    },
+    "current": {
+     "session_id": "00000000-0000-4000-8000-000000000004",
+     "status": "closed",
+     "mode": "learning",
+     "pair": "ru-de",
+     "local_date": "2026-09-29",
+     "close_reason": "stop",
+     "group": {
+      "id": "00000000-0000-4000-9000-000000000001",
+      "status": "active",
+      "version": "3",
+      "preview_position": 2,
+      "total": 2
+     },
+     "preview": null,
+     "assignment": null
+    },
+    "state_version": "18",
+    "error": {
+     "code": "SESSION_CLOSED"
+    }
+   },
+   "schema": [
+    "SessionCommandResponse"
+   ]
+  },
+  {
+   "name": "summary_start",
+   "method": "POST",
+   "path": "/api/v1/commands",
+   "query": {},
+   "body": {
+    "command_id": "00000000-0000-4000-8000-000000000115",
+    "client_instance_id": "00000000-0000-4000-8000-000000000031",
+    "document_id": "00000000-0000-4000-8000-000000000032",
+    "session_id": "00000000-0000-4000-8000-000000000034",
+    "kind": "session.start",
+    "payload": {
+     "mode": "learning"
+    }
+   },
+   "status": 200,
+   "response": {
+    "command": {
+     "id": "00000000-0000-4000-8000-000000000115",
+     "kind": "session.start",
+     "status": "applied",
+     "applied_at": "2026-09-29T12:00:00Z",
+     "target_id": "00000000-0000-4000-8000-000000000034",
+     "action_id": null,
+     "result_id": null,
+     "context_id": null,
+     "object_version": null
+    },
+    "current": {
+     "session_id": "00000000-0000-4000-8000-000000000034",
+     "status": "active",
+     "mode": "learning",
+     "pair": "ru-de",
+     "local_date": "2026-09-29",
+     "close_reason": null,
+     "group": {
+      "id": "00000000-0000-4000-9000-000000000010",
+      "status": "assembling",
+      "version": "1",
+      "preview_position": 0,
+      "total": 2
+     },
+     "preview": {
+      "id": "00000000-0000-4000-9000-000000000011",
+      "card_id": "00000000-0000-4000-8000-000000000010",
+      "position": 1,
+      "total": 2,
+      "content": {
+       "pair": "ru-de",
+       "card": {
+        "id": "00000000-0000-4000-8000-000000000010",
+        "revision": "1",
+        "lemma": "Haus",
+        "type": "noun",
+        "cefr": "A1"
+       },
+       "translations": {
+        "common": [
+         "дом"
+        ],
+        "personal": null
+       },
+       "grammar": {
+        "gender": "neuter",
+        "gender_status": "applicable",
+        "singular": "Haus",
+        "singular_status": "applicable",
+        "plural": "Häuser",
+        "plural_status": "applicable",
+        "article_status": "applicable"
+       },
+       "reference_conjugations": [],
+       "examples": {
+        "common": [
+         {
+          "id": "00000000-0000-4000-8000-000000000030",
+          "text": "Das Haus ist alt.",
+          "role": "general",
+          "highlighted_parts": []
+         }
+        ],
+        "personal": null
+       },
+       "association": null
+      }
+     },
+     "assignment": null
+    },
+    "state_version": "4"
+   },
+   "schema": [
+    "SessionCommandResponse"
+   ]
+  },
+  {
+   "name": "summary_known",
+   "method": "POST",
+   "path": "/api/v1/commands",
+   "query": {},
+   "body": {
+    "command_id": "00000000-0000-4000-8000-000000000116",
+    "client_instance_id": "00000000-0000-4000-8000-000000000031",
+    "document_id": "00000000-0000-4000-8000-000000000032",
+    "session_id": "00000000-0000-4000-8000-000000000034",
+    "kind": "learning.known",
+    "preview_id": "00000000-0000-4000-9000-000000000011",
+    "payload": {}
+   },
+   "status": 200,
+   "response": {
+    "command": {
+     "id": "00000000-0000-4000-8000-000000000116",
+     "kind": "learning.known",
+     "status": "applied",
+     "applied_at": "2026-09-29T12:00:00Z",
+     "target_id": "00000000-0000-4000-9000-000000000011",
+     "action_id": null,
+     "result_id": null,
+     "context_id": null,
+     "object_version": "2"
+    },
+    "current": {
+     "session_id": "00000000-0000-4000-8000-000000000034",
+     "status": "active",
+     "mode": "learning",
+     "pair": "ru-de",
+     "local_date": "2026-09-29",
+     "close_reason": null,
+     "group": {
+      "id": "00000000-0000-4000-9000-000000000010",
+      "status": "assembling",
+      "version": "2",
+      "preview_position": 1,
+      "total": 2
+     },
+     "preview": {
+      "id": "00000000-0000-4000-9000-000000000012",
+      "card_id": "00000000-0000-4000-8000-000000000011",
+      "position": 2,
+      "total": 2,
+      "content": {
+       "pair": "ru-de",
+       "card": {
+        "id": "00000000-0000-4000-8000-000000000011",
+        "revision": "1",
+        "lemma": "Buch",
+        "type": "noun",
+        "cefr": "A1"
+       },
+       "translations": {
+        "common": [
+         "книга"
+        ],
+        "personal": null
+       },
+       "grammar": {
+        "gender": "neuter",
+        "gender_status": "applicable",
+        "singular": "Buch",
+        "singular_status": "applicable",
+        "plural": "Bücher",
+        "plural_status": "applicable",
+        "article_status": "applicable"
+       },
+       "reference_conjugations": [],
+       "examples": {
+        "common": [
+         {
+          "id": "00000000-0000-4000-8000-000000000031",
+          "text": "Das Buch liegt auf dem Tisch.",
+          "role": "general",
+          "highlighted_parts": []
+         }
+        ],
+        "personal": null
+       },
+       "association": null
+      }
+     },
+     "assignment": null
+    },
+    "state_version": "5"
+   },
+   "schema": [
+    "SessionCommandResponse"
+   ]
+  },
+  {
+   "name": "summary_preview",
+   "method": "POST",
+   "path": "/api/v1/commands",
+   "query": {},
+   "body": {
+    "command_id": "00000000-0000-4000-8000-000000000117",
+    "client_instance_id": "00000000-0000-4000-8000-000000000031",
+    "document_id": "00000000-0000-4000-8000-000000000032",
+    "session_id": "00000000-0000-4000-8000-000000000034",
+    "kind": "learning.preview_next",
+    "preview_id": "00000000-0000-4000-9000-000000000012",
+    "payload": {}
+   },
+   "status": 200,
+   "response": {
+    "command": {
+     "id": "00000000-0000-4000-8000-000000000117",
+     "kind": "learning.preview_next",
+     "status": "applied",
+     "applied_at": "2026-09-29T12:00:00Z",
+     "target_id": "00000000-0000-4000-9000-000000000012",
+     "action_id": null,
+     "result_id": null,
+     "context_id": null,
+     "object_version": "3"
+    },
+    "current": {
+     "session_id": "00000000-0000-4000-8000-000000000034",
+     "status": "active",
+     "mode": "learning",
+     "pair": "ru-de",
+     "local_date": "2026-09-29",
+     "close_reason": null,
+     "group": {
+      "id": "00000000-0000-4000-9000-000000000010",
+      "status": "active",
+      "version": "3",
+      "preview_position": 2,
+      "total": 2
+     },
+     "preview": null,
+     "assignment": {
+      "id": "00000000-0000-4000-9000-000000000013",
+      "card_id": "00000000-0000-4000-8000-000000000011",
+      "status": "prefetched",
+      "kind": "learning",
+      "prompt": {
+       "text": "книга",
+       "language": "ru",
+       "translations": [
+        "книга"
+       ],
+       "personal_translation_version": null,
+       "conjunction_hint": null
+      },
+      "answer_spec": {
+       "kind": "forms",
+       "labels": [
+        "Singular",
+        "Plural"
+       ],
+       "part_count": 2,
+       "case_sensitive": true
+      }
+     }
+    },
+    "state_version": "6"
+   },
+   "schema": [
+    "SessionCommandResponse"
+   ]
+  },
+  {
+   "name": "summary_present",
+   "method": "POST",
+   "path": "/api/v1/commands",
+   "query": {},
+   "body": {
+    "command_id": "00000000-0000-4000-8000-000000000118",
+    "client_instance_id": "00000000-0000-4000-8000-000000000031",
+    "document_id": "00000000-0000-4000-8000-000000000032",
+    "session_id": "00000000-0000-4000-8000-000000000034",
+    "kind": "assignment.present",
+    "assignment_id": "00000000-0000-4000-9000-000000000013",
+    "payload": {}
+   },
+   "status": 200,
+   "response": {
+    "command": {
+     "id": "00000000-0000-4000-8000-000000000118",
+     "kind": "assignment.present",
+     "status": "applied",
+     "applied_at": "2026-09-29T12:00:00Z",
+     "target_id": "00000000-0000-4000-9000-000000000013",
+     "action_id": null,
+     "result_id": null,
+     "context_id": null,
+     "object_version": null
+    },
+    "current": {
+     "session_id": "00000000-0000-4000-8000-000000000034",
+     "status": "active",
+     "mode": "learning",
+     "pair": "ru-de",
+     "local_date": "2026-09-29",
+     "close_reason": null,
+     "group": {
+      "id": "00000000-0000-4000-9000-000000000010",
+      "status": "active",
+      "version": "3",
+      "preview_position": 2,
+      "total": 2
+     },
+     "preview": null,
+     "assignment": {
+      "id": "00000000-0000-4000-9000-000000000013",
+      "card_id": "00000000-0000-4000-8000-000000000011",
+      "status": "presented",
+      "kind": "learning",
+      "prompt": {
+       "text": "книга",
+       "language": "ru",
+       "translations": [
+        "книга"
+       ],
+       "personal_translation_version": null,
+       "conjunction_hint": null
+      },
+      "answer_spec": {
+       "kind": "forms",
+       "labels": [
+        "Singular",
+        "Plural"
+       ],
+       "part_count": 2,
+       "case_sensitive": true
+      }
+     }
+    },
+    "state_version": "7"
+   },
+   "schema": [
+    "SessionCommandResponse"
+   ]
+  },
+  {
+   "name": "summary_answer",
+   "method": "POST",
+   "path": "/api/v1/commands",
+   "query": {},
+   "body": {
+    "command_id": "00000000-0000-4000-8000-000000000119",
+    "client_instance_id": "00000000-0000-4000-8000-000000000031",
+    "document_id": "00000000-0000-4000-8000-000000000032",
+    "session_id": "00000000-0000-4000-8000-000000000034",
+    "kind": "answer.submit",
+    "assignment_id": "00000000-0000-4000-9000-000000000013",
+    "payload": {
+     "text": "das Buch Bücher"
+    }
+   },
+   "status": 200,
+   "response": {
+    "action": {
+     "action_id": "00000000-0000-4000-9000-000000000014",
+     "kind": "answer.submit",
+     "version": "1",
+     "status": "active"
+    },
+    "result": {
+     "result_id": "00000000-0000-4000-9000-000000000015",
+     "assignment_id": "00000000-0000-4000-9000-000000000013",
+     "version": "1",
+     "grade": 4,
+     "correct": true,
+     "status": "active",
+     "accepted_at": "2026-09-29T12:00:00Z",
+     "answer_date": "2026-09-29",
+     "detail": {
+      "input": {
+       "kind": "text",
+       "text": "das Buch Bücher"
+      },
+      "initial_check": {
+       "correct": true,
+       "variant_index": 0,
+       "correct_answer": "das Buch / Bücher",
+       "other_answers": [],
+       "matched_spans": [
+        {
+         "start": 0,
+         "end": 8
+        },
+        {
+         "start": 9,
+         "end": 15
+        }
+       ],
+       "input_errors": [],
+       "answer_errors": [],
+       "span_unit": "unicode_code_point",
+       "span_bounds": "start_inclusive_end_exclusive"
+      },
+      "variants": [
+       {
+        "parts": [
+         "das Buch",
+         "Bücher"
+        ]
+       }
+      ],
+      "conjunction_hint": null,
+      "examples": {
+       "common": [
+        {
+         "id": "00000000-0000-4000-8000-000000000031",
+         "text": "Das Buch liegt auf dem Tisch.",
+         "role": "general",
+         "highlighted_parts": []
+        }
+       ],
+       "personal": null
+      }
+     }
+    },
+    "step": {
+     "session_id": "00000000-0000-4000-8000-000000000034",
+     "status": "summary",
+     "mode": "learning",
+     "pair": "ru-de",
+     "local_date": "2026-09-29",
+     "close_reason": null,
+     "group": {
+      "id": "00000000-0000-4000-9000-000000000010",
+      "status": "completed",
+      "version": "3",
+      "preview_position": 2,
+      "total": 2
+     },
+     "preview": null,
+     "assignment": null
+    },
+    "capabilities": {
+     "answer_target": null,
+     "grades": {
+      "session_id": "00000000-0000-4000-8000-000000000034",
+      "assignment_id": "00000000-0000-4000-9000-000000000013",
+      "result_id": "00000000-0000-4000-9000-000000000015",
+      "expected_result_version": "1",
+      "values": [
+       3,
+       4,
+       5
+      ]
+     },
+     "correct_target": null,
+     "undo_target": {
+      "session_id": "00000000-0000-4000-8000-000000000034",
+      "assignment_id": "00000000-0000-4000-9000-000000000013",
+      "result_id": "00000000-0000-4000-9000-000000000015",
+      "expected_result_version": "1",
+      "action_id": "00000000-0000-4000-9000-000000000014",
+      "kind": "answer.submit"
+     },
+     "stop": true,
+     "summary_home": true
+    },
+    "command": {
+     "id": "00000000-0000-4000-8000-000000000119",
+     "kind": "answer.submit",
+     "status": "applied",
+     "applied_at": "2026-09-29T12:00:00Z",
+     "target_id": "00000000-0000-4000-9000-000000000013",
+     "action_id": "00000000-0000-4000-9000-000000000014",
+     "result_id": "00000000-0000-4000-9000-000000000015",
+     "context_id": null,
+     "object_version": "1"
+    },
+    "state_version": "8"
+   },
+   "schema": [
+    "LearningAnswerResponse"
+   ]
+  },
+  {
+   "name": "summary_undo",
+   "method": "POST",
+   "path": "/api/v1/commands",
+   "query": {},
+   "body": {
+    "command_id": "00000000-0000-4000-8000-000000000120",
+    "client_instance_id": "00000000-0000-4000-8000-000000000031",
+    "document_id": "00000000-0000-4000-8000-000000000032",
+    "session_id": "00000000-0000-4000-8000-000000000034",
+    "kind": "result.undo",
+    "assignment_id": "00000000-0000-4000-9000-000000000013",
+    "result_id": "00000000-0000-4000-9000-000000000015",
+    "expected_result_version": "1",
+    "payload": {}
+   },
+   "status": 200,
+   "response": {
+    "action": {
+     "action_id": "00000000-0000-4000-9000-000000000014",
+     "kind": "answer.submit",
+     "version": "2",
+     "status": "undone"
+    },
+    "result": {
+     "result_id": "00000000-0000-4000-9000-000000000015",
+     "assignment_id": "00000000-0000-4000-9000-000000000013",
+     "version": "2",
+     "grade": 4,
+     "correct": true,
+     "status": "undone",
+     "accepted_at": "2026-09-29T12:00:00Z",
+     "answer_date": "2026-09-29",
+     "detail": null
+    },
+    "step": {
+     "session_id": "00000000-0000-4000-8000-000000000034",
+     "status": "active",
+     "mode": "learning",
+     "pair": "ru-de",
+     "local_date": "2026-09-29",
+     "close_reason": null,
+     "group": {
+      "id": "00000000-0000-4000-9000-000000000010",
+      "status": "active",
+      "version": "3",
+      "preview_position": 2,
+      "total": 2
+     },
+     "preview": null,
+     "assignment": {
+      "id": "00000000-0000-4000-9000-000000000016",
+      "card_id": "00000000-0000-4000-8000-000000000011",
+      "status": "prefetched",
+      "kind": "learning",
+      "prompt": {
+       "text": "книга",
+       "language": "ru",
+       "translations": [
+        "книга"
+       ],
+       "personal_translation_version": null,
+       "conjunction_hint": null
+      },
+      "answer_spec": {
+       "kind": "forms",
+       "labels": [
+        "Singular",
+        "Plural"
+       ],
+       "part_count": 2,
+       "case_sensitive": true
+      }
+     }
+    },
+    "capabilities": {
+     "answer_target": null,
+     "grades": null,
+     "correct_target": null,
+     "undo_target": null,
+     "stop": true,
+     "summary_home": false
+    },
+    "command": {
+     "id": "00000000-0000-4000-8000-000000000120",
+     "kind": "result.undo",
+     "status": "applied",
+     "applied_at": "2026-09-29T12:00:00Z",
+     "target_id": "00000000-0000-4000-9000-000000000013",
+     "action_id": "00000000-0000-4000-9000-000000000014",
+     "result_id": "00000000-0000-4000-9000-000000000015",
+     "context_id": null,
+     "object_version": "2"
+    },
+    "state_version": "9"
+   },
+   "schema": [
+    "LearningAnswerResponse"
+   ]
+  },
+  {
+   "name": "summary_present_again",
+   "method": "POST",
+   "path": "/api/v1/commands",
+   "query": {},
+   "body": {
+    "command_id": "00000000-0000-4000-8000-000000000121",
+    "client_instance_id": "00000000-0000-4000-8000-000000000031",
+    "document_id": "00000000-0000-4000-8000-000000000032",
+    "session_id": "00000000-0000-4000-8000-000000000034",
+    "kind": "assignment.present",
+    "assignment_id": "00000000-0000-4000-9000-000000000016",
+    "payload": {}
+   },
+   "status": 200,
+   "response": {
+    "command": {
+     "id": "00000000-0000-4000-8000-000000000121",
+     "kind": "assignment.present",
+     "status": "applied",
+     "applied_at": "2026-09-29T12:00:00Z",
+     "target_id": "00000000-0000-4000-9000-000000000016",
+     "action_id": null,
+     "result_id": null,
+     "context_id": null,
+     "object_version": null
+    },
+    "current": {
+     "session_id": "00000000-0000-4000-8000-000000000034",
+     "status": "active",
+     "mode": "learning",
+     "pair": "ru-de",
+     "local_date": "2026-09-29",
+     "close_reason": null,
+     "group": {
+      "id": "00000000-0000-4000-9000-000000000010",
+      "status": "active",
+      "version": "3",
+      "preview_position": 2,
+      "total": 2
+     },
+     "preview": null,
+     "assignment": {
+      "id": "00000000-0000-4000-9000-000000000016",
+      "card_id": "00000000-0000-4000-8000-000000000011",
+      "status": "presented",
+      "kind": "learning",
+      "prompt": {
+       "text": "книга",
+       "language": "ru",
+       "translations": [
+        "книга"
+       ],
+       "personal_translation_version": null,
+       "conjunction_hint": null
+      },
+      "answer_spec": {
+       "kind": "forms",
+       "labels": [
+        "Singular",
+        "Plural"
+       ],
+       "part_count": 2,
+       "case_sensitive": true
+      }
+     }
+    },
+    "state_version": "10"
+   },
+   "schema": [
+    "SessionCommandResponse"
+   ]
+  },
+  {
+   "name": "summary_answer_again",
+   "method": "POST",
+   "path": "/api/v1/commands",
+   "query": {},
+   "body": {
+    "command_id": "00000000-0000-4000-8000-000000000122",
+    "client_instance_id": "00000000-0000-4000-8000-000000000031",
+    "document_id": "00000000-0000-4000-8000-000000000032",
+    "session_id": "00000000-0000-4000-8000-000000000034",
+    "kind": "answer.submit",
+    "assignment_id": "00000000-0000-4000-9000-000000000016",
+    "payload": {
+     "text": "das Buch Bücher"
+    }
+   },
+   "status": 200,
+   "response": {
+    "action": {
+     "action_id": "00000000-0000-4000-9000-000000000017",
+     "kind": "answer.submit",
+     "version": "1",
+     "status": "active"
+    },
+    "result": {
+     "result_id": "00000000-0000-4000-9000-000000000018",
+     "assignment_id": "00000000-0000-4000-9000-000000000016",
+     "version": "1",
+     "grade": 4,
+     "correct": true,
+     "status": "active",
+     "accepted_at": "2026-09-29T12:00:00Z",
+     "answer_date": "2026-09-29",
+     "detail": {
+      "input": {
+       "kind": "text",
+       "text": "das Buch Bücher"
+      },
+      "initial_check": {
+       "correct": true,
+       "variant_index": 0,
+       "correct_answer": "das Buch / Bücher",
+       "other_answers": [],
+       "matched_spans": [
+        {
+         "start": 0,
+         "end": 8
+        },
+        {
+         "start": 9,
+         "end": 15
+        }
+       ],
+       "input_errors": [],
+       "answer_errors": [],
+       "span_unit": "unicode_code_point",
+       "span_bounds": "start_inclusive_end_exclusive"
+      },
+      "variants": [
+       {
+        "parts": [
+         "das Buch",
+         "Bücher"
+        ]
+       }
+      ],
+      "conjunction_hint": null,
+      "examples": {
+       "common": [
+        {
+         "id": "00000000-0000-4000-8000-000000000031",
+         "text": "Das Buch liegt auf dem Tisch.",
+         "role": "general",
+         "highlighted_parts": []
+        }
+       ],
+       "personal": null
+      }
+     }
+    },
+    "step": {
+     "session_id": "00000000-0000-4000-8000-000000000034",
+     "status": "summary",
+     "mode": "learning",
+     "pair": "ru-de",
+     "local_date": "2026-09-29",
+     "close_reason": null,
+     "group": {
+      "id": "00000000-0000-4000-9000-000000000010",
+      "status": "completed",
+      "version": "3",
+      "preview_position": 2,
+      "total": 2
+     },
+     "preview": null,
+     "assignment": null
+    },
+    "capabilities": {
+     "answer_target": null,
+     "grades": {
+      "session_id": "00000000-0000-4000-8000-000000000034",
+      "assignment_id": "00000000-0000-4000-9000-000000000016",
+      "result_id": "00000000-0000-4000-9000-000000000018",
+      "expected_result_version": "1",
+      "values": [
+       3,
+       4,
+       5
+      ]
+     },
+     "correct_target": null,
+     "undo_target": {
+      "session_id": "00000000-0000-4000-8000-000000000034",
+      "assignment_id": "00000000-0000-4000-9000-000000000016",
+      "result_id": "00000000-0000-4000-9000-000000000018",
+      "expected_result_version": "1",
+      "action_id": "00000000-0000-4000-9000-000000000017",
+      "kind": "answer.submit"
+     },
+     "stop": true,
+     "summary_home": true
+    },
+    "command": {
+     "id": "00000000-0000-4000-8000-000000000122",
+     "kind": "answer.submit",
+     "status": "applied",
+     "applied_at": "2026-09-29T12:00:00Z",
+     "target_id": "00000000-0000-4000-9000-000000000016",
+     "action_id": "00000000-0000-4000-9000-000000000017",
+     "result_id": "00000000-0000-4000-9000-000000000018",
+     "context_id": null,
+     "object_version": "1"
+    },
+    "state_version": "11"
+   },
+   "schema": [
+    "LearningAnswerResponse"
+   ]
+  },
+  {
+   "name": "summary_read",
+   "method": "GET",
+   "path": "/api/v1/sessions/00000000-0000-4000-8000-000000000034",
+   "query": {
+    "client_instance_id": "00000000-0000-4000-8000-000000000031",
+    "document_id": "00000000-0000-4000-8000-000000000032"
+   },
+   "body": null,
+   "status": 200,
+   "response": {
+    "current": {
+     "session_id": "00000000-0000-4000-8000-000000000034",
+     "status": "summary",
+     "mode": "learning",
+     "pair": "ru-de",
+     "local_date": "2026-09-29",
+     "close_reason": null,
+     "group": {
+      "id": "00000000-0000-4000-9000-000000000010",
+      "status": "completed",
+      "version": "3",
+      "preview_position": 2,
+      "total": 2
+     },
+     "preview": null,
+     "assignment": null
+    },
+    "state_version": "11"
+   },
+   "schema": [
+    "SessionResponse"
+   ]
+  },
+  {
+   "name": "summary_home",
+   "method": "POST",
+   "path": "/api/v1/commands",
+   "query": {},
+   "body": {
+    "command_id": "00000000-0000-4000-8000-000000000123",
+    "client_instance_id": "00000000-0000-4000-8000-000000000031",
+    "document_id": "00000000-0000-4000-8000-000000000032",
+    "session_id": "00000000-0000-4000-8000-000000000034",
+    "kind": "session.stop",
+    "payload": {
+     "reason": "summary_home"
+    }
+   },
+   "status": 200,
+   "response": {
+    "command": {
+     "id": "00000000-0000-4000-8000-000000000123",
+     "kind": "session.stop",
+     "status": "applied",
+     "applied_at": "2026-09-29T12:00:00Z",
+     "target_id": "00000000-0000-4000-8000-000000000034",
+     "action_id": null,
+     "result_id": null,
+     "context_id": null,
+     "object_version": null
+    },
+    "current": {
+     "session_id": "00000000-0000-4000-8000-000000000034",
+     "status": "closed",
+     "mode": "learning",
+     "pair": "ru-de",
+     "local_date": "2026-09-29",
+     "close_reason": "summary_home",
+     "group": {
+      "id": "00000000-0000-4000-9000-000000000010",
+      "status": "completed",
+      "version": "3",
+      "preview_position": 2,
+      "total": 2
+     },
+     "preview": null,
+     "assignment": null
+    },
+    "state_version": "13"
+   },
+   "schema": [
+    "SessionCommandResponse"
+   ]
+  }
+ ]
+}
