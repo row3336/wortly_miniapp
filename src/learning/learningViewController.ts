@@ -1,5 +1,6 @@
 import type { LearningSessionProjection, PublicAssignment } from "../api/generated";
 import { sameId } from "../api/wireValidation";
+import type { ResultTimerView } from "../commands/resultTimer";
 import { StudyView, type StudyLanes, type StudyPhase } from "../commands/studyView";
 import type { LearningCommandSnapshot, LearningTransition } from "./learningCommandController";
 import { LearningDocumentCommands, type LearningDocumentSnapshot } from "./learningDocumentCommands";
@@ -25,7 +26,7 @@ export type LearningViewSnapshot = {
   submittedText: string | null;
   problem: string | null;
   commands: LearningDocumentSnapshot;
-  timer: { key: string; durationMs: number } | null;
+  timer: ResultTimerView | null;
   canSubmit: boolean;
   canEditDraft: boolean;
   canForget: boolean;

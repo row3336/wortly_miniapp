@@ -119,6 +119,8 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
   private readingSource: OpenedAccess | null = null;
   private readingMinimumVersion = "0";
   private queuedRead: Promise<void> | null = null;
+  /** Reads that paused the countdown and have not finished their tail yet; the pause outlives overlapping reads (П02). */
+  private pausingReads = 0;
   protected stopping: Promise<void> | null = null;
   private disposed = false;
   private active = true;
@@ -240,11 +242,12 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
   }
   private canNext(): boolean { return this.view().fields.canNext; }
   private armTimer(): void {
-    this.cancelTimer();
-    if (this.waitNext || !this.is("result_correct", "result_wrong") || !this.answer?.result || !this.canNext()) return;
-    const mode = this.options.transitionMode();
-    if (mode === null || mode === "normal" && this.answer.result.grade === 2) return;
-    const result = this.answer.result;
+    // A read in flight has paused the countdown and arms it again when it ends: do not wipe the pause meanwhile.
+    if (this.reading) return;
+    const result = this.answer?.result, mode = this.options.transitionMode();
+    if (this.waitNext || !this.is("result_correct", "result_wrong") || !result || !this.canNext()
+      || mode === null || mode === "normal" && result.grade === 2) { this.cancelTimer(); return; }
+    // The timer itself decides between a full duration and the paused remainder of this very result (П02).
     this.timer.start(`${this.sessionId}:${result.result_id}:${result.version}`, mode === "accelerated" ? 2000 : 3000,
       { live: () => this.live(), due: () => this.canNext() }, () => { void this.next(); });
     this.emit();
@@ -346,7 +349,8 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
     // pendingGradeAdvance is kept: an explicit grade acknowledged around the background still advances once on return (К05-047).
     // A revision with an unknown outcome keeps the old result on screen: it waits too. A lost answer.submit does not (no result seen yet).
     const kind = this.commands.snapshot().primary.pendingIntent?.kind;
-    if (this.is("result_correct", "result_wrong", "changing_result")
+    // A stale view that still holds the shown result (a failed read) keeps waiting for «Далее» after the return too.
+    if (this.is("result_correct", "result_wrong", "changing_result") || this.is("stale") && !!this.answer?.result
       || this.is("unknown") && (kind === "result.correct" || kind === "result.grade")) this.waitNext = true;
     this.active = false; this.activationGeneration++; this.cancelTimer(); this.emit();
   }
@@ -391,14 +395,15 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
             const floor = BigInt(this.commands.snapshot().stateVersion);
             if (source === this.options.access() && (BigInt(minimum) >= floor || BigInt(this.currentVersion ?? "0") >= floor)) break;
           }
-        })().finally(() => { if (this.queuedRead === queued) this.queuedRead = null; });
+        })().finally(() => { if (this.queuedRead === queued) this.queuedRead = null; this.settlePause(); });
         this.queuedRead = queued;
       }
       return this.queuedRead;
     }
     this.readingSource = this.options.access();
     this.readingMinimumVersion = this.commands.snapshot().stateVersion;
-    this.cancelTimer(); this.problem = null;
+    // A read only pauses the countdown: the same result received again continues it, any other state starts afresh (П02).
+    this.timer.pause(); this.pausingReads++; this.problem = null;
     const task = (async () => {
       await this.commands.refresh(); if (!this.live() || this.is("closed")) return;
       const state = this.commands.snapshot(), pending = state.primary.pendingIntent;
@@ -435,8 +440,14 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
     })().catch(() => { if (this.live() && !this.is("closed", "stopping")) { this.phase = "stale"; this.problem = "load"; } })
       .finally(() => { if (this.reading === task) this.reading = null; this.emit(); });
     this.reading = task; await task;
-    await this.afterRead();
-    await this.continueView();
+    try {
+      await this.afterRead();
+      await this.continueView();
+    } finally { this.pausingReads--; this.settlePause(); }
+  }
+  /** The pause is forgotten only when no read is left that could arm the same result again. */
+  private settlePause(): void {
+    if (this.pausingReads === 0 && !this.reading && !this.queuedRead) this.timer.discardPause();
   }
   protected chooseCurrent(): void {
     if (!this.current) { this.phase = "stale"; return; }

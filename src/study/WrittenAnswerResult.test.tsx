@@ -106,6 +106,14 @@ describe("server-provided answer presentation", () => {
     Object.assign(p.result.detail!.initial_check, { input_errors: [], answer_errors: [] });
     render(<WrittenAnswerResult {...p} />); expect(screen.getByText("Забыл…")).toBeTruthy(); expect(screen.getByText("😀Haus")).toBeTruthy();
   });
+  it("a timer paused by a read continues the bar from its level; a fresh timer starts full", () => {
+    const p = props(); const { container, rerender } = render(<WrittenAnswerResult {...p} timer={{ key: "k:0", durationMs: 3000 }} />);
+    const bar = () => (container.querySelector(".written-timer span") as HTMLElement).style;
+    expect(bar().animationDuration).toBe("3000ms"); expect(bar().animationDelay).toBe("");
+    rerender(<WrittenAnswerResult {...p} timer={{ key: "k:1", durationMs: 1000, elapsedMs: 2000 }} />);
+    // The whole bar lasts the original 3 s and starts 2 s in: it drains the last second from where it was.
+    expect(bar().animationDuration).toBe("3000ms"); expect(bar().animationDelay).toBe("-2000ms");
+  });
   it("only offered actions can run; a timer animation never invokes any callback", () => {
     const p = props(); const { container, rerender } = render(<WrittenAnswerResult {...p} canCorrect={false} canNext={false}
       timer={{ key: "session:result:1:1", durationMs: 2000 }} />);

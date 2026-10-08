@@ -88,8 +88,8 @@ describe("shared study view", () => {
     f.replies.set("assignment.present", () => ({ current: current(assignment(10, "presented")) }));
     await f.controller.submit();
     expect(f.commands.begin.mock.calls[0][0]).toEqual({ kind: "answer.submit", session_id: SESSION, assignment_id: id(6), payload: { text: "Haus" } });
-    expect(f.controller.snapshot()).toMatchObject({ phase: "result_correct", draft: "", // read, submit and the arm itself each cancel once: the third generation is armed.
-      timer: { key: `${SESSION}:${id(7)}:1:3`, durationMs: 3000 } });
+    expect(f.controller.snapshot()).toMatchObject({ phase: "result_correct", draft: "", // the read pauses and the submit cancels once: the second generation is armed.
+      timer: { key: `${SESSION}:${id(7)}:1:2`, durationMs: 3000 } });
     await vi.advanceTimersByTimeAsync(3000);
     expect(f.commands.begin.mock.calls.map(call => call[0].kind)).toEqual(["answer.submit", "assignment.present"]);
     expect(f.controller.snapshot()).toMatchObject({ phase: "question", question: { id: id(10), status: "presented" }, timer: null });
@@ -109,6 +109,97 @@ describe("shared study view", () => {
     f.controller.suspend();
     expect(f.controller.snapshot()).toMatchObject({ phase: "result_correct", timer: null, canNext: false });
     f.commands.readResult.mockResolvedValueOnce({ state_version: "6", step: current(assignment(10, "prefetched")), ...answer(4) });
+    await f.controller.resume();
+    expect(f.controller.snapshot()).toMatchObject({ phase: "result_correct", timer: null, canNext: true });
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(f.commands.begin).toHaveBeenCalledOnce();
+  });
+  /** A shown result with 2 of its 3 seconds gone, then a profile version bump (as a Settings change makes) before the next read. */
+  async function shownResultAfterTwoSeconds() {
+    const f = view(); await f.controller.refresh();
+    f.controller.setDraft("Haus"); f.replies.set("answer.submit", answered(4));
+    f.replies.set("assignment.present", () => ({ current: current(assignment(10, "presented")) }));
+    await f.controller.submit();
+    expect(f.controller.snapshot().timer).toMatchObject({ durationMs: 3000 });
+    await vi.advanceTimersByTimeAsync(2000);
+    f.state.stateVersion = "50";
+    f.commands.readSession.mockResolvedValue({ state_version: "50", current: current(assignment(10, "prefetched")) as object });
+    return f;
+  }
+  const readOf = (result: StudyAnswer) => ({ state_version: "50", step: current(assignment(10, "prefetched")), ...result });
+
+  it("П02: the same result with the same version, received again, continues the original countdown", async () => {
+    const f = await shownResultAfterTwoSeconds();
+    f.commands.readResult.mockResolvedValue(readOf(answer(4)));
+    await f.controller.refresh();
+    expect(f.controller.snapshot()).toMatchObject({ phase: "result_correct", timer: { durationMs: 1000 } });
+    await vi.advanceTimersByTimeAsync(999);
+    expect(f.commands.begin).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(f.commands.begin.mock.calls.map(call => call[0].kind)).toEqual(["answer.submit", "assignment.present"]);
+  });
+  it("П02: the countdown keeps running while the read is in flight", async () => {
+    const f = await shownResultAfterTwoSeconds();
+    f.commands.readResult.mockResolvedValue(readOf(answer(4)));
+    f.commands.refresh.mockImplementationOnce(() => new Promise<void>(resolve => { setTimeout(resolve, 400); }));
+    const reading = f.controller.refresh();
+    await vi.advanceTimersByTimeAsync(400); await reading;
+    expect(f.controller.snapshot().timer).toMatchObject({ durationMs: 600 });
+  });
+  it("П02: a result with a new version (a corrected grade) starts the full countdown again", async () => {
+    const f = await shownResultAfterTwoSeconds();
+    f.commands.readResult.mockResolvedValue(readOf(answer(5, "2")));
+    await f.controller.refresh();
+    expect(f.controller.snapshot()).toMatchObject({ phase: "result_correct", timer: { durationMs: 3000 } });
+    await vi.advanceTimersByTimeAsync(2999);
+    expect(f.commands.begin).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(f.commands.begin).toHaveBeenCalledTimes(2);
+  });
+  it("П02: background after a read still cancels the countdown and the result waits for «Далее»", async () => {
+    const f = await shownResultAfterTwoSeconds();
+    f.commands.readResult.mockResolvedValue(readOf(answer(4)));
+    await f.controller.refresh();
+    f.controller.suspend();
+    expect(f.controller.snapshot()).toMatchObject({ phase: "result_correct", timer: null });
+    await f.controller.resume();
+    expect(f.controller.snapshot()).toMatchObject({ phase: "result_correct", timer: null, canNext: true });
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(f.commands.begin).toHaveBeenCalledOnce();
+  });
+  it("П02: a read that starts while another one runs (queued re-read) still continues the original countdown", async () => {
+    const f = await shownResultAfterTwoSeconds();
+    f.commands.readResult.mockResolvedValue(readOf(answer(4)));
+    let release: () => void = () => {};
+    f.commands.refresh.mockImplementationOnce(() => new Promise<void>(resolve => { release = resolve; }));
+    const first = f.controller.refresh();
+    // The version grows while the first read is on its way: the second refresh is queued behind it.
+    f.state.stateVersion = "60";
+    f.commands.readSession.mockResolvedValue({ state_version: "60", current: current(assignment(10, "prefetched")) as object });
+    f.commands.readResult.mockResolvedValue({ ...readOf(answer(4)), state_version: "60" });
+    const second = f.controller.refresh();
+    release(); await first; await second;
+    expect(f.controller.snapshot().timer).toMatchObject({ durationMs: 1000, elapsedMs: 2000 });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(f.commands.begin.mock.calls.map(call => call[0].kind)).toEqual(["answer.submit", "assignment.present"]);
+  });
+  it("П02: a failed read leaves no remainder behind: the next successful read of the same result starts afresh", async () => {
+    const f = await shownResultAfterTwoSeconds();
+    f.commands.readSession.mockRejectedValueOnce(new Error("network"));
+    await f.controller.refresh();
+    expect(f.controller.snapshot()).toMatchObject({ phase: "stale", timer: null });
+    await vi.advanceTimersByTimeAsync(5000);
+    f.commands.readResult.mockResolvedValue(readOf(answer(4)));
+    await f.controller.refresh();
+    expect(f.controller.snapshot()).toMatchObject({ phase: "result_correct", timer: { durationMs: 3000 } });
+  });
+  it("П02: background while the view is stale after a failed read keeps the result waiting for «Далее»", async () => {
+    const f = await shownResultAfterTwoSeconds();
+    f.commands.readSession.mockRejectedValueOnce(new Error("network"));
+    await f.controller.refresh();
+    expect(f.controller.snapshot().phase).toBe("stale");
+    f.controller.suspend();
+    f.commands.readResult.mockResolvedValue(readOf(answer(4)));
     await f.controller.resume();
     expect(f.controller.snapshot()).toMatchObject({ phase: "result_correct", timer: null, canNext: true });
     await vi.advanceTimersByTimeAsync(10000);

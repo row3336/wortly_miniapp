@@ -392,6 +392,24 @@ describe("conjugation test flow: timer (§5; a return waits for Next, DC 2.19)",
     expect(other.actions.openStep).not.toHaveBeenCalled();
   });
 
+  it("П02: the same result projected again with a newer document version keeps the one running timer (no second schedule)", () => {
+    ticket = stepTicket();
+    const h = harness();
+    h.show(h.input(answer(result(true))));
+    const again = h.show(h.input(answer(result(true), { stateVersion: "50" })));
+    expect(again).toMatchObject({ screen: "result", mode: "answer", timer: { durationMs: 3000 } });
+    expect(h.schedule).toHaveBeenCalledTimes(1);
+    expect(h.timers[0].cancelled).toBe(false);
+    h.fire();
+    expect(onlyArgument(h.actions.openStep)).toBe(ticket);
+    // A corrected result (new version) is another result: its own timer.
+    const corrected = harness();
+    corrected.show(corrected.input(answer(result(true))));
+    corrected.show(corrected.input(answer(result(true, "6", 5))));
+    expect(corrected.timers[0].cancelled).toBe(true);
+    expect(corrected.schedule).toHaveBeenCalledTimes(2);
+  });
+
   it("Ф12: after active=false→true the same result waits for Next; the timer never re-arms (DC 2.19, К05-152)", () => {
     ticket = stepTicket();
     const h = harness();

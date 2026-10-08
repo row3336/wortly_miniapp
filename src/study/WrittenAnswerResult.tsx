@@ -14,7 +14,8 @@ export type WrittenAnswerResultProps = {
   grades: readonly (3 | 4 | 5)[];
   canCorrect: boolean;
   canNext: boolean;
-  timer: { key: string; durationMs: number } | null;
+  /** durationMs is what is left; elapsedMs (after a read paused the countdown) is already spent, so the bar continues its level. */
+  timer: { key: string; durationMs: number; elapsedMs?: number } | null;
   onGrade(grade: 3 | 4 | 5): void;
   onCorrect(): void;
   onNext(): void;
@@ -101,7 +102,9 @@ export function WrittenAnswerResult(props: WrittenAnswerResultProps) {
       <AnswerExample choice={example} />
     </> : <><p role="status">{status}</p><p>{t.unavailable}</p></>}
     {props.timer && !blocked && <div className="written-timer" aria-hidden="true">
-      <span key={props.timer.key} style={{ animationDuration: `${props.timer.durationMs}ms` }} />
+      <span key={props.timer.key} style={props.timer.elapsedMs
+        ? { animationDuration: `${props.timer.durationMs + props.timer.elapsedMs}ms`, animationDelay: `-${props.timer.elapsedMs}ms` }
+        : { animationDuration: `${props.timer.durationMs}ms` }} />
     </div>}
     {props.grades.length > 0 && <div className="written-grades">
       {props.grades.map(grade => <button type="button" key={grade} disabled={blocked}

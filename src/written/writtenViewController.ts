@@ -1,5 +1,6 @@
 import type { PublicAssignment, SessionProjection, WrittenPractice, WrittenStep, WrittenSummary } from "../api/generated";
 import { sameId } from "../api/wireValidation";
+import type { ResultTimerView } from "../commands/resultTimer";
 import { StudyView, type StudyLanes, type StudyPhase } from "../commands/studyView";
 import type { WrittenAnswer } from "./writtenApi";
 import type { WrittenCommandSnapshot } from "./writtenCommandController";
@@ -33,7 +34,7 @@ export type WrittenViewSnapshot = {
   submittedText: string | null;
   problem: string | null;
   commands: WrittenDocumentSnapshot;
-  timer: { key: string; durationMs: number } | null;
+  timer: ResultTimerView | null;
   /** Material of the current or last requested session; a refused start has no projection of its own. */
   bucket: "words" | "phrases" | null;
   /**

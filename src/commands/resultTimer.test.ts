@@ -21,6 +21,60 @@ describe("result timer", () => {
     expect(timer.view()!.key).toBe("s:r:1:1");
     vi.advanceTimersByTime(2000); expect(fire).toHaveBeenCalledOnce();
   });
+  it("a pause keeps the deadline for the same result only; any cancel forgets it", () => {
+    const timer = new ResultTimer(), fire = vi.fn(), guard = { live: () => true, due: () => true };
+    timer.start("s:r:1", 3000, guard, fire);
+    vi.advanceTimersByTime(2000); timer.pause(); expect(timer.view()).toBeNull();
+    vi.advanceTimersByTime(500);
+    timer.start("s:r:1", 3000, guard, fire);
+    expect(timer.view()!.durationMs).toBe(500);
+    vi.advanceTimersByTime(499); expect(fire).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1); expect(fire).toHaveBeenCalledOnce();
+
+    timer.start("s:r:1", 3000, guard, fire);
+    vi.advanceTimersByTime(1000); timer.pause(); timer.pause(); timer.start("s:r:2", 3000, guard, fire);
+    expect(timer.view()!.durationMs).toBe(3000); // another result (e.g. a corrected grade) starts afresh
+    timer.cancel(); timer.start("s:r:1", 3000, guard, fire);
+    expect(timer.view()!.durationMs).toBe(3000);
+    vi.advanceTimersByTime(1000); timer.pause(); timer.discardPause(); timer.start("s:r:1", 3000, guard, fire);
+    expect(timer.view()!.durationMs).toBe(3000);
+  });
+  it("a shorter mode caps the remainder; arming the running result again does not restart it", () => {
+    const timer = new ResultTimer(), fire = vi.fn(), guard = { live: () => true, due: () => true };
+    timer.start("s:r:1", 3000, guard, fire);
+    vi.advanceTimersByTime(500); timer.pause(); timer.start("s:r:1", 2000, guard, fire);
+    expect(timer.view()!.durationMs).toBe(2000);
+    vi.advanceTimersByTime(1500); timer.start("s:r:1", 2000, guard, fire);
+    expect(timer.view()!.durationMs).toBe(500);
+    vi.advanceTimersByTime(500); expect(fire).toHaveBeenCalledOnce();
+  });
+  it("a pause forgotten by cancel or by a background (cancel after pause) is not used by the next arm of the same result", () => {
+    const timer = new ResultTimer(), fire = vi.fn(), guard = { live: () => true, due: () => true };
+    timer.start("s:r:1", 3000, guard, fire);
+    vi.advanceTimersByTime(1000); timer.pause(); timer.cancel(); timer.start("s:r:1", 3000, guard, fire);
+    expect(timer.view()).toEqual({ key: "s:r:1:2", durationMs: 3000 });
+    timer.cancel();
+    timer.start("s:r:1", 3000, guard, fire);
+    vi.advanceTimersByTime(1000); timer.pause(); timer.cancel(); // what suspend() does to a paused timer
+    vi.advanceTimersByTime(500); timer.start("s:r:1", 3000, guard, fire);
+    expect(timer.view()!.durationMs).toBe(3000);
+  });
+  it("the view tells how much of the original countdown is already spent, only after a pause", () => {
+    const timer = new ResultTimer(), fire = vi.fn(), guard = { live: () => true, due: () => true };
+    timer.start("s:r:1", 3000, guard, fire);
+    expect(timer.view()).not.toHaveProperty("elapsedMs");
+    vi.advanceTimersByTime(2000); timer.pause(); timer.start("s:r:1", 3000, guard, fire);
+    expect(timer.view()).toMatchObject({ durationMs: 1000, elapsedMs: 2000 });
+    vi.advanceTimersByTime(400); timer.pause(); timer.start("s:r:1", 3000, guard, fire);
+    expect(timer.view()).toMatchObject({ durationMs: 600, elapsedMs: 2400 });
+  });
+  it("arming another result while one runs silences the older callback", () => {
+    const timer = new ResultTimer(), old = vi.fn(), fire = vi.fn(), guard = { live: () => true, due: () => true };
+    timer.start("s:r:1", 1000, guard, old);
+    timer.start("s:r:2", 2000, guard, fire);
+    expect(vi.getTimerCount()).toBe(1);
+    vi.advanceTimersByTime(2000); expect(old).not.toHaveBeenCalled(); expect(fire).toHaveBeenCalledOnce();
+  });
   it("a dead owner or a view that can no longer advance keeps the timer silent", () => {
     const timer = new ResultTimer(), fire = vi.fn();
     let live = false, due = true;
