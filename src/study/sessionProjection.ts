@@ -1,5 +1,5 @@
 import type { LearningSessionProjection, SessionProjection, SessionResponse, UnavailableSession } from "../api/generated";
-import { record, uuid, sameId, exactKeys, version, oneOf, count, date } from "../api/wireValidation";
+import { record, uuid, sameId, exactKeys, version, oneOf, count, date, CLOSE_REASONS } from "../api/wireValidation";
 import { validLearningPreviewContent } from "../learning/learningPreviewContent";
 import { validConjunctionHint } from "./questionContext";
 import { validOralCurrent } from "../oral/oralProjection";
@@ -38,7 +38,7 @@ export function validLearningSessionCurrent(value: unknown, sessionId: string): 
     || !uuid(group.id) || !version(group.version) || !oneOf(group.status, ["assembling", "active", "completed"])
     || !count(group.preview_position) || !count(group.total) || group.total === 0 || group.preview_position > group.total) return false;
   if (value.status === "closed") return value.preview === null && value.assignment === null
-    && oneOf(value.close_reason, ["midnight", "pair_changed", "timezone_date_changed", "stop", "remote_stop", "summary_home"]);
+    && oneOf(value.close_reason, CLOSE_REASONS);
   if (value.close_reason !== null) return false;
   if (value.status === "summary") return value.preview === null && value.assignment === null
     && oneOf(group.status, ["active", "completed"]) && group.preview_position === group.total;
@@ -85,7 +85,7 @@ export function validWrittenSessionCurrent(value: unknown, sessionId: string): v
     || value.progress.completed > value.progress.total
     || !validWrittenNumbers(value.status, value.progress, value.summary)) return false;
   if (value.status === "closed") return value.assignment === null
-    && oneOf(value.close_reason, ["midnight", "pair_changed", "timezone_date_changed", "stop", "remote_stop", "summary_home"]);
+    && oneOf(value.close_reason, CLOSE_REASONS);
   if (value.close_reason !== null) return false;
   if (value.status === "summary") return value.assignment === null;
   return value.bucket !== null && value.progress.total > 0

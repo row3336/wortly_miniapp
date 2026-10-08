@@ -4,7 +4,7 @@ import type {
 } from "../api/generated";
 import { validProfile } from "../api/entryApi";
 import { ApiError, createJsonTransport, errorCode, httpError, type HttpOptions } from "../api/http";
-import { record, uuid, sameId, exactKeys, version, eventTime, oneOf } from "../api/wireValidation";
+import { record, uuid, sameId, exactKeys, version, eventTime, oneOf, CLOSE_REASONS } from "../api/wireValidation";
 
 export type RemoteStopIntent = Pick<SessionStopRemoteCommand, "command_id" | "kind" | "session_id" | "payload">;
 type Current = RemoteSessionProjection | UnavailableSession;
@@ -43,7 +43,7 @@ function current(value: unknown, intent: RemoteStopIntent): value is Current {
   if (!exactKeys(value, ["session_id", "status", "close_reason"])) return false;
   if (value.status === "active" || value.status === "summary") return value.close_reason === null;
   return value.status === "closed" && oneOf(value.close_reason,
-    ["midnight", "pair_changed", "timezone_date_changed", "stop", "remote_stop", "summary_home"]);
+    CLOSE_REASONS);
 }
 
 function accepted(value: unknown, intent: RemoteStopIntent): value is SavedCommandFact {

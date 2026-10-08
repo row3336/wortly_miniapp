@@ -52,6 +52,7 @@ function BlockLabel({ block }: { block: ConjugationSummaryBlock }) {
 /** М17 working presentation (T3B_PRESENTATION_HANDOFF §1 A/B/C): only server facts, grouped, never sorted or recomputed. */
 export function ConjugationSummaryView({ summary, closedReason, language, onHome }: ConjugationSummaryViewProps) {
   const t = copy[language];
+  // save_failed (accepted by the decoders ahead of the core) has no entry in t.reasons yet: it falls back to the generic closed text.
   const reason = closedReason === undefined ? null : closedReason === null ? t.closed : t.reasons[closedReason] ?? t.closed;
   let body;
   if (summary === null) body = <p>{t.unavailable}</p>;

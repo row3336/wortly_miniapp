@@ -110,6 +110,15 @@ describe("ConjugationSummaryView closed reason and action", () => {
     expect(screen.queryByRole("status")).toBeNull();
   });
 
+  it("save_failed (no own text yet, owner question N4.4) renders the generic closed text in every language and does not throw", () => {
+    const expected = { ru: "Занятие закрыто", uk: "Заняття закрито", en: "The session was closed" } as const;
+    for (const language of ["ru", "uk", "en"] as const) {
+      view(summaryA(), language, { closedReason: "save_failed" as unknown as null });
+      expect(screen.getByRole("status").textContent).toBe(expected[language]);
+      cleanup();
+    }
+  });
+
   it("the Today action calls onHome once per click and is disabled without the right", () => {
     const onHome = vi.fn();
     view(summaryA(), "ru", { onHome });

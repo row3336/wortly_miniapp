@@ -1,5 +1,5 @@
 import type { ConjugationCatalog, ConjugationResultReadResponse, ConjugationSessionProjection, UnavailableSession } from "../api/generated";
-import { count, date, eventTime, exactKeys, oneOf, record, sameId, uuid, version } from "../api/wireValidation";
+import { count, date, eventTime, exactKeys, oneOf, record, sameId, uuid, version, CLOSE_REASONS } from "../api/wireValidation";
 import { validWrittenAnswerDetail } from "../learning/learningAnswerApi";
 
 const pairs = ["ru-de", "uk-de", "en-de"];
@@ -8,7 +8,6 @@ const pronouns: Readonly<Record<string, string>> = {
   ich: "ich", du: "du", er_sie_es: "er/sie/es", wir: "wir", ihr: "ihr", sie_sie: "sie/Sie",
 };
 const groups = Object.keys(pronouns);
-const closeReasons = ["midnight", "pair_changed", "timezone_date_changed", "stop", "remote_stop", "summary_home"];
 function uniqueIds(values: unknown): values is string[] {
   return Array.isArray(values) && values.every(uuid) && new Set(values.map(id => id.toLowerCase())).size === values.length;
 }
@@ -92,7 +91,7 @@ export function validConjugationCurrent(value: unknown, sessionId: string): valu
     return value.assignment.status === "presented" ? sameId(caps.answer_target, value.assignment.id as string) : caps.answer_target === null;
   }
   if (value.assignment !== null || caps.answer_target !== null
-    || (value.status === "closed" ? !oneOf(value.close_reason, closeReasons) : value.close_reason !== null)
+    || (value.status === "closed" ? !oneOf(value.close_reason, CLOSE_REASONS) : value.close_reason !== null)
     || value.status === "summary" && progress.completed !== progress.total
     || !record(value.summary) || !exactKeys(value.summary, ["completed_cycle_ids", "partial", "results", "completed", "correct", "wrong", "blocks"])) return false;
   const summary = value.summary;

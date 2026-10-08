@@ -1,9 +1,8 @@
 import type { OralSessionProjection, UnavailableSession } from "../api/generated";
-import { count, date, exactKeys, oneOf, record, sameId, uuid } from "../api/wireValidation";
+import { count, date, exactKeys, oneOf, record, sameId, uuid, CLOSE_REASONS } from "../api/wireValidation";
 import { validConjunctionHint } from "../study/questionContext";
 
 const pairs = ["ru-de", "uk-de", "en-de"];
-const closeReasons = ["midnight", "pair_changed", "timezone_date_changed", "stop", "remote_stop", "summary_home"];
 
 function validAssignment(value: unknown): boolean {
   if (!record(value) || typeof value.revealed !== "boolean"
@@ -46,7 +45,7 @@ export function validOralCurrent(value: unknown, sessionId: string): value is Or
       && (grade ? sameId(capabilities.grade_target, assignment.id as string) : capabilities.grade_target === null);
   }
   if (value.assignment !== null || capabilities.reveal_target !== null || capabilities.grade_target !== null
-    || (value.status === "closed" ? !oneOf(value.close_reason, closeReasons) : value.close_reason !== null)
+    || (value.status === "closed" ? !oneOf(value.close_reason, CLOSE_REASONS) : value.close_reason !== null)
     || !record(value.summary) || !exactKeys(value.summary, ["completed", "correct", "wrong", "ratio"])) return false;
   const summary = value.summary;
   if (summary.completed !== progress.completed || summary.correct !== progress.correct || summary.wrong !== progress.wrong) return false;

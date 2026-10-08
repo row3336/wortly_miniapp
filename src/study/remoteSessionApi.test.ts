@@ -96,6 +96,11 @@ describe("addressed remote stop transport", () => {
     await expect(api.stop("synthetic", "synthetic", command())).rejects.toMatchObject({ kind: "invalid_response" });
   });
 
+  it("accepts save_failed as the close reason of the other device's session (R2a)", async () => {
+    const { api } = apiFor({ ...accepted(), current: { session_id: ids.session, status: "closed", close_reason: "save_failed" } });
+    await expect(api.stop("synthetic", "synthetic", command())).resolves.toMatchObject({ current: { close_reason: "save_failed" } });
+  });
+
   it.each([
     { session_id: ids.command, status: "closed", close_reason: "remote_stop" },
     { session_id: ids.session, status: "active", close_reason: "remote_stop" },

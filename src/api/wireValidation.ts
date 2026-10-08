@@ -26,10 +26,12 @@ export function eventTime(value: unknown): boolean {
 export function oneOf(value: unknown, values: string[]): boolean {
   return typeof value === "string" && values.includes(value);
 }
+/** Every close_reason the client decodes. save_failed is accepted ahead of the core release that writes it (R2a); the shown text falls back to the generic closed text. */
+export const CLOSE_REASONS: string[] = ["midnight", "pair_changed", "timezone_date_changed", "stop", "remote_stop", "summary_home", "save_failed"];
 export function validClosedSessionBoundary(value: unknown, sessionId: string): value is ClosedSessionBoundary {
   return record(value) && exactKeys(value, ["session_id", "status", "close_reason"])
     && sameId(value.session_id, sessionId) && value.status === "closed"
-    && oneOf(value.close_reason, ["midnight", "pair_changed", "timezone_date_changed", "stop", "remote_stop", "summary_home"]);
+    && oneOf(value.close_reason, CLOSE_REASONS);
 }
 export function count(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
