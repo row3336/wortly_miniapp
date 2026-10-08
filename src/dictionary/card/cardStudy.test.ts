@@ -87,6 +87,6 @@ describe("card origin from the source route (Р7)", () => {
   it("the written quiz is L1→De, the oral quiz De→L1, anything else is the dictionary", () => {
     expect(cardOrigin("written")).toEqual({ kind: "quiz", direction: "l1-de" });
     expect(cardOrigin("oral")).toEqual({ kind: "quiz", direction: "de-l1" });
-    for (const source of ["dictionary", "learning", "today", "card", null] as const) expect(cardOrigin(source)).toEqual({ kind: "dictionary" });
+    for (const source of ["dictionary", "learning", "today", "card", "statistics", "settings", null] as const) expect(cardOrigin(source)).toEqual({ kind: "dictionary" });
   });
 });
