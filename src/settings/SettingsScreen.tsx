@@ -75,12 +75,11 @@ function SettingField({ setting, ...props }: SettingsScreenProps & { setting: Se
   const outcome = snapshot.outcome?.key === setting ? snapshot.outcome : null;
   const help = bounds(rule, language);
   const hint = t.hints[setting];
-  // 2.21г: a CEFR level picks words at random, so Mix is muted. It is locked only once a value is stored: the core still
-  // requires Mix to start a group in level mode (learning_selection.py:43, pending C-LSEL-LEVEL-RANDOM).
+  // 2.21г, 2.25а: a CEFR level picks words at random, so Mix is always muted and locked; an unset Mix is shown as off
+  // and never blocks a start.
   const mixByLevel = setting === "learning_mix" && materialParts(data.settings.material.value).mode === "level";
-  const mixStored = typeof current.value === "boolean";
-  const mixLocked = mixByLevel && mixStored && !draft;
-  const mixNote = mixByLevel ? (mixStored ? t.mixByLevel.locked : t.mixByLevel.unset) : null;
+  const mixLocked = mixByLevel;
+  const mixNote = mixByLevel ? t.mixByLevel.locked : null;
   const describedBy = `${hint ? `${id}-hint ` : ""}${mixNote ? `${id}-mix-note ` : ""}${id}-help ${id}-error`;
   // Fixed two or three way switches are shown as radios; the options still come from the server constraint.
   const radioChoice = rule.type === "enum" && (setting === "review_error_mode" || setting === "learning_content");
@@ -110,7 +109,7 @@ function SettingField({ setting, ...props }: SettingsScreenProps & { setting: Se
     </div>}
     {rule.type === "boolean" && <div className="settings-options">
       {[true, false].map(choice => <label key={String(choice)}>
-        <input type="radio" name={`${id}-boolean`} checked={value === choice} disabled={!snapshot.canEdit || mixLocked}
+        <input type="radio" name={`${id}-boolean`} checked={value === choice || (mixLocked && value === null && !choice)} disabled={!snapshot.canEdit || mixLocked}
           onChange={() => change(choice)} aria-describedby={describedBy} />
         {choice ? t.on : t.off}
       </label>)}

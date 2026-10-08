@@ -225,12 +225,11 @@ describe("remote stop through the actual App and HTTP client", () => {
   it("explains that the session changed after «already closed» and asks separately for the new one", async () => {
     const f = fixture(); f.state.refuseWithNew = true; render(<App />);
     await confirm();
-    await screen.findByRole("heading", { name: "Занятие сменилось" });
-    expect(screen.getByText("Пока ты подтверждал, на другом устройстве началось новое занятие. Завершить и его?")).toBeTruthy();
+    await screen.findByText("На другом устройстве теперь идёт другое занятие. Завершить это занятие?");
     expect(f.commands).toHaveLength(1);
     fireEvent.click(screen.getByRole("button", { name: "Отмена" }));
     await screen.findByRole("button", { name: "Завершить занятие на другом устройстве" });
-    expect(screen.queryByRole("heading", { name: "Занятие сменилось" })).toBeNull();
+    expect(screen.queryByText("На другом устройстве теперь идёт другое занятие. Завершить это занятие?")).toBeNull();
     // The plain question comes back for the same session; only the refused tap carried the explanation.
     fireEvent.click(screen.getByRole("button", { name: "Завершить занятие на другом устройстве" }));
     expect(screen.getByRole("heading", { name: "Завершить занятие?" })).toBeTruthy();
@@ -240,9 +239,9 @@ describe("remote stop through the actual App and HTTP client", () => {
   it("answers the «session changed» question for the new session only after its own button", async () => {
     const f = fixture(); f.state.refuseWithNew = true; render(<App />);
     await confirm();
-    await screen.findByRole("heading", { name: "Занятие сменилось" });
+    await screen.findByText("На другом устройстве теперь идёт другое занятие. Завершить это занятие?");
     f.state.busy = false;
-    fireEvent.click(screen.getByRole("button", { name: "Завершить новое занятие" }));
+    fireEvent.click(screen.getByRole("button", { name: "Завершить занятие" }));
     await screen.findByRole("heading", { name: "Сегодня", level: 1 });
     expect(f.commands).toHaveLength(2);
     expect(f.commands[1].session_id).toBe(id(51));

@@ -17,7 +17,7 @@ type Copy = {
   reviewModes: Record<string, string>; learningContents: Record<string, string>;
   hints: Partial<Record<SettingKey, string>>;
   /** Why Mix is muted while the material is chosen by CEFR level (2.21г): locked, or still active because a value is required. */
-  mixByLevel: { locked: string; unset: string };
+  mixByLevel: { locked: string };
   fields: Record<SettingKey, string>;
   problems: Record<NonNullable<SettingsSnapshot["problem"]>["reason"], string>;
 };
@@ -51,8 +51,7 @@ export const settingsCopy: Record<Language, Copy> = {
       learning_mix: "Выключено: темы идут по порядку. Включено: выбранные темы смешиваются. Это не меняет выбор слов или фраз и уже начатую группу.",
     },
     mixByLevel: {
-      locked: "При выборе по уровням CEFR слова берутся из уровня случайно, перемешивание тем не применяется. Значение сохранено и не меняется.",
-      unset: "При выборе по уровням CEFR перемешивание тем не применяется. Значение пока нужно задать, чтобы начать занятие; на выбор слов оно не влияет.",
+      locked: "При выборе по уровням CEFR слова берутся из уровня случайно, перемешивание тем не применяется. Значение здесь не меняется.",
     },
     fields: {
       ui_language: "Язык интерфейса", dictionary_language: "Язык словаря", material: "Учебный материал",
@@ -105,8 +104,7 @@ export const settingsCopy: Record<Language, Copy> = {
       learning_mix: "Вимкнено: теми йдуть по порядку. Увімкнено: вибрані теми змішуються. Це не змінює вибір слів чи фраз і вже розпочату групу.",
     },
     mixByLevel: {
-      locked: "Коли матеріал вибрано за рівнем CEFR, слова беруться з рівня випадково, перемішування тем не застосовується. Значення збережено й не змінюється.",
-      unset: "Коли матеріал вибрано за рівнем CEFR, перемішування тем не застосовується. Значення поки потрібно задати, щоб почати заняття; на вибір слів воно не впливає.",
+      locked: "Коли матеріал вибрано за рівнем CEFR, слова беруться з рівня випадково, перемішування тем не застосовується. Значення тут не змінюється.",
     },
     fields: {
       ui_language: "Мова інтерфейсу", dictionary_language: "Мова словника", material: "Навчальний матеріал",
@@ -159,8 +157,7 @@ export const settingsCopy: Record<Language, Copy> = {
       learning_mix: "Off: topics go in order. On: the selected topics are mixed. This does not change the choice of words or phrases or a group already started.",
     },
     mixByLevel: {
-      locked: "With the material chosen by CEFR level, words are picked from the level at random and topic mixing does not apply. The saved value stays unchanged.",
-      unset: "With the material chosen by CEFR level, topic mixing does not apply. A value must still be set to start a session; it does not affect which words are picked.",
+      locked: "With the material chosen by CEFR level, words are picked from the level at random and topic mixing does not apply. The value cannot be changed here.",
     },
     fields: {
       ui_language: "Interface language", dictionary_language: "Dictionary language", material: "Learning material",

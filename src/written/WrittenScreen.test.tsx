@@ -287,18 +287,19 @@ describe("M-WRITTEN-PRACTICE daily counter (2.31б)", () => {
     answer(h, "Haus"); await screen.findByText("Верно");
     expect(counter()).toBe("Сегодня: 12 слов");
   });
-  it.each([["ru", "words", "Сегодня: 21 слово"], ["ru", "phrases", "Сегодня: 21 фраза"], ["uk", "words", "Сьогодні: 21 слово"],
-    ["uk", "phrases", "Сьогодні: 21 фраза"], ["en", "words", "Today: 21 words"], ["en", "phrases", "Today: 21 phrases"]] as const)(
+  it.each([["ru", "words", "Сегодня: 21 слово"], ["ru", "phrases", "Фраз за день: 21"], ["uk", "words", "Сьогодні: 21 слово"],
+    ["uk", "phrases", "Фраз за день: 21"], ["en", "words", "Today: 21 words"], ["en", "phrases", "Phrases today: 21"]] as const)(
     "labels the %s counter of the %s group", async (language, bucket, text) => {
       const h = setup({ cards: [6, 7], dailyBase: 20 }, "normal", { language, bucket }); await h.start();
       answer(h, "Haus");
       expect(await screen.findByText(text)).toBeTruthy();
     });
-  it("inflects the noun by the number", () => {
-    for (const [language, expected] of [["ru", ["1 фраза", "2 фразы", "5 фраз", "21 фраза"]], ["uk", ["1 фраза", "2 фрази", "5 фраз", "21 фраза"]],
-      ["en", ["1 phrase", "2 phrases", "5 phrases", "21 phrases"]]] as const) {
-      expect(expected.map(item => practiceText(language, true, Number(item.split(" ")[0])).replace(/^[^:]+: /, ""))).toEqual(expected);
+  it("inflects the word noun by the number; the phrase counter has no noun", () => {
+    for (const [language, expected] of [["ru", ["1 слово", "2 слова", "5 слов", "21 слово"]], ["uk", ["1 слово", "2 слова", "5 слів", "21 слово"]],
+      ["en", ["1 word", "2 words", "5 words", "21 words"]]] as const) {
+      expect(expected.map(item => practiceText(language, false, Number(item.split(" ")[0])).replace(/^[^:]+: /, ""))).toEqual(expected);
     }
+    expect(practiceText("ru", true, 5)).toBe("Фраз за день: 5");
   });
   it("is not shown on the summary", async () => {
     const h = setup({ cards: [6], dailyBase: 3 }); await h.start();

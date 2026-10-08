@@ -56,15 +56,17 @@ const copy = {
  * material of the session group (the core counts words or phrases by that group) and inflects the noun by the number.
  */
 const practiceLabel = {
-  ru: { prefix: "Сегодня", words: { one: "слово", few: "слова", many: "слов" }, phrases: { one: "фраза", few: "фразы", many: "фраз" } },
-  uk: { prefix: "Сьогодні", words: { one: "слово", few: "слова", many: "слів" }, phrases: { one: "фраза", few: "фрази", many: "фраз" } },
-  en: { prefix: "Today", words: { one: "word", few: "words", many: "words" }, phrases: { one: "phrase", few: "phrases", many: "phrases" } },
+  ru: { prefix: "Сегодня", words: { one: "слово", few: "слова", many: "слов" } },
+  uk: { prefix: "Сьогодні", words: { one: "слово", few: "слова", many: "слів" } },
+  en: { prefix: "Today", words: { one: "word", few: "words", many: "words" } },
 } as const;
+// Phrase counter label (В3). uk/en: root decision, pending owner (O24); ru is the owner-approved text.
+const phraseCounter = { ru: "Фраз за день", uk: "Фраз за день", en: "Phrases today" } as const;
 export function practiceText(language: Language, phrases: boolean, count: number): string {
+  if (phrases) return `${phraseCounter[language]}: ${count}`;
   const label = practiceLabel[language], category = new Intl.PluralRules(language).select(count);
-  const forms = phrases ? label.phrases : label.words;
   // English has no "few": every other category falls to the plural form.
-  return `${label.prefix}: ${count} ${category === "one" ? forms.one : category === "few" ? forms.few : forms.many}`;
+  return `${label.prefix}: ${count} ${category === "one" ? label.words.one : category === "few" ? label.words.few : label.words.many}`;
 }
 
 /** Connects the local display to the owner's exact capabilities; command identity and outcome are never invented here. */

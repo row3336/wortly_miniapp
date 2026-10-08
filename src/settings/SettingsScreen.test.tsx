@@ -437,17 +437,18 @@ describe("Mix with the material chosen by CEFR level (M-SET-MIX-LEVEL, 2.21г)",
     expect(f.actions.edit).not.toHaveBeenCalled();
     expect(mixRadios().every(r => r.disabled)).toBe(true);
     expect(mixRadios().map(r => r.checked)).toEqual([true, false]);
-    expect(field("Перемешивать темы").getByText(/перемешивание тем не применяется\. Значение сохранено/)).toBeDefined();
+    expect(field("Перемешивать темы").getByText(/перемешивание тем не применяется\. Значение здесь не меняется/)).toBeDefined();
     expect(screen.getByRole("group", { name: "Перемешивать темы", hidden: true }).className).toContain("settings-field-muted");
     expect(f.actions.edit).not.toHaveBeenCalled();
   });
 
-  it("stays settable while no Mix value is stored, because the core still requires it (pending C-LSEL-LEVEL-RANDOM)", () => {
+  it("locks Mix too while no value is stored, shows it as off and does not ask to set it (2.25а)", async () => {
     const f = levelFixture(null), { container } = render(<SettingsScreen {...f} />); openAdditional(container);
-    expect(mixRadios().some(r => r.disabled)).toBe(false);
-    expect(field("Перемешивать темы").getByText(/нужно задать, чтобы начать занятие/)).toBeDefined();
-    fireEvent.click(mixRadios()[0]);
-    expect(f.actions.edit).toHaveBeenCalledWith("learning_mix", true);
+    expect(mixRadios().every(r => r.disabled)).toBe(true);
+    expect(mixRadios().map(r => r.checked)).toEqual([false, true]);
+    expect(field("Перемешивать темы").queryByText(/нужно задать/)).toBeNull();
+    await userEvent.click(mixRadios()[0]);
+    expect(f.actions.edit).not.toHaveBeenCalled();
   });
 
   it("follows the saved material, not an unsaved draft of it", () => {
@@ -482,6 +483,6 @@ describe("Mix with the material chosen by CEFR level (M-SET-MIX-LEVEL, 2.21г)",
   it("links the note to the radios", () => {
     const f = levelFixture(true), { container } = render(<SettingsScreen {...f} />); openAdditional(container);
     const ids = mixRadios()[0].getAttribute("aria-describedby")!.split(" ");
-    expect(ids.map(item => document.getElementById(item)?.textContent).join(" ")).toMatch(/Значение сохранено/);
+    expect(ids.map(item => document.getElementById(item)?.textContent).join(" ")).toMatch(/Значение здесь не меняется/);
   });
 });

@@ -26,12 +26,12 @@ describe("remote stop entry screens", () => {
   });
 
   it.each([
-    ["ru", "Занятие сменилось", "Пока ты подтверждал, на другом устройстве началось новое занятие. Завершить и его?",
-      "Завершить новое занятие", "Отмена"],
-    ["uk", "Заняття змінилося", "Поки ти підтверджував, на іншому пристрої почалося нове заняття. Завершити і його?",
-      "Завершити нове заняття", "Скасувати"],
-    ["en", "The session has changed", "While you were confirming, a new session started on the other device. End it too?",
-      "End the new session", "Cancel"],
+    ["ru", "Завершить занятие?", "На другом устройстве теперь идёт другое занятие. Завершить это занятие?",
+      "Завершить занятие", "Отмена"],
+    ["uk", "Завершити заняття?", "На іншому пристрої тепер триває інше заняття. Завершити це заняття?",
+      "Завершити заняття", "Скасувати"],
+    ["en", "End the session?", "A different session is now running on the other device. End this session?",
+      "End session", "Cancel"],
   ] as const)("explains a changed session and asks separately in %s", (language, title, detail, yes, cancel) => {
     const confirm = vi.fn(), dismiss = vi.fn();
     render(<EntryScreen language={language} state={{ kind: "remote_confirm", targetId, changed: true }}
