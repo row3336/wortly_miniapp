@@ -19,6 +19,7 @@ import { useSessionResumeDocument } from "../study/useSessionResumeDocument";
 import { TodayScreen, type OrdinaryQuiz } from "../today/TodayScreen";
 import { useWrittenHost } from "../written/useWrittenHost";
 import { EntryScreen } from "./EntryScreen";
+import type { LaunchCard } from "./launchCard";
 import { LearningHost } from "./LearningHost";
 import { backDestination, initialRoute, navigationReducer, type Route, type Tab } from "./navigation";
 import { useBackLayer } from "./navigationBack";
@@ -31,6 +32,8 @@ type Props = {
   storage: AsyncStorage; newId(): string; oralStores: OralStores;
   foreground(): Promise<OpenedAccess | null>;
   onCurrent(current: SettingsObservation): void;
+  /** The card a bot button asked for at launch (answer Q20); taken by the first document only. */
+  launchCard?: LaunchCard;
 };
 function covers(opened: OpenedAccess, floor: SettingsObservation | null): boolean {
   if (!floor) return true;
@@ -184,6 +187,18 @@ export function ApplicationDocument(props: Props) {
       void synchronize();
     }
   }, [selected, oralSelected, writtenSelected, session, pair, read.kind, readId, readAfter, synchronize]);
+  // The launch card opens once, when the start has settled (the mode read chose the start screen), and only over Today:
+  // Back returns to Today. A start that resumes a session drops it: over a quiz the card would take the quiz as its
+  // origin (cardOrigin), which is not what the owner asked for.
+  const started = selected !== null;
+  const startScreen = useRef(at);
+  startScreen.current = at;
+  const launchCard = useRef(props.launchCard);
+  useEffect(() => {
+    if (!started) return;
+    const cardId = launchCard.current?.take() ?? null;
+    if (cardId !== null && startScreen.current === "today") navigate({ type: "push", screen: "card", subject: cardId });
+  }, [started]);
 
   const today = () => {
     attemptedFloor.current = latest.current?.version ?? null;
@@ -194,8 +209,9 @@ export function ApplicationDocument(props: Props) {
   // same refresh; a session supplies its own exit from its owner. A gate-hidden Host is not Settings.
   const destination = backDestination(route);
   // On the card route native Back is the card's own exit (it closes the card context first), called through one slot.
-  const back = destination === "today" ? today : at === "card"
-    ? () => { if (cardBack.current) cardBack.current(); else navigate({ type: "back" }); } : () => navigate({ type: "back" });
+  // The card is checked first: a card opened over Today (the launch card) must close its context too.
+  const back = at === "card" ? () => { if (cardBack.current) cardBack.current(); else navigate({ type: "back" }); }
+    : destination === "today" ? today : () => navigate({ type: "back" });
   useBackLayer("screen", destination === null ? null : back);
   const openSettings = () => { setSettingsOpened(true); navigate({ type: "open", screen: "settings" }); };
   // The panel only navigates: each section owns its screen (M-DICT, M-SET); Today keeps its refresh on return.

@@ -16,6 +16,7 @@ import { BusyTodayHost } from "./TodayHost";
 import { createTodayApi } from "../today/todayApi";
 import { ApplicationDocument } from "./ApplicationDocument";
 import { LaunchHost } from "./LaunchScreen";
+import { LaunchCard, launchCardId } from "./launchCard";
 import { useBackLayer } from "./navigationBack";
 import { SettingsPendingStore } from "../settings/settingsPending";
 import { RemoteStopPendingStore } from "../study/remoteStopPending";
@@ -45,6 +46,8 @@ export function App() {
   const [storage, setStorage] = useState<AsyncStorage | null>(null);
   const [oralStores, setOralStores] = useState<OralStores | null>(null);
   const [documentCheck, setDocumentCheck] = useState(false);
+  // Read once at launch; the opened document takes it after the ordinary entry (answer Q20).
+  const [launchCard] = useState(() => new LaunchCard(launchCardId(window.location.search)));
   const openedRef = useRef<OpenedAccess | null>(null);
   const storageRef = useRef<AsyncStorage | null>(null);
   const observedLanguage = useRef<{ profileId: string; version: string } | null>(null);
@@ -195,7 +198,8 @@ export function App() {
       return <>
         <div className="document-check" style={{ display: documentCheck ? "none" : "contents" }} inert={documentCheck}>
           <ApplicationDocument key={access.key} access={access} transport={transport} pendingStore={pendingStore}
-            storage={storage} oralStores={oralStores} newId={newId} language={language} foreground={foreground} onCurrent={observeSettings} />
+            storage={storage} oralStores={oralStores} newId={newId} language={language} foreground={foreground} onCurrent={observeSettings}
+            launchCard={launchCard} />
         </div>
         {documentCheck && <EntryScreen state={{ kind: "checking" }} language={language} />}
       </>;
