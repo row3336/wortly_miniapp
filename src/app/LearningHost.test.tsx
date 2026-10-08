@@ -235,14 +235,17 @@ describe("LearningHost with real document owners and synthetic HTTP", () => {
     await waitFor(() => expect((input as HTMLInputElement).readOnly).toBe(false));
     fireEvent.change(input, { target: { value: "captured answer A" } });
     const router = h.f.fetcher.getMockImplementation()!;
+    // The old document cannot check the lost answer by ID: it is left unknown there.
+    let offline = true;
     h.f.fetcher.mockImplementation(async (...call) => {
       if (call[1]?.method === "POST") { await router(...call); throw new Error("synthetic lost ACK"); }
+      if (offline && String(call[0]).includes("/commands/")) throw new Error("synthetic status outage");
       return router(...call);
     });
     fireEvent.click(screen.getByRole("button", { name: "Проверить" }));
     await screen.findByText("Проверяем, сохранилось ли действие.");
     const command = h.f.posts()[0]; expect(h.f.values.has(primaryKey)).toBe(true);
-    h.unmount(); h.f.replace({ session: null });
+    h.unmount(); offline = false; h.f.replace({ session: null });
     const reloaded = setup({ fixture: h.f });
     await screen.findByRole("region", { name: "Есть ошибка" });
     expect(reloaded.f.storage).toBe(h.f.storage); expect(reloaded.onLearning).toHaveBeenCalledOnce();
@@ -269,18 +272,21 @@ describe("LearningHost with real document owners and synthetic HTTP", () => {
     await waitFor(() => expect(h.onToday).toHaveBeenCalledOnce());
     h.f.replace({ session: null }); h.update(); await act(async () => {});
     fireEvent.click(await screen.findByRole("button", { name: /Новая группа слов4/ }));
-    const check = await screen.findByRole("button", { name: "Проверить сохранённые действия" });
+    await screen.findByText("Занятие завершено.");
     await act(async () => {});
+    // The answer is a study result: no manual check, its automatic recovery keeps checking it by ID (Я15).
+    expect(screen.queryByRole("button", { name: "Проверить сохранённые действия" })).toBeNull();
     expect(h.f.posts().map(post => post.kind)).toEqual(["answer.submit", "session.stop"]);
     expect(h.f.values.has(primaryKey)).toBe(true); expect(screen.queryByRole("button", { name: "На Сегодня" })).toBeNull();
-    checkingFails = false; fireEvent.click(check);
-    const home = await screen.findByRole("button", { name: "На Сегодня" });
+    // Once the server answers, the next check of the probe schedule finds it not applied in the closed session.
+    checkingFails = false;
+    const home = await screen.findByRole("button", { name: "На Сегодня" }, { timeout: 25_000 });
     expect(h.f.values.has(primaryKey)).toBe(false); expect(h.f.posts()).toHaveLength(2);
     fireEvent.click(home);
     fireEvent.click(await screen.findByRole("button", { name: /Новая группа слов4/ })); await screen.findByTestId("approved-preview");
     expect(h.f.posts().map(post => post.kind)).toEqual(["answer.submit", "session.stop", "session.start"]);
     expect(h.f.posts()[2].session_id).not.toBe(id(3)); expect(h.onToday).toHaveBeenCalledTimes(2);
-  });
+  }, 40_000);
   it("summary_home waits for a confirmed closed reply and refreshes Today exactly once", async () => {
     const h = setup({ initialSessionId: id(3) }); h.f.setStep({ ...current(), status: "summary", assignment: null });
     const summary = await screen.findByRole("button", { name: "Вернуться на Сегодня" });

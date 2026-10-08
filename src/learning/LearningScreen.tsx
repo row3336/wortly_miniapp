@@ -1,7 +1,7 @@
 import { useRef, type ReactNode } from "react";
 import type { LearningPreviewAddress } from "../api/generated";
 import { recoveryCopy } from "../commands/commandCopy";
-import { CommandRecovery } from "../commands/CommandRecovery";
+import { CommandRecovery, localCleanupOnly } from "../commands/CommandRecovery";
 import { RecoveryOverlay, recoveryConflict, recoveryScreen } from "../commands/RecoveryOverlay";
 import { StepBackButton, stepBackCopy } from "../commands/StepBackButton";
 import { useEnterNext } from "../commands/useEnterNext";
@@ -131,7 +131,7 @@ export function LearningScreen({ state, language, submitOnEnter, actions, render
     </p>}
     {state.phase === "unknown" && !state.question && !unknownAnswer && !result && <p role="status">{t.unknown}</p>}
     {problem && !isClosed && <p role="status">{problem}</p>}
-    {showRecovery && <CommandRecovery className="learning-recovery" language={language} lanes={manualLanes}
+    {showRecovery && <CommandRecovery className="learning-recovery" language={language} lanes={manualLanes} localOnly={localCleanupOnly(primary, stop)}
       canRetryPrimary={state.canRetryPrimary} canRetryStop={stop.canRetry}
       onCheck={() => { void actions.refresh(); }} onRetry={lane => { void actions.retry(lane); }} />}
     {recovering && <RecoveryOverlay screen={recovering} language={language} />}

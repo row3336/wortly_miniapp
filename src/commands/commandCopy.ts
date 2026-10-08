@@ -1,8 +1,12 @@
-/** Labels of the command state controls, the same in every study screen: check by the same ID, resend, retry Stop. */
+/**
+ * Labels of the command state controls, the same in every study screen: check by the same ID, resend, retry Stop.
+ * updateDevice: the outcome is confirmed, only the local record could not be cleared; the control repeats that cleanup
+ * and checks nothing (not the manual check CT §6.1 п. 2 forbids). Working text, pending owner approval.
+ */
 export const commandCopy = {
-  ru: { check: "Проверить состояние", retry: "Повторить отправку", retryStop: "Повторить завершение" },
-  uk: { check: "Перевірити стан", retry: "Повторити надсилання", retryStop: "Повторити завершення" },
-  en: { check: "Check status", retry: "Retry sending", retryStop: "Retry ending the session" },
+  ru: { check: "Проверить состояние", retry: "Повторить отправку", retryStop: "Повторить завершение", updateDevice: "Обновить данные на устройстве" },
+  uk: { check: "Перевірити стан", retry: "Повторити надсилання", retryStop: "Повторити завершення", updateDevice: "Оновити дані на пристрої" },
+  en: { check: "Check status", retry: "Retry sending", retryStop: "Retry ending the session", updateDevice: "Update data on this device" },
 } as const;
 
 /**

@@ -1,7 +1,7 @@
 import { useRef } from "react";
 import type { Language } from "../i18n/language";
 import { recoveryCopy } from "../commands/commandCopy";
-import { CommandRecovery } from "../commands/CommandRecovery";
+import { CommandRecovery, localCleanupOnly } from "../commands/CommandRecovery";
 import { Loader, RecoveryOverlay, recoveryConflict, recoveryScreen } from "../commands/RecoveryOverlay";
 import { StepBackButton, stepBackCopy } from "../commands/StepBackButton";
 import { useEnterNext } from "../commands/useEnterNext";
@@ -163,7 +163,7 @@ export function WrittenScreen({ state, language, submitOnEnter, actions, onToday
     {state.phase === "closed" && !summary && <p role="status">{t.closed}</p>}
     {state.phase === "unknown" && !state.question && !unknownAnswer && !result && <p role="status">{t.unknown}</p>}
     {problem && !isClosed && <p role="status">{problem}</p>}
-    {showRecovery && <CommandRecovery className="written-recovery" language={language} lanes={manualLanes}
+    {showRecovery && <CommandRecovery className="written-recovery" language={language} lanes={manualLanes} localOnly={localCleanupOnly(primary, stop)}
       canRetryPrimary={state.canRetryPrimary} canRetryStop={stop.canRetry}
       onCheck={() => { void actions.refresh(); }} onRetry={lane => { void actions.retry(lane); }} />}
     {recovering && <RecoveryOverlay screen={recovering} language={language} />}

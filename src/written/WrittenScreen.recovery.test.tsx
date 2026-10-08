@@ -147,3 +147,22 @@ describe("an ended recovery (CT §6.1 п. 7, 10; QA CP2 Н2)", () => {
     expect((screen.getByRole("button", { name: "Проверить" }) as HTMLButtonElement).disabled).toBe(false);
   });
 });
+
+describe("a confirmed answer whose local record could not be cleared (QA CP2b Н1)", () => {
+  it("offers only to update the device data: no check, no POST, the record goes and the control disappears", async () => {
+    const h = await setup();
+    const remove = vi.mocked(h.storage.remove), base = remove.getMockImplementation()!;
+    let failures = 1;
+    remove.mockImplementation(async key => { if (key.includes("written_session") && failures-- > 0) throw new Error("io"); return base(key); });
+    await h.answer("Haus");
+    expect(screen.getByText("Верно")).toBeTruthy();
+    expect(screen.getByText("Не удалось обновить данные на этом устройстве.")).toBeTruthy();
+    expect(h.overlay()).toBeNull();
+    h.noManual();
+    const posts = h.posts().length;
+    fireEvent.click(screen.getByRole("button", { name: "Обновить данные на устройстве" })); await h.step();
+    expect(h.values.has("wortly.pending.written_session")).toBe(false);
+    expect(h.posts()).toHaveLength(posts);
+    expect(screen.queryByRole("button", { name: "Обновить данные на устройстве" })).toBeNull();
+  });
+});

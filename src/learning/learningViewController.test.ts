@@ -1,6 +1,7 @@
 import { learningViewFixture } from "./learningView.test-support";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { LearningSessionProjection } from "../api/generated";
+import { tick } from "../commands/recoveryTime.test-support";
 import { LearningViewController } from "./learningViewController";
 import { current, deferred, id, missing, original, pending, primaryKey, response } from "./learningFixtures.test-support";
 
@@ -10,20 +11,28 @@ function harness(mode: "normal" | "accelerated" = "normal", sessionId: string | 
   const f = learningViewFixture(mode, sessionId); owners.push(f.view); return f;
 }
 type Fixture = ReturnType<typeof harness>;
-/** A revision that never reached the server: after the return its receipt is not found, then the explicit retry is rejected. */
+/**
+ * A revision that never reached the server: the check before the background cannot reach it; after the return its
+ * receipt is not found, so the machine sends the same ID again, and that retry is rejected.
+ */
 async function lostRevisionRejectedAfterReturn(f: Fixture, revise: () => Promise<void>, kind: "result.grade" | "result.correct") {
   const before = f.view.snapshot();
-  f.fetcher.mockRejectedValueOnce(new Error("lost before the server")); await revise();
-  expect(f.view.snapshot()).toMatchObject({ phase: "unknown", commands: { primary: { kind } } });
+  // The synthetic server answers no unknown ID by itself: the first check fails like an unreachable server.
+  f.fetcher.mockRejectedValueOnce(new Error("lost before the server")); await revise(); await tick();
+  expect(f.view.snapshot()).toMatchObject({ phase: "unknown", canRetryPrimary: false, commands: { primary: { kind } } });
   const sent = f.posts().at(-1)!;
-  f.view.suspend(); await vi.advanceTimersByTimeAsync(10000); f.replace();
-  f.fetcher.mockResolvedValueOnce(response(missing(sent, before.commands.stateVersion)));
-  await f.view.resume();
-  expect(f.view.snapshot()).toMatchObject({ phase: "unknown", canRetryPrimary: true, timer: null });
-  f.fetcher.mockImplementationOnce(async (_url, init) => response({ ...before.answer, step: before.current,
-    state_version: before.commands.stateVersion, command: { id: JSON.parse(String(init?.body)).command_id, status: "rejected" },
-    error: { code: "VERSION_CONFLICT" } }, 409));
-  await f.view.retry();
+  f.view.suspend(); await tick(10000); f.replace();
+  let refused = false;
+  f.fetcher.mockImplementation(async (url, init) => {
+    if (init?.method === "GET" && String(url).includes(`/commands/${sent.command_id}`)) return response(missing(sent, before.commands.stateVersion));
+    if (init?.method === "POST" && !refused) {
+      refused = true;
+      return response({ ...before.answer, step: before.current, state_version: before.commands.stateVersion,
+        command: { id: JSON.parse(String(init.body)).command_id, status: "rejected" }, error: { code: "VERSION_CONFLICT" } }, 409);
+    }
+    return f.handler(url, init);
+  });
+  await f.view.resume(); await tick();
 }
 
 describe("Learning question, result and presentation lifecycle", () => {
@@ -130,7 +139,7 @@ describe("Learning question, result and presentation lifecycle", () => {
     vi.useFakeTimers(); const f = harness(); f.wrong(); await f.view.refresh(); f.view.setDraft("x"); await f.view.submit();
     const gate = deferred<Response>(); f.fetcher.mockReturnValueOnce(gate.promise); const correcting = f.view.correct();
     await vi.waitFor(() => expect(f.posts()).toHaveLength(2)); const reply = await f.handler(...f.fetcher.mock.calls.at(-1)!);
-    f.view.suspend(); f.replace(); const resuming = f.view.resume(); gate.resolve(reply); await correcting; await resuming;
+    f.view.suspend(); f.replace(); const resuming = f.view.resume(); gate.resolve(reply); await correcting; await resuming; await tick();
     expect(f.view.snapshot()).toMatchObject({ phase: "result_correct", timer: null, canNext: true });
     await vi.advanceTimersByTimeAsync(10000); expect(f.posts().map(post => post.kind)).toEqual(["answer.submit", "result.correct"]);
     await f.view.next(); expect(f.posts().map(post => post.kind)).toEqual(["answer.submit", "result.correct", "assignment.present"]);
@@ -179,8 +188,10 @@ describe("Learning question, result and presentation lifecycle", () => {
   it("OPEN QUESTION: an answer whose reply was lost before background shows its first-seen result with the normal timer after return", async () => {
     vi.useFakeTimers(); const f = harness(); await f.view.refresh(); f.view.setDraft("Haus");
     f.fetcher.mockImplementationOnce(async (...call) => { await f.handler(...call); throw new Error("lost reply"); });
-    await f.view.submit(); expect(f.view.snapshot().phase).toBe("unknown");
-    f.view.suspend(); f.replace(); await f.view.resume();
+    // The check right after the loss cannot reach the server either: the result is first seen after the return.
+    f.fetcher.mockRejectedValueOnce(new Error("offline"));
+    await f.view.submit(); await tick(); expect(f.view.snapshot().phase).toBe("unknown");
+    f.view.suspend(); f.replace(); await f.view.resume(); await tick();
     expect(f.view.snapshot()).toMatchObject({ phase: "result_correct", timer: { durationMs: 3000 }, canNext: true });
     await vi.advanceTimersByTimeAsync(3000);
     expect(f.posts().map(post => post.kind)).toEqual(["answer.submit", "assignment.present"]);
@@ -269,11 +280,12 @@ describe("Learning question, result and presentation lifecycle", () => {
     expect(f.posts().map(x => x.kind)).toEqual(["answer.submit", "result.grade", "assignment.present"]);
   });
   it("lost accepted grade is recovered by GET and advances without another grade POST", async () => {
-    const f = harness(); await f.view.refresh(); f.view.setDraft("Haus"); await f.view.submit();
+    vi.useFakeTimers(); const f = harness(); await f.view.refresh(); f.view.setDraft("Haus"); await f.view.submit();
     f.fetcher.mockImplementationOnce(async (...call) => { await f.handler(...call); throw new Error("lost response"); });
-    await f.view.grade(5); expect(f.view.snapshot()).toMatchObject({ phase: "unknown", canNext: false, timer: null });
-    await f.view.refresh(); expect(f.view.snapshot()).toMatchObject({ phase: "question", answer: { result: { grade: 5 } } });
-    expect(f.posts().filter(x => x.kind === "result.grade")).toHaveLength(1);
+    await f.view.grade(5); expect(f.view.snapshot()).toMatchObject({ canNext: false, timer: null });
+    // The machine checks by the same ID at once and shows the confirmed grade, which advances once.
+    await tick(); expect(f.view.snapshot()).toMatchObject({ phase: "question", answer: { result: { grade: 5 } } });
+    expect(f.posts().map(x => x.kind)).toEqual(["answer.submit", "result.grade", "assignment.present"]);
   });
   it("Stop during an answer discards the local draft and prevents late data from reopening the screen", async () => {
     const f = harness(); await f.view.refresh(); f.view.setDraft("Haus"); const gate = deferred<Response>(); f.fetcher.mockReturnValueOnce(gate.promise);
@@ -322,13 +334,18 @@ describe("Learning question, result and presentation lifecycle", () => {
     expect(f.view.snapshot()).toMatchObject({ phase: "question", draft: "retained B", canSubmit: true });
     expect(f.newId).not.toHaveBeenCalled();
   });
-  it("a missing submitted answer reloads the same text and explicit retry keeps the original ID", async () => {
+  it("a missing submitted answer reloads the same text; with an unknown count it is only checked, never resent (CT §6.1 п. 4)", async () => {
+    vi.useFakeTimers();
     const f = harness(), intent = original(); f.values.set(primaryKey, JSON.stringify(pending(intent)));
-    f.fetcher.mockResolvedValueOnce(response(missing(intent, "1"))).mockResolvedValueOnce(response({ current: current(), state_version: "1" }));
-    await f.view.refresh(); expect(f.view.snapshot()).toMatchObject({ phase: "unknown", submittedText: "Haus", draft: "Haus", question: { id: id(6) }, canSubmit: false });
-    f.view.setDraft("must not replace saved input"); await f.view.submit(); expect(f.posts()).toEqual([]);
-    await f.view.retry(); expect(f.posts()[0]).toMatchObject({ command_id: id(100), payload: { text: "Haus" } });
-    expect(f.view.snapshot()).toMatchObject({ phase: "result_correct", draft: "" }); expect(f.newId).not.toHaveBeenCalled();
+    f.fetcher.mockImplementation(async (url, init) => init?.method === "GET" && String(url).includes(`/commands/${id(100)}`)
+      ? response(missing(intent, "1")) : f.handler(url, init));
+    await f.view.refresh(); await tick();
+    expect(f.view.snapshot()).toMatchObject({ phase: "unknown", submittedText: "Haus", draft: "Haus", question: { id: id(6) }, canSubmit: false,
+      canRetryPrimary: false, commands: { recovery: { state: { name: "counter_unknown" } } } });
+    f.view.setDraft("must not replace saved input"); await f.view.submit(); await f.view.retry();
+    for (let second = 0; second < 120; second += 5) await tick(5000);
+    expect(f.posts()).toEqual([]); expect(f.newId).not.toHaveBeenCalled();
+    expect(f.view.snapshot()).toMatchObject({ phase: "unknown", submittedText: "Haus" });
   });
   it.each(["pair", "client", "profile"])("pending text from another %s is never inserted into the current question", async source => {
     const f = harness(), saved = pending();
@@ -457,23 +474,27 @@ describe("Learning question, result and presentation lifecycle", () => {
     expect(f.view.snapshot()).toMatchObject({ phase: ending === "stop" ? "closed" : "disposed", question: null, draft: "" });
   });
   it("pending answer receipt follows the new handle without another submission", async () => {
-    const f = harness(); f.wrong(); await f.view.refresh(); f.view.setDraft("exact answer");
+    vi.useFakeTimers(); const f = harness(); f.wrong(); await f.view.refresh(); f.view.setDraft("exact answer");
     f.fetcher.mockImplementationOnce(async (...call) => { await f.handler(...call); throw new Error("lost response"); });
-    await f.view.submit(); expect(f.view.snapshot().phase).toBe("unknown");
+    // The machine's check by ID goes through the old handle and is held there.
     const gate = deferred<Response>(); f.fetcher.mockReturnValueOnce(gate.promise);
-    const old = f.view.refresh(); await vi.waitFor(() => expect(f.fetcher).toHaveBeenCalledTimes(3));
+    await f.view.submit(); await tick(); expect(f.view.snapshot().phase).toBe("unknown");
+    expect(f.fetcher).toHaveBeenCalledTimes(3);
     const oldReply = await f.handler(...f.fetcher.mock.calls.at(-1)!);
     f.replace({}, "synthetic-new"); const fresh = f.view.refresh(); gate.resolve(oldReply);
-    await Promise.all([old, fresh]);
+    await fresh; await tick(5000);
     expect(f.view.snapshot()).toMatchObject({ phase: "result_wrong", draft: "", answer: { result: { grade: 2 } } });
+    const checks = f.fetcher.mock.calls.filter(call => call[1]?.method === "GET" && String(call[0]).includes("/commands/"));
+    expect(checks.at(-1)![1]?.headers).toMatchObject({ Authorization: "Bearer synthetic-new" });
     expect(f.posts().map(post => post.kind)).toEqual(["answer.submit"]); expect(f.values.has(primaryKey)).toBe(false);
   });
   it("a lost correction is recovered without changing the next question's draft", async () => {
+    vi.useFakeTimers();
     const f = harness(); f.wrong(); await f.view.refresh(); f.view.setDraft("wrong"); await f.view.submit(); await f.view.next();
     f.view.setDraft("B draft"); f.view.previousResult();
     f.fetcher.mockImplementationOnce(async (...call) => { await f.handler(...call); throw new Error("lost response"); });
-    await f.view.correct(); expect(f.view.snapshot()).toMatchObject({ phase: "unknown", draft: "B draft", canCorrect: false, timer: null });
-    await f.view.refresh(); expect(f.view.snapshot()).toMatchObject({ phase: "previous_result", draft: "B draft", answer: { result: { grade: 4 } } });
+    await f.view.correct(); expect(f.view.snapshot()).toMatchObject({ draft: "B draft", canCorrect: false, timer: null });
+    await tick(); expect(f.view.snapshot()).toMatchObject({ phase: "previous_result", draft: "B draft", answer: { result: { grade: 4 } } });
     await f.view.next(); expect(f.view.snapshot()).toMatchObject({ phase: "question", question: { id: id(7) }, draft: "B draft" });
     expect(f.posts().filter(x => x.kind === "result.correct")).toHaveLength(1);
   });

@@ -1,13 +1,15 @@
 // «Шаг назад» of Learning (M-UNDO CP2) over a synthetic server with core's C-UNDO-L behavior (C-UNDO-L/REPORT.md).
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { hashInPlace, tick } from "../commands/recoveryTime.test-support";
 import { createLearningResultApi } from "./learningAnswerApi";
 import { id, response } from "./learningFixtures.test-support";
 import { learningUndoServer, type LearningUndoOptions as Options } from "./learningUndo.test-support";
 import { LearningViewController } from "./learningViewController";
 
 const owners: LearningViewController[] = [];
-afterEach(() => { owners.splice(0).forEach(owner => owner.dispose()); });
+afterEach(() => { owners.splice(0).forEach(owner => owner.dispose()); vi.useRealTimers(); });
 async function harness(options: Options = {}, mode: "normal" | "accelerated" = "normal") {
+  hashInPlace();
   const s = learningUndoServer(options);
   const own = () => {
     const view = new LearningViewController({ access: s.access, storage: s.storage, newId: s.newId,
@@ -63,6 +65,16 @@ describe("Learning result.undo", () => {
     expect(h.view.snapshot()).toMatchObject({ phase: "question", question: { id: again(6), status: "presented" },
       current: { status: "active" } });
   });
+  it("a lost undo from the phase summary is resolved by its ID by itself: the session is active again, nothing sent twice", async () => {
+    vi.useFakeTimers();
+    const h = await harness({ cards: [6] }); await h.answer("Haus"); await h.view.next();
+    expect(h.view.snapshot()).toMatchObject({ phase: "summary", canUndo: true });
+    h.fetcher.mockImplementationOnce(async (...call) => { await h.fetcher.getMockImplementation()!(...call); throw new TypeError("network"); });
+    await h.view.undo(); await tick();
+    expect(h.undos()).toHaveLength(1);
+    expect(h.kinds().slice(-2)).toEqual(["result.undo", "assignment.present"]);
+    expect(h.view.snapshot()).toMatchObject({ phase: "question", question: { id: again(6), status: "presented" }, current: { status: "active" } });
+  });
   it("after a correction that finished the phase (К05-151) the undo of version 2 returns to A", async () => {
     const h = await harness({ correctionEndsPhase: true }); await h.answer("falsch"); await h.view.next();
     h.view.setDraft("B draft"); h.view.previousResult(); await h.view.correct();
@@ -81,41 +93,42 @@ describe("Learning undo refusals", () => {
     expect(h.view.snapshot()).toMatchObject({ phase: "result_correct", problem: code, canUndo: false, timer: null });
     expect(h.kinds().at(-1)).toBe("result.undo");
   });
-  it("WRITE_UNAVAILABLE (503 without a projection) leaves the undo unknown: one POST, never repeated by itself", async () => {
+  it("WRITE_UNAVAILABLE (503 without a projection) leaves the undo unknown: the machine resends the same ID, six times at most", async () => {
+    vi.useFakeTimers();
     const h = await harness({ refuseUndo: { code: "WRITE_UNAVAILABLE", status: 503 } }); await h.answer("falsch");
-    await h.view.undo();
-    expect(h.view.snapshot()).toMatchObject({ phase: "unknown", canUndo: false });
-    await h.view.refresh();
+    await h.view.undo(); await tick();
+    expect(h.view.snapshot()).toMatchObject({ phase: "unknown", canUndo: false, canRetryPrimary: false });
     expect(h.undos()).toHaveLength(1);
-    // The right still holds, so the same ID may be resent by hand; it is refused again and stays unknown.
-    expect(h.view.snapshot()).toMatchObject({ phase: "unknown", canRetryPrimary: true });
-    await h.view.retry();
-    const [first, second] = h.undos();
-    expect(second).toEqual(first);
-    expect(h.undos()).toHaveLength(2);
+    // The right still holds: after each check that confirms absence, the same ID goes again (2, 5, 10, 20, 30 s).
+    for (let second = 0; second < 120; second++) await tick(1000);
+    const undos = h.undos();
+    expect(undos).toHaveLength(6);
+    expect(new Set(undos.map(post => JSON.stringify(post))).size).toBe(1);
+    expect(h.view.snapshot()).toMatchObject({ phase: "unknown", canRetryPrimary: false, commands: { recovery: { state: { name: "exhausted" } } } });
+    await h.view.retry(); await tick(60_000); expect(h.undos()).toHaveLength(6);
   });
 });
 
 describe("Learning undo: same ID and restart", () => {
   it("503 keeps the undo durable: after a restart it is checked by the same command_id, never as a new one", async () => {
+    vi.useFakeTimers();
     const h = await harness({ refuseUndo: { code: "WRITE_UNAVAILABLE", status: 503 } }); await h.answer("falsch");
     await h.view.undo();
     const [first] = h.undos();
     h.view.dispose();
-    const restarted = h.own(); await restarted.refresh();
+    const restarted = h.own(); await restarted.refresh(); await tick();
     const checks = h.fetcher.mock.calls.filter(call => call[1]?.method === "GET" && String(call[0]).includes(`/commands/${first.command_id}`));
     expect(checks.length).toBeGreaterThan(0);
-    expect(h.undos()).toHaveLength(1);
-    expect(restarted.snapshot()).toMatchObject({ phase: "unknown", canRetryPrimary: true });
-    await restarted.retry();
+    // The same storage, the same page: its count of that ID goes on (1 of 6), so the restart resends only the same ID.
+    expect(restarted.snapshot()).toMatchObject({ phase: "unknown", canRetryPrimary: false });
+    await tick(2000); await tick();
     expect(h.undos().map(post => post.command_id)).toEqual([first.command_id, first.command_id]);
   });
   it("a lost reply is resolved by the same ID", async () => {
+    vi.useFakeTimers();
     const h = await harness(); await h.answer("falsch");
     h.fetcher.mockImplementationOnce(async (...call) => { await h.fetcher.getMockImplementation()!(...call); throw new TypeError("network"); });
-    await h.view.undo();
-    expect(h.view.snapshot()).toMatchObject({ phase: "unknown" });
-    await h.view.refresh();
+    await h.view.undo(); await tick();
     expect(h.undos()).toHaveLength(1);
     expect(h.view.snapshot()).toMatchObject({ phase: "question", question: { id: again(6) } });
   });

@@ -7,6 +7,14 @@ import { createLearningSessionApi, type LearningSessionRead } from "./learningSe
 import { LearningSessionPendingStore, LearningStopPendingStore } from "./learningSessionPending";
 
 export type LearningDocumentSnapshot = DocumentLanesSnapshot<LearningCommandSnapshot>;
+/**
+ * The Learning commands that pass the result of a study step (CT §6.1 п. 1; TC table 4.3 «Шаг занятия»; D-RECOV table
+ * 1.1.1 group (а)): the answer or «Не помню», a grade, a correction, «Шаг назад», and «Дальше» / «Уже знаю» of a preview.
+ * session.start and assignment.present keep their manual recovery until the owner decides (4.6-В1, 4.6-В2);
+ * session.stop always does.
+ */
+export const learningAutomaticKinds = ["answer.submit", "result.grade", "result.correct", "result.undo",
+  "learning.preview_next", "learning.known"] as const;
 
 function resultCommand(intent: LearningCommandIntent): intent is LearningAnswerIntent | LearningResultIntent {
   return intent.kind === "answer.submit" || isLearningResultIntent(intent);
@@ -18,8 +26,7 @@ export class LearningDocumentCommands extends DocumentLanes<LearningCommandSnaps
     const sessions = createLearningSessionApi(options.transport), results = createLearningResultApi(options.transport);
     super(options, {
       label: "Learning",
-      // M-RECOV-AUTO CP2b turns on automatic recovery here; until then every Learning command keeps its manual check.
-      automatic: [],
+      automatic: learningAutomaticKinds,
       readSession: (credentials, sessionId, origin) => sessions.read(credentials.token, credentials.proof,
         { session_id: sessionId, ...origin(credentials) }),
       readResult: (credentials, address, origin) => results.read(credentials.token, credentials.proof,

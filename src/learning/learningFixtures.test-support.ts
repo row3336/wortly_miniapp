@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import { hashInPlace } from "../commands/recoveryTime.test-support";
 import type { LearningSessionProjection, OpenedClient, Profile } from "../api/generated";
 import { createOpenedAccess, type OpenedAccess } from "../app/openedAccess";
 import type { AsyncStorage } from "../platform/storage";
@@ -17,6 +18,13 @@ function current(sessionId = id(3)): LearningSessionProjection {
       translations: ["дом"], personal_translation_version: null, conjunction_hint: null },
       answer_spec: { kind: "word", labels: ["word"], part_count: 1, case_sensitive: true } } };
 }
+/** The current step with its question issued but not yet shown: the only state that lets a present be retried. */
+function prefetched(): LearningSessionProjection {
+  const step = current();
+  return { ...step, assignment: { ...step.assignment!, status: "prefetched" } };
+}
+/** A present stays manual (4.6-В1): the document mechanics of a manual retry are shown with it. */
+const present: LearningTransition = { kind: "assignment.present", session_id: id(3), assignment_id: id(6), payload: {} };
 const closed = (): LearningSessionProjection => ({ ...current(), status: "closed", close_reason: "stop", assignment: null });
 const action = (kind: "answer.submit" | "result.correct" | "result.grade" = "answer.submit"): LearningTransition => kind === "answer.submit"
   ? { kind, session_id: id(3), assignment_id: id(6), payload: { text: "Haus" } }
@@ -55,6 +63,7 @@ const response = (value: unknown, status = 200) => new Response(JSON.stringify(v
 function deferred<T>() { let resolve!: (value: T) => void, reject!: (error: unknown) => void;
   const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
 function fixture(saved: Partial<Record<"primary" | "stop", LearningCommandIntent>> = {}, minimumStateVersion?: () => string | null) {
+  hashInPlace();
   const values = new Map<string, string>([["unrelated", "keep"]]);
   if (saved.primary) values.set(primaryKey, JSON.stringify(pending(saved.primary)));
   if (saved.stop) values.set(stopKey, JSON.stringify(pending(saved.stop)));
@@ -82,4 +91,4 @@ function fixture(saved: Partial<Record<"primary" | "stop", LearningCommandIntent
   return { values, storage, access: () => access, replace, fetcher, onDenied, onUpdate, newId, make, owner: make(), revoke: () => { live = false; } };
 }
 
-export { id, primaryKey, stopKey, profile, current, closed, action, stop, original, pending, fact, resultRead, accepted, missing, response, deferred, fixture };
+export { id, primaryKey, stopKey, profile, current, prefetched, closed, action, present, stop, original, pending, fact, resultRead, accepted, missing, response, deferred, fixture };

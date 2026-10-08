@@ -96,35 +96,44 @@ describe("Learning screen with its real command owner", () => {
     await act(async () => { gate.resolve(await f.handler(...lastPost(f))); });
     await waitFor(() => expect(screen.getByText("Есть ошибка")).toBeTruthy());
   });
-  it("recovers a lost accepted answer by GET without offering another answer submission", async () => {
+  it("recovers a lost accepted answer by GET by itself, under the waiting cover, without any button (Я15, Я15.2)", async () => {
     const { f } = await mount({ wrong: true });
     f.fetcher.mockImplementationOnce(async (...call) => { await f.handler(...call); throw new Error("lost response"); });
+    // The machine's check by the same ID is held: the action is unknown meanwhile.
+    const check = deferred<Response>(); f.fetcher.mockReturnValueOnce(check.promise);
     fireEvent.change(input(), { target: { value: "my exact input" } }); click("Проверить");
-    await waitFor(() => expect(f.view.snapshot().phase).toBe("unknown"));
+    await waitFor(() => expect(f.view.snapshot().commands.recovery?.state.name).toBe("checking"));
+    expect(f.view.snapshot().phase).toBe("unknown");
     expect(input().readOnly).toBe(true); expect(input().value).toBe("my exact input");
-    expect(screen.queryByRole("button", { name: "Повторить отправку" })).toBeNull();
-    click("Проверить состояние"); await waitFor(() => expect(screen.getByText("Есть ошибка")).toBeTruthy());
+    expect(document.querySelector(".recovery-overlay")?.textContent).toBe("Проверяем, сохранилось ли действие…");
+    for (const name of ["Повторить отправку", "Проверить состояние"]) expect(screen.queryByRole("button", { name })).toBeNull();
+    const status = f.fetcher.mock.calls.at(-1)!;
+    await act(async () => { check.resolve(await f.handler(...status)); });
+    await waitFor(() => expect(screen.getByText("Есть ошибка")).toBeTruthy());
+    expect(document.querySelector(".recovery-overlay")).toBeNull();
     expect(f.posts().map(post => post.kind)).toEqual(["answer.submit"]);
   });
-  it("retry from an original missing receipt uses the same ID and saved text", async () => {
+  it("after a reload a missing receipt keeps the saved text and is only checked: the count is unknown (CT §6.1 п. 4)", async () => {
     const f = learningViewFixture(); owners.push(f.view); const intent = original();
     f.values.set(primaryKey, JSON.stringify(pending(intent)));
-    f.fetcher.mockResolvedValueOnce(response(missing(intent, "1"))).mockResolvedValueOnce(response({ current: current(), state_version: "1" }));
+    f.fetcher.mockImplementation(async (url, init) => init?.method === "GET" && String(url).includes(`/commands/${intent.command_id}`)
+      ? response(missing(intent, "1")) : f.handler(url, init));
     render(<LiveScreen f={f} />); await act(() => f.view.refresh());
+    await waitFor(() => expect(f.view.snapshot().commands.recovery?.state.name).toBe("counter_unknown"));
     expect(input().value).toBe("Haus"); expect(input().readOnly).toBe(true); expect(f.posts()).toEqual([]);
-    click("Повторить отправку"); await waitFor(() => expect(screen.getByText("Верно")).toBeTruthy());
-    expect(f.posts()).toHaveLength(1); expect(f.posts()[0]).toMatchObject({ command_id: intent.command_id, payload: { text: "Haus" } });
+    expect(document.querySelector(".recovery-overlay")?.textContent).toBe("Проверяем, сохранилось ли действие…");
+    for (const name of ["Повторить отправку", "Проверить состояние"]) expect(screen.queryByRole("button", { name })).toBeNull();
     expect(f.newId).not.toHaveBeenCalled();
   });
-  it("a suspended screen hides primary retry while Stop remains available", async () => {
+  it("a study result never offers a primary retry; Stop remains available", async () => {
     const f = learningViewFixture(); owners.push(f.view); const intent = original();
     f.values.set(primaryKey, JSON.stringify(pending(intent)));
-    f.fetcher.mockResolvedValueOnce(response(missing(intent, "1"))).mockResolvedValueOnce(response({ current: current(), state_version: "1" }));
+    f.fetcher.mockImplementation(async (url, init) => init?.method === "GET" && String(url).includes(`/commands/${intent.command_id}`)
+      ? response(missing(intent, "1")) : f.handler(url, init));
     render(<LiveScreen f={f} />); await act(() => f.view.refresh());
-    expect(screen.getByRole("button", { name: "Повторить отправку" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Повторить отправку" })).toBeNull();
+    expect(f.view.snapshot()).toMatchObject({ canRetryPrimary: false, commands: { automaticPrimary: true, primary: { canRetry: false } } });
     act(() => f.view.suspend());
-    expect(f.view.snapshot().commands.primary.canRetry).toBe(true);
-    expect(f.view.snapshot().canRetryPrimary).toBe(false);
     expect(screen.queryByRole("button", { name: "Повторить отправку" })).toBeNull();
     await act(() => f.view.retry("primary")); expect(f.posts()).toEqual([]);
     click("Выйти"); await waitFor(() => expect(f.view.snapshot().phase).toBe("closed"));
@@ -171,11 +180,28 @@ describe("Learning screen with its real command owner", () => {
     await waitFor(() => expect(f.view.snapshot().phase).toBe("question"));
     expect(f.posts().map(post => post.kind)).toEqual(["answer.submit", "result.grade", "assignment.present"]);
   });
+  it("another payload under the same ID shows the text of Я17 with «Выйти», no check and no retry (CT §6.1 п. 10)", async () => {
+    const { f } = await mount();
+    const handler = f.fetcher.getMockImplementation()!;
+    f.fetcher.mockImplementation(async (url, init) => init?.method === "POST" && JSON.parse(String(init.body)).kind === "answer.submit"
+      ? response({ error: { code: "COMMAND_PAYLOAD_MISMATCH" } }, 409) : handler(url, init));
+    fireEvent.change(input(), { target: { value: "Haus" } }); click("Проверить");
+    await screen.findByText("Не удалось подтвердить это действие. Повторить его нельзя. Заверши занятие, чтобы продолжить.");
+    expect(screen.queryByText("Проверяем, сохранилось ли действие.")).toBeNull();
+    for (const name of ["Повторить отправку", "Проверить состояние"]) expect(screen.queryByRole("button", { name })).toBeNull();
+    expect(f.values.has(primaryKey)).toBe(true);
+    click("Выйти"); await waitFor(() => expect(f.posts().map(post => post.kind)).toEqual(["answer.submit", "session.stop"]));
+  });
   it("lost correction shows an unconfirmed change until its original receipt is read", async () => {
     const { f } = await mount({ wrong: true }); await answer(f);
     f.fetcher.mockImplementationOnce(async (...call) => { await f.handler(...call); throw new Error("lost correction"); });
+    const check = deferred<Response>(); f.fetcher.mockReturnValueOnce(check.promise);
     click("Исправить ответ"); await waitFor(() => expect(screen.getByText("Проверяем изменение")).toBeTruthy());
-    expect(screen.queryByText("Верно")).toBeNull(); click("Проверить состояние");
+    expect(screen.queryByText("Верно")).toBeNull(); expect(screen.queryByRole("button", { name: "Проверить состояние" })).toBeNull();
+    // The machine's own check by ID confirms the correction.
+    await waitFor(() => expect(f.view.snapshot().commands.recovery?.state.name).toBe("checking"));
+    const status = f.fetcher.mock.calls.at(-1)!;
+    await act(async () => { check.resolve(await f.handler(...status)); });
     await waitFor(() => expect(screen.getByText("Верно")).toBeTruthy());
     expect(f.posts().map(post => post.kind)).toEqual(["answer.submit", "result.correct"]);
   });
@@ -214,8 +240,11 @@ describe("Learning screen with its real command owner", () => {
     vi.mocked(f.storage.remove).mockRejectedValueOnce(new Error("storage unavailable")); await answer(f);
     expect(screen.getByText("Действие сохранено. Не удалось обновить данные на этом устройстве.")).toBeTruthy();
     expect(screen.getByText("Есть ошибка")).toBeTruthy(); expect(screen.queryByRole("button", { name: "Повторить отправку" })).toBeNull();
-    click("Проверить состояние"); await waitFor(() => expect(f.values.has(primaryKey)).toBe(false));
+    // The outcome is confirmed: the control only repeats the local cleanup and is named so, not as a check (CT §6.1 п. 2).
+    expect(screen.queryByRole("button", { name: "Проверить состояние" })).toBeNull();
+    click("Обновить данные на устройстве"); await waitFor(() => expect(f.values.has(primaryKey)).toBe(false));
     expect(f.posts().map(post => post.kind)).toEqual(["answer.submit"]);
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Обновить данные на устройстве" })).toBeNull());
   });
   it("an unavailable projection hides the question and explains recovery without exposing wire errors", async () => {
     const { f } = await mount(); fireEvent.change(input(), { target: { value: "retained draft" } });

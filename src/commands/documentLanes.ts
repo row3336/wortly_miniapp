@@ -205,8 +205,9 @@ export class DocumentLanes<C extends LaneState, T extends { kind: string; sessio
   snapshot(): DocumentLanesSnapshot<C> {
     const stateVersion = this.minimumVersion(), live = this.live();
     const lane = this.controllers.primary.snapshot(), stop = this.controllers.stop.snapshot();
-    // A study result has no manual retry (Я15): only the machine resends it.
-    const automaticPrimary = lane.pending && this.automatic.has(lane.kind ?? "");
+    // A study result has no manual retry (Я15): only the machine resends it. Once its outcome is known, a record kept only
+    // by a failed local cleanup is no recovery any more: its manual check of the device data stays.
+    const automaticPrimary = lane.pending && lane.outcome === null && this.automatic.has(lane.kind ?? "");
     const primary = automaticPrimary ? { ...lane, canRetry: false } : lane;
     return { live, stateVersion, primary, stop,
       canBegin: live && !this.refreshing && !this.work.primary && !this.work.stop && ready(primary) && ready(stop) && !this.recovery.busy(),

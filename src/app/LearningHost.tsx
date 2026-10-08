@@ -182,7 +182,8 @@ export function LearningHost(props: LearningHostProps) {
     </section>}
     {state ? <LearningScreen state={state} actions={actions} language={props.language}
       submitOnEnter={props.submitOnEnter} renderPreview={props.renderPreview} /> : <p role="status">{t.loading}</p>}
-    {state?.phase === "closed" && (state.commands.primary.pending || state.commands.stop.pending)
+    {/* A study result left after the closure is checked by its automatic recovery, never by hand (Я15, CT §6.1 п. 2). */}
+    {state?.phase === "closed" && (state.commands.primary.pending && !state.commands.automaticPrimary || state.commands.stop.pending)
       && <button type="button" onClick={() => { void actions.refresh(); }}>{t.check}</button>}
     {state && (state.phase === "idle" && state.sessionId === null || state.phase === "closed")
       && !state.commands.primary.pending && !state.commands.stop.pending && state.commands.canBegin
