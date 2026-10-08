@@ -29,7 +29,7 @@ function lane(wiring: LaneWiring<State>) {
     retry: vi.fn(async () => {}), dispose: vi.fn(), snapshot: () => ({ ...state }),
     // No kind of this scripted mode recovers automatically: these are never reached.
     prepare: vi.fn(() => new Error("manual mode")), start: vi.fn(async () => {}), resend: vi.fn(async () => {}),
-    lastFailure: () => null, release: vi.fn(async () => {}) };
+    lastFailure: () => null, release: vi.fn(async () => {}), releaseClosed: vi.fn(async () => {}) };
   return lane;
 }
 const profile = (version = "5"): Profile => ({ profile_id: id(1), role: "user", ui_language: "ru", dictionary_language: "ru",

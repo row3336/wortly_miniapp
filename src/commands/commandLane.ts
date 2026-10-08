@@ -1,6 +1,7 @@
 import { ApiError } from "../api/http";
 import type { ClosedSessionBoundary, Profile } from "../api/generated";
 import { exactKeys, oneOf, record, sameId, uuid, version } from "../api/wireValidation";
+import { sendableIntent } from "./closeIntent";
 import { PendingStoreError, type PendingSlot } from "./pendingSlot";
 
 export type CommandPhase = "loading" | "idle" | "checking" | "sending" | "unresolved" | "blocked" | "settled" | "disposed";
@@ -56,6 +57,11 @@ export type LaneSnapshot<I extends LaneIntent, C, R> = {
   /** Seconds the server estimates for a planned pause (problem "maintenance"); 0 once the estimate has passed. */
   pauseSeconds?: number | null;
   canRetry: boolean;
+  /**
+   * The record carries the conflict mark of Я17 in memory. The stored copy may lack it when its write failed (then the
+   * problem reads "storage"), so this, not the problem, says that the record is a conflict.
+   */
+  conflict?: boolean;
   current: C | null;
   closedSession: ClosedSessionBoundary | null;
   stateVersion: string | null;
@@ -208,6 +214,21 @@ export abstract class LaneCore<I extends LaneIntent, Snapshot> {
       this.pending = null; this.problem = null; this.retryVerified = false; this.phase = "idle";
     });
   }
+  /**
+   * Я17 after the closure (CT §6.1 п. 10, D-CP4 3.1.1): the record of a conflict waits for the confirmed closure of its
+   * own session and is then cleared, so a new session can start on this device. The caller passes only a conflict
+   * (the lane's mark or the recovery machine's conflict) of a session the server confirmed closed; the stored copy may
+   * lack the mark, so the slot compares the record without it. A record of another session stays.
+   */
+  releaseClosed(sessionId: string): Promise<void> {
+    return this.run(async () => {
+      const pending = this.pending;
+      if (!pending || this.outcome || !sameId(pending.intent.session_id, sessionId)) return;
+      await this.core.pendingStore.clearMarked(pending, this.lifetime.signal);
+      if (!this.live()) return;
+      this.pending = null; this.problem = null; this.retryVerified = false; this.phase = "idle";
+    });
+  }
   dispose(): void { this.lifetime.abort(); this.clearCurrent(); this.phase = "disposed"; }
 }
 
@@ -271,7 +292,9 @@ export abstract class CommandLane<S extends LaneSpec, O extends LaneOptions<S> =
       outcome: this.outcome, resolved: live && this.resolved ? { ...this.resolved } : null,
       rejectionCode: live ? this.rejectionCode : null, problem: this.problem,
       pauseSeconds: this.problem === "maintenance" ? this.pauseSeconds : null,
-      canRetry: live && fresh && !this.running && this.retryVerified && own && !this.pending!.mismatch && this.outcome === null,
+      canRetry: live && fresh && !this.running && this.retryVerified && own && !this.pending!.mismatch && this.outcome === null
+        && sendableIntent(this.pending!.intent),
+      conflict: this.pending?.mismatch === true,
       current: live && fresh ? structuredClone(this.current) : null,
       closedSession: live && fresh ? structuredClone(this.closedSession) : null, stateVersion: this.floor }, live && fresh);
   }
@@ -366,7 +389,8 @@ export abstract class CommandLane<S extends LaneSpec, O extends LaneOptions<S> =
   }
   private async sendPending(retry = false, transmitted?: () => void): Promise<void> {
     const pending = this.pending;
-    if (!pending || !this.live()) return;
+    // A stored closure record is only checked by its ID (D-CP4 4.6.1): never sent from here.
+    if (!pending || !this.live() || !sendableIntent(pending.intent)) return;
     if (retry && (!this.retryVerified || !this.retryFresh())) return;
     this.phase = "sending"; this.problem = null; this.retryVerified = false; this.clearCurrent(); this.emit();
     if (!this.live() || retry && !this.retryFresh()) return;

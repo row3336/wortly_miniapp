@@ -2,7 +2,7 @@
 import { useRef } from "react";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CommandRecovery, recoveryCover } from "./CommandRecovery";
+import { CommandRecovery, localCleanupOnly, recoveryCover } from "./CommandRecovery";
 import { commandCopy } from "./commandCopy";
 import { useEnterNext } from "./useEnterNext";
 
@@ -70,5 +70,22 @@ describe("the blurred cover of a waiting recovery (Q25.2, QA CP2c З2)", () => {
     const unsaved = { kind: "unsaved" } as const;
     expect(recoveryCover(unsaved, lanes("assignment.present"))).toBe(unsaved);
     expect(recoveryCover(null, lanes("assignment.present"))).toBeNull();
+  });
+});
+
+// S07 (owner answer of 08.10.2026; QA CP4a-1 probe Q-S1): «Продолжить» belongs only to a saved action whose local record
+// was left, while Stop has nothing unknown.
+describe("localCleanupOnly", () => {
+  const stopFree = { pending: false, outcome: null };
+  it("holds for accepted + storage with a free or settled Stop", () => {
+    expect(localCleanupOnly({ pending: true, outcome: "accepted", problem: "storage" }, stopFree)).toBe(true);
+    expect(localCleanupOnly({ pending: true, outcome: "accepted", problem: "storage" }, { pending: true, outcome: "accepted" })).toBe(true);
+  });
+  it("never for a refusal, a non-application, another problem or a Stop whose outcome is unknown", () => {
+    expect(localCleanupOnly({ pending: true, outcome: "rejected", problem: "storage" }, stopFree)).toBe(false);
+    expect(localCleanupOnly({ pending: true, outcome: "not_applied", problem: "storage" }, stopFree)).toBe(false);
+    expect(localCleanupOnly({ pending: true, outcome: "accepted", problem: "network" }, stopFree)).toBe(false);
+    expect(localCleanupOnly({ pending: false, outcome: "accepted", problem: "storage" }, stopFree)).toBe(false);
+    expect(localCleanupOnly({ pending: true, outcome: "accepted", problem: "storage" }, { pending: true, outcome: null })).toBe(false);
   });
 });

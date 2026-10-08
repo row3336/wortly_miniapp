@@ -56,6 +56,8 @@ export type StudyCommands = {
   begin(action: never): Promise<void>;
   retry(lane: DocumentLane): Promise<void>;
   refresh(): Promise<void>;
+  /** S07: repeat only the local cleanup of a confirmed primary outcome; nothing is requested. */
+  clearSettled(): Promise<void>;
   readSession(sessionId: string): Promise<SessionRead>;
   readResult(address: ResultAddress): Promise<ResultRead>;
   /** The activity of this view drives the automatic recovery of the primary action (Я15.3, Я15.7). */
@@ -596,6 +598,24 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
       // Accepted: show the new issue of the card. Refused: the right is gone or changed, read the actual state (CT 2.2).
       if (outcome === "accepted") await this.continueView();
       else if (outcome === "rejected") await this.refresh();
+    });
+  }
+  /**
+   * «Продолжить» (owner answer S07 of 08.10.2026): the server confirmed the action and only its local record was left.
+   * Only that cleanup is repeated: no send, no check, no read before it. A repeated refusal keeps the real state on
+   * screen. Once the record is gone the view continues as after the confirmation itself; only a view without a usable
+   * step reads the session again, and a failure of that read stays a read problem: the record is already gone, so it
+   * can neither bring back the failed cleanup nor grant a send of the saved action.
+   */
+  cleanup(): Promise<void> {
+    let cleared = false;
+    return this.run(async () => {
+      await this.commands.clearSettled();
+      cleared = this.live() && !this.commands.snapshot().primary.pending;
+    }).then(async () => {
+      if (!cleared || !this.live()) return;
+      if (this.is("stale")) await this.refresh();
+      else await this.continueView();
     });
   }
   retry(lane: DocumentLane = "primary"): Promise<void> {

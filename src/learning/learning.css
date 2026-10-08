@@ -15,3 +15,6 @@
 .learning-screen-summary .learning-step-back { position: fixed; left: 16px; bottom: max(16px, env(safe-area-inset-bottom)); }
 /* Above the blurred cover of automatic recovery (styles/app.css .recovery-overlay): Exit stays reachable. */
 .learning-header { position: relative; z-index: 2; }
+/* The check of a study action after the closure (Н6): an indicator and its status, nothing covered. */
+.learning-closed-check { display: grid; justify-items: center; gap: 16px; text-align: center; }
+.learning-closed-check p { margin: 0; }

@@ -35,6 +35,8 @@ type StudyController<S> = {
   /** A visible window got its fresh open handle while study stays disabled: recovery goes on (Я15.7). */
   resumeRecovery(): void;
   refresh(): Promise<void>;
+  /** S07 «Продолжить»: only the local cleanup of a confirmed outcome. */
+  cleanup(): Promise<void>;
   dispose(): void;
   setDraft(text: string): void;
   previousResult(): void;
@@ -47,7 +49,7 @@ type StudyController<S> = {
   stop(reason?: "stop" | "summary_home"): Promise<void>;
 };
 export type StudyActions = Pick<StudyController<unknown>, "setDraft" | "submit" | "previousResult" | "next" | "grade" | "correct"
-  | "undo" | "retry" | "refresh" | "stop">;
+  | "undo" | "retry" | "refresh" | "cleanup" | "stop">;
 type Owner<V> = {
   key: string; dictionaryLanguage: string; storage: AsyncStorage; transport: HttpOptions; seed: string | null;
   lastAccess: OpenedAccess; waitingForAccess: OpenedAccess | null; lastMinimumVersion: string; lastEnabled: boolean;
@@ -162,6 +164,7 @@ export function useStudyDocument<O extends StudyDocumentOptions, V extends Study
         const bound = lookup.current();
         return bound && !bound.waitingForAccess ? bound.controller.refresh() : Promise.resolve();
       },
+      cleanup: () => perform(controller => controller.cleanup()),
       stop: reason => perform(controller => controller.stop(reason)),
     };
     const start = async (run: (controller: V) => Promise<void>) => {

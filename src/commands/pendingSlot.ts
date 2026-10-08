@@ -87,6 +87,24 @@ export class PendingSlot<T extends { profileId: string; mismatch?: true }> {
     });
   }
 
+  /**
+   * Clear the record of a conflict (Я17) after its session was closed: the stored copy may still lack the conflict
+   * mark when its write failed, so the comparison leaves that one field out; every other field must match exactly.
+   */
+  async clearMarked(value: T, signal: AbortSignal): Promise<void> {
+    const unmarked = (record: T): T => { const { mismatch: _mark, ...rest } = record; return rest as T; };
+    const pending = unmarked(this.copy(value));
+    return this.run(async () => {
+      const current = await this.read(signal);
+      active(signal);
+      if (current && !this.same(unmarked(current), pending)) throw new PendingStoreError("changed");
+      if (current) {
+        await this.storage.remove(this.key);
+        active(signal);
+      }
+    });
+  }
+
   async markMismatch(value: T, signal: AbortSignal): Promise<void> {
     const marked = this.copy({ ...value, mismatch: true });
     return this.run(async () => {

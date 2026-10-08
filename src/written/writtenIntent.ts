@@ -1,13 +1,16 @@
 import type { PresentCommand, SessionStartCommand, SessionStartPayload, SessionStopCommand } from "../api/generated";
 import { exactKeys, oneOf, record, uuid } from "../api/wireValidation";
+import { copySaveFailedStop, validSaveFailedStop, type SaveFailedStopIntent } from "../commands/closeIntent";
 import { copyResultUndoIntent, validResultUndoIntent, type ResultUndoIntent } from "../commands/resultUndo";
 // The answer and grade envelopes are shared with Learning; only the session payloads are written-specific.
 import { copyLearningAnswerIntent, validLearningAnswerIntent, type LearningAnswerIntent } from "../learning/learningCommandIntent";
 import { copyLearningRevisionIntent, validLearningRevisionIntent, type LearningRevisionIntent } from "../learning/learningRevisionIntent";
 
 type WithoutOrigin<T> = T extends unknown ? Omit<T, "client_instance_id" | "document_id"> : never;
-export type WrittenSessionIntent = WithoutOrigin<
+/** SaveFailedStopIntent is only read from the Stop slot and checked; validWrittenIntent never lets it be sent. */
+type SendableSessionIntent = WithoutOrigin<
   (Omit<SessionStartCommand, "payload"> & { payload: SessionStartPayload }) | PresentCommand | SessionStopCommand>;
+export type WrittenSessionIntent = SendableSessionIntent | SaveFailedStopIntent;
 export type WrittenAnswerIntent = LearningAnswerIntent;
 /** An explicit grade of a correct answer or the one-tap correction of an error; both address a server right. */
 export type WrittenRevisionIntent = LearningRevisionIntent;
@@ -18,7 +21,7 @@ export type WrittenResultIntent = WrittenRevisionIntent | WrittenUndoIntent;
 export type WrittenIntent = WrittenSessionIntent | WrittenAnswerIntent | WrittenResultIntent;
 export type WrittenCommand = WrittenIntent & { client_instance_id: string; document_id: string };
 
-export function validWrittenSessionIntent(value: unknown): value is WrittenSessionIntent {
+export function validWrittenSessionIntent(value: unknown): value is SendableSessionIntent {
   if (!record(value) || !uuid(value.command_id) || !uuid(value.session_id) || !record(value.payload)) return false;
   const keys = ["session_id", "command_id", "kind", "payload"];
   let valid = false;
@@ -30,9 +33,14 @@ export function validWrittenSessionIntent(value: unknown): value is WrittenSessi
   }
   return valid && exactKeys(value, keys);
 }
+/** An intent this client may create and send. */
 export function validWrittenIntent(value: unknown): value is WrittenIntent {
   return validWrittenSessionIntent(value) || validLearningAnswerIntent(value) || validLearningRevisionIntent(value)
     || validResultUndoIntent(value);
+}
+/** An intent a durable record may hold and its status check may name: also the closure C, which is never sent. */
+export function readableWrittenIntent(value: unknown): value is WrittenIntent {
+  return validWrittenIntent(value) || validSaveFailedStop(value);
 }
 export function isAnswerKind(kind: WrittenIntent["kind"]): kind is "answer.submit" | WrittenResultIntent["kind"] {
   return kind === "answer.submit" || kind === "result.grade" || kind === "result.correct" || kind === "result.undo";
@@ -49,6 +57,7 @@ export function copyWrittenIntent(value: WrittenIntent): WrittenIntent {
   if (value.kind === "answer.submit") return copyLearningAnswerIntent(value);
   if (isRevisionIntent(value)) return copyLearningRevisionIntent(value);
   if (value.kind === "result.undo") return copyResultUndoIntent(value);
+  if (validSaveFailedStop(value)) return copySaveFailedStop(value);
   if (!validWrittenSessionIntent(value)) throw new Error("invalid written intent");
   const address = { command_id: value.command_id, session_id: value.session_id };
   switch (value.kind) {
@@ -71,7 +80,9 @@ export async function writtenIntentHash(value: WrittenIntent): Promise<string> {
   let payload: Record<string, Canonical>;
   switch (intent.kind) {
     case "session.start": payload = { session_id: session, mode: intent.payload.mode, bucket: intent.payload.bucket }; break;
-    case "session.stop": payload = { session_id: session, reason: intent.payload.reason }; break;
+    // DS 2.1.6: the closure C adds the ID of its unsaved action to the fingerprint.
+    case "session.stop": payload = { session_id: session, reason: intent.payload.reason,
+      ...("unsaved_command_id" in intent.payload ? { unsaved_command_id: intent.payload.unsaved_command_id.toLowerCase() } : {}) }; break;
     case "assignment.present": payload = { session_id: session, assignment_id: intent.assignment_id.toLowerCase() }; break;
     case "answer.submit": payload = { session_id: session, assignment_id: intent.assignment_id.toLowerCase(),
       payload: "text" in intent.payload ? { text: intent.payload.text } : { forgot: true } }; break;

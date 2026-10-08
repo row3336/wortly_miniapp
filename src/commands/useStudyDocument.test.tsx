@@ -17,6 +17,7 @@ class FakeController {
   async resume(): Promise<void> { this.calls.push("resume"); }
   resumeRecovery(): void { this.calls.push("recover"); }
   async refresh(): Promise<void> { this.calls.push("refresh"); }
+  async cleanup(): Promise<void> { this.calls.push("cleanup"); }
   dispose(): void { this.calls.push("dispose"); }
   setDraft(text: string): void { this.calls.push(`draft:${text}`); }
   previousResult(): void { this.calls.push("previous"); }

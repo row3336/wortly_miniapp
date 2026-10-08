@@ -1,7 +1,8 @@
 import type { AnswerSubmitCommand } from "../api/generated";
 import { exactKeys, record, uuid } from "../api/wireValidation";
 import { copyResultUndoIntent, validResultUndoIntent, type ResultUndoIntent } from "../commands/resultUndo";
-import { copyLearningSessionIntent, validLearningSessionIntent, type LearningSessionIntent } from "./learningSessionIntent";
+import { copyLearningSessionIntent, readableLearningSessionIntent, validLearningSessionIntent,
+  type LearningSessionIntent } from "./learningSessionIntent";
 import { copyLearningRevisionIntent, validLearningRevisionIntent, type LearningRevisionIntent } from "./learningRevisionIntent";
 
 export type LearningAnswerIntent = Omit<AnswerSubmitCommand, "client_instance_id" | "document_id">;
@@ -20,9 +21,14 @@ export function copyLearningAnswerIntent(value: LearningAnswerIntent): LearningA
   return { command_id: value.command_id, session_id: value.session_id, assignment_id: value.assignment_id,
     kind: "answer.submit", payload: "text" in value.payload ? { text: value.payload.text } : { forgot: true } };
 }
+/** An intent this client may create and send. */
 export function validLearningCommandIntent(value: unknown): value is LearningCommandIntent {
   return validLearningSessionIntent(value) || validLearningAnswerIntent(value) || validLearningRevisionIntent(value)
     || validResultUndoIntent(value);
+}
+/** An intent a durable record may hold: also the closure C, which is never sent (D-CP4 4.6.1). */
+export function readableLearningCommandIntent(value: unknown): value is LearningCommandIntent {
+  return validLearningCommandIntent(value) || readableLearningSessionIntent(value);
 }
 export function isLearningResultIntent(value: LearningCommandIntent): value is LearningResultIntent {
   return value.kind === "result.grade" || value.kind === "result.correct" || value.kind === "result.undo";

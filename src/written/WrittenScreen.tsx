@@ -107,6 +107,8 @@ export function WrittenScreen({ state, language, submitOnEnter, actions, onToday
   const showRecovery = !isClosed && (unknownLane || !automatic && (!!problem && state.phase !== "idle" || state.phase === "stale"))
     || summaryFailed;
   const recovering = isClosed ? null : recoveryCover(recoveryScreen(state.commands), state.commands);
+  // S07: «Продолжить» repeats only the local cleanup of a saved action, never the check and read of «Проверить состояние».
+  const localOnly = localCleanupOnly(primary, stop);
   const status = state.phase === "submitting" ? t.saving : state.phase === "visible_unconfirmed" ? t.present
     : state.phase === "unknown" ? t.unknown : undefined;
   const pendingForgot = primary.pending && primary.outcome === null && primary.pendingIntent?.kind === "answer.submit"
@@ -163,9 +165,9 @@ export function WrittenScreen({ state, language, submitOnEnter, actions, onToday
     {state.phase === "closed" && !summary && <p role="status">{t.closed}</p>}
     {state.phase === "unknown" && !state.question && !unknownAnswer && !result && <p role="status">{t.unknown}</p>}
     {problem && !isClosed && <p role="status">{problem}</p>}
-    {showRecovery && <CommandRecovery className="written-recovery" language={language} lanes={manualLanes} localOnly={localCleanupOnly(primary, stop)}
+    {showRecovery && <CommandRecovery className="written-recovery" language={language} lanes={manualLanes} localOnly={localOnly}
       canRetryPrimary={state.canRetryPrimary} canRetryStop={stop.canRetry}
-      onCheck={() => { void actions.refresh(); }} onRetry={lane => { void actions.retry(lane); }} />}
+      onCheck={() => { void (localOnly ? actions.cleanup() : actions.refresh()); }} onRetry={lane => { void actions.retry(lane); }} />}
     {recovering && <RecoveryOverlay screen={recovering} language={language} />}
     {(state.phase === "idle" && !unresolved || summaryFailed) && <button type="button" className="written-today" onClick={onToday}>{t.today}</button>}
   </main>;

@@ -102,6 +102,9 @@ export class LaneRecovery {
   /** Resolves the promise of begin: once the first send has its answer, or the machine stopped before sending it. */
   private firstSettled: (() => void) | null = null;
   private sending = false;
+  /** Н3: a refused or outdated intent whose record could not be cleared; cleared again on the next event, never on a timer. */
+  private unreleased: string | null = null;
+  private releasing: Promise<void> | null = null;
 
   constructor(private readonly host: LaneRecoveryHost, private readonly counter: SendCounter, private readonly clock: RecoveryClock) {}
 
@@ -109,6 +112,10 @@ export class LaneRecovery {
   busy(): boolean {
     const name = this.machine?.snapshot().state.name;
     return name !== undefined && !FINAL_RECOVERY_STATES.has(name);
+  }
+  /** The machine still checks or sends this very intent. */
+  drives(commandId: string): boolean {
+    return this.busy() && this.commandId !== null && this.commandId.toLowerCase() === commandId.toLowerCase();
   }
   view(): RecoveryView | null {
     return this.machine && this.commandId ? { ...this.machine.snapshot(), commandId: this.commandId, afterLoss: this.afterLoss } : null;
@@ -127,6 +134,7 @@ export class LaneRecovery {
    * automatic intent this owner does not drive yet (reload, another owner) is checked, then continued.
    */
   sync(): void {
+    this.retryRelease();
     const state = this.host.primary(), intent = state.pendingIntent;
     if (this.machine && this.busy() && !this.exchanging() && state.outcome !== null && state.resolved?.commandId === this.commandId) {
       this.machine.dispose(); this.machine = null;
@@ -138,9 +146,40 @@ export class LaneRecovery {
     this.replace(intent, true);
     this.machine!.resume();
   }
+  /**
+   * Н4 (D-CP4 3.1.3): the session of this pending automatic intent was confirmed closed while no machine drives it
+   * (the budget ran out, a check of the closure failed, a reload). A resumed machine only checks it by its ID until the
+   * answer is definite, on the probe schedule and only in an active window; a send cannot follow, because the document
+   * refuses any send into a closed session and a closure turns every absence into not_applied.
+   */
+  recheck(intent: RecoveryIntent): void {
+    if (this.drives(intent.command_id)) return;
+    this.replace(intent, true);
+    this.machine!.resume();
+  }
+  /**
+   * The lane cleared the record of this intent outside the machine (a conflict after the confirmed closure, Н2): nothing
+   * is left to check or send, and a machine still waiting on it would hold the lane busy and keep probing.
+   */
+  forget(commandId: string): void {
+    if (this.commandId === null || this.commandId.toLowerCase() !== commandId.toLowerCase()) return;
+    this.machine?.dispose(); this.machine = null;
+    this.settleFirst();
+    void this.counter.clear(commandId).catch(() => undefined);
+    this.host.onUpdate();
+  }
+  /**
+   * Н3 (D-CP4 3.1.2): clear the record of a refused or outdated intent again after a failed cleanup. Called by events
+   * only (a lane step, a return from the background, a refresh); null when nothing is left to clear.
+   */
+  retryRelease(): Promise<void> | null {
+    if (this.releasing) return this.releasing;
+    return this.unreleased ? this.release(this.unreleased) : null;
+  }
   setActive(active: boolean): void {
     this.active = active;
     this.machine?.setActive(active);
+    if (active) void this.retryRelease();
   }
   dispose(): void {
     this.machine?.dispose();
@@ -188,6 +227,21 @@ export class LaneRecovery {
     });
     this.machine = machine;
   }
+  /**
+   * One cleanup of a record that will never apply. The lane keeps the record when its storage fails; then it is due
+   * again on the next event. The step's own completion (its sync) runs while this is still in flight, so a failing
+   * storage never loops.
+   */
+  private release(commandId: string): Promise<void> {
+    if (this.releasing) return this.releasing;
+    const task = this.host.release(commandId).catch(() => undefined).then(() => {
+      if (this.releasing === task) this.releasing = null;
+      const state = this.host.primary(), held = state.pendingIntent?.command_id ?? commandId;
+      this.unreleased = state.pending && state.outcome === null && held.toLowerCase() === commandId.toLowerCase() ? commandId : null;
+    });
+    this.releasing = task;
+    return task;
+  }
   /** The machine waits for its own send or check: their answer settles it, not this adapter. */
   private exchanging(): boolean {
     const name = this.machine?.snapshot().state.name;
@@ -204,7 +258,7 @@ export class LaneRecovery {
     // by the server's state (CT §6.1 п. 7). Not a conflict, not a closure or a replaced window: those keep their rules.
     if (this.commandId && (state.name === "refused" || state.name === "terminated" && state.reason === "step_stale")) {
       const commandId = this.commandId;
-      void this.host.release(commandId).catch(() => undefined);
+      void this.release(commandId);
       void this.counter.clear(commandId).catch(() => undefined);
     }
     const firstSend = state.name === "idle" || state.name === "sending" && state.attempt === 1 && !this.afterLoss;

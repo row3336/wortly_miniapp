@@ -272,7 +272,8 @@ describe("LearningHost with real document owners and synthetic HTTP", () => {
     await waitFor(() => expect(h.onToday).toHaveBeenCalledOnce());
     h.f.replace({ session: null }); h.update(); await act(async () => {});
     fireEvent.click(await screen.findByRole("button", { name: /Новая группа слов4/ }));
-    await screen.findByText("Занятие завершено.");
+    // Н6 (D-CP4 3.1.4): while the record outlives the closure, the screen says that it is checked, not only «завершено».
+    await screen.findByText("Нет связи с сервером. Ждём, когда связь восстановится…");
     await act(async () => {});
     // The answer is a study result: no manual check, its automatic recovery keeps checking it by ID (Я15).
     expect(screen.queryByRole("button", { name: "Проверить сохранённые действия" })).toBeNull();
@@ -330,4 +331,91 @@ describe("LearningHost with real document owners and synthetic HTTP", () => {
     h.f.revoke(); h.update(); await screen.findByText("Занятие недоступно в этом окне.");
     expect(h.onToday).not.toHaveBeenCalled(); expect(h.f.posts()).toEqual([]);
   });
+});
+
+// QA CP2b probes H1 and H2, ported (M-RECOV-AUTO CP4a-1, D-CP4 3.1.1 and 3.1.4): what the closed Learning screen shows
+// while a study record outlives the confirmed closure, and that a conflict no longer blocks a new session.
+describe("a study record after the confirmed closure (Н2, Н6)", () => {
+  function closure(intercept: (call: Parameters<typeof fetch>, router: (...call: Parameters<typeof fetch>) => Promise<Response>) => Promise<Response> | null) {
+    const f = learningViewFixture("normal", id(3)); fixtures.push(f); f.view.dispose(); f.owner.dispose();
+    const data = settingsData();
+    const transport = { fetcher: f.fetcher, timeoutMs: 30000, maxResponseBytes: 100000 };
+    const store = new SettingsPendingStore(f.storage), onToday = vi.fn();
+    const router = async (...call: Parameters<typeof fetch>) => {
+      const path = new URL(String(call[0]), "http://localhost").pathname;
+      if (path.endsWith("/settings")) return response(data);
+      if (path.endsWith("/settings/topics")) return response({ topics: [], state_version: data.state_version });
+      if (path.endsWith("/today")) return response(today());
+      return f.handler(...call);
+    };
+    f.fetcher.mockImplementation(async (...call) => intercept(call, router) ?? router(...call));
+    function Harness() {
+      const [route, updateRoute] = useState<Route>("learning");
+      const access = f.access();
+      const settings = useSettingsDocument({ access, transport, pendingStore: store, onCurrent() {} });
+      return <LearningHost access={access} transport={transport} storage={f.storage} newId={f.newId} language="ru"
+        initialSessionId={id(3)} route={route} settings={settings} submitOnEnter
+        renderPreview={preview => <p data-testid="approved-preview">{preview.content.card.lemma}</p>}
+        onLearning={() => updateRoute("learning")} onToday={() => { onToday(); updateRoute("today"); }} onSettings={() => updateRoute("settings")} />;
+    }
+    const ui = render(<Harness />);
+    return { f, onToday, update: () => ui.rerender(<Harness />) };
+  }
+  const buttons = () => screen.queryAllByRole("button").map(button => button.textContent);
+  const body = (call: Parameters<typeof fetch>) => call[1]?.method === "POST" ? JSON.parse(String(call[1].body)) : null;
+  async function answer() {
+    const input = await screen.findByRole("textbox");
+    await waitFor(() => expect((input as HTMLInputElement).readOnly).toBe(false));
+    fireEvent.change(input, { target: { value: "Haus" } });
+    fireEvent.click(screen.getByRole("button", { name: "Проверить" }));
+  }
+
+  it("H1 a conflict, «Выйти», Today: «Новая группа слов» starts a new session on this device", async () => {
+    let conflicted: string | null = null;
+    const mismatch = () => response({ error: { code: "COMMAND_PAYLOAD_MISMATCH" } }, 409);
+    const h = closure(call => {
+      if (conflicted && call[1]?.method !== "POST" && String(call[0]).includes(`/commands/${conflicted}`)) return Promise.resolve(mismatch());
+      if (body(call)?.kind === "answer.submit") { conflicted = body(call).command_id; return Promise.resolve(mismatch()); }
+      return null;
+    });
+    await answer();
+    await screen.findByText("Не удалось подтвердить это действие. Повторить его нельзя. Заверши занятие, чтобы продолжить.");
+    fireEvent.click(screen.getByRole("button", { name: "Выйти" }));
+    await waitFor(() => expect(h.onToday).toHaveBeenCalledOnce());
+    await waitFor(() => expect(h.f.values.has(primaryKey)).toBe(false));
+    h.f.replace({ session: null }); h.update(); await act(async () => {});
+    fireEvent.click(await screen.findByRole("button", { name: /Новая группа слов/ }));
+    await waitFor(() => expect(h.f.posts().map(post => post.kind)).toContain("session.start"));
+    expect(h.f.posts().map(post => post.kind).filter(kind => kind === "answer.submit")).toHaveLength(1);
+  }, 30_000);
+
+  it("H2 a lost answer, «Выйти» offline: 9.2.2 with an indicator, nothing blurred, no buttons; back online: 9.2.8, then «На Сегодня»", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let answerId: string | null = null, offline = true;
+    const h = closure((call, router) => {
+      if (answerId && offline && String(call[0]).includes(`/commands/${answerId}`)) return Promise.reject(new TypeError("offline"));
+      if (body(call)?.kind === "answer.submit") {
+        answerId = body(call).command_id;
+        return router(...call).then(() => { throw new TypeError("lost"); });
+      }
+      return null;
+    });
+    await answer();
+    await screen.findByText("Нет связи с сервером. Ждём, когда связь восстановится…");
+    fireEvent.click(screen.getByRole("button", { name: "Выйти" }));
+    await waitFor(() => expect(h.onToday).toHaveBeenCalledOnce());
+    h.f.replace({ session: null }); h.update(); await act(async () => {});
+    fireEvent.click(await screen.findByRole("button", { name: /Новая группа слов/ }));
+    await screen.findByText("Нет связи с сервером. Ждём, когда связь восстановится…");
+    expect(document.querySelector(".learning-closed-check .wortly-loader")).toBeTruthy();
+    expect(document.querySelector(".recovery-overlay")).toBeNull();
+    expect(screen.queryByText("Занятие завершено.")).toBeNull();
+    expect(buttons()).toEqual(["Настройки"]);
+    offline = false;
+    await act(() => vi.advanceTimersByTimeAsync(31_000));
+    await screen.findByText("Занятие завершено. Последнее действие сохранено.");
+    expect(screen.getByRole("button", { name: "На Сегодня" })).toBeTruthy();
+    expect(h.f.values.has(primaryKey)).toBe(false);
+    expect(h.f.posts().filter(post => post.kind === "answer.submit")).toHaveLength(1);
+  }, 30_000);
 });

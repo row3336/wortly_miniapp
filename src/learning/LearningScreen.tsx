@@ -2,7 +2,7 @@ import { useRef, type ReactNode } from "react";
 import type { LearningPreviewAddress } from "../api/generated";
 import { recoveryCopy } from "../commands/commandCopy";
 import { CommandRecovery, localCleanupOnly, recoveryCover } from "../commands/CommandRecovery";
-import { RecoveryOverlay, recoveryConflict, recoveryScreen } from "../commands/RecoveryOverlay";
+import { ClosedCheckStatus, RecoveryOverlay, recoveryConflict, recoveryScreen } from "../commands/RecoveryOverlay";
 import { StepBackButton, stepBackCopy } from "../commands/StepBackButton";
 import { useEnterNext } from "../commands/useEnterNext";
 import type { Language } from "../i18n/language";
@@ -13,7 +13,8 @@ import type { LearningViewController, LearningViewSnapshot } from "./learningVie
 import "./learning.css";
 
 export type LearningActions = Pick<LearningViewController,
-  "setDraft" | "submit" | "previousResult" | "next" | "grade" | "correct" | "undo" | "retry" | "refresh" | "stop" | "advancePreview">;
+  "setDraft" | "submit" | "previousResult" | "next" | "grade" | "correct" | "undo" | "retry" | "refresh" | "cleanup" | "stop"
+  | "advancePreview">;
 export type LearningScreenProps = {
   state: LearningViewSnapshot;
   language: Language;
@@ -25,7 +26,7 @@ export type LearningScreenProps = {
 const copy = {
   ru: { title: "Изучение слов", exit: "Выйти", loading: "Загружаем занятие…", idle: "Занятие ещё не началось.",
     saving: "Сохраняем ответ…", present: "Подтверждаем показ задания…", unknown: "Проверяем, сохранилось ли действие.",
-    stop: "Завершаем занятие…", closed: "Занятие завершено.", unavailable: "Занятие недоступно в этом окне.", stale: "Не удалось обновить занятие.",
+    stop: "Завершаем занятие…", closed: "Занятие завершено.", closedSaved: "Занятие завершено. Последнее действие сохранено.", unavailable: "Занятие недоступно в этом окне.", stale: "Не удалось обновить занятие.",
     previous: "Предыдущий ответ", captured: "Отправленный ответ", forgot: "Забыл…", next: "Дальше", known: "Уже знаю",
     groupDone: "Группа изучена.", passDone: "Этот проход завершён.", today: "Вернуться на Сегодня",
     local: "Не удалось обновить данные на этом устройстве.", savedLocal: "Действие сохранено. Не удалось обновить данные на этом устройстве.",
@@ -33,7 +34,7 @@ const copy = {
     busy: "Занятие открыто на другом устройстве" },
   uk: { title: "Вивчення слів", exit: "Вийти", loading: "Завантажуємо заняття…", idle: "Заняття ще не почалося.",
     saving: "Зберігаємо відповідь…", present: "Підтверджуємо показ завдання…", unknown: "Перевіряємо, чи збереглася дія.",
-    stop: "Завершуємо заняття…", closed: "Заняття завершено.", unavailable: "Заняття недоступне в цьому вікні.", stale: "Не вдалося оновити заняття.",
+    stop: "Завершуємо заняття…", closed: "Заняття завершено.", closedSaved: "Заняття завершено. Останню дію збережено.", unavailable: "Заняття недоступне в цьому вікні.", stale: "Не вдалося оновити заняття.",
     previous: "Попередня відповідь", captured: "Надіслана відповідь", forgot: "Не пам’ятаю…", next: "Далі", known: "Уже знаю",
     groupDone: "Групу вивчено.", passDone: "Цей прохід завершено.", today: "Повернутися на Сьогодні",
     local: "Не вдалося оновити дані на цьому пристрої.", savedLocal: "Дію збережено. Не вдалося оновити дані на цьому пристрої.",
@@ -41,13 +42,15 @@ const copy = {
     busy: "Заняття відкрито на іншому пристрої" },
   en: { title: "Learn words", exit: "Exit", loading: "Loading your session…", idle: "The session has not started yet.",
     saving: "Saving your answer…", present: "Confirming the displayed question…", unknown: "Checking whether the action was saved.",
-    stop: "Ending the session…", closed: "The session has ended.", unavailable: "This session is unavailable in this window.", stale: "Could not refresh the session.",
+    stop: "Ending the session…", closed: "The session has ended.", closedSaved: "The session has ended. Your last action was saved.", unavailable: "This session is unavailable in this window.", stale: "Could not refresh the session.",
     previous: "Previous answer", captured: "Submitted answer", forgot: "I forgot…", next: "Next", known: "I already know this",
     groupDone: "You have learned this group.", passDone: "This round has ended.", today: "Return to Today",
     local: "Could not update data on this device.", savedLocal: "The action was saved. Could not update data on this device.",
     changed: "The question has changed. Refresh the session.", resultChanged: "The result has changed. Refresh the session.", noMaterial: "There are no words available for this session right now.",
     busy: "A session is open on another device" },
 } as const;
+// closedSaved is text 9.2.8 (ANS2 table 2.2): wording approved by the owner (R10, 08.10.2026); display conditions follow
+// TA and D-CP4 table 2.7.5. It lives here because commandCopy is not part of this package.
 
 /**
  * Connect local display to the owner's exact capabilities; no command identity or outcome is invented here.
@@ -65,8 +68,13 @@ export function LearningScreen({ state, language, submitOnEnter, actions, render
   const pendingResult = state.phase === "changing_result" ? "changing" : state.phase === "unknown" && revision ? "unknown" : null;
   const unknownAnswer = state.phase === "unknown" && pendingKind === "answer.submit";
   const isClosed = state.phase === "closed" || state.phase === "disposed";
+  // Н6: the study action of this closed session whose record outlived the closure (its check, then its answer).
+  const closedAction = state.phase === "closed" && state.sessionId !== null
+    && state.commands.closedAction?.sessionId === state.sessionId.toLowerCase() ? state.commands.closedAction : null;
   // A refused «Шаг назад» says that this right is gone; the re-read state shows what holds now (CT 2.2).
   const refusedUndo = primary.outcome === "rejected" && primary.resolved?.kind === "result.undo" && state.problem === primary.rejectionCode;
+  // S07: a saved action whose local record was left; its text and its «Продолжить» share this one condition.
+  const localOnly = localCleanupOnly(primary, stop);
   // Я17 (CT §6.1 п. 10): the conflict's own text; its action is «Выйти» of the header.
   const problem = recoveryConflict(state.commands) ? recoveryCopy[language].conflict
     : refusedUndo && state.problem !== "SESSION_CLOSED" ? stepBackCopy[language].unavailable
@@ -75,7 +83,7 @@ export function LearningScreen({ state, language, submitOnEnter, actions, render
     : state.problem === "ASSIGNMENT_STALE" ? t.changed
     : state.problem === "RESULT_STALE" ? t.resultChanged
     : state.problem === "SESSION_CLOSED" ? t.closed
-    : state.problem === "storage" ? primary.outcome === "accepted" || stop.outcome === "accepted" ? t.savedLocal : t.local
+    : state.problem === "storage" ? localOnly ? t.savedLocal : t.local
     : state.problem ? t.stale : null;
   // A study result recovers by itself: no check or retry button for it (Я15, CT §6.1 п. 2); Stop keeps its own.
   const automatic = state.commands.automaticPrimary;
@@ -127,16 +135,20 @@ export function LearningScreen({ state, language, submitOnEnter, actions, render
     {/* The phase summary keeps «Шаг назад» while the server grants it (К10-127, К05-151). */}
     {state.phase === "summary" && state.canUndo
       && <StepBackButton className="learning-step-back" language={language} onUndo={() => { void actions.undo(); }} />}
-    {["loading", "idle", "stopping", "closed", "disposed", "undoing"].includes(state.phase) && <p role="status">
+    {closedAction?.state === "checking"
+      ? <ClosedCheckStatus className="learning-closed-check" screen={recoveryScreen(state.commands)} language={language} />
+      : ["loading", "idle", "stopping", "closed", "disposed", "undoing"].includes(state.phase) && <p role="status">
       {state.phase === "loading" ? t.loading : state.phase === "idle" ? t.idle : state.phase === "stopping" ? t.stop
         : state.phase === "undoing" ? stepBackCopy[language].pending
-        : state.phase === "disposed" ? t.unavailable : t.closed}
+        : state.phase === "disposed" ? t.unavailable : closedAction?.state === "saved" ? t.closedSaved
+        // pending owner: D-CP4 5.1.1 — the text after a confirmed own Stop when the last action proved not saved.
+        : t.closed}
     </p>}
     {state.phase === "unknown" && !state.question && !unknownAnswer && !result && <p role="status">{t.unknown}</p>}
     {problem && !isClosed && <p role="status">{problem}</p>}
-    {showRecovery && <CommandRecovery className="learning-recovery" language={language} lanes={manualLanes} localOnly={localCleanupOnly(primary, stop)}
+    {showRecovery && <CommandRecovery className="learning-recovery" language={language} lanes={manualLanes} localOnly={localOnly}
       canRetryPrimary={state.canRetryPrimary} canRetryStop={stop.canRetry}
-      onCheck={() => { void actions.refresh(); }} onRetry={lane => { void actions.retry(lane); }} />}
+      onCheck={() => { void (localOnly ? actions.cleanup() : actions.refresh()); }} onRetry={lane => { void actions.retry(lane); }} />}
     {recovering && <RecoveryOverlay screen={recovering} language={language} />}
   </main>;
 }

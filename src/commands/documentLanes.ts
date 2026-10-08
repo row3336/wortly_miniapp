@@ -22,6 +22,7 @@ type LaneState = {
   resolved: { commandId: string; kind: string; sessionId: string } | null;
   problem: string | null;
   canRetry: boolean;
+  conflict?: boolean;
   current: Step | null;
   closedSession: ClosedSessionBoundary | null;
   stateVersion: string | null;
@@ -34,7 +35,15 @@ type Lane<C, T> = {
   resend(transmitted?: () => void): Promise<void>;
   lastFailure(): unknown;
   release(commandId: string): Promise<void>;
+  /** Я17: clear a conflict's record once its own session is confirmed closed (Н2). */
+  releaseClosed(sessionId: string): Promise<void>;
 };
+/**
+ * The automatic study action whose record outlived the confirmed closure of its session (D-CP4 3.1.4, Н6): checking
+ * while its record waits for a definite answer; saved when that answer is its acceptance after a Stop this document
+ * sent (9.2.8); ended otherwise (not applied, refused, a conflict cleared after the closure).
+ */
+export type ClosedAction = { sessionId: string; commandId: string; state: "checking" | "saved" | "ended" };
 export type DocumentLanesSnapshot<C> = {
   live: boolean;
   stateVersion: string;
@@ -47,6 +56,7 @@ export type DocumentLanesSnapshot<C> = {
   recovery: RecoveryView | null;
   /** The primary lane holds a study result: it is recovered automatically, never by a manual check or retry. */
   automaticPrimary: boolean;
+  closedAction: ClosedAction | null;
 };
 export type DocumentLanesOptions<C> = {
   access(): OpenedAccess;
@@ -102,7 +112,13 @@ export class DocumentLanes<C extends LaneState, T extends { kind: string; sessio
   private readonly work: Record<DocumentLane, Promise<void> | null> = { primary: null, stop: null };
   private readonly sendSources: Record<DocumentLane, OpenedAccess | null> = { primary: null, stop: null };
   protected readonly closed = new Set<string>();
+  /** session:command pairs whose record this document already began to resolve after their closure. */
   private readonly reconciledClosed = new Set<string>();
+  /** session:command pairs of a conflict whose record this document tried to clear after the closure; a refresh retries. */
+  private readonly closedReleases = new Set<string>();
+  /** Sessions this document sent its own (voluntary) Stop for. */
+  private readonly ownStops = new Set<string>();
+  private closedAction: { sessionId: string; commandId: string } | null = null;
   private floor: string;
   private disposed = false;
   private refreshing: Promise<void> | null = null;
@@ -211,7 +227,19 @@ export class DocumentLanes<C extends LaneState, T extends { kind: string; sessio
     const primary = automaticPrimary ? { ...lane, canRetry: false } : lane;
     return { live, stateVersion, primary, stop,
       canBegin: live && !this.refreshing && !this.work.primary && !this.work.stop && ready(primary) && ready(stop) && !this.recovery.busy(),
-      canStop: live && !this.work.stop && ready(stop), recovery: live ? this.recovery.view() : null, automaticPrimary };
+      canStop: live && !this.work.stop && ready(stop), recovery: live ? this.recovery.view() : null, automaticPrimary,
+      closedAction: live ? this.closedActionView(lane, stop) : null };
+  }
+  private closedActionView(primary: C, stop: C): ClosedAction | null {
+    const action = this.closedAction;
+    if (!action) return null;
+    const same = (id: string | undefined) => id !== undefined && id.toLowerCase() === action.commandId;
+    if (primary.pending && primary.outcome === null && same(primary.pendingIntent?.command_id ?? action.commandId)) return { ...action, state: "checking" };
+    // 9.2.8 needs both facts: the server accepted this action, and the closure is this document's own confirmed Stop.
+    const ownStop = this.ownStops.has(action.sessionId) && stop.outcome === "accepted" && stop.resolved?.kind === "session.stop"
+      && stop.resolved.sessionId.toLowerCase() === action.sessionId;
+    const saved = primary.outcome === "accepted" && same(primary.resolved?.commandId) && ownStop;
+    return { ...action, state: saved ? "saved" : "ended" };
   }
 
   private track(lane: DocumentLane, operation: () => Promise<void>): Promise<void> {
@@ -228,17 +256,44 @@ export class DocumentLanes<C extends LaneState, T extends { kind: string; sessio
     void task.then(finish, finish);
     return task;
   }
+  /**
+   * A record of the primary lane in a session confirmed closed. Stop does not prove whether a concurrent action
+   * committed: it is asked by its ID, never replayed. A conflict is cleared (Н2). An automatic action is checked until
+   * the answer is definite (Н4): a busy machine goes on by itself after this one check; otherwise a machine is resumed
+   * that only checks. Any other kind keeps one check and its manual check button.
+   */
   private reconcileClosedPrimary(): void {
     if (!this.live() || this.work.primary) return;
     const primary = this.controllers.primary.snapshot(), sessionId = primary.sessionId?.toLowerCase();
-    if (!primary.pending || !sessionId || !this.closed.has(sessionId) || this.reconciledClosed.has(sessionId)) return;
-    // Stop does not prove whether a concurrent answer committed: ask once by its ID, never replay it.
-    this.reconciledClosed.add(sessionId);
+    if (!primary.pending || !sessionId || !this.closed.has(sessionId)) return;
+    const intent = primary.pendingIntent, key = `${sessionId}:${intent?.command_id.toLowerCase() ?? ""}`;
+    const recovery = this.recovery.view();
+    // The lane's own mark (also when only its stored copy lacks it) or the machine's conflict on this very intent.
+    const conflict = primary.conflict === true || primary.problem === "mismatch" || !!intent && recovery?.state.name === "conflict"
+      && recovery.commandId.toLowerCase() === intent.command_id.toLowerCase();
+    if (conflict && primary.outcome === null) {
+      // One try per event: a failed clear waits for the next refresh, never loops on a failing storage.
+      if (this.closedReleases.has(key)) return;
+      this.closedReleases.add(key);
+      const lane = this.controllers.primary;
+      void this.track("primary", () => lane.releaseClosed(sessionId).then(() => {
+        // A machine that still waits on the cleared conflict (it met only the failed mark write) has nothing left.
+        if (intent && !lane.snapshot().pending) this.recovery.forget(intent.command_id);
+      }));
+      return;
+    }
+    if (this.reconciledClosed.has(key)) return;
+    this.reconciledClosed.add(key);
+    if (intent && primary.outcome === null && this.automatic.has(intent.kind)) {
+      this.closedAction = { sessionId, commandId: intent.command_id.toLowerCase() };
+      if (!this.recovery.drives(intent.command_id)) { this.recovery.recheck(intent); return; }
+    }
     void this.track("primary", () => this.controllers.primary.refresh());
   }
   refresh(): Promise<void> {
     if (!this.live()) return Promise.resolve();
     if (this.refreshing) return this.refreshing;
+    this.closedReleases.clear();
     const refreshLane = async (lane: DocumentLane) => {
       const joined = this.work[lane];
       await this.track(lane, () => this.controllers[lane].refresh());
@@ -249,9 +304,11 @@ export class DocumentLanes<C extends LaneState, T extends { kind: string; sessio
       }
     };
     // While the machine recovers the primary action, it alone checks it: a refresh only waits for its exchange in
-    // flight (a reply may still settle it), and Stop keeps its own check.
+    // flight (a reply may still settle it), and Stop keeps its own check. A record that will never apply and whose
+    // cleanup failed is only cleared again (Н3).
+    const release = this.recovery.busy() ? null : this.recovery.retryRelease();
     const primary = this.recovery.busy() ? (this.work.primary ?? Promise.resolve()).then(() => undefined, () => undefined)
-      : refreshLane("primary");
+      : release ?? refreshLane("primary");
     const task = Promise.all([primary, refreshLane("stop")]).then(() => undefined).finally(() => {
       if (this.refreshing === task) this.refreshing = null;
       this.emit();
@@ -266,6 +323,7 @@ export class DocumentLanes<C extends LaneState, T extends { kind: string; sessio
     if (this.closed.has(action.session_id.toLowerCase())) return Promise.resolve();
     const state = this.snapshot();
     if (!(lane === "stop" ? state.canStop : state.canBegin)) return Promise.resolve();
+    if (lane === "stop") this.ownStops.add(action.session_id.toLowerCase());
     if (lane === "primary" && this.automatic.has(action.kind)) {
       const intent = this.controllers.primary.prepare(action);
       return intent instanceof Error ? Promise.reject(intent) : this.recovery.begin(intent);
@@ -283,6 +341,17 @@ export class DocumentLanes<C extends LaneState, T extends { kind: string; sessio
     this.sendSources.primary = this.options.access();
     const lane = this.controllers.primary;
     return this.track("primary", () => first ? lane.start(intent, transmitted) : lane.resend(transmitted));
+  }
+  /**
+   * S07 «Продолжить»: the server confirmed the primary action and only its local record is left. The lane repeats exactly
+   * that cleanup — a reconcile with a known outcome clears the record and requests nothing — with no check, send or read.
+   */
+  clearSettled(): Promise<void> {
+    if (!this.live()) return Promise.resolve();
+    if (this.work.primary) return this.work.primary;
+    const lane = this.controllers.primary.snapshot();
+    if (!lane.pending || lane.outcome !== "accepted") return Promise.resolve();
+    return this.track("primary", () => this.controllers.primary.refresh());
   }
   /** The study view's activity (visible, fresh handle, study route on): the machine requests nothing otherwise. */
   setRecoveryActive(active: boolean): void { this.recovery.setActive(active); }

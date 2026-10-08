@@ -26,7 +26,7 @@ type Snapshot = StudyViewFields<StudyCurrent, StudyAnswer, StudyLanes> & { phase
 function lanes() {
   let version = 5, next = 100;
   const state: StudyLanes = { live: true, stateVersion: "5", canBegin: true, canStop: true, primary: idle(), stop: idle(), recovery: null,
-    automaticPrimary: false };
+    automaticPrimary: false, closedAction: null };
   let publish: (state: StudyLanes) => void = () => {};
   const replies = new Map<string, (action: Record<string, unknown>) => Partial<Lane>>();
   const commands = {
@@ -38,7 +38,7 @@ function lanes() {
         resolved: { commandId: id(next++), kind: String(action.kind), sessionId: SESSION }, ...reply };
       publish(structuredClone(state));
     }),
-    retry: vi.fn(async () => {}), refresh: vi.fn(async () => {}),
+    retry: vi.fn(async () => {}), refresh: vi.fn(async () => {}), clearSettled: vi.fn(async () => {}),
     readSession: vi.fn(async () => ({ state_version: String(version), current: current(assignment(6, "presented")) as object })),
     readResult: vi.fn(async () => ({ state_version: String(version), step: current(assignment(6, "presented")), ...answer(4) })),
     setRecoveryActive: vi.fn(), dispose: vi.fn(),

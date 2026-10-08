@@ -91,3 +91,30 @@ describe("the waiting screen", () => {
     expect(recoveryScreen({ ...view({ name: "checking" }), primary: settled("accepted") })).toBeNull();
   });
 });
+
+// Н2 after the confirmed closure (D-CP4 3.1.1; QA CP4a-1 Д2): forget drops only the machine of the cleared intent.
+describe("forget", () => {
+  it("leaves a machine of another intent alone and drops its own", async () => {
+    const { LaneRecovery } = await import("./laneRecovery");
+    const { MemorySendCounter } = await import("./sendCounter");
+    const { systemRecoveryClock } = await import("./recoveryClock");
+    const intent = { command_id: ID, kind: "answer.submit", session_id: "00000000-0000-4000-8000-000000000003" };
+    let updates = 0;
+    const recovery = new LaneRecovery({
+      automatic: () => true, primary: () => lane(), failure: () => null,
+      // The first send never answers: the machine keeps driving this intent.
+      send: () => new Promise<void>(() => {}), check: async () => {}, release: async () => {},
+      isLive: () => true, onUpdate: () => { updates++; },
+    }, new MemorySendCounter(), systemRecoveryClock);
+    void recovery.begin(intent);
+    await Promise.resolve();
+    expect(recovery.drives(ID)).toBe(true);
+    const before = updates;
+    recovery.forget("00000000-0000-4000-8000-000000000999");
+    expect({ drives: recovery.drives(ID), commandId: recovery.view()?.commandId, updates: updates - before })
+      .toEqual({ drives: true, commandId: ID, updates: 0 });
+    recovery.forget(ID.toUpperCase());
+    expect({ drives: recovery.drives(ID), view: recovery.view(), busy: recovery.busy() }).toEqual({ drives: false, view: null, busy: false });
+    recovery.dispose();
+  });
+});

@@ -217,4 +217,77 @@ describe("a confirmed answer whose local record could not be cleared (QA CP2b Н
     expect(h.posts()).toHaveLength(posts);
     expect(screen.queryByRole("button", { name: "Продолжить" })).toBeNull();
   });
+  it("S07 requests nothing at all and then continues as after the confirmation: the timer shows the next word", async () => {
+    const h = await setup();
+    const remove = vi.mocked(h.storage.remove), base = remove.getMockImplementation()!;
+    let failures = 1;
+    remove.mockImplementation(async key => { if (key.includes("written_session") && failures-- > 0) throw new Error("io"); return base(key); });
+    await h.answer("Haus");
+    const requests = h.fetcher.mock.calls.length;
+    fireEvent.click(screen.getByRole("button", { name: "Продолжить" })); await h.step();
+    expect(h.fetcher.mock.calls.length).toBe(requests);
+    expect(h.values.has("wortly.pending.written_session")).toBe(false);
+    await h.step(3000);
+    expect(screen.getByText("слово 7")).toBeTruthy();
+    expect(h.answers()).toHaveLength(1);
+  });
+  it("S07 a repeated refusal keeps the real state and the same control; nothing is requested until it succeeds", async () => {
+    const h = await setup();
+    const remove = vi.mocked(h.storage.remove), base = remove.getMockImplementation()!;
+    let failures = 2;
+    remove.mockImplementation(async key => { if (key.includes("written_session") && failures-- > 0) throw new Error("io"); return base(key); });
+    await h.answer("Haus");
+    const requests = h.fetcher.mock.calls.length;
+    fireEvent.click(screen.getByRole("button", { name: "Продолжить" })); await h.step();
+    expect(h.values.has("wortly.pending.written_session")).toBe(true);
+    expect(screen.getByText("Не удалось обновить данные на этом устройстве.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Продолжить" })).toBeTruthy();
+    h.noManual();
+    fireEvent.click(screen.getByRole("button", { name: "Продолжить" })); await h.step();
+    expect(h.values.has("wortly.pending.written_session")).toBe(false);
+    expect(h.fetcher.mock.calls.length).toBe(requests);
+    expect(h.answers()).toHaveLength(1);
+  });
+  it("S07 a refused grade whose record was left: the ordinary check of its state, never «Продолжить»", async () => {
+    const h = await setup();
+    await h.answer("Haus");
+    expect(screen.getByText("Верно")).toBeTruthy();
+    // The saved result changed on the server meanwhile: the grade is refused (VERSION_CONFLICT) with its projection.
+    for (const item of h.server.results.values()) item.version++;
+    const remove = vi.mocked(h.storage.remove), base = remove.getMockImplementation()!;
+    let failures = 1;
+    remove.mockImplementation(async key => { if (key.includes("written_session") && failures-- > 0) throw new Error("io"); return base(key); });
+    fireEvent.click(screen.getByRole("button", { name: "Легко" })); await h.step();
+    expect(h.posts().map(post => post.kind)).toContain("result.grade");
+    expect(h.values.has("wortly.pending.written_session")).toBe(true);
+    expect(screen.queryByRole("button", { name: "Продолжить" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Проверить состояние" })).toBeTruthy();
+  });
+});
+
+describe("the closure record C in the written Stop slot (D-CP4 4.6.1)", () => {
+  it("is read and checked by its ID, never sent; «Повторить завершение» never appears for it", async () => {
+    vi.useFakeTimers();
+    const f = writtenFixture({ saved: { stop: { command_id: "00000000-0000-4000-8000-000000000300", session_id: "00000000-0000-4000-8000-000000000003",
+      kind: "session.stop", payload: { reason: "save_failed", unsaved_command_id: "00000000-0000-4000-8000-000000000100" } } } });
+    f.fetcher.mockImplementation(async (url, init) => {
+      if (init?.method === "GET" && String(url).includes("/commands/")) {
+        return response({ command: { id: "00000000-0000-4000-8000-000000000300", status: "not_found" }, state_version: "1",
+          current: { profile_id: "00000000-0000-4000-8000-000000000050", role: "user", ui_language: "ru", dictionary_language: "ru",
+            time_zone: "UTC", state_version: "1", access: { status: "admitted", version: "1", reason: null } } });
+      }
+      return f.server.handle(url as RequestInfo, init);
+    });
+    function Harness() {
+      const { state, actions } = useWrittenDocument({ access: f.access(), storage: f.storage, transport: f.transport, newId: f.newId,
+        transitionMode: "normal", initialSessionId: "00000000-0000-4000-8000-000000000003" });
+      return state ? <WrittenScreen state={state} language="ru" submitOnEnter actions={actions} onToday={vi.fn()} /> : null;
+    }
+    render(<Harness />);
+    await act(() => tick(0));
+    expect(f.values.has("wortly.pending.written_stop")).toBe(true);
+    expect(f.gets("/commands/00000000-0000-4000-8000-000000000300").length).toBeGreaterThan(0);
+    expect(screen.queryByRole("button", { name: "Повторить завершение" })).toBeNull();
+    expect(f.posts()).toEqual([]);
+  });
 });

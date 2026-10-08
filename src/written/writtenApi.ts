@@ -7,7 +7,7 @@ import { count, date, eventTime, exactKeys, oneOf, record, sameId, uuid, validCl
 import { validAnswerCapabilities, validAnswerFact, validSavedAnswer } from "../learning/learningAnswerApi";
 import { validWrittenSessionCurrent } from "../study/sessionProjection";
 import { createSessionReadApi } from "../study/sessionReadApi";
-import { copyWrittenIntent, isAnswerKind, validWrittenIntent, writtenIntentHash, type WrittenCommand } from "./writtenIntent";
+import { copyWrittenIntent, isAnswerKind, readableWrittenIntent, validWrittenIntent, writtenIntentHash, type WrittenCommand } from "./writtenIntent";
 
 export type WrittenAnswer = { action: WrittenAction | null; result: WrittenResult | null; capabilities: WrittenCapabilities };
 export type WrittenStepCurrent = WrittenStep | UnavailableSession | UnavailableCurrent;
@@ -86,10 +86,11 @@ function refusal(value: Record<string, unknown>, status: number, command: Writte
   return { outcome: code === "COMMAND_PAYLOAD_MISMATCH" ? "mismatch" : "rejected",
     command: { id: command.command_id, status: "rejected" }, error: { code } };
 }
-function prepare(token: string, proof: string, value: WrittenCommand): WrittenCommand {
+/** send: only an intent this client may send; a status check also names a stored closure record (D-CP4 4.6.1). */
+function prepare(token: string, proof: string, value: WrittenCommand, use: "send" | "status"): WrittenCommand {
   if (!token || !proof || !record(value) || !uuid(value.client_instance_id) || !uuid(value.document_id)) throw new Error("invalid written command");
   const { client_instance_id, document_id, ...intent } = value;
-  if (!validWrittenIntent(intent)) throw new Error("invalid written command");
+  if (!(use === "send" ? validWrittenIntent(intent) : readableWrittenIntent(intent))) throw new Error("invalid written command");
   return { ...copyWrittenIntent(intent), client_instance_id, document_id };
 }
 const origin = (address: WrittenSessionAddress) => ({ client_instance_id: address.client_instance_id, document_id: address.document_id });
@@ -121,7 +122,7 @@ export function createWrittenApi(options: HttpOptions): WrittenApi {
       throw new ApiError("invalid_response");
     },
     async send(token, proof, original) {
-      const command = prepare(token, proof, original);
+      const command = prepare(token, proof, original, "send");
       const reply = await request("/commands", { method: "POST", token, proof, body: command });
       const value = reply.value;
       const extra = record(value) && Object.hasOwn(value, "error") ? ["error"] : [];
@@ -148,7 +149,7 @@ export function createWrittenApi(options: HttpOptions): WrittenApi {
       throw new ApiError("invalid_response");
     },
     async status(token, proof, original) {
-      const command = prepare(token, proof, original);
+      const command = prepare(token, proof, original, "status");
       const { client_instance_id: _client, document_id: _document, ...intent } = command;
       const expectedHash = await writtenIntentHash(intent);
       const query = new URLSearchParams({ ...origin(command), session_id: command.session_id, expected_intent_hash: expectedHash });

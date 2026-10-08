@@ -2,7 +2,7 @@ import type { LearningSessionProjection } from "../api/generated";
 import { copyLanePending, validLanePending } from "../commands/commandLane";
 import { PendingSlot, PendingStoreError } from "../commands/pendingSlot";
 import type { AsyncStorage } from "../platform/storage";
-import { copyLearningCommandIntent, validLearningCommandIntent, type LearningCommandIntent } from "./learningCommandIntent";
+import { copyLearningCommandIntent, readableLearningCommandIntent, type LearningCommandIntent } from "./learningCommandIntent";
 
 export type LearningSessionPending = {
   schemaVersion: 1;
@@ -14,7 +14,7 @@ export type LearningSessionPending = {
 };
 
 export function validLearningSessionPending(value: unknown): value is LearningSessionPending {
-  return validLanePending(value, validLearningCommandIntent);
+  return validLanePending(value, readableLearningCommandIntent);
 }
 
 function copy(value: unknown): LearningSessionPending {

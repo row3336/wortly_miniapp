@@ -18,11 +18,12 @@ type Props = {
 
 type LaneFacts = { pending: boolean; outcome: string | null; problem?: string | null };
 /**
- * The outcome of the primary action is confirmed, only its local record could not be cleared (problem "storage"), and
- * Stop has nothing unknown: the one control left repeats that cleanup.
+ * S07: the server confirmed that the primary action was saved (accepted, never a refusal), only its local record could
+ * not be cleared (problem "storage"), and Stop has nothing unknown: the one control left repeats that cleanup. A
+ * refused action whose record was left keeps the ordinary check of its state.
  */
 export function localCleanupOnly(primary: LaneFacts, stop: LaneFacts): boolean {
-  return primary.pending && primary.outcome !== null && primary.problem === "storage" && !(stop.pending && stop.outcome === null);
+  return primary.pending && primary.outcome === "accepted" && primary.problem === "storage" && !(stop.pending && stop.outcome === null);
 }
 
 type PendingKind = { primary: { pendingIntent: { kind: string } | null } };

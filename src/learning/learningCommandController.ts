@@ -2,6 +2,7 @@ import type { ClosedSessionBoundary, LearningAnswerResponse, LearningSessionProj
 import { oneOf, sameId, uuid, version } from "../api/wireValidation";
 import { LaneCore, missingProblem, retryStep, type CommandProblem, type LaneResolved, type LaneSnapshot,
   type MissingStatus, type WithoutId } from "../commands/commandLane";
+import { sendableIntent } from "../commands/closeIntent";
 import type { PendingSlot } from "../commands/pendingSlot";
 import { revisionRetryProblem } from "../commands/resultRevision";
 import type { LearningSessionRead, LearningSessionReply, LearningSessionStatus } from "./learningSessionApi";
@@ -75,7 +76,8 @@ export class LearningCommandController extends LaneCore<LearningCommandIntent, L
       closedSession: live && fresh ? structuredClone(this.closedSession) : null,
       canRetry: live && fresh && !this.running && this.retryVerified && this.pending !== null && !this.pending.mismatch
         && this.outcome === null && this.pending.clientInstanceId === this.options.clientInstanceId
-        && this.pending.pair === this.options.pair };
+        && this.pending.pair === this.options.pair && sendableIntent(this.pending.intent),
+      conflict: this.pending?.mismatch === true };
   }
   protected clearCurrent(): void { this.current = null; this.answer = null; this.closedSession = null; }
   private observe(stateVersion: string, current?: Current): boolean {
@@ -170,7 +172,8 @@ export class LearningCommandController extends LaneCore<LearningCommandIntent, L
 
   private async sendPending(transmitted?: () => void): Promise<void> {
     const pending = this.pending;
-    if (!pending || !this.live()) return;
+    // A stored closure record is only checked by its ID (D-CP4 4.6.1): never sent from here.
+    if (!pending || !this.live() || !sendableIntent(pending.intent)) return;
     this.phase = "sending"; this.problem = null; this.retryVerified = false; this.clearCurrent(); this.emit();
     if (!this.live()) return;
     await this.options.pendingStore.save(pending, this.lifetime.signal);

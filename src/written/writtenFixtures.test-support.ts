@@ -150,7 +150,8 @@ export function writtenServer(options: ServerOptions = {}) {
     }
     if (intent.kind === "session.stop") {
       if (state.status === "closed") return refuse(intent, "SESSION_CLOSED");
-      state.status = "closed"; state.closeReason = intent.payload.reason; state.assignment = null; state.version++;
+      // This synthetic core is R1/R2a: it never applies the closure C (save_failed), whose record the client only reads.
+      state.status = "closed"; state.closeReason = intent.payload.reason as "stop" | "summary_home"; state.assignment = null; state.version++;
       return { status: 200, body: { command: fact(intent), current: projection(), state_version: String(state.version) } };
     }
     if (intent.kind === "answer.submit") {

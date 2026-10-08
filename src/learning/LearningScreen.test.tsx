@@ -274,6 +274,56 @@ describe("Learning screen with its real command owner", () => {
     expect(f.posts().map(post => post.kind)).toEqual(["answer.submit"]);
     await waitFor(() => expect(screen.queryByRole("button", { name: "Продолжить" })).toBeNull());
   });
+  it("S07 «Продолжить» clears only the local record: no check, no read and no send before or after it", async () => {
+    const { f } = await mount({ wrong: true });
+    vi.mocked(f.storage.remove).mockRejectedValueOnce(new Error("storage unavailable")); await answer(f);
+    const requests = f.fetcher.mock.calls.length;
+    click("Продолжить"); await waitFor(() => expect(f.values.has(primaryKey)).toBe(false));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Продолжить" })).toBeNull());
+    expect(f.fetcher.mock.calls.length).toBe(requests);
+    // The saved result stays on screen and continues as after its confirmation.
+    expect(screen.getByText("Есть ошибка")).toBeTruthy();
+    expect(f.view.snapshot()).toMatchObject({ phase: "result_wrong", problem: null, canRetryPrimary: false, canNext: true });
+  });
+  it("S07 the cleanup succeeds while the server is unreachable: a read problem follows, never the failed cleanup or a resend", async () => {
+    const { f } = await mount({ wrong: true });
+    vi.mocked(f.storage.remove).mockRejectedValueOnce(new Error("storage unavailable")).mockRejectedValueOnce(new Error("storage unavailable"));
+    await answer(f);
+    const handler = f.fetcher.getMockImplementation()!;
+    f.fetcher.mockImplementation(async (url, init) => init?.method === "GET" ? Promise.reject(new TypeError("offline")) : handler(url, init));
+    // A read that failed leaves the view without a usable step while the record of the saved answer is still kept.
+    await act(() => f.view.refresh());
+    expect(f.view.snapshot().phase).toBe("stale");
+    expect(f.values.has(primaryKey)).toBe(true);
+    click("Продолжить"); await waitFor(() => expect(f.values.has(primaryKey)).toBe(false));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Продолжить" })).toBeNull());
+    expect(screen.queryByText("Действие сохранено. Не удалось обновить данные на этом устройстве.")).toBeNull();
+    expect(screen.getByText("Не удалось обновить занятие.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Проверить состояние" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Повторить отправку" })).toBeNull();
+    expect(f.view.snapshot().canRetryPrimary).toBe(false);
+    // Back online, the ordinary check reads the session; the saved answer is never sent again.
+    f.fetcher.mockImplementation(handler);
+    click("Проверить состояние"); await waitFor(() => expect(f.view.snapshot().phase).toBe("result_wrong"));
+    expect(f.posts().map(post => post.kind)).toEqual(["answer.submit"]);
+  });
+  it("S07 a refused change whose record was left keeps the ordinary check, never «Продолжить» or «Действие сохранено»", async () => {
+    const { f } = await mount(); await answer(f);
+    expect(screen.getByText("Верно")).toBeTruthy();
+    const handler = f.fetcher.getMockImplementation()!;
+    f.fetcher.mockImplementationOnce(async (_url, init) => {
+      const command = JSON.parse(String(init!.body));
+      const view = await (await handler(`http://localhost/api/v1/sessions/${id(3)}?result_id=${id(706)}`, { method: "GET" })).json();
+      return response({ ...view, command: { id: command.command_id, status: "rejected" }, error: { code: "RESULT_STALE" } }, 409);
+    });
+    vi.mocked(f.storage.remove).mockRejectedValueOnce(new Error("storage unavailable"));
+    click("Легко");
+    await waitFor(() => expect(f.view.snapshot().commands.primary).toMatchObject({ outcome: "rejected", problem: "storage", pending: true }));
+    expect(screen.queryByRole("button", { name: "Продолжить" })).toBeNull();
+    expect(screen.queryByText("Действие сохранено. Не удалось обновить данные на этом устройстве.")).toBeNull();
+    expect(screen.getByRole("button", { name: "Проверить состояние" })).toBeTruthy();
+    expect(f.posts().map(post => post.kind)).toEqual(["answer.submit", "result.grade"]);
+  });
   it("a repeated local cleanup refusal keeps the real state and the same control until the cleanup succeeds (S07)", async () => {
     const { f } = await mount({ wrong: true });
     vi.mocked(f.storage.remove).mockRejectedValueOnce(new Error("storage unavailable")).mockRejectedValueOnce(new Error("storage unavailable"));

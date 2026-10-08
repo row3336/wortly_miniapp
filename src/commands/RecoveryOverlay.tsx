@@ -54,6 +54,22 @@ export function Loader() {
   </svg>;
 }
 
+/**
+ * Н6 (D-CP4 3.1.4): the record of a study action outlived the confirmed closure of its session and is still checked by
+ * its ID. The session no longer runs, so nothing is covered: only the indicator and 9.2.1, or 9.2.2 while the server
+ * is unreachable, or 9.2.4 in a confirmed planned pause (503 MAINTENANCE only: root decision on QA CP4a-1 Ф5, C049);
+ * no buttons until the answer is definite.
+ */
+export function ClosedCheckStatus({ screen, language, className }: { screen: RecoveryScreen | null; language: Language; className: string }) {
+  const t = recoveryCopy[language];
+  const status = screen?.kind === "waiting" ? screen.status : "checking";
+  const wait = screen?.kind === "waiting" && status === "maintenance" ? maintenanceWait(language, screen.pauseSeconds) : null;
+  return <div className={className} role="status" aria-busy="true">
+    <Loader />
+    <p>{status === "offline" ? t.offline : status === "maintenance" ? `${t.maintenance}${wait ? ` ${wait}` : ""}` : t.checking}</p>
+  </div>;
+}
+
 /** The blurred cover of the study content with an indicator and the connection status; it has no buttons (Я15). */
 export function RecoveryOverlay({ screen, language }: { screen: RecoveryScreen; language: Language }) {
   const t = recoveryCopy[language];

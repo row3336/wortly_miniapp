@@ -54,7 +54,9 @@ export function learningViewFixture(mode: "normal" | "accelerated" = "normal", s
       receipts.set(intent.command_id, { intent, fact: saved }); return response({ ...project(result), command: saved });
     }
     if (intent.kind === "assignment.present") step = { ...step, assignment: { ...step.assignment!, status: "presented" } };
-    else if (intent.kind === "session.stop") step = { ...step, status: "closed", close_reason: intent.payload.reason, assignment: null, preview: null };
+    else if (intent.kind === "session.stop") step = { ...step, status: "closed",
+      // This synthetic core is R1/R2a: it never applies the closure C (save_failed), whose record the client only reads.
+      close_reason: intent.payload.reason as "stop" | "summary_home", assignment: null, preview: null };
     else if (intent.kind === "session.start") step = { ...current(intent.session_id), group: { ...current().group, status: "assembling", preview_position: 0 },
       assignment: null, preview: { id: id(20), card_id: id(21), position: 1, total: 1, content: previewContent(id(21)) } };
     else step = { ...current(step.session_id), assignment: { ...current().assignment!, status: "prefetched" } };

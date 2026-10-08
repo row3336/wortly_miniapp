@@ -4,7 +4,8 @@ import type { ClosedSessionBoundary, ErrorDetail, LearningSessionProjection,
 import { validProfile } from "../api/entryApi";
 import { ApiError, createJsonTransport, errorCode, httpError, type HttpOptions } from "../api/http";
 import { record, uuid, sameId, exactKeys, version, eventTime, oneOf, validClosedSessionBoundary } from "../api/wireValidation";
-import { copyLearningSessionIntent, validLearningSessionIntent, type LearningSessionCommand } from "./learningSessionIntent";
+import { copyLearningSessionIntent, readableLearningSessionIntent, validLearningSessionIntent,
+  type LearningSessionCommand } from "./learningSessionIntent";
 import { validLearningSessionCurrent } from "../study/sessionProjection";
 import { createSessionReadApi } from "../study/sessionReadApi";
 export { validLearningSessionCurrent } from "../study/sessionProjection";
@@ -35,10 +36,11 @@ function prepareAddress(token: string, proof: string, value: LearningSessionAddr
   if (!token || !proof || !address(value)) throw new Error("invalid Learning session access");
   return { session_id: value.session_id, client_instance_id: value.client_instance_id, document_id: value.document_id };
 }
-function prepareCommand(token: string, proof: string, value: LearningSessionCommand): LearningSessionCommand {
+/** send: only an intent this client may send; a status check also names a stored closure record (D-CP4 4.6.1). */
+function prepareCommand(token: string, proof: string, value: LearningSessionCommand, use: "send" | "status"): LearningSessionCommand {
   const access = prepareAddress(token, proof, value);
   const { client_instance_id: _client, document_id: _document, ...intent } = value;
-  if (!validLearningSessionIntent(intent)) throw new Error("invalid Learning command");
+  if (!(use === "send" ? validLearningSessionIntent(intent) : readableLearningSessionIntent(intent))) throw new Error("invalid Learning command");
   return { ...copyLearningSessionIntent(intent), client_instance_id: access.client_instance_id, document_id: access.document_id };
 }
 
@@ -67,7 +69,7 @@ export function createLearningSessionApi(options: HttpOptions): LearningSessionA
       return { current: reply.current, state_version: reply.state_version };
     },
     async send(token, proof, original) {
-      const command = prepareCommand(token, proof, original);
+      const command = prepareCommand(token, proof, original, "send");
       const reply = await request("/commands", { method: "POST", token, proof, body: command });
       const value = reply.value;
       if (record(value) && version(value.state_version)
@@ -89,7 +91,7 @@ export function createLearningSessionApi(options: HttpOptions): LearningSessionA
       throw new ApiError("invalid_response");
     },
     async status(token, proof, original) {
-      const command = prepareCommand(token, proof, original);
+      const command = prepareCommand(token, proof, original, "status");
       const parameters = query(command);
       parameters.set("session_id", command.session_id);
       const reply = await request(`/commands/${command.command_id}?${parameters}`, { method: "GET", token, proof });

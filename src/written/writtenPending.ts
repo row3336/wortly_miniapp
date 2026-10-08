@@ -2,7 +2,7 @@ import type { SessionProjection } from "../api/generated";
 import { copyLanePending, validLanePending } from "../commands/commandLane";
 import { PendingSlot, PendingStoreError } from "../commands/pendingSlot";
 import type { AsyncStorage } from "../platform/storage";
-import { copyWrittenIntent, validWrittenIntent, type WrittenIntent } from "./writtenIntent";
+import { copyWrittenIntent, readableWrittenIntent, type WrittenIntent } from "./writtenIntent";
 
 export type WrittenLane = "primary" | "stop";
 export type WrittenPending = {
@@ -14,7 +14,7 @@ export type WrittenPending = {
   mismatch?: true;
 };
 
-export function validWrittenPending(value: unknown): value is WrittenPending { return validLanePending(value, validWrittenIntent); }
+export function validWrittenPending(value: unknown): value is WrittenPending { return validLanePending(value, readableWrittenIntent); }
 
 function copy(value: unknown, lane: WrittenLane): WrittenPending {
   if (!validWrittenPending(value) || (value.intent.kind === "session.stop") !== (lane === "stop")) {
