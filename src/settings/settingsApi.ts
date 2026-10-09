@@ -219,6 +219,25 @@ function resetFact(value: unknown, profileId: string, intent: SettingsResetInten
 }
 type Fact = (value: unknown) => value is SavedCommandFact;
 
+/**
+ * A refusal of this attempt in one of two exact forms the core answers before any command handling, so no command fact
+ * is written: 409 {"error":{"code":"CLIENT_INCOMPATIBLE"}} from the contract check (core api/app.py admit,
+ * identity/origin.py) and 422 {"error":{"code":"VALIDATION_FAILED"}} from request parsing (api/app.py). It proves
+ * nothing about earlier attempts of the same intent. Any other body, including a generic 409/422, stays a plain error.
+ */
+export class KnownRefusal extends ApiError {
+  constructor(readonly refusal: "incompatible" | "command_refused", status: number, code: string) {
+    super("http", status, code);
+  }
+}
+function knownRefusal(reply: JsonReply): KnownRefusal | null {
+  const value = reply.value;
+  if (!record(value) || !exact(value, ["error"]) || !record(value.error) || !exact(value.error, ["code"])) return null;
+  if (reply.status === 409 && value.error.code === "CLIENT_INCOMPATIBLE") return new KnownRefusal("incompatible", 409, "CLIENT_INCOMPATIBLE");
+  if (reply.status === 422 && value.error.code === "VALIDATION_FAILED") return new KnownRefusal("command_refused", 422, "VALIDATION_FAILED");
+  return null;
+}
+
 /** A command reply counts only with the complete current settings; an accepted fact must be the one we sent. */
 function commandReply(reply: JsonReply, commandId: string, accepted: Fact): SettingSaveReply {
   const value = reply.value;
@@ -234,6 +253,8 @@ function commandReply(reply: JsonReply, commandId: string, accepted: Fact): Sett
         command: { id: value.command.id as string, status: "rejected" }, error: { code } };
     }
   }
+  const refusal = knownRefusal(reply);
+  if (refusal) throw refusal;
   if (!reply.ok) throw httpError(reply);
   throw new ApiError("invalid_response");
 }

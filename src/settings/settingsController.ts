@@ -3,7 +3,7 @@ import { ApiError } from "../api/http";
 import { version as validVersion } from "../api/wireValidation";
 import { ClosedAccessError, type OpenedAccess } from "../app/openedAccess";
 import { PendingStoreError, validId } from "../commands/pendingSlot";
-import { allowedSettingValue, resetKeys, type SettingKey, type SettingSaveReply, type SettingsApi } from "./settingsApi";
+import { allowedSettingValue, KnownRefusal, resetKeys, type SettingKey, type SettingSaveReply, type SettingsApi } from "./settingsApi";
 import { SettingsPendingStore, type SettingsPending } from "./settingsPending";
 import type { SettingsResetPending, SettingsResetPendingStore } from "./settingsResetPending";
 
@@ -16,7 +16,8 @@ export type SettingsDraft = Omit<Draft, "revision"> & {
   canKeepMine: boolean;
 };
 type Problem = { reason: "network" | "storage" | "invalid_pending" | "pending_changed" | "expired" | "forbidden"
-  | "context_closed" | "context_refreshed" | "client_changed" | "profile_changed" | "mismatch" | "not_found" | "stale_response"; code?: string };
+  | "context_closed" | "context_refreshed" | "client_changed" | "profile_changed" | "mismatch" | "not_found" | "stale_response"
+  | KnownRefusal["refusal"]; code?: string };
 type Outcome = { commandId: string; key: SettingKey; status: "accepted" | "rejected"; code?: string };
 /** The server's answer to a reset; shown only once the server reported it (TA 12.4). */
 type ResetOutcome = Omit<Outcome, "key">;
@@ -75,6 +76,13 @@ export class SettingsController {
   private version: string | null = null;
   private outcome: Outcome | null = null;
   private resetOutcome: ResetOutcome | null = null;
+  /**
+   * The last attempt of the sent intent got a known refusal (KnownRefusal). It is a fact about that attempt only:
+   * the intent stays unresolved and checkable, since an earlier attempt may still have been applied. Repeating it
+   * is useless until a newer client/open: Entry creates an access handle only for a compatible open, so another
+   * live handle is that sign (app/entryController.ts). A timeout or a status read never lifts it.
+   */
+  private refusal: { reason: KnownRefusal["refusal"]; code?: string; access: OpenedAccess } | null = null;
   private problem: Problem | null = null;
   private writeBlocked: "expired" | "forbidden" | "profile_changed" | null = null;
   private running: Promise<void> | null = null;
@@ -119,9 +127,13 @@ export class SettingsController {
     const minimum = this.minimumVersion();
     return this.data !== null && (minimum === null || BigInt(this.data.state_version) >= BigInt(minimum));
   }
+  private refused(): KnownRefusal["refusal"] | null {
+    const access = this.currentAccess();
+    return this.refusal && access && this.refusal.access === access ? this.refusal.reason : null;
+  }
   private retryAllowed(): boolean {
     const sent = this.sent();
-    return !!this.currentAccess() && !this.running && !this.writeBlocked && !this.settled && !!sent
+    return !!this.currentAccess() && !this.running && !this.writeBlocked && !this.settled && !!sent && !this.refused()
       && !sent.mismatch && sent.clientInstanceId === this.scope.clientId
       && !!this.problem && ["network", "storage", "not_found", "context_refreshed", "stale_response"].includes(this.problem.reason);
   }
@@ -162,9 +174,18 @@ export class SettingsController {
         this.writeBlocked = error.status === 401 ? "expired" : "forbidden";
         this.data = null;
         this.problem = { reason: this.writeBlocked, code: error.code };
+      } else if (error instanceof KnownRefusal && this.sent() && this.currentAccess()) {
+        this.refusal = { reason: error.refusal, code: error.code, access: this.currentAccess()! };
+        this.problem = { reason: error.refusal, code: error.code };
       } else if (error instanceof ClosedAccessError) {
         this.problem = { reason: this.currentAccess() ? "context_refreshed" : "context_closed" };
-      } else this.problem = { reason: "network", ...(error instanceof ApiError ? { code: error.code } : {}) };
+      } else {
+        // While a known refusal stands, a failed check (a status read, a lost reply) does not replace its reason: the
+        // screen keeps saying why no repeat is offered (an update, or the refused command).
+        const refused = this.refused();
+        this.problem = refused ? { reason: refused, code: this.refusal!.code }
+          : { reason: "network", ...(error instanceof ApiError ? { code: error.code } : {}) };
+      }
       this.phase = this.sent() ? "unresolved" : "blocked";
     }).finally(() => {
       if (this.running === task) this.running = null;
@@ -238,6 +259,7 @@ export class SettingsController {
     if (!this.live()) return;
     this.pending = null;
     this.resetPending = null;
+    this.refusal = null;
     this.settled = false;
     this.submittedRevision = null;
     this.idle();
@@ -294,7 +316,10 @@ export class SettingsController {
       }
       await this.readCurrent();
       if (!this.live()) return;
-      if (!this.problem) this.problem = { reason: pending.clientInstanceId === this.scope.clientId ? "not_found" : "client_changed" };
+      // A missing fact does not undo a known refusal of the last attempt: the repeat stays closed (KnownRefusal).
+      const refused = this.refused();
+      if (!this.problem) this.problem = pending.clientInstanceId !== this.scope.clientId ? { reason: "client_changed" }
+        : refused ? { reason: refused, code: this.refusal!.code } : { reason: "not_found" };
     }
     this.phase = "unresolved";
   }

@@ -1,5 +1,5 @@
 import type { Language } from "../i18n/language";
-import type { SettingKey } from "./settingsApi";
+import type { KnownRefusal, SettingKey } from "./settingsApi";
 import type { SettingsSnapshot } from "./settingsController";
 
 type Copy = {
@@ -22,7 +22,8 @@ type Copy = {
   /** Returning the initial settings: the button, its confirmation window (Q08) and the states after confirming. */
   reset: { button: string; title: string; resets: string; kept: string; confirm: string; cancel: string;
     sending: string; done: string; failed: string; unknown: string };
-  problems: Record<NonNullable<SettingsSnapshot["problem"]>["reason"], string>;
+  /** Known refusals (incompatible, command_refused) are worded by the screen from existing texts. */
+  problems: Record<Exclude<NonNullable<SettingsSnapshot["problem"]>["reason"], KnownRefusal["refusal"]>, string>;
 };
 
 // Wording approved by the owner (R10, 08.10.2026); display conditions follow TA. Approved by R10: only mixByLevel.locked (Б4.3.31);

@@ -628,6 +628,24 @@ describe("returning the initial settings (M-SET-RESET, D-SET-RESET 4.1, 5.3.1)",
     expect(screen.getAllByRole("button", { name: "Повторить отправку" })).toHaveLength(1);
   });
 
+  it.each([
+    ["incompatible", "reset", "Эта версия приложения устарела и не может отправлять новые действия. Закрой Wortly и открой его снова через бота."],
+    ["command_refused", "reset", "Пока не удалось подтвердить возврат исходных настроек. Проверь состояние или повтори отправку."],
+    ["incompatible", "save", "Эта версия приложения устарела и не может отправлять новые действия. Закрой Wortly и открой его снова через бота."],
+    ["command_refused", "save", "Пока не удалось подтвердить сохранение. Проверь состояние или повтори отправку."],
+  ] as const)("a known refusal (%s, %s) uses an existing text and offers no repeat (C082)", (reason, kind, text) => {
+    const f = fixture();
+    const save = { schemaVersion: 1 as const, profileId: id(1), clientInstanceId: id(2),
+      intent: { command_id: id(100), kind: "setting.save" as const, expected_field_version: "1", payload: { key: "retry_count" as const, value: 4 } } };
+    f.snapshot = { ...f.snapshot, phase: "unresolved", ...(kind === "reset" ? { resetPending: resetRecord } : { pending: save }),
+      problem: { reason, code: reason === "incompatible" ? "CLIENT_INCOMPATIBLE" : "VALIDATION_FAILED" },
+      canEdit: false, canReset: false, canRetry: false };
+    render(<SettingsScreen {...f} />);
+    expect(screen.getAllByRole("alert").map(item => item.textContent)).toEqual([text]);
+    expect(screen.queryByRole("button", { name: "Повторить отправку" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Обновить настройки" })).toBeDefined();
+  });
+
   it("a mismatch shows the existing text and no reset status or retry", () => {
     const f = fixture();
     f.snapshot = { ...f.snapshot, phase: "unresolved", resetPending: { ...resetRecord, mismatch: true },

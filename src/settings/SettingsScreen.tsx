@@ -3,6 +3,7 @@ import type { SettingConstraint, Topic } from "../api/generated";
 import { BottomNav } from "../app/BottomNav";
 import type { FeedbackDocument } from "../feedback/useFeedbackDocument";
 import type { Language } from "../i18n/language";
+import { t as appText } from "../i18n/messages";
 import type { SettingKey } from "./settingsApi";
 import type { SettingsController, SettingsSnapshot } from "./settingsController";
 import { catalogAllows, MaterialEditor, materialParts, type CatalogState } from "./MaterialEditor";
@@ -160,6 +161,17 @@ function SettingField({ setting, ...props }: SettingsScreenProps & { setting: Se
   </section>;
 }
 
+/** The top line's wording for the current problem; only existing texts, no new phrases. */
+function problemText(snapshot: SettingsSnapshot, language: Language): string {
+  const t = settingsCopy[language], reason = snapshot.problem!.reason;
+  // Exactly CLIENT_INCOMPATIBLE: the app's existing update text for it (i18n/messages.ts, M-COMPAT-HDR working copy).
+  if (reason === "incompatible") return appText(language).incompatibleDetail;
+  // text pending owner: a known 422 of the last attempt keeps the earlier unknown-outcome wording, without its retry.
+  if (reason === "command_refused") return snapshot.resetPending ? t.reset.unknown : t.unknown;
+  if (snapshot.resetPending && (reason === "network" || reason === "not_found")) return t.reset.unknown;
+  return snapshot.pending && reason === "network" ? t.unknown : t.problems[reason];
+}
+
 /**
  * The one line that reports a sent reset, next to its button; the screen's top lines then stay silent about it, so a
  * state is shown and announced once. Д2.1.9 asks to retry, so it is the line only while the retry is available: not
@@ -214,8 +226,7 @@ export function SettingsScreen(props: SettingsScreenProps) {
     {busy && line !== "sending" && <p role="status">{snapshot.phase === "sending" ? snapshot.resetPending ? t.reset.sending : t.saving
       : snapshot.data ? t.refreshing : t.loading}</p>}
     {snapshot.problem && line !== "unknown" && <div className="settings-error" role="alert">
-      <p>{snapshot.resetPending && ["network", "not_found"].includes(snapshot.problem.reason) ? t.reset.unknown
-        : snapshot.pending && snapshot.problem.reason === "network" ? t.unknown : t.problems[snapshot.problem.reason]}</p>
+      <p>{problemText(snapshot, language)}</p>
       {snapshot.canRetry && <button className="settings-secondary" type="button" onClick={() => { void actions.retry(); }}>{t.retry}</button>}
     </div>}
     {!snapshot.data && !busy && !snapshot.problem && <p role="alert">{t.unavailable}</p>}
