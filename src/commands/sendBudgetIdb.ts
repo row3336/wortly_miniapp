@@ -1,7 +1,7 @@
 import { DatabaseOpenError, openWortlyDatabase, SEND_BUDGET_STORE } from "../platform/indexedDb";
 import {
   beginSendingStep, canonicalClaim, canonicalId, canonicalIdentity, canonicalLoss, canonicalRelease, canonicalStoreKey, clearAllowed,
-  createConflict, damageGate, forbidStep, forgetHashStep, isDamaged, lossStep, releasesWithout,
+  createConflict, damagedKeys, damageGate, forbidStep, forgetHashStep, isDamaged, lossStep, releasesWithout,
   maintenanceStep, markRetryableStep, markTransmittedStep, newBudgetRecord, orphanOf, releaseStep, reserveStep, reservedClaim,
   SendBudgetError, summarize,
   type BudgetBinding, type BudgetIdentity, type BudgetLoss, type BudgetOrphan, type BudgetStep, type BudgetSummary,
@@ -218,5 +218,8 @@ export class IdbSendBudget implements SendBudgetStore {
     return this.transact<BudgetOrphan[]>("readonly", (store, finish) => {
       readAll(store, entries => finish(entries.flatMap(([key, value]) => orphanOf(key, value, profile, session) ?? [])));
     });
+  }
+  listDamagedKeys(): Promise<StoreKey[]> {
+    return this.transact<StoreKey[]>("readonly", (store, finish) => readAll(store, entries => finish(damagedKeys(entries))));
   }
 }

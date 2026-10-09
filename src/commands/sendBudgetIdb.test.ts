@@ -63,6 +63,7 @@ describe("IdbSendBudget — transactions (D-CP5 5.3.11)", () => {
       ["forbidSends", () => store.forbidSends(identity), "readwrite", ["get", "put"]],
       ["load", () => store.load(identity), "readonly", ["get"]],
       ["listOrphans", () => store.listOrphans(PROFILE, SESSION), "readonly", ["getAllKeys", "getAll"]],
+      ["listDamagedKeys", () => store.listDamagedKeys(), "readonly", ["getAllKeys", "getAll"]],
       ["forgetHashOfOtherProfiles", () => store.forgetHashOfOtherProfiles("00000000-0000-4000-8000-0000000000a2"), "readwrite", ["getAll", "put"]],
       ["clear", () => store.clear(COMMAND, PROFILE), "readwrite", ["getAllKeys", "getAll", "delete"]],
       ["clearDamaged", () => store.clearDamaged(COMMAND), "readwrite", ["getAllKeys", "getAll"]],
@@ -473,5 +474,151 @@ describe("IdbSendBudget — limits and an unavailable store (D-CP5 5.3.12, 9.1)"
     const store = await IdbSendBudget.open(fake.factory);
     fake.closeByBrowser();
     expect(await reason(store.reserve(identity, attempt(1)))).toBe("unavailable");
+  });
+});
+
+describe("IdbSendBudget — the damaged-key enumerator (D-CP5A-DAMAGE-EXIT table 4.1, C091 §4)", () => {
+  const NEW_SESSION = "00000000-0000-4000-8000-0000000000e3";
+  const OTHER_PROFILE = "00000000-0000-4000-8000-0000000000a2";
+  const START = "00000000-0000-4000-8000-000000000009";
+  const DAMAGED = "00000000-0000-4000-8000-00000000000d";
+  const LATE_DAMAGE = "00000000-0000-4000-8000-00000000000e";
+  const start: BudgetBinding = { ...binding, commandId: START, sessionId: NEW_SESSION, kind: "session.start",
+    target: { field: "session_id", id: NEW_SESSION } };
+  const inN: BudgetBinding = { ...binding, commandId: "00000000-0000-4000-8000-000000000005", sessionId: NEW_SESSION };
+  const releaseAt = releaseKey(PROFILE, NEW_SESSION);
+  const seed = (fake: FakeIndexedDb, key: string | number, value: unknown) => fake.seed(WORTLY_DATABASE, SEND_BUDGET_STORE, key, value);
+  /** A record in a format this build does not know, as another build in the same origin writes it (D-CP5A-DAMAGE-EXIT 1.1). */
+  const newerFormat = (commandId: string) => ({ schemaVersion: 2, commandId, profileId: OTHER_PROFILE, slots: [] });
+
+  /** Window 2: a raw connection to the same database that writes one value in its own readwrite transaction. */
+  async function otherWindow(fake: FakeIndexedDb): Promise<(value: unknown) => Promise<void>> {
+    const db = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = fake.factory.open(WORTLY_DATABASE, WORTLY_DATABASE_VERSION);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    return value => new Promise<void>((resolve, reject) => {
+      const transaction = db.transaction(SEND_BUDGET_STORE, "readwrite");
+      transaction.oncomplete = () => resolve();
+      transaction.onabort = () => reject(new Error("the other window's write aborted"));
+      transaction.objectStore(SEND_BUDGET_STORE).put(value);
+    });
+  }
+
+  it("4.1.3: one readonly transaction that writes nothing", async () => {
+    const fake = new FakeIndexedDb();
+    const store = await IdbSendBudget.open(fake.factory);
+    await store.createAndReserve(binding, attempt(1), 1_000);
+    seed(fake, DAMAGED, { commandId: DAMAGED, slots: "x" });
+    seed(fake, releaseKey(PROFILE, SESSION), { commandId: releaseKey(PROFILE, SESSION), schemaVersion: 1, profileId: PROFILE, session: SESSION, keys: [DAMAGED] });
+    const before = rows(fake);
+    const logged = fake.log.length;
+    expect(await store.listDamagedKeys()).toEqual([DAMAGED]);
+    expect(fake.log.slice(logged)).toEqual([{ id: logged + 1, mode: "readonly", durability: "default", requests: ["getAllKeys", "getAll"], outcome: "complete" }]);
+    expect(rows(fake)).toEqual(before);
+  });
+
+  it("4.1.1, 4.1.13: numeric keys, ±Infinity included, are listed as numbers, released and removed on proof", async () => {
+    const fake = new FakeIndexedDb();
+    const store = await IdbSendBudget.open(fake.factory);
+    for (const key of [42, Infinity, -Infinity]) seed(fake, key, { commandId: key, slots: "x" });
+    seed(fake, DAMAGED, { commandId: DAMAGED, slots: "x" });
+    const keys = await store.listDamagedKeys();
+    expect(keys).toEqual([-Infinity, 42, Infinity, DAMAGED]);
+    expect(await store.createAndReserve(start, attempt(1), 1_000, keys)).toMatchObject({ outcome: "reserved" });
+    expect(rows(fake).get(releaseAt)).toMatchObject({ keys: [-Infinity, 42, Infinity, DAMAGED] });
+    expect(await store.clearDamaged(Infinity)).toBe(true);
+    expect(await store.clearDamaged(-Infinity)).toBe(true);
+    expect(rows(fake).has(Infinity)).toBe(false);
+    expect(rows(fake).get(releaseAt)).toMatchObject({ keys: [42, DAMAGED] });
+    expect(await store.listDamagedKeys()).toEqual([42, DAMAGED]);
+  });
+
+  it("CL125 open: a damaged record under a Date key cannot be named — it is not listed and keeps blocking", async () => {
+    const fake = new FakeIndexedDb();
+    const store = await IdbSendBudget.open(fake.factory);
+    // The double types its keys as string | number; a real IndexedDB also accepts a Date, an array or binary.
+    seed(fake, new Date(0) as unknown as number, { slots: "x" });
+    expect(await store.listDamagedKeys()).toEqual([]);
+    expect(await store.createAndReserve(start, attempt(1), 1_000, [])).toEqual({ outcome: "blocked_by_damage" });
+  });
+
+  it("4.1.7: window 1 lists, window 2 writes a damaged record, window 1 starts N: blocked, nothing written", async () => {
+    const fake = new FakeIndexedDb();
+    const first = await IdbSendBudget.open(fake.factory);
+    const write = await otherWindow(fake);
+    seed(fake, DAMAGED, { commandId: DAMAGED, slots: "x" });
+    const keys = await first.listDamagedKeys();
+    await write(newerFormat(LATE_DAMAGE));
+    expect(await first.createAndReserve(start, attempt(1), 1_000, keys)).toEqual({ outcome: "blocked_by_damage" });
+    expect(rows(fake).has(START)).toBe(false);
+    expect(rows(fake).has(releaseAt)).toBe(false);
+    // A new press lists again: both keys, and the start goes through.
+    const again = await first.listDamagedKeys();
+    expect(again).toEqual([DAMAGED, LATE_DAMAGE]);
+    expect(await first.createAndReserve(start, attempt(2), 1_000, again)).toMatchObject({ outcome: "reserved" });
+    expect(rows(fake).get(releaseAt)).toMatchObject({ keys: [DAMAGED, LATE_DAMAGE] });
+  });
+
+  it.each(["start first", "damage first"] as const)(
+    "4.1.7: the start of N and window 2's damaged write at once (%s): never a release without the new key", async (order) => {
+      const fake = new FakeIndexedDb();
+      const first = await IdbSendBudget.open(fake.factory);
+      const write = await otherWindow(fake);
+      seed(fake, DAMAGED, { commandId: DAMAGED, slots: "x" });
+      const keys = await first.listDamagedKeys();
+      // Transactions run in creation order; the order of creation is the race being explored.
+      const [started] = order === "start first"
+        ? await Promise.all([first.createAndReserve(start, attempt(1), 1_000, keys), write(newerFormat(LATE_DAMAGE))])
+        : await (async () => {
+          const damaging = write(newerFormat(LATE_DAMAGE));
+          const starting = first.createAndReserve(start, attempt(1), 1_000, keys);
+          await damaging;
+          return [await starting];
+        })();
+      expect(rows(fake).has(LATE_DAMAGE)).toBe(true);
+      if (started?.outcome === "reserved") {
+        // The damage came after the start: N is released for DAMAGED only, so the next action in N is blocked.
+        expect(rows(fake).get(releaseAt)).toMatchObject({ keys: [DAMAGED] });
+        expect(await first.createAndReserve(inN, attempt(2), 1_000)).toEqual({ outcome: "blocked_by_damage" });
+      } else {
+        expect(started).toEqual({ outcome: "blocked_by_damage" });
+        expect(rows(fake).has(START)).toBe(false);
+        expect(rows(fake).has(releaseAt)).toBe(false);
+      }
+      expect(started?.outcome).toBe(order === "start first" ? "reserved" : "blocked_by_damage");
+    });
+
+  it.each(["abort_on_commit", "throw_on_create"] as const)("4.1.11: a failed listing (%s) is an error, never an empty list", async (fault) => {
+    const fake = new FakeIndexedDb();
+    const store = await IdbSendBudget.open(fake.factory);
+    seed(fake, DAMAGED, { commandId: DAMAGED, slots: "x" });
+    const before = rows(fake);
+    fake.failNext(fault);
+    expect(await reason(store.listDamagedKeys())).toBe("failed");
+    expect(rows(fake)).toEqual(before);
+  });
+
+  it("4.1.11: a listing that does not answer within the limit is a timeout, never an empty list", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const fake = new FakeIndexedDb();
+    const store = await IdbSendBudget.open(fake.factory);
+    seed(fake, DAMAGED, { commandId: DAMAGED, slots: "x" });
+    const before = rows(fake);
+    fake.failNext("hang");
+    const listing = track(store.listDamagedKeys());
+    await vi.advanceTimersByTimeAsync(SEND_BUDGET_TIMEOUT_MS);
+    await drain();
+    expect((listing.error as SendBudgetError).reason).toBe("timeout");
+    expect(listing.value).toBeUndefined();
+    expect(rows(fake)).toEqual(before);
+  });
+
+  it("4.1.11: a closed connection lists nothing: unavailable", async () => {
+    const fake = new FakeIndexedDb();
+    const store = await IdbSendBudget.open(fake.factory);
+    fake.closeByBrowser();
+    expect(await reason(store.listDamagedKeys())).toBe("unavailable");
   });
 });

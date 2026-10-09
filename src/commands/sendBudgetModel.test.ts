@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
-  budgetVerdict, MemorySendBudget, summarize,
-  type BudgetBinding, type BudgetIdentity, type BudgetSlot, type BudgetSummary, type BudgetVerdict, type SendBudgetRecord, type SlotClaim,
+  budgetVerdict, MemorySendBudget, releaseKey, summarize,
+  type BudgetBinding, type BudgetIdentity, type BudgetSlot, type BudgetSummary, type BudgetVerdict, type CreateResult, type SendBudgetRecord,
+  type SlotClaim, type StoreKey,
 } from "./sendBudget";
 
 /**
@@ -19,6 +20,11 @@ import {
  * after a refusal whose ban failed to commit, no reservation and no gate goes through (I7, C060). A sent attempt is
  * written "retryable" when its reply is lost; the model has no clear(): no failure path removes a record. Bounds of the proof are those of F1: one record, no reordered or lost
  * store operations, the store behaves as one queue.
+ *
+ * With damage (D-CP5A-DAMAGE-EXIT 4.1.12, C091 §4) the way out is two separate steps: LIST takes a snapshot of the
+ * damaged keys, START is the explicit start of a new session N that offers that snapshot, and DAMAGE may fall between
+ * them. Checked: the listing only reads and lists exactly the damaged record (I9); a start releases N only when its
+ * snapshot covers the damage of that moment, and leaves the damaged record and its missing budget as they were (I8).
  */
 
 const COMMAND = "00000000-0000-4000-8000-000000000001";
@@ -40,13 +46,16 @@ const NEW = 0, RESERVED = 1, SENDING = 2, FETCHED = 3, DONE = 4, MARKED = 5;
 type Attempt = { phase: number; slot: number; late: number; fetched: boolean; refused?: boolean };
 type Window = { next: number; crashed: boolean; current: number };
 /** refused: a refusal arrived and its ban failed to commit (C060) — nothing in the store says so. */
-/** damaged: the record was corrupted in storage (slots frozen at that moment); freed: a new start N released it. */
+/**
+ * damaged: the record was corrupted in storage (slots frozen at that moment); freed: a new start N released it;
+ * listed: the snapshot of damaged keys taken by LIST for the next START (JSON), null when none is pending.
+ */
 type State = { slots: BudgetSlot[]; windows: Window[]; attempts: Attempt[]; actual: number; banned: boolean; refused: boolean;
-  damaged: boolean; freed: boolean };
+  damaged: boolean; freed: boolean; listed: string | null };
 
 /** The store operations the model drives; a broken store can be put in its place for the controls. */
 type ModelStore = Pick<MemorySendBudget, "createAndReserve" | "reserve" | "beginSending" | "markTransmitted" | "markRetryable"
-  | "release" | "forbidSends" | "seed" | "peek">;
+  | "release" | "forbidSends" | "listDamagedKeys" | "seed" | "peek">;
 
 /**
  * ban: a proven refusal of the server may set the ban of C053 at any moment, once. refuse: the answer to a transmitted
@@ -81,12 +90,13 @@ const START: BudgetBinding = { ...identity, commandId: "00000000-0000-4000-8000-
 
 function key(state: State): string {
   const slots = state.slots.map(slot => "attempt" in slot ? `${slot.state.slice(0, 3)}${parseInt(slot.attempt.slice(24), 16)}` : slot.state.slice(0, 3));
-  return JSON.stringify([slots, state.windows, state.attempts, state.actual, state.banned, state.refused, state.damaged, state.freed]);
+  return JSON.stringify([slots, state.windows, state.attempts, state.actual, state.banned, state.refused, state.damaged, state.freed,
+    state.listed]);
 }
 function clone(state: State): State {
   return { slots: state.slots.map(slot => ({ ...slot })), windows: state.windows.map(w => ({ ...w })),
     attempts: state.attempts.map(a => ({ ...a })), actual: state.actual, banned: state.banned, refused: state.refused,
-    damaged: state.damaged, freed: state.freed };
+    damaged: state.damaged, freed: state.freed, listed: state.listed };
 }
 
 /** I5: an operation of attempt g changed a slot held by another attempt (C006: a late handler hits a foreign slot). */
@@ -116,6 +126,7 @@ class Model {
   private readonly makeStore: () => ModelStore;
   private readonly answers = new Map<string, { result: unknown; slots: BudgetSlot[] }>();
   private readonly verdicts = new Map<string, BudgetVerdict>();
+  private readonly exits = new Map<string, { listed?: string; violation: string | null }>();
   private readonly verdict: (summary: BudgetSummary | null) => BudgetVerdict;
 
   constructor(private readonly config: Config, options: Options) {
@@ -135,7 +146,7 @@ class Model {
     return {
       slots, windows: this.config.attempts.map(() => ({ next: 0, crashed: false, current: -1 })),
       attempts: this.owner.map(() => ({ phase: NEW, slot: -1, late: 0, fetched: false })), actual: this.config.prefill,
-      banned: false, refused: false, damaged: false, freed: false,
+      banned: false, refused: false, damaged: false, freed: false, listed: null,
     };
   }
 
@@ -267,7 +278,14 @@ class Model {
       }
     }
     if (this.config.damage && !state.damaged) out.push(["DAMAGE", { ...clone(state), damaged: true }, null]);
-    if (state.damaged && !state.freed) out.push(["RELEASE", { ...clone(state), freed: true }, await this.releaseByNewStart(state)]);
+    if (this.config.damage && !state.freed) {
+      const listing = await this.list(state);
+      out.push(["LIST", { ...clone(state), listed: listing.listed ?? null }, listing.violation]);
+      if (state.listed !== null) {
+        const start = await this.startN(state);
+        out.push([`START:${start.freed}`, { ...clone(state), listed: null, freed: start.freed }, start.violation]);
+      }
+    }
     if (this.config.ban && !state.banned && !state.damaged) {
       const banned = await this.run(state, "forbid", store => store.forbidSends(identity));
       out.push(["BAN", { ...clone(state), slots: banned.slots, banned: true }, banned.result ? null : "the ban was refused"]);
@@ -275,20 +293,61 @@ class Model {
     return out;
   }
 
+  /** The record as the store holds it in this state, in a fresh store of its own (the start of N is another record). */
+  private scratch(state: State): { store: ModelStore; stored: unknown } {
+    const store = this.makeStore();
+    const stored = state.damaged ? damagedRecord(state.slots, state.banned) : record(state.slots, state.banned);
+    store.seed(COMMAND, stored);
+    return { store, stored };
+  }
+  private async cached(state: State, step: string, run: () => Promise<{ listed?: string; violation: string | null }>) {
+    const id = `${JSON.stringify(state.slots)}|${state.banned}|${state.damaged}|${state.listed}|${step}`;
+    const known = this.exits.get(id);
+    if (known) return known;
+    const answer = await run();
+    this.exits.set(id, answer);
+    return answer;
+  }
+
+  /** LIST: the snapshot of damaged keys (I9: exactly the damaged record, nothing written). */
+  private list(state: State): Promise<{ listed?: string; violation: string | null }> {
+    return this.cached(state, "LIST", async () => {
+      const { store, stored } = this.scratch(state);
+      const keys = await store.listDamagedKeys();
+      const listed = JSON.stringify(keys);
+      if (JSON.stringify(store.peek(COMMAND)) !== JSON.stringify(stored)) return { listed, violation: "I9: the listing changed the record" };
+      if (listed !== JSON.stringify(state.damaged ? [COMMAND] : [])) return { listed, violation: `I9: the listing gave ${listed}` };
+      return { listed, violation: null };
+    });
+  }
+
   /**
-   * The explicit start of a new session N with the release of the damaged key (C073): it is created, the damaged record
-   * stays as it was, and its command still gets no reservation.
+   * START: the explicit start of a new session N offering the snapshot. It may release N only when the snapshot covers
+   * the damage of this moment (C091 §4: damage after the listing blocks); the damaged record stays as it was, and its
+   * command still gets no reservation (C073, I8).
    */
-  private async releaseByNewStart(state: State): Promise<string | null> {
-    const scratch = this.makeStore();
-    const damaged = damagedRecord(state.slots, state.banned);
-    scratch.seed(COMMAND, damaged);
-    const start = await scratch.createAndReserve(START, attemptId(0x800), 0, [COMMAND]);
-    const again = await scratch.reserve(identity, attemptId(0x801));
-    if (start.outcome !== "reserved") return `I8: the start of N was refused (${start.outcome})`;
-    if (JSON.stringify(scratch.peek(COMMAND)) !== JSON.stringify(damaged)) return "I8: the release changed the damaged record";
-    if (again.outcome !== "unknown") return `I8: the damaged command got ${again.outcome} after the release`;
-    return null;
+  private async startN(state: State): Promise<{ freed: boolean; violation: string | null }> {
+    const answer = await this.cached(state, "START", async () => {
+      const { store, stored } = this.scratch(state);
+      const offered = JSON.parse(state.listed!) as StoreKey[];
+      const start: CreateResult = await store.createAndReserve(START, attemptId(0x800), 0, offered);
+      const released = store.peek(releaseKey(identity.profileId, NEW_SESSION));
+      const unchanged = JSON.stringify(store.peek(COMMAND)) === JSON.stringify(stored);
+      // Only a damaged command is tried again: on a valid record a reservation is the protocol, not a violation.
+      const again = state.damaged ? await store.reserve(identity, attemptId(0x801)) : null;
+      const violation = (() => {
+        if (!unchanged) return "I8: the start of N changed the record";
+        if (!state.damaged) return start.outcome === "reserved" && released === undefined ? null : `I9: an undamaged start got ${start.outcome}`;
+        if (again?.outcome !== "unknown") return `I8: the damaged command got ${again?.outcome} after the start of N`;
+        if (!offered.includes(COMMAND)) {
+          return start.outcome === "blocked_by_damage" && store.peek(START.commandId) === undefined && released === undefined ? null
+            : `I9: a start whose snapshot predates the damage got ${start.outcome}`;
+        }
+        return start.outcome === "reserved" ? null : `I8: the start of N was refused (${start.outcome})`;
+      })();
+      return { listed: String(state.damaged && start.outcome === "reserved"), violation };
+    });
+    return { freed: answer.listed === "true", violation: answer.violation };
   }
 
   check(state: State): string[] {
@@ -368,6 +427,12 @@ class RollbackStore extends MemorySendBudget {
     return Promise.resolve(true);
   }
 }
+/** Control (c): the gate takes the damaged keys itself instead of the snapshot offered (D-CP5A-DAMAGE-EXIT 2.2). */
+class SelfListingStore extends MemorySendBudget {
+  override async createAndReserve(binding: BudgetBinding, attempt: string, createdAt: number, release?: readonly StoreKey[]): Promise<CreateResult> {
+    return super.createAndReserve(binding, attempt, createdAt, release === undefined ? undefined : await this.listDamagedKeys());
+  }
+}
 /** Control (b): exhaustion by six occupied slots instead of six transmitted. */
 const occupiedVerdict = (summary: BudgetSummary | null): BudgetVerdict =>
   summary === null ? "unknown" : summary.occupied < SIX ? "can_send" : "exhausted";
@@ -406,6 +471,22 @@ describe("slot protocol model on MemorySendBudget (D-CP5 5.3.9, port of F1-ATTEM
     expect(state.attempts[2]).toMatchObject({ phase: DONE, slot: -1 });
     expect(budgetVerdict(summarize(record(state.slots), identity))).toBe("exhausted");
   });
+
+  it("4.1.12: LIST, then DAMAGE, then START with the old snapshot is blocked; a new LIST and START free N", async () => {
+    const model = new Model({ attempts: [1, 1], prefill: 5, late: "one", damage: true }, {});
+    let state = model.initial();
+    const labels: string[] = [];
+    for (const step of ["LIST", "DAMAGE", "START:false", "LIST", "START:true"]) {
+      const move = (await model.moves(state)).find(([label]) => label === step);
+      expect(move, step).toBeDefined();
+      expect(move![2], step).toBeNull();
+      state = move![1];
+      labels.push(`${step}:${state.listed}`);
+      expect(model.check(state)).toEqual([]);
+    }
+    expect(labels).toEqual(["LIST:[]", "DAMAGE:[]", "START:false:null", `LIST:${JSON.stringify([COMMAND])}`, "START:true:null"]);
+    expect(state).toMatchObject({ damaged: true, freed: true });
+  });
 });
 
 describe("controls: the model catches broken protocols (D-CP5 5.3.10)", () => {
@@ -413,6 +494,11 @@ describe("controls: the model catches broken protocols (D-CP5 5.3.10)", () => {
     const report = await explore({ attempts: [2, 1], prefill: 4, late: "one" }, { store: () => new RollbackStore() });
     // A sent slot is freed (I3) by an attempt that never held it (I5).
     expect(report.violations).toEqual(expect.arrayContaining(["I3", "I5"]));
+  });
+
+  it("a gate that lists the damage itself instead of using the snapshot is caught (4.2.8)", async () => {
+    const report = await explore({ attempts: [1, 1], prefill: 5, late: "one", damage: true }, { store: () => new SelfListingStore(), stopOnViolation: true });
+    expect(report.violations).toContain("I9");
   });
 
   it("exhaustion by six occupied slots instead of six transmitted is caught", async () => {

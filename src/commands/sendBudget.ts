@@ -192,6 +192,13 @@ export interface SendBudgetStore {
   forgetHashOfOtherProfiles(profileId: string): Promise<number>;
   /** Records of the profile and session, damaged ones included; the caller drops the ones whose envelope still exists. */
   listOrphans(profileId: string, sessionId: string): Promise<BudgetOrphan[]>;
+  /**
+   * C091 §4, D-CP5A-DAMAGE-EXIT 2.1: the exact keys of every damaged record in the store, of any profile and session,
+   * as stored (case kept) and sorted; no field of any record. Only the start of a new session N passes them on, as the
+   * release of createAndReserve; nothing else may show or log them (Е02). It only reads: it frees, repairs and clears
+   * nothing. A record damaged after this read is not in the list, so the start that offers it is blocked_by_damage.
+   */
+  listDamagedKeys(): Promise<StoreKey[]>;
 }
 
 const LOWER_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -447,9 +454,12 @@ export function releaseKey(profileId: string, session: string): string {
 function isReleaseKey(key: StoreKey): boolean {
   return typeof key === "string" && key.startsWith(RELEASE_PREFIX);
 }
+/**
+ * A key the API can name: any string but a release key, any number but NaN (D-CP5A-DAMAGE-EXIT 3.1.4 (а): "" and
+ * ±Infinity are valid IndexedDB keys). A Date, array or binary key is not nameable (open question, CL125).
+ */
 function storeKey(value: unknown): value is StoreKey {
-  return (typeof value === "string" && value.length > 0 && !isReleaseKey(value))
-    || (typeof value === "number" && Number.isFinite(value));
+  return (typeof value === "string" && !isReleaseKey(value)) || (typeof value === "number" && !Number.isNaN(value));
 }
 function sortedKeys(keys: Iterable<StoreKey>): StoreKey[] {
   return [...keys].sort((left, right) => typeof left !== typeof right ? (typeof left === "number" ? -1 : 1)
@@ -468,6 +478,14 @@ export function validRelease(value: unknown, key: StoreKey): value is DamageRele
 /** A value of the budget store that is not a release and not a valid record under its own key. */
 export function isDamaged(key: StoreKey, value: unknown): boolean {
   return !isReleaseKey(key) && (!validBudgetRecord(value) || value.commandId !== key);
+}
+
+/**
+ * The keys of the damaged records among the entries: the selection of damageGate, nameable keys only. A damaged record
+ * under a key the API cannot name (Date, array, binary) is left out, so it keeps blocking every new record (CL125).
+ */
+export function damagedKeys(entries: readonly StoreEntry[]): StoreKey[] {
+  return sortedKeys(entries.filter(([key, value]) => storeKey(key) && isDamaged(key, value)).map(([key]) => key));
 }
 
 /** A store key given by the caller as it is; a release key or a malformed one is a programming error. */
@@ -514,8 +532,9 @@ export function damageGate(entries: readonly StoreEntry[], fresh: SendBudgetReco
  * a release of it. Read conservatively: a damaged field counts against novelty, never for it.
  */
 function mentionsSession(key: StoreKey, value: unknown, session: string): boolean {
+  // A release key of N counts whatever it holds: a damaged release under it must not be overwritten by a new one.
+  if (isReleaseKey(key)) return (typeof key === "string" && key.endsWith(`:${session}`)) || (record(value) && value.session === session);
   if (!record(value)) return false;
-  if (isReleaseKey(key)) return (typeof key === "string" && key.endsWith(`:${session}`)) || value.session === session;
   const target = record(value.target) ? value.target.id : undefined;
   return lower(value.sessionId) === session || lower(target) === session;
 }
@@ -689,5 +708,8 @@ export class MemorySendBudget implements SendBudgetStore {
     const profile = canonicalId(profileId);
     const session = canonicalId(sessionId);
     return this.run(() => [...this.values.entries()].flatMap(([key, value]) => orphanOf(key, value, profile, session) ?? []));
+  }
+  listDamagedKeys(): Promise<StoreKey[]> {
+    return this.run(() => damagedKeys([...this.values.entries()]));
   }
 }

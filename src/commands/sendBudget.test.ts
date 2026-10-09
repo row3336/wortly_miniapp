@@ -3,7 +3,7 @@ import { WORTLY_DATABASE, SEND_BUDGET_STORE } from "../platform/indexedDb";
 import { FakeIndexedDb } from "./idbFake.test-support";
 import {
   budgetVerdict, MemorySendBudget, releaseKey, SendBudgetError, validBudgetRecord,
-  type BudgetBinding, type BudgetIdentity, type SendBudgetStore, type SlotClaim,
+  type BudgetBinding, type BudgetIdentity, type SendBudgetStore, type SlotClaim, type StoreKey,
 } from "./sendBudget";
 import { IdbSendBudget } from "./sendBudgetIdb";
 
@@ -793,5 +793,207 @@ describe.each(SUBJECTS)("delta QA CP5a-2: healing, store keys, existing records 
     await walk(store, 1, "retryable");
     seed(DAMAGED, damagedValue);
     expect(await store.createAndReserve(binding, attempt(2), 1_000)).toEqual({ outcome: "exists" });
+  });
+});
+
+describe.each(SUBJECTS)("the damaged-key enumerator (D-CP5A-DAMAGE-EXIT table 4.1, C091 §4) — %s", (_name, make) => {
+  const key = (n: number) => `00000000-0000-4000-8000-0000000d${n.toString(16).padStart(4, "0")}`;
+  const valid = (commandId: string) => ({ ...baseRecord(), commandId });
+  const UPPER = "ABCDEF00-0000-4000-8000-00000000000D";
+  const N2 = "00000000-0000-4000-8000-0000000000e4";
+  /** Every kind of damage of D-CP5A-DAMAGE-EXIT 4.1.1 that a string key can carry, under its exact key. */
+  const KINDS: Array<[string, StoreKey, unknown]> = [
+    ["another profile, fields readable", key(1), { ...damagedValue, commandId: key(1), profileId: OTHER_PROFILE }],
+    ["own old session", key(2), { ...damagedValue, commandId: key(2) }],
+    ["profileId and sessionId do not read", key(3), { commandId: key(3), profileId: 5, sessionId: null, slots: "x" }],
+    ["a key that is not a UUID", "not-a-uuid", { ...damagedValue, commandId: "not-a-uuid" }],
+    ["an upper-case UUID key", UPPER, { ...damagedValue, commandId: UPPER }],
+    ["sessionId in upper case", key(4), { ...valid(key(4)), sessionId: SESSION.toUpperCase() }],
+    ["the damaged: true mark", key(5), { ...valid(key(5)), damaged: true }],
+    ["another format: an extra key", key(6), { ...valid(key(6)), note: "x" }],
+    ["another format: schemaVersion 2", key(7), { ...valid(key(7)), schemaVersion: 2 }],
+    ["another format: a new slot state", key(8), { ...valid(key(8)), slots: slotsWith(3, { state: "queued" }) }],
+    ["a valid record under another key", key(9), valid(OTHER_COMMAND)],
+  ];
+  const seedKinds = (seed: Subject["seed"]) => KINDS.forEach(([, at, value]) => seed(at as string, value));
+  const sortedKinds = () => [...KINDS.map(([, at]) => at)].sort() as StoreKey[];
+
+  it("4.1.1: lists every kind of damage of any profile and session, by its exact key with the case kept", async () => {
+    const { store, seed } = await make();
+    seedKinds(seed);
+    expect(await store.listDamagedKeys()).toEqual(sortedKinds());
+  });
+
+  it("4.1.2: valid records of any profile, valid releases and junk under a release key are not listed", async () => {
+    const { store, seed } = await make();
+    await walk(store, 1, "transmitted");
+    expect(await store.createAndReserve(other(OTHER_COMMAND, OTHER_PROFILE, OTHER_SESSION), attempt(2), 1_000)).toMatchObject({ outcome: "reserved" });
+    expect(await store.listDamagedKeys()).toEqual([]);
+    seed(DAMAGED, damagedValue);
+    seed(releaseKey(PROFILE, OTHER_SESSION), release(PROFILE, OTHER_SESSION, [DAMAGED]));
+    seed(releaseKey(OTHER_PROFILE, NEW_SESSION), { junk: true });
+    seed("release:not-even-a-release", null);
+    expect(await store.listDamagedKeys()).toEqual([DAMAGED]);
+  });
+
+  it("4.1.3: only reads — every stored value is the same after listing", async () => {
+    const { store, seed, peek } = await make();
+    await walk(store, 1, "transmitted");
+    seedKinds(seed);
+    seed(releaseKey(PROFILE, OTHER_SESSION), release(PROFILE, OTHER_SESSION, [key(2)]));
+    const keys = [COMMAND, releaseKey(PROFILE, OTHER_SESSION), ...KINDS.map(([, at]) => at as string)];
+    const before = keys.map(at => JSON.stringify(peek(at)));
+    await store.listDamagedKeys();
+    await store.listDamagedKeys();
+    expect(keys.map(at => JSON.stringify(peek(at)))).toEqual(before);
+    expect(peek(releaseKey(PROFILE, NEW_SESSION))).toBeUndefined();
+  });
+
+  it("4.1.4: the answer is a list of bare keys — no field of any record, checked at run time", async () => {
+    const { store, seed } = await make();
+    seedKinds(seed);
+    const listed: unknown = await store.listDamagedKeys();
+    expect(Array.isArray(listed)).toBe(true);
+    for (const item of listed as unknown[]) expect(["string", "number"]).toContain(typeof item);
+    expect(JSON.stringify(listed)).not.toMatch(/profileId|sessionId|slots|intentHash|kind|target/);
+  });
+
+  it("4.1.5: the way out — list, then the start of N with exactly these keys; the damaged records stay as they are", async () => {
+    const { store, seed, peek } = await make();
+    seedKinds(seed);
+    const blocked = await store.createAndReserve(startOf(NEW_SESSION), attempt(1), 1_000);
+    expect(blocked).toEqual({ outcome: "blocked_by_damage" });
+    const keys = await store.listDamagedKeys();
+    expect(await store.createAndReserve(startOf(NEW_SESSION), attempt(2), 1_000, keys))
+      .toEqual({ outcome: "reserved", claim: { slot: 0, attempt: attempt(2) } });
+    expect(peek(releaseKey(PROFILE, NEW_SESSION))).toEqual(release(PROFILE, NEW_SESSION, keys as string[]));
+    // 4.1.7 C075: byte for byte as before, no new budget for any of them.
+    for (const [, at, value] of KINDS) expect(JSON.stringify(peek(at as string)), String(at)).toBe(JSON.stringify(value));
+    expect(await store.createAndReserve({ ...binding, commandId: key(2), sessionId: NEW_SESSION }, attempt(3), 1_000)).toEqual({ outcome: "exists" });
+    expect(await store.createAndReserve(other(START2, PROFILE, NEW_SESSION), attempt(4), 1_000)).toMatchObject({ outcome: "reserved" });
+    // The listed key is the stored one: removal on proof finds it.
+    expect(await store.clearDamaged(UPPER)).toBe(true);
+    expect(peek(UPPER)).toBeUndefined();
+  });
+
+  it("4.1.6: a record damaged between listing and the start blocks the start; nothing is written", async () => {
+    const { store, seed, peek } = await make();
+    seed(DAMAGED, damagedValue);
+    const keys = await store.listDamagedKeys();
+    seed(SECOND_DAMAGED, { ...damagedValue, commandId: SECOND_DAMAGED, profileId: OTHER_PROFILE });
+    expect(await store.createAndReserve(startOf(NEW_SESSION), attempt(1), 1_000, keys)).toEqual({ outcome: "blocked_by_damage" });
+    expect(peek(START)).toBeUndefined();
+    expect(peek(releaseKey(PROFILE, NEW_SESSION))).toBeUndefined();
+    // The next press lists again and starts N′.
+    const again = await store.listDamagedKeys();
+    expect(again).toEqual([DAMAGED, SECOND_DAMAGED]);
+    expect(await store.createAndReserve(startOf(N2, START2), attempt(2), 1_000, again)).toMatchObject({ outcome: "reserved" });
+    expect(peek(releaseKey(PROFILE, N2))).toEqual(release(PROFILE, N2, [DAMAGED, SECOND_DAMAGED]));
+  });
+
+  it("4.1.8: a key removed by clearDamaged between listing and the start is not in the release", async () => {
+    const { store, seed, peek } = await make();
+    seed(DAMAGED, damagedValue);
+    seed(SECOND_DAMAGED, { ...damagedValue, commandId: SECOND_DAMAGED });
+    const keys = await store.listDamagedKeys();
+    expect(keys).toEqual([DAMAGED, SECOND_DAMAGED]);
+    expect(await store.clearDamaged(SECOND_DAMAGED)).toBe(true);
+    expect(await store.createAndReserve(startOf(NEW_SESSION), attempt(1), 1_000, keys)).toMatchObject({ outcome: "reserved" });
+    expect(peek(releaseKey(PROFILE, NEW_SESSION))).toEqual(release(PROFILE, NEW_SESSION, [DAMAGED]));
+  });
+
+  it("4.1.9: the listed keys do not let profile A into a session released only for B", async () => {
+    const { store, seed, peek } = await make();
+    seed(DAMAGED, damagedValue);
+    const keys = await store.listDamagedKeys();
+    expect(await store.createAndReserve(startOf(NEW_SESSION, START, OTHER_PROFILE), attempt(1), 1_000, keys)).toMatchObject({ outcome: "reserved" });
+    expect(await store.createAndReserve(other(OTHER_COMMAND, PROFILE, NEW_SESSION), attempt(2), 1_000)).toEqual({ outcome: "blocked_by_damage" });
+    expect(await store.createAndReserve(startOf(NEW_SESSION, START2), attempt(3), 1_000, keys)).toEqual({ outcome: "session_not_new" });
+    expect(peek(releaseKey(PROFILE, NEW_SESSION))).toBeUndefined();
+  });
+
+  it.each(DAMAGED_RELEASES)("4.1.9: a damaged release with the listed keys frees nothing — %s", async (_label, value) => {
+    const { store, seed, peek } = await make();
+    seed(DAMAGED, damagedValue);
+    seed(releaseKey(PROFILE, NEW_SESSION), value);
+    const keys = await store.listDamagedKeys();
+    expect(keys).toEqual([DAMAGED]);
+    expect(await store.createAndReserve(other(OTHER_COMMAND, PROFILE, NEW_SESSION), attempt(1), 1_000)).toEqual({ outcome: "blocked_by_damage" });
+    expect(await store.createAndReserve(startOf(NEW_SESSION), attempt(2), 1_000, keys)).toEqual({ outcome: "session_not_new" });
+    expect(peek(START)).toBeUndefined();
+    expect(peek(releaseKey(PROFILE, NEW_SESSION))).toEqual(value);
+  });
+
+  it("4.1.10: the listed keys in a command that is not a start are a programming error", async () => {
+    const { store, seed, peek } = await make();
+    seed(DAMAGED, damagedValue);
+    const keys = await store.listDamagedKeys();
+    const stop: BudgetBinding = { ...binding, commandId: START2, kind: "session.stop", family: "stop", target: { field: "session_id", id: SESSION } };
+    for (const command of [stop, { ...stop, kind: "session.cancel_start", family: "start_cancel" as const }, { ...binding, sessionId: NEW_SESSION }]) {
+      let failure: unknown = null;
+      try { await store.createAndReserve(command, attempt(1), 1_000, keys); } catch (error) { failure = error; }
+      expect(failure, command.kind).toBeInstanceOf(SendBudgetError);
+      expect((failure as SendBudgetError).reason).toBe("invalid_input");
+    }
+    expect(peek(START2)).toBeUndefined();
+    expect(peek(COMMAND)).toBeUndefined();
+  });
+
+  it("4.1.13: a damaged record under the empty string key is listed, released and removed on proof", async () => {
+    const { store, seed, peek } = await make();
+    seed("", { commandId: "", slots: "x" });
+    seed(DAMAGED, damagedValue);
+    const keys = await store.listDamagedKeys();
+    expect(keys).toEqual(["", DAMAGED]);
+    expect(await store.createAndReserve(startOf(NEW_SESSION), attempt(1), 1_000, keys)).toMatchObject({ outcome: "reserved" });
+    expect(peek(releaseKey(PROFILE, NEW_SESSION))).toEqual(release(PROFILE, NEW_SESSION, ["", DAMAGED]));
+    expect(await store.clearDamaged("")).toBe(true);
+    expect(peek("")).toBeUndefined();
+    expect(peek(releaseKey(PROFILE, NEW_SESSION))).toEqual(release(PROFILE, NEW_SESSION, [DAMAGED]));
+    expect(await store.listDamagedKeys()).toEqual([DAMAGED]);
+  });
+
+  it("QA P12: one listed key cleared and another damaged in between — same count, other keys: blocked, nothing written", async () => {
+    const { store, seed, peek } = await make();
+    const LATE = "00000000-0000-4000-8000-00000000000b";
+    seed(DAMAGED, damagedValue);
+    seed(SECOND_DAMAGED, { ...damagedValue, commandId: SECOND_DAMAGED });
+    const keys = await store.listDamagedKeys();
+    expect(await store.clearDamaged(SECOND_DAMAGED)).toBe(true);
+    seed(LATE, { ...damagedValue, commandId: LATE });
+    // The count of damaged records equals the count offered, but LATE was never offered.
+    expect(await store.createAndReserve(startOf(NEW_SESSION), attempt(1), 1_000, keys)).toEqual({ outcome: "blocked_by_damage" });
+    expect(peek(START)).toBeUndefined();
+    expect(peek(releaseKey(PROFILE, NEW_SESSION))).toBeUndefined();
+  });
+
+  it("QA P13: junk under another session's release key that names N inside is a trace of N", async () => {
+    const { store, seed, peek } = await make();
+    seed(DAMAGED, damagedValue);
+    seed(releaseKey(OTHER_PROFILE, OTHER_SESSION), { session: NEW_SESSION });
+    const keys = await store.listDamagedKeys();
+    expect(await store.createAndReserve(startOf(NEW_SESSION), attempt(1), 1_000, keys)).toEqual({ outcome: "session_not_new" });
+    expect(peek(START)).toBeUndefined();
+    expect(peek(releaseKey(PROFILE, NEW_SESSION))).toBeUndefined();
+  });
+
+  it("QA P14: a listing queued after a clear sees the clear — no read past pending operations", async () => {
+    const { store, seed } = await make();
+    seed(DAMAGED, damagedValue);
+    const cleared = store.clearDamaged(DAMAGED);
+    const listed = store.listDamagedKeys();
+    expect(await cleared).toBe(true);
+    expect(await listed).toEqual([]);
+  });
+
+  it("QA P5: NaN, a release key, a Date and an array are not nameable keys: invalid_input in clearDamaged and in the offered list", async () => {
+    const { store } = await make();
+    const refused = async (run: () => Promise<unknown>): Promise<string> => {
+      try { await run(); return "resolved"; } catch (error) { return error instanceof SendBudgetError ? error.reason : String(error); }
+    };
+    for (const bad of [Number.NaN, releaseKey(PROFILE, NEW_SESSION), new Date(0), ["x"]] as unknown as StoreKey[]) {
+      expect(await refused(() => store.clearDamaged(bad)), String(bad)).toBe("invalid_input");
+      expect(await refused(() => store.createAndReserve(startOf(NEW_SESSION), attempt(1), 1_000, [bad])), String(bad)).toBe("invalid_input");
+    }
   });
 });
