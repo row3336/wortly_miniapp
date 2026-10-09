@@ -4,12 +4,12 @@ import type { Profile } from "../api/generated";
 import { ApiError } from "../api/http";
 import type { AsyncStorage } from "../platform/storage";
 import { CommandLane, copyLanePending, failureProblem, missingProblem, retryStep, validLanePending, type CommandProblem, type LaneOptions, type LanePending,
-  type LaneResolved, type LaneSettled, type LaneSnapshot, type MissingStatus, type WithoutId } from "./commandLane";
+  type LaneResolved, type LaneSettled, type LaneSnapshot, type MissingStatus, type Pair, type WithoutId } from "./commandLane";
 import { PendingSlot, PendingStoreError } from "./pendingSlot";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 type Intent = { command_id: string; kind: "session.start" | "item.mark" | "session.stop"; session_id: string };
-type Current = { session_id: string; status: "active" | "summary" | "closed"; pair: "ru-de" | "uk-de"; marked: boolean }
+type Current = { session_id: string; status: "active" | "summary" | "closed"; pair: "ru-de" | "uk-de" | "en-de"; marked: boolean }
   | { session_id: string; status: "unavailable" | "not_found" };
 type Reply = { state_version: string; current: Current } & ({ outcome: "accepted"; command: { result_id: string | null } }
   | { outcome: "rejected" | "mismatch"; error: { code: string } });
@@ -31,6 +31,9 @@ class TestLane extends CommandLane<Spec> {
     if (reply.command.result_id) resolved.resultId = reply.command.result_id;
   }
   protected settledCurrent(reply: LaneSettled<Spec>): object { return reply.current; }
+  /** Projections a mode view (an answer, a result) was built on, as the written mode builds one on a visible step. */
+  readonly views: object[] = [];
+  protected settledView(): void { if (this.current !== null) this.views.push(structuredClone(this.current)); }
   protected verify(pending: LanePending<Intent>): Promise<boolean> {
     return this.verifySession(pending, current => {
       const step = retryStep(current, pending.intent, pending.pair);
@@ -48,7 +51,9 @@ const accepted = (version = "6", resultId: string | null = id(9)): Reply => ({ o
 const missing = (extra: Partial<MissingStatus> = {}): Status => ({ outcome: "not_found", state_version: "6", current: profile(), ...extra });
 const mark: WithoutId<Intent> = { kind: "item.mark", session_id: id(3) };
 
-function fixture(options: { lane?: "study" | "stop"; minimum?: () => string | null; saved?: Intent; mismatch?: boolean } = {}) {
+type RecordFields = Partial<Pick<LanePending<Intent>, "profileId" | "clientInstanceId" | "pair">>;
+function fixture(options: { lane?: "study" | "stop"; minimum?: () => string | null; saved?: Intent; mismatch?: boolean;
+  pair?: Pair; record?: RecordFields } = {}) {
   const values = new Map<string, string>();
   const storage: AsyncStorage = { get: vi.fn(async key => values.get(key) ?? null),
     set: vi.fn(async (key, value) => { values.set(key, value); }), remove: vi.fn(async key => { values.delete(key); }) };
@@ -59,12 +64,12 @@ function fixture(options: { lane?: "study" | "stop"; minimum?: () => string | nu
     return { ...pending, intent: copy(pending.intent) };
   });
   if (options.saved) values.set("test.pending", JSON.stringify({ schemaVersion: 1, profileId: id(1), clientInstanceId: id(2),
-    pair: "ru-de", intent: options.saved, ...(options.mismatch ? { mismatch: true } : {}) }));
+    pair: "ru-de", ...options.record, intent: options.saved, ...(options.mismatch ? { mismatch: true } : {}) }));
   let next = 100;
   const send = vi.fn<(intent: Intent) => Promise<Reply>>(), check = vi.fn<(intent: Intent) => Promise<Status>>();
   const read = vi.fn<(sessionId: string) => Promise<{ state_version: string; current: Current }>>();
   const onUpdate = vi.fn<(snapshot: Snapshot) => void>(), newId = vi.fn(() => id(next++));
-  const controller = new TestLane({ profileId: id(1), clientInstanceId: id(2), pair: "ru-de", lane, pendingStore: store,
+  const controller = new TestLane({ profileId: id(1), clientInstanceId: id(2), pair: options.pair ?? "ru-de", lane, pendingStore: store,
     isLive: () => true, newId, send, check, read, onUpdate, stateVersion: "5", minimumStateVersion: options.minimum });
   return { controller, values, send, check, read, newId, onUpdate };
 }
@@ -286,5 +291,76 @@ describe("planned pause and outdated client (M-COMPAT-HDR)", () => {
     f.send.mockRejectedValueOnce(new ApiError("http", 503, "WRITE_UNAVAILABLE"));
     await f.controller.begin(mark);
     expect(f.controller.snapshot()).toMatchObject({ problem: "network", pauseSeconds: null });
+  });
+});
+
+describe("M-ORAL-STUCK-A: the receipt of an own session closed in another pair", () => {
+  const saved: Intent = { command_id: id(50), kind: "item.mark", session_id: id(3) };
+  const closed = (overrides: Partial<Extract<Current, { pair: string }>> = {}): Current =>
+    ({ session_id: id(3), status: "closed", pair: "ru-de", marked: true, ...overrides });
+  const receipt = (current: Current): Status => ({ outcome: "accepted", state_version: "6", current, command: { result_id: id(9) } });
+  /** The record of ru-de and its owner reopened in uk-de: the pair changed while the reply was lost. */
+  const reopened = (record: RecordFields = {}) => fixture({ saved, pair: "uk-de", record });
+
+  it("a closed projection of the own session from the receipt stays its closed fact, without a mode view", async () => {
+    const f = reopened();
+    f.check.mockResolvedValueOnce(receipt(closed()));
+    await f.controller.refresh();
+    // The projection keeps its own pair and status: it is never this pair's open step.
+    expect(f.controller.snapshot()).toMatchObject({ phase: "settled", outcome: "accepted", pending: false, canRetry: false,
+      current: closed(), resolved: { commandId: id(50), sessionId: id(3), resultId: id(9) } });
+    expect(f.controller.snapshot().current).toMatchObject({ pair: "ru-de", status: "closed" });
+    // Its numbers build no view of this pair.
+    expect(f.controller.views).toEqual([]);
+    expect(f.send).not.toHaveBeenCalled(); expect(f.read).not.toHaveBeenCalled();
+  });
+  it("an open projection of another pair from the receipt is hidden", async () => {
+    for (const status of ["active", "summary"] as const) {
+      const f = reopened();
+      f.check.mockResolvedValueOnce(receipt(closed({ status })));
+      await f.controller.refresh();
+      expect(f.controller.snapshot()).toMatchObject({ phase: "settled", outcome: "accepted", current: null });
+      expect(f.controller.views).toEqual([]);
+    }
+  });
+  it("a closed projection of another session, or of a pair the record was not made for, is no fact", async () => {
+    for (const current of [closed({ session_id: id(4) }), closed({ pair: "en-de" })]) {
+      const f = reopened();
+      f.check.mockResolvedValueOnce(receipt(current));
+      await f.controller.refresh();
+      expect(f.controller.snapshot()).toMatchObject({ outcome: "accepted", current: null });
+      expect(f.controller.views).toEqual([]);
+    }
+  });
+  it("a record of another installation or another profile proves no closure of this owner", async () => {
+    const other = reopened({ clientInstanceId: id(8) });
+    other.check.mockResolvedValueOnce(receipt(closed()));
+    await other.controller.refresh();
+    expect(other.controller.snapshot()).toMatchObject({ outcome: "accepted", current: null });
+    expect(other.controller.views).toEqual([]);
+    // The slot itself drops a record of another profile; a store that still hands one over proves nothing either.
+    const record: LanePending<Intent> = { schemaVersion: 1, profileId: id(7), clientInstanceId: id(2), pair: "ru-de", intent: saved };
+    const store = { load: vi.fn(async () => record), clear: vi.fn(async () => {}) } as unknown as PendingSlot<LanePending<Intent>>;
+    const check = vi.fn(async () => receipt(closed()));
+    const foreign = new TestLane({ profileId: id(1), clientInstanceId: id(2), pair: "uk-de", lane: "study", pendingStore: store,
+      isLive: () => true, newId: () => id(100), send: vi.fn(), check, read: vi.fn(), onUpdate: vi.fn(), stateVersion: "5" });
+    await foreign.refresh();
+    expect(foreign.snapshot()).toMatchObject({ outcome: "accepted", current: null });
+    expect(foreign.views).toEqual([]);
+  });
+  it("a read of the session, not the receipt, keeps hiding another pair's closure", async () => {
+    const f = fixture({ saved });
+    f.check.mockResolvedValueOnce(missing());
+    f.read.mockResolvedValueOnce({ state_version: "6", current: closed({ pair: "uk-de" }) });
+    await f.controller.refresh();
+    expect(f.read).toHaveBeenCalledWith(id(3));
+    expect(f.controller.snapshot()).toMatchObject({ outcome: null, pending: true, problem: "closed", current: null });
+  });
+  it("this pair is unchanged: its closed and open projections stay, with their view", async () => {
+    const f = fixture({ saved });
+    f.check.mockResolvedValueOnce(receipt(closed()));
+    await f.controller.refresh();
+    expect(f.controller.snapshot()).toMatchObject({ outcome: "accepted", current: closed() });
+    expect(f.controller.views).toHaveLength(1);
   });
 });

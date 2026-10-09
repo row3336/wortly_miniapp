@@ -299,11 +299,24 @@ export abstract class CommandLane<S extends LaneSpec, O extends LaneOptions<S> =
       closedSession: live && fresh ? structuredClone(this.closedSession) : null, stateVersion: this.floor }, live && fresh);
   }
   protected clearCurrent(): void { this.current = null; this.closedSession = null; }
-  protected observe(stateVersion: string, current?: object): boolean {
+  /**
+   * A projection of another pair is not this owner's to show or act on, with one exception: the settled receipt of this
+   * owner's own record (its profile, its installation) proves the closure of exactly the session of that record, in the
+   * pair the record was made for. Dropping that closure would leave an accepted receipt of the session without its end
+   * (CT §6.1 п. 5, п. 7). It stays a closed fact of its own session: never an open step, never numbers of this pair.
+   */
+  private ownClosureOfOtherPair(pending: LanePending<S["intent"]>, current: object): boolean {
+    return "pair" in current && current.pair !== this.options.pair && current.pair === pending.pair
+      && "status" in current && current.status === "closed"
+      && "session_id" in current && typeof current.session_id === "string" && sameId(current.session_id, pending.intent.session_id)
+      && sameId(pending.profileId, this.options.profileId) && sameId(pending.clientInstanceId, this.options.clientInstanceId);
+  }
+  protected observe(stateVersion: string, current?: object, ownClosure = false): boolean {
     const minimum = this.minimumVersion();
     if (!version(stateVersion) || minimum !== null && BigInt(stateVersion) < BigInt(minimum)) return false;
     this.floor = stateVersion;
-    if (current !== undefined) this.current = "pair" in current && current.pair !== this.options.pair ? null : structuredClone(current) as S["current"];
+    if (current !== undefined) this.current = "pair" in current && current.pair !== this.options.pair && !ownClosure
+      ? null : structuredClone(current) as S["current"];
     return true;
   }
   /** Read the session of a pending session command and check that its exact target still accepts a retry. */
@@ -333,8 +346,10 @@ export abstract class CommandLane<S extends LaneSpec, O extends LaneOptions<S> =
     // The exact accepted address is immutable evidence, even if its attached projection is stale.
     if (reply.outcome === "accepted") this.accept(intent, reply as LaneSettled<S> & { outcome: "accepted" }, this.resolved);
     this.rejectionCode = reply.outcome === "accepted" ? null : (reply as Refused).error.code;
-    if (!this.observe(reply.state_version, this.settledCurrent(reply))) this.clearCurrent();
-    else this.settledView(reply);
+    const current = this.settledCurrent(reply), ownClosure = this.ownClosureOfOtherPair(this.pending!, current);
+    if (!this.observe(reply.state_version, current, ownClosure)) this.clearCurrent();
+    // A closure of another pair carries no mode view (an answer, a result) into this pair.
+    else if (!ownClosure) this.settledView(reply);
     await this.clearSettled();
   }
   private async markMismatch(pending: LanePending<S["intent"]>): Promise<void> {
