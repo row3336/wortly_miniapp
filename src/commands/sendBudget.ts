@@ -1,4 +1,4 @@
-import { exactKeys, oneOf, record } from "../api/wireValidation";
+import { exactKeys, oneOf, record, uuid } from "../api/wireValidation";
 import type { Pair } from "./commandLane";
 import { MAX_SENDS } from "./recoveryLimits";
 
@@ -75,10 +75,17 @@ export type SlotClaim = { slot: number; attempt: string };
  * damaged record that this profile has not released for this session (C069–C075); nothing was written.
  */
 export type CreateResult = { outcome: "reserved"; claim: SlotClaim } | { outcome: "exists" } | { outcome: "forbidden" }
-  | { outcome: "blocked_by_damage" };
+  | { outcome: "blocked_by_damage" }
+  /**
+   * A release was offered, but the store holds evidence that session N is not new: a record of N, a damaged record that
+   * reads as one of N, or a release of N. Nothing was written (delta QA CP5a-2 п. 1, 6).
+   */
+  | { outcome: "session_not_new" };
 /**
  * "unknown": no record, a corrupt one or one of another envelope. The count is then unknown, never zero (CT:240).
  * "unsettled": a taken slot is not retryable yet — another attempt is under way or its outcome was never written.
+ * "no_slots": all six slots are taken. This is not proven exhaustion: some may still be unsettled (C081). Whether a
+ * closing C or a cancel of the start may follow is decided by budgetVerdict alone.
  */
 export type ReserveResult = { outcome: "reserved"; claim: SlotClaim } | { outcome: "no_slots" } | { outcome: "unknown" }
   | { outcome: "forbidden" } | { outcome: "unsettled" };
@@ -173,11 +180,11 @@ export interface SendBudgetStore {
   /** 2.3.8: removes a valid record of this profile; the caller has the proof of D-CP5 9.2. A corrupt record stays. */
   clear(commandId: string, profileId: string): Promise<boolean>;
   /**
-   * Removes the damaged record stored under commandId; the caller has the proof: already_applied of this command_id
-   * under the current profile (9.2.1). Nothing else of the record is trusted. The key leaves every release in the same
-   * transaction. false: no damaged record under that key.
+   * Removes the damaged record stored under exactly this key (as listOrphans gives it, case kept); the caller has the
+   * proof: already_applied of this command_id under the current profile (9.2.1). Nothing else of the record is trusted.
+   * The key leaves every release in the same transaction. false: no damaged record under that key.
    */
-  clearDamaged(commandId: string): Promise<boolean>;
+  clearDamaged(key: StoreKey): Promise<boolean>;
   /**
    * Е02, D-CP5 10.6.2: drops intentHash from every record not of this profile, a recognisable damaged one included;
    * nothing else changes and nothing is deleted.
@@ -463,10 +470,16 @@ export function isDamaged(key: StoreKey, value: unknown): boolean {
   return !isReleaseKey(key) && (!validBudgetRecord(value) || value.commandId !== key);
 }
 
-/** The release key list must name existing damaged records only; an error of the caller, not of the store. */
+/** A store key given by the caller as it is; a release key or a malformed one is a programming error. */
+export function canonicalStoreKey(key: StoreKey): StoreKey {
+  if (!storeKey(key)) invalidInput();
+  return key;
+}
+
+/** Only the explicit start of a session may carry a release; anything else is an error of the caller. */
 export function canonicalRelease(binding: BudgetBinding, keys: readonly StoreKey[]): StoreKey[] {
   const identity = canonicalIdentity(binding);
-  if (identity.kind !== "session.start" || binding.target.field !== "session_id"
+  if (identity.kind !== "session.start" || binding.family !== "primary" || binding.target.field !== "session_id"
     || lower(binding.target.id) !== identity.sessionId || !Array.isArray(keys) || !Array.from(keys).every(storeKey)) {
     invalidInput();
   }
@@ -479,17 +492,32 @@ export function canonicalRelease(binding: BudgetBinding, keys: readonly StoreKey
  * release, or by the release of this very start. The release written then lists the damaged keys of that moment.
  */
 export function damageGate(entries: readonly StoreEntry[], fresh: SendBudgetRecord, release?: readonly StoreKey[]):
-  { allowed: false } | { allowed: true; write?: DamageRelease } {
+  { allowed: false; reason: "blocked_by_damage" | "session_not_new" } | { allowed: true; write?: DamageRelease } {
   const damaged = entries.filter(([key, value]) => key !== fresh.commandId && isDamaged(key, value)).map(([key]) => key);
   if (damaged.length === 0) return { allowed: true };
+  // A release rests on N being new (C073): any trace of N in the store, of any profile, refuses it.
+  if (release !== undefined && entries.some(([key, value]) => key !== fresh.commandId && mentionsSession(key, value, fresh.sessionId))) {
+    return { allowed: false, reason: "session_not_new" };
+  }
   const ownKey = releaseKey(fresh.profileId, fresh.sessionId);
   const existing = entries.find(([key]) => key === ownKey);
   const released = new Set<StoreKey>(existing && validRelease(existing[1], ownKey) ? existing[1].keys : []);
   const offered = new Set<StoreKey>(release ?? []);
-  if (!damaged.every(key => released.has(key) || offered.has(key))) return { allowed: false };
+  if (!damaged.every(key => released.has(key) || offered.has(key))) return { allowed: false, reason: "blocked_by_damage" };
   if (release === undefined) return { allowed: true };
   return { allowed: true, write: { commandId: ownKey, schemaVersion: 1, profileId: fresh.profileId,
     session: fresh.sessionId, keys: sortedKeys(damaged) } };
+}
+
+/**
+ * The stored value is evidence that the session already exists: a record of it (valid, or damaged but reading so) or
+ * a release of it. Read conservatively: a damaged field counts against novelty, never for it.
+ */
+function mentionsSession(key: StoreKey, value: unknown, session: string): boolean {
+  if (!record(value)) return false;
+  if (isReleaseKey(key)) return (typeof key === "string" && key.endsWith(`:${session}`)) || value.session === session;
+  const target = record(value.target) ? value.target.id : undefined;
+  return lower(value.sessionId) === session || lower(target) === session;
 }
 
 /** The releases to rewrite (key removed) or delete (left empty) when the record under key is removed. */
@@ -514,8 +542,9 @@ export function forgetHashStep(current: unknown, profileId: string): Record<stri
   // The record is written back under the store's own key whatever its commandId field holds.
   if (!record(current) || !Object.hasOwn(current, "intentHash") || current.profileId === profileId) return undefined;
   if (validBudgetRecord(current)) return copyBudgetRecord({ ...current, intentHash: undefined });
+  // Dropping a damaged fingerprint must not heal the record (delta QA CP5a-2 п. 2): the mark keeps it damaged.
   const { intentHash: _dropped, ...rest } = current;
-  return rest;
+  return { ...rest, damaged: true };
 }
 
 export function orphanOf(key: StoreKey, current: unknown, profileId: string, sessionId: string): BudgetOrphan | null {
@@ -530,7 +559,8 @@ export function orphanOf(key: StoreKey, current: unknown, profileId: string, ses
     };
   }
   // Damaged: only the key is trusted for a check by number; the rest is read where it still reads, never relied on.
-  if (typeof key !== "string" || !lowerId(key)) return null;
+  // The key is reported exactly as stored, so clearDamaged can remove it.
+  if (!uuid(key)) return null;
   return {
     commandId: key, damaged: true,
     kind: typeof current.kind === "string" && KIND.test(current.kind) ? current.kind : null,
@@ -579,9 +609,7 @@ export class MemorySendBudget implements SendBudgetStore {
     return this.run((): CreateResult => {
       if (this.values.has(fresh.commandId)) return createConflict(this.values.get(fresh.commandId), own);
       const gate = damageGate([...this.values.entries()], fresh, offered);
-      if (!gate.allowed) return { outcome: "blocked_by_damage" };
-      // As IndexedDB add(): an existing release of this session aborts the whole operation.
-      if (gate.write && this.values.has(gate.write.commandId)) throw new SendBudgetError("failed");
+      if (!gate.allowed) return { outcome: gate.reason };
       this.values.set(fresh.commandId, structuredClone(fresh));
       if (gate.write) this.values.set(gate.write.commandId, structuredClone(gate.write));
       return { outcome: "reserved", claim };
@@ -634,8 +662,8 @@ export class MemorySendBudget implements SendBudgetStore {
     const profile = canonicalId(profileId);
     return this.run(() => clearAllowed(this.values.get(id), id, profile) && this.remove(id));
   }
-  clearDamaged(commandId: string): Promise<boolean> {
-    const id = canonicalId(commandId);
+  clearDamaged(key: StoreKey): Promise<boolean> {
+    const id = String(canonicalStoreKey(key));
     return this.run(() => this.values.has(id) && isDamaged(id, this.values.get(id)) && this.remove(id));
   }
   /** Deletes the record and takes its key out of every release, as one step. */

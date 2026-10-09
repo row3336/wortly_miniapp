@@ -21,6 +21,7 @@ const NEW_SESSION = "00000000-0000-4000-8000-0000000000e3";
 const START = "00000000-0000-4000-8000-000000000009";
 const DAMAGED = "00000000-0000-4000-8000-00000000000d";
 const SECOND_DAMAGED = "00000000-0000-4000-8000-00000000000e";
+const START2 = "00000000-0000-4000-8000-00000000000a";
 
 const identity: BudgetIdentity = {
   commandId: COMMAND, profileId: PROFILE, clientInstanceId: CLIENT, pair: "ru-de", sessionId: SESSION,
@@ -380,7 +381,7 @@ describe.each(SUBJECTS)("send budget protocol (D-CP5 2.3) — %s", (_name, make)
     expect({ ...forgotten, intentHash: HASH }).toEqual(previous);
     expect(validBudgetRecord(forgotten)).toBe(true);
     expect(peek(OTHER_COMMAND)).toMatchObject({ intentHash: HASH });
-    expect(peek("00000000-0000-4000-8000-000000000003")).toEqual({ garbage: true, commandId: "00000000-0000-4000-8000-000000000003", profileId: PROFILE });
+    expect(peek("00000000-0000-4000-8000-000000000003")).toEqual({ garbage: true, commandId: "00000000-0000-4000-8000-000000000003", profileId: PROFILE, damaged: true });
     // The returning profile cannot use it as the budget of its envelope: only the guard of a lost envelope sees it.
     expect(await store.load(identity)).toBeNull();
     expect(await store.forgetHashOfOtherProfiles(OTHER_PROFILE)).toBe(0);
@@ -491,8 +492,8 @@ describe.each(SUBJECTS)("send budget protocol (D-CP5 2.3) — %s", (_name, make)
     seed(OTHER_COMMAND, anonymous);
     seed("00000000-0000-4000-8000-000000000007", mineDamaged);
     expect(await store.forgetHashOfOtherProfiles(PROFILE)).toBe(2);
-    expect(peek(COMMAND)).toEqual(without(damaged, "intentHash"));
-    expect(peek(OTHER_COMMAND)).toEqual(without(anonymous, "intentHash"));
+    expect(peek(COMMAND)).toEqual({ ...without(damaged, "intentHash"), damaged: true });
+    expect(peek(OTHER_COMMAND)).toEqual({ ...without(anonymous, "intentHash"), damaged: true });
     // This profile's own damaged record keeps its fingerprint: its count stays unknown, not forgotten.
     expect(peek("00000000-0000-4000-8000-000000000007")).toEqual(mineDamaged);
     expect(await store.forgetHashOfOtherProfiles(PROFILE)).toBe(0);
@@ -533,7 +534,7 @@ describe("forgetHashOfOtherProfiles on a damaged value without a string commandI
     const key = "00000000-0000-4000-8000-000000000008";
     store.seed(key, { commandId: 42, profileId: OTHER_PROFILE, intentHash: HASH, slots: [] });
     expect(await store.forgetHashOfOtherProfiles(PROFILE)).toBe(1);
-    expect(store.peek(key)).toEqual({ commandId: 42, profileId: OTHER_PROFILE, slots: [] });
+    expect(store.peek(key)).toEqual({ commandId: 42, profileId: OTHER_PROFILE, slots: [], damaged: true });
   });
 });
 
@@ -608,15 +609,88 @@ describe.each(SUBJECTS)("damaged records and their release (C069, C073, C075 tab
     expect(peek(releaseKey(PROFILE, NEW_SESSION))).toEqual(release(PROFILE, NEW_SESSION, [DAMAGED, SECOND_DAMAGED]));
   });
 
-  it("4.1.8: without damage a start writes no release; an existing release of the session aborts the start", async () => {
+  it("4.1.8: without damage a start writes no release; an existing release of the session refuses a second start", async () => {
     const { store, seed, peek } = await make();
     expect(await store.createAndReserve(startOf(NEW_SESSION), attempt(1), 1_000, [])).toMatchObject({ outcome: "reserved" });
     expect(peek(releaseKey(PROFILE, NEW_SESSION))).toBeUndefined();
     seed(DAMAGED, damagedValue);
     seed(releaseKey(PROFILE, OTHER_SESSION), release(PROFILE, OTHER_SESSION, [DAMAGED]));
-    await expect(store.createAndReserve(startOf(OTHER_SESSION, OTHER_COMMAND), attempt(2), 1_000, [DAMAGED]))
-      .rejects.toMatchObject({ reason: "failed" });
+    // Delta QA п. 6: a deterministic outcome, not a failed transaction.
+    expect(await store.createAndReserve(startOf(OTHER_SESSION, OTHER_COMMAND), attempt(2), 1_000, [DAMAGED]))
+      .toEqual({ outcome: "session_not_new" });
     expect(peek(OTHER_COMMAND)).toBeUndefined();
+  });
+
+  it("delta QA п. 6: starting N again after its release, with new damage: session_not_new, the release unchanged", async () => {
+    const { store, seed, peek } = await make();
+    seed(DAMAGED, damagedValue);
+    expect(await store.createAndReserve(startOf(NEW_SESSION), attempt(1), 1_000, [DAMAGED])).toMatchObject({ outcome: "reserved" });
+    seed(SECOND_DAMAGED, { ...damagedValue, commandId: SECOND_DAMAGED });
+    expect(await store.createAndReserve(startOf(NEW_SESSION, OTHER_COMMAND), attempt(2), 1_000, [DAMAGED, SECOND_DAMAGED]))
+      .toEqual({ outcome: "session_not_new" });
+    expect(peek(releaseKey(PROFILE, NEW_SESSION))).toEqual(release(PROFILE, NEW_SESSION, [DAMAGED]));
+    expect(await store.createAndReserve(other(START2, PROFILE, NEW_SESSION), attempt(3), 1_000)).toEqual({ outcome: "blocked_by_damage" });
+  });
+
+  it("delta QA P1a: N already has a valid start of this profile — a second start of N cannot release", async () => {
+    const { store, seed, peek } = await make();
+    expect(await store.createAndReserve(startOf(NEW_SESSION), attempt(1), 1_000)).toMatchObject({ outcome: "reserved" });
+    seed(DAMAGED, damagedValue);
+    expect(await store.createAndReserve(startOf(NEW_SESSION, START2), attempt(2), 1_000, [DAMAGED])).toEqual({ outcome: "session_not_new" });
+    expect(peek(START2)).toBeUndefined();
+    expect(peek(releaseKey(PROFILE, NEW_SESSION))).toBeUndefined();
+  });
+
+  it("delta QA P1b: the damaged record reads as a record of N — no release of N", async () => {
+    const { store, seed, peek } = await make();
+    seed(DAMAGED, { ...damagedValue, sessionId: NEW_SESSION.toUpperCase(), kind: "session.start", target: { field: "session_id", id: NEW_SESSION } });
+    expect(await store.createAndReserve(startOf(NEW_SESSION, START2), attempt(2), 1_000, [DAMAGED])).toEqual({ outcome: "session_not_new" });
+    expect(await store.createAndReserve({ ...binding, sessionId: NEW_SESSION }, attempt(3), 1_000)).toEqual({ outcome: "blocked_by_damage" });
+    expect(peek(releaseKey(PROFILE, NEW_SESSION))).toBeUndefined();
+  });
+
+  it("delta QA P1c: the old session S has valid records — a start of S cannot release it", async () => {
+    const { store, seed, peek } = await make();
+    expect(await store.createAndReserve(binding, attempt(1), 1_000)).toMatchObject({ outcome: "reserved" });
+    seed(DAMAGED, damagedValue);
+    expect(await store.createAndReserve(startOf(SESSION, START2), attempt(2), 1_000, [DAMAGED])).toEqual({ outcome: "session_not_new" });
+    expect(await store.createAndReserve({ ...binding, commandId: OTHER_COMMAND }, attempt(3), 1_000)).toEqual({ outcome: "blocked_by_damage" });
+    expect(peek(releaseKey(PROFILE, SESSION))).toBeUndefined();
+  });
+
+  it("delta QA P1: another profile's record of N counts against novelty too", async () => {
+    const { store, seed } = await make();
+    expect(await store.createAndReserve(other(OTHER_COMMAND, OTHER_PROFILE, NEW_SESSION), attempt(1), 1_000)).toMatchObject({ outcome: "reserved" });
+    seed(DAMAGED, damagedValue);
+    expect(await store.createAndReserve(startOf(NEW_SESSION), attempt(2), 1_000, [DAMAGED])).toEqual({ outcome: "session_not_new" });
+  });
+
+  it("delta QA п. 3 (M3): only session.start releases — session.stop and cancel_start of S do not", async () => {
+    const { store, seed } = await make();
+    seed(DAMAGED, damagedValue);
+    const stop: BudgetBinding = { ...binding, commandId: START2, kind: "session.stop", family: "stop", target: { field: "session_id", id: SESSION } };
+    expect(() => store.createAndReserve(stop, attempt(1), 1_000, [DAMAGED])).toThrow(SendBudgetError);
+    expect(() => store.createAndReserve({ ...stop, kind: "session.cancel_start", family: "start_cancel" }, attempt(2), 1_000, [DAMAGED]))
+      .toThrow(SendBudgetError);
+    // The kind alone refuses, whatever the family says.
+    for (const kind of ["session.stop", "session.cancel_start", "assignment.present"]) {
+      expect(() => store.createAndReserve({ ...stop, kind, family: "primary" }, attempt(3), 1_000, [DAMAGED])).toThrow(SendBudgetError);
+    }
+  });
+
+  it("delta QA п. 7: a start of another family carries no release", async () => {
+    const { store, seed } = await make();
+    seed(DAMAGED, damagedValue);
+    expect(() => store.createAndReserve({ ...startOf(NEW_SESSION), family: "stop" }, attempt(1), 1_000, [DAMAGED])).toThrow(SendBudgetError);
+  });
+
+  it("delta QA п. 4 (M2): the release lists the damaged keys of the moment, not what was offered", async () => {
+    const { store, seed, peek } = await make();
+    await walk(store, 1, "transmitted");
+    seed(DAMAGED, damagedValue);
+    expect(await store.createAndReserve(startOf(NEW_SESSION), attempt(2), 1_000, [DAMAGED, COMMAND, START, "00000000-0000-4000-8000-0000000000ff"]))
+      .toMatchObject({ outcome: "reserved" });
+    expect(peek(releaseKey(PROFILE, NEW_SESSION))).toEqual(release(PROFILE, NEW_SESSION, [DAMAGED]));
   });
 
   it("4.1.9: valid records of another profile or envelope are not damage", async () => {
@@ -652,5 +726,56 @@ describe.each(SUBJECTS)("damaged records and their release (C069, C073, C075 tab
     seed(DAMAGED, { slots: "x" });
     expect(await store.listOrphans(PROFILE, SESSION)).toEqual([]);
     expect(await store.createAndReserve(binding, attempt(1), 1_000)).toEqual({ outcome: "blocked_by_damage" });
+  });
+});
+
+describe.each(SUBJECTS)("delta QA CP5a-2: healing, store keys, existing records — %s", (_name, make) => {
+  const sixSlots = [slot("retryable", 1), slot("empty"), slot("empty"), slot("empty"), slot("empty"), slot("empty")];
+
+  it("P2: dropping the fingerprint of a record damaged only in intentHash keeps it damaged and blocking", async () => {
+    const { store, seed, peek } = await make();
+    seed(DAMAGED, { ...damagedValue, slots: sixSlots, intentHash: "Z".repeat(64) });
+    expect(await store.createAndReserve(binding, attempt(1), 1_000)).toEqual({ outcome: "blocked_by_damage" });
+    expect(await store.forgetHashOfOtherProfiles(OTHER_PROFILE)).toBe(1);
+    expect(validBudgetRecord(peek(DAMAGED))).toBe(false);
+    expect(await store.createAndReserve(binding, attempt(1), 1_000)).toEqual({ outcome: "blocked_by_damage" });
+    expect(await store.listOrphans(PROFILE, SESSION)).toEqual([expect.objectContaining({ commandId: DAMAGED, damaged: true })]);
+  });
+
+  it("P2b: the same for a damaged record of another profile when this profile signs in", async () => {
+    const { store, seed } = await make();
+    seed(DAMAGED, { ...damagedValue, profileId: OTHER_PROFILE, slots: sixSlots, intentHash: "Z".repeat(64) });
+    expect(await store.forgetHashOfOtherProfiles(PROFILE)).toBe(1);
+    expect(await store.createAndReserve(binding, attempt(1), 1_000)).toEqual({ outcome: "blocked_by_damage" });
+  });
+
+  it("п. 8: a damaged record under an upper-case key is listed and removed by its exact key", async () => {
+    const { store, seed, peek } = await make();
+    const key = "ABCDEF00-0000-4000-8000-00000000000D";
+    seed(key, { ...damagedValue, commandId: key });
+    expect(await store.listOrphans(PROFILE, SESSION)).toEqual([expect.objectContaining({ commandId: key, damaged: true })]);
+    expect(await store.clearDamaged(key)).toBe(true);
+    expect(peek(key)).toBeUndefined();
+    expect(await store.createAndReserve(binding, attempt(1), 1_000)).toMatchObject({ outcome: "reserved" });
+  });
+
+  it("M6: a valid record stored under another key counts as damage", async () => {
+    const { store, seed } = await make();
+    seed(DAMAGED, { ...baseRecord(), commandId: OTHER_COMMAND });
+    expect(await store.createAndReserve(binding, attempt(1), 1_000)).toEqual({ outcome: "blocked_by_damage" });
+  });
+
+  it("M12: a damaged record under a key that is not a UUID is not listed, and still blocks", async () => {
+    const { store, seed } = await make();
+    seed("not-a-uuid", { ...damagedValue, commandId: "not-a-uuid" });
+    expect(await store.listOrphans(PROFILE, SESSION)).toEqual([]);
+    expect(await store.createAndReserve(binding, attempt(1), 1_000)).toEqual({ outcome: "blocked_by_damage" });
+  });
+
+  it("M14: creating a command that already exists answers exists even while damage blocks new records", async () => {
+    const { store, seed } = await make();
+    await walk(store, 1, "retryable");
+    seed(DAMAGED, damagedValue);
+    expect(await store.createAndReserve(binding, attempt(2), 1_000)).toEqual({ outcome: "exists" });
   });
 });

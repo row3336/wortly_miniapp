@@ -319,7 +319,7 @@ describe("IdbSendBudget — damaged values (QA Н5)", () => {
     const store = await IdbSendBudget.open(fake.factory);
     fake.seed(WORTLY_DATABASE, SEND_BUDGET_STORE, 42, { commandId: 42, profileId: "00000000-0000-4000-8000-0000000000a2", intentHash: "a".repeat(64) });
     expect(await store.forgetHashOfOtherProfiles(PROFILE)).toBe(1);
-    expect(rows(fake).get(42)).toEqual({ commandId: 42, profileId: "00000000-0000-4000-8000-0000000000a2" });
+    expect(rows(fake).get(42)).toEqual({ commandId: 42, profileId: "00000000-0000-4000-8000-0000000000a2", damaged: true });
     expect(rows(fake).size).toBe(1);
   });
 });

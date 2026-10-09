@@ -1,6 +1,6 @@
 import { DatabaseOpenError, openWortlyDatabase, SEND_BUDGET_STORE } from "../platform/indexedDb";
 import {
-  beginSendingStep, canonicalClaim, canonicalId, canonicalIdentity, canonicalLoss, canonicalRelease, clearAllowed,
+  beginSendingStep, canonicalClaim, canonicalId, canonicalIdentity, canonicalLoss, canonicalRelease, canonicalStoreKey, clearAllowed,
   createConflict, damageGate, forbidStep, forgetHashStep, isDamaged, lossStep, releasesWithout,
   maintenanceStep, markRetryableStep, markTransmittedStep, newBudgetRecord, orphanOf, releaseStep, reserveStep, reservedClaim,
   SendBudgetError, summarize,
@@ -111,11 +111,11 @@ export class IdbSendBudget implements SendBudgetStore {
       readAll(store, entries => {
         const exists = entries.some(([key]) => key === fresh.commandId);
         const gate = exists ? { allowed: true as const } : damageGate(entries, fresh, offered);
-        if (!gate.allowed) { finish({ outcome: "blocked_by_damage" }); return; }
+        if (!gate.allowed) { finish({ outcome: gate.reason }); return; }
         // add, never put: a record of this command_id, whatever its content, is never reset (D-CP5 2.3.1).
         const request = store.add(fresh);
         request.onsuccess = () => {
-          // add as well: an existing release of this session aborts the whole transaction, record included.
+          // add as well: an existing release of this session is refused by the gate already; a duplicate aborts.
           if ("write" in gate && gate.write) store.add(gate.write);
           finish({ outcome: "reserved", claim });
         };
@@ -180,12 +180,12 @@ export class IdbSendBudget implements SendBudgetStore {
     const profile = canonicalId(profileId);
     return this.removeIf(id, current => clearAllowed(current, id, profile));
   }
-  clearDamaged(commandId: string): Promise<boolean> {
-    const id = canonicalId(commandId);
+  clearDamaged(key: StoreKey): Promise<boolean> {
+    const id = canonicalStoreKey(key);
     return this.removeIf(id, current => current !== undefined && isDamaged(id, current));
   }
   /** Deletes the record under id when allowed and takes the key out of every release, in one transaction. */
-  private removeIf(id: string, allowed: (current: unknown) => boolean): Promise<boolean> {
+  private removeIf(id: StoreKey, allowed: (current: unknown) => boolean): Promise<boolean> {
     return this.transact<boolean>("readwrite", (store, finish) => {
       readAll(store, entries => {
         const current = entries.find(([key]) => key === id)?.[1];
