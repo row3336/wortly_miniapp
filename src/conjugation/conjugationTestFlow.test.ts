@@ -602,6 +602,50 @@ describe("conjugation test flow: present barrier, C1 and commit", () => {
     expect(onlyArgument(step.actions.openStep)).toBe(back);
     expect(step.actions.openResult).not.toHaveBeenCalled();
   });
+
+  /** The live summary after the answer A; a document after a return has no display yet and offers its step ticket. */
+  const summaryOf = (over: Partial<ConjugationDocumentSnapshot> = {}) => snap({ phase: "summary", display: { kind: "summary" }, canSubmit: false,
+    canSummaryHome: true, resultA: resultA(result(true)), currentStep: { stateVersion: "10", step: projection(null, "summary") }, ...over });
+  const returned = (ticket: ConjugationStepTicket, over: Partial<ConjugationDocumentSnapshot> = {}) => summaryOf({ display: { kind: "none" },
+    stepTicket: ticket, ...over });
+
+  it("row 4a: a return from the background on the summary restores the summary, not the result of the last answer", () => {
+    const h = harness();
+    h.show(h.input(onResult(result(true), { commands: { study: acceptedAnswer(), stop: command() }, stepTicket: stepTicket() })));
+    h.show(h.input(summaryOf()));
+    h.show(h.input(summaryOf(), { active: false }));
+    const back = stepTicket();
+    h.show(h.input(returned(back), { active: false }));
+    expect(h.calls()).toBe(0);
+    h.show(h.input(returned(back))); h.show(h.input(returned(back)));
+    expect(onlyArgument(h.actions.openStep)).toBe(back);
+    expect(h.actions.openResult).not.toHaveBeenCalled();
+    expect(h.show(h.input(summaryOf()))).toMatchObject({ screen: "summary", canHome: true, canPrevious: true });
+    // К06-102 still works after the return: previous reopens A, and the remembered display is A again.
+    h.flow.previous();
+    expect(h.actions.openResult).toHaveBeenCalledTimes(1);
+    h.show(h.input(onResult(result(true), { stepTicket: stepTicket(), currentStep: { stateVersion: "10", step: projection(null, "summary") } })));
+    h.show(h.input(returned(stepTicket())));
+    expect(h.actions.openResult).toHaveBeenCalledTimes(2);
+    expect(h.actions.openStep).toHaveBeenCalledTimes(1);
+  });
+
+  it("row 4a: the remembered summary belongs to its session; a new session with a known A restores that A", () => {
+    const direct = harness();
+    direct.show(direct.input(summaryOf()));
+    const other = onResult(result(true), { sessionId: S2, display: { kind: "none" }, phase: "prefetched", stepTicket: stepTicket() });
+    direct.show(direct.input(other));
+    expect(direct.actions.openResult).toHaveBeenCalledTimes(1);
+    expect(direct.actions.openStep).not.toHaveBeenCalled();
+
+    const closed = harness();
+    closed.show(closed.input(summaryOf()));
+    closed.show(closed.input(snap({ phase: "closed", display: { kind: "closed" }, currentStep: null, terminalSessionIds: [S1],
+      closed: { sessionId: S1, reason: "summary_home", summary: summaryFixture() } })));
+    closed.show(closed.input(other));
+    expect(closed.actions.openResult).toHaveBeenCalledTimes(1);
+    expect(closed.actions.openStep).not.toHaveBeenCalled();
+  });
 });
 
 describe("conjugation test flow: unknown, lanes and no automatic commands", () => {

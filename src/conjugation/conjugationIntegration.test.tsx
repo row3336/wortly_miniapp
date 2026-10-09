@@ -634,6 +634,30 @@ describe("QA-5 timer details, summary and Today (К06-102, К06-103)", () => {
     expect(await d.settle()).toMatchObject({ screen: "summary", canHome: true, summary: { correct: 1, wrong: 0 } });
     expect(m.posted.filter(c => c.kind === "session.stop")).toEqual([]);
   });
+
+  it("background on the summary: the return restores the summary, not the result of the last answer (MCF 9)", async () => {
+    const m = model(undefined, true), a1 = m.access(1), ref = { current: m.controller(a1) };
+    await ref.current.refresh();
+    const d = drive(ref, a1);
+    d.show(); d.flow.setDraft("kommst"); d.show(); d.flow.submit();
+    await d.settle();
+    d.flow.next();
+    expect(await d.settle()).toMatchObject({ screen: "summary" });
+    const address = ref.current.snapshot().acceptedAddress!;
+    ref.current.setActivity({ enabled: true, visible: false });
+    d.show({ active: false });
+    const a2 = m.access(2);
+    d.setAccess(a2); d.show({ state: null });
+    ref.current.dispose(); ref.current = m.controller(a2, address);
+    await ref.current.refresh();
+    const back = await d.settle();
+    expect(back).toMatchObject({ screen: "summary", canHome: true, canPrevious: true, summary: { completed: 1 } });
+    expect(d.running()).toHaveLength(0);
+    // The restored summary is the live one: «На Сегодня» still closes the session once.
+    d.flow.home();
+    expect(await d.settle()).toMatchObject({ screen: "closed", reason: "summary_home" });
+    expect(m.posted.filter(c => c.kind === "session.stop").map(c => c.payload)).toEqual([{ reason: "summary_home" }]);
+  });
 });
 
 describe("M-UNDO-CONJ: «Шаг назад» through the real controller and flow", () => {

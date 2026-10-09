@@ -41,7 +41,8 @@ type Memory = Readonly<{
   draft: Readonly<{ assignmentId: string; text: string }> | null;
   question: ConjugationQuestion | null;
   lastResult: WrittenResult | null;
-  lastDisplay: "step" | "result" | null;
+  /** Row 4a: what this identity showed last; "step" and "summary" are both reached through the step ticket. */
+  lastDisplay: "step" | "result" | "summary" | null;
   resultMode: Readonly<{ resultId: string; mode: "answer" | "previous" }> | null;
   /** Command IDs of accepted answers and undos whose effect on this memory is already applied. */
   seenAnswers: readonly string[];
@@ -119,6 +120,7 @@ function reconcile(memory: Memory, input: FlowInput, state: ConjugationDocumentS
   }
   if (state.display.kind === "step" && next.lastDisplay !== "step") next = { ...next, lastDisplay: "step" };
   if (state.display.kind === "result" && next.lastDisplay !== "result") next = { ...next, lastDisplay: "result" };
+  if (state.display.kind === "summary" && next.lastDisplay !== "summary") next = { ...next, lastDisplay: "summary" };
   const result = resultOf(state);
   if (result && next.lastResult !== result && !(next.lastResult && next.lastResult.result_id === result.result_id
     && next.lastResult.version === result.version)) next = { ...next, lastResult: structuredClone(result) };
@@ -472,8 +474,9 @@ export class ConjugationTestFlow {
       if (ticket && !this.autoTickets.has(ticket)) { this.autoTickets.add(ticket); this.options.actions.openStep(ticket); }
       return;
     }
-    // Row 4a: restore the last display this identity chose; local only.
-    if (memory.lastDisplay === "step" && state.stepTicket) {
+    // Row 4a: restore the last display this identity chose; local only. A summary left for the background comes back
+    // as the summary (its step ticket), not as the result of the last answer.
+    if ((memory.lastDisplay === "step" || memory.lastDisplay === "summary") && state.stepTicket) {
       const ticket = state.stepTicket;
       if (!this.autoTickets.has(ticket)) { this.autoTickets.add(ticket); this.options.actions.openStep(ticket); }
       return;
