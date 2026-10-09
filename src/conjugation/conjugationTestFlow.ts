@@ -302,6 +302,8 @@ export class ConjugationTestFlow {
   dispose(): void {
     this.cancelTimer(); this.disposed = true; this.input = null;
   }
+  /** A disposed flow is final: its owner must replace it (StrictMode runs the cleanup of a flow that stays in use). */
+  get isDisposed(): boolean { return this.disposed; }
 
   private accessChanged(input: FlowInput): boolean {
     return !!this.input && this.input.source.access !== input.source.access && this.input.source.tuple === input.source.tuple;

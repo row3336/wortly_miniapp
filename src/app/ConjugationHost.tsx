@@ -113,10 +113,15 @@ export function useConjugationHost(options: ConjugationHostOptions): Conjugation
     void latest.current.onToday();
   });
   // One flow for the hook's lifetime: its actions are stable and always reach the current document owner.
+  // StrictMode runs the effect cleanup on a flow that stays in use; a disposed flow is final, so the effect replaces it.
+  const [flowEpoch, replaceFlow] = useReducer((value: number) => value + 1, 0);
   const flow = useMemo(() => new ConjugationTestFlow({ actions, onChange: repaint,
     schedule: (delayMs, run) => { const timer = window.setTimeout(run, delayMs); return () => window.clearTimeout(timer); },
-    onToday: () => leave.current(latestState.current?.sessionId?.toLowerCase() ?? null) }), [actions]);
-  useEffect(() => () => flow.dispose(), [flow]);
+    onToday: () => leave.current(latestState.current?.sessionId?.toLowerCase() ?? null) }), [actions, flowEpoch]);
+  useEffect(() => {
+    if (flow.isDisposed) replaceFlow();
+    return () => flow.dispose();
+  }, [flow]);
 
   // Foreground invalidates an unconsumed tap as well as the owner's command rights.
   useEffect(() => {

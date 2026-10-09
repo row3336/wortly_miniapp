@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Profile, TodayResponse } from "../api/generated";
@@ -7,6 +8,9 @@ import { settingsResponse } from "../settings/settingsRead.test-support";
 import { App } from "./App";
 import { besidesContext, launch, serveLaunchCard } from "./launchCard.test-support";
 
+/** The mode matrix below runs every suite plain and under StrictMode, as src/main.tsx does in development. */
+let strict = false;
+const root = () => strict ? <StrictMode><App /></StrictMode> : <App />;
 type Fetch = (url: string | URL | Request, init?: RequestInit) => Promise<Response>;
 type Language = "ru" | "uk" | "en";
 const response = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status });
@@ -91,213 +95,218 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); localStorage.clear(); window.history.replaceState(null, "", "/"); vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 
-describe("the conjugation test through the actual App document", () => {
-  it("A1 Today's «Тест спряжений» opens the test without the bottom navigation; one answer is one command", async () => {
-    const a = app();
-    render(<App />);
-    expect((await startButton()).textContent).toContain("2");
-    expect(screen.getByRole("navigation", navigation)).toBeTruthy();
-    fireEvent.click(await startButton());
-    await screen.findByRole("heading", testScreen, exchange);
-    expect(screen.queryByRole("navigation", navigation)).toBeNull();
-    await answer("kommst");
-    await screen.findByRole("button", { name: "Далее" }, exchange);
-    expect(a.kinds()).toEqual(["session.start", "assignment.present", "answer.submit"]);
-    expect(a.starts()[0].payload).toEqual({ mode: "conjugation" });
-  });
-
-  it("A1 native Back on a question stops the test and keeps its closed screen; the next Back returns to Today", async () => {
-    const a = app({ sessions: [active()], reported: S1 });
-    render(<App />);
-    await editable();
-    await a.back.click();
-    await screen.findByText("Занятие завершено", undefined, exchange);
-    await settled();
-    expect(screen.queryByRole("navigation", navigation)).toBeNull();
-    expect(a.model.posted.map(post => [post.kind, post.payload])).toEqual([["session.stop", { reason: "stop" }]]);
-    a.server.session = null;
-    await a.back.click();
-    await screen.findByRole("navigation", navigation, exchange);
-    expect(a.model.posted).toHaveLength(1);
-  });
-
-  it("A2 no ready conjugations: no button; ready ones without a confirmed timer mode: a disabled button that sends nothing", async () => {
-    app({ ready: 0 });
-    render(<App />);
-    await screen.findByText(/Готово: 0/, undefined, exchange);
-    expect(screen.queryByRole("button", { name: /Тест спряжений/ })).toBeNull();
-    cleanup();
-    const a = app({ transitionMode: null });
-    render(<App />);
-    const button = await screen.findByRole("button", { name: /Тест спряжений/ }, exchange) as HTMLButtonElement;
-    await settled();
-    expect(button.disabled).toBe(true);
-    fireEvent.click(button); await settled();
-    expect(a.model.posted).toEqual([]); expect(screen.queryByRole("heading", testScreen)).toBeNull();
-  });
-
-  it("A3 a restart with an open session continues at its shown form: nothing is sent, no «Вход подтверждён», no Today", async () => {
-    const a = app({ sessions: [active()], reported: S1 });
-    render(<App />);
-    await screen.findByRole("heading", testScreen, exchange);
-    await editable(); await settled();
-    expect(screen.getByText("kommen")).toBeTruthy();
-    expect(a.model.posted).toEqual([]); expect(screen.queryByText("Вход подтверждён")).toBeNull();
-    expect(a.todayReply).not.toHaveBeenCalled();
-  });
-
-  // The mode read itself opens the route (ApplicationDocument start("conjugation")); the host's claim of an open session
-  // is only a fallback that needs the host's own read, so it cannot stand in for it while that read is still under way.
-  it("A3 a restart with an open session opens the test route from the mode read, before the host has read the session", async () => {
-    const a = app({ sessions: [active()], reported: S1 });
-    // Observed order of session reads, not a contract: two belong to the mode read (the route opens after them), the host
-    // makes the third. Holding the third keeps the host's snapshot unsettled, so its claim cannot open the route.
-    let reads = 0;
-    const hostRead = a.model.hold((url, method) => method === "GET" && url.pathname.includes("/sessions/") && ++reads === 3);
-    render(<App />);
-    await hostRead.entered;
-    await settled();
-    expect(screen.getByRole("heading", testScreen)).toBeTruthy();
-    expect(screen.queryByRole("navigation", navigation)).toBeNull();
-    hostRead.release();
-    await editable();
-    expect(a.model.posted).toEqual([]);
-  });
-
-  it("A4 a restart with a prefetched form confirms its display exactly once, after it is shown", async () => {
-    const a = app({ sessions: [active({ presented: false })], reported: S1 });
-    render(<App />);
-    await editable(); await settled();
-    expect(a.kinds()).toEqual(["assignment.present"]);
-    expect(a.model.posted[0]).toMatchObject({ session_id: S1, assignment_id: FORMS[0] });
-  });
-
-  // pending owner answer 5.1.1 (D-CONJ-HOST): TEMPORARY expectation. A refused start stays on the module's screen; only a
-  // return from the background (a new access, so a new owner without that session) leads back to Today.
-  it("A5 a refused start stays on the test screen; after a foreground Today offers a new start with another session ID", async () => {
-    const a = app();
-    a.model.server.rejectStart = "NO_MATERIAL";
-    render(<App />);
-    fireEvent.click(await startButton());
-    await screen.findByText("Не удалось обновить занятие.", undefined, exchange);
-    const todays = a.todayReply.mock.calls.length;
-    await settled();
-    expect(a.starts()).toHaveLength(1); expect(a.todayReply.mock.calls.length).toBe(todays);
-    await foreground();
-    fireEvent.click(await startButton());
-    await editable();
-    expect(a.starts()).toHaveLength(2);
-    expect(a.starts()[1].session_id).not.toBe(a.starts()[0].session_id);
-  });
-
-  // C085: an explicit Back is the one way out of a refused start; it clears, cancels and starts nothing.
-  it("A5 native Back after a refused start shows a fresh Today that stays; a new tap starts another session", async () => {
-    const a = app();
-    a.model.server.rejectStart = "NO_MATERIAL";
-    render(<App />);
-    fireEvent.click(await startButton());
-    await screen.findByText("Не удалось обновить занятие.", undefined, exchange);
-    await settled();
-    const todays = a.todayReply.mock.calls.length;
-    await a.back.click();
-    await screen.findByRole("navigation", navigation, exchange);
-    await settled();
-    expect(screen.queryByRole("heading", testScreen)).toBeNull();
-    expect(a.todayReply.mock.calls.length).toBeGreaterThan(todays); expect(a.model.posted).toHaveLength(1);
-    fireEvent.click(await startButton());
-    await editable();
-    expect(a.starts()).toHaveLength(2); expect(a.starts()[1].session_id).not.toBe(a.starts()[0].session_id);
-  });
-
-  it("A7 an own unconfirmed start of an earlier document is shown before Today, and Today waits until it is resolved", async () => {
-    const a = app();
-    render(<App />);
-    const lost = a.model.hold((url, method) => method === "POST" && url.pathname.endsWith("/commands"));
-    fireEvent.click(await startButton());
-    await lost.entered;
-    cleanup();
-    const check = a.model.hold((url, method) => method === "GET" && url.pathname.includes("/commands/"));
-    const todays = a.todayReply.mock.calls.length;
-    render(<App />);
-    await check.entered;
-    await screen.findByRole("heading", testScreen, exchange);
-    await settled();
-    expect(a.todayReply.mock.calls.length).toBe(todays);
-    expect(screen.queryByRole("navigation", navigation)).toBeNull();
-    check.release(); lost.release();
-  });
-
-  it("A8 the summary's «На Сегодня» closes the session and shows a fresh Today with its navigation", async () => {
-    const a = app({ sessions: [active({ status: "summary", assignment: null })], reported: S1 });
-    render(<App />);
-    await screen.findByText("Итог спряжений", undefined, exchange);
-    const todays = a.todayReply.mock.calls.length;
-    a.server.session = null;
-    fireEvent.click(screen.getByRole("button", { name: "На Сегодня" }));
-    await screen.findByRole("navigation", navigation, exchange);
-    expect(a.todayReply.mock.calls.length).toBeGreaterThan(todays);
-    expect(a.model.posted.map(post => [post.kind, post.payload])).toEqual([["session.stop", { reason: "summary_home" }]]);
-  });
-
-  it("A9 a return from the background keeps the same session and form; no new start", async () => {
-    const a = app();
-    render(<App />);
-    fireEvent.click(await startButton());
-    fireEvent.change(await editable(), { target: { value: "komm" } });
-    a.server.session = a.starts()[0].session_id;
-    const opens = a.openReply.mock.calls.length;
-    await foreground();
-    await waitFor(() => expect(a.openReply.mock.calls.length).toBeGreaterThan(opens));
-    await settled();
-    expect((await editable()).value).toBe("komm");
-    expect(a.starts()).toHaveLength(1); expect(a.kinds()).toEqual(["session.start", "assignment.present"]);
-  });
-
-  it("A10 a closure at midnight during the test keeps the closed screen with its reason; Back returns to Today", async () => {
-    const a = app({ sessions: [active()], reported: S1 });
-    render(<App />);
-    await editable();
-    a.model.close(S1, "midnight"); a.server.session = null;
-    await foreground();
-    await screen.findByText("Занятие закрыто: начался новый день", undefined, exchange);
-    const todays = a.todayReply.mock.calls.length;
-    await settled();
-    expect(a.todayReply.mock.calls.length).toBe(todays); expect(a.model.posted).toEqual([]);
-    await a.back.click();
-    await screen.findByRole("navigation", navigation, exchange);
-    expect(a.model.posted).toEqual([]);
-  });
-
-  it.each<[Language, RegExp, string]>([["uk", /Тест відмінювання/, "Тест дієвідмін"], ["en", /Conjugation quiz/, "Conjugation test"]])(
-    "A12 %s: the existing button and screen titles", async (language, button, title) => {
-      app({ language });
-      render(<App />);
-      fireEvent.click(await startButton(button));
-      await screen.findByRole("heading", { name: title, level: 1 }, exchange);
+describe.each([["StrictMode", true], ["plain render", false]])("App (%s)", (_name, strictMode) => {
+  beforeEach(() => { strict = strictMode; });
+  describe("the conjugation test through the actual App document", () => {
+    it("A1 Today's «Тест спряжений» opens the test without the bottom navigation; one answer is one command", async () => {
+      const a = app();
+      render(root());
+      expect((await startButton()).textContent).toContain("2");
+      expect(screen.getByRole("navigation", navigation)).toBeTruthy();
+      fireEvent.click(await startButton());
+      await screen.findByRole("heading", testScreen, exchange);
+      expect(screen.queryByRole("navigation", navigation)).toBeNull();
+      await answer("kommst");
+      await screen.findByRole("button", { name: "Далее" }, exchange);
+      expect(a.kinds()).toEqual(["session.start", "assignment.present", "answer.submit"]);
+      expect(a.starts()[0].payload).toEqual({ mode: "conjugation" });
     });
-});
 
-describe("the launch card over a conjugation session (answer S01)", () => {
-  const LAUNCH = cardIdOf(3);
-  it("A6 the card opens first and the form is not confirmed under it; Back shows the same form and confirms it once", async () => {
-    launch(`?card=${LAUNCH}`);
-    const a = app({ sessions: [active({ presented: false })], reported: S1 });
-    const card = serveLaunchCard(a.fetcher as never, LAUNCH, { learning: true });
-    render(<App />);
-    await screen.findByText("В очереди на изучение", undefined, exchange);
-    expect(card.origins()).toEqual(["?origin=message"]);
-    await waitFor(() => expect(a.fetcher.mock.calls.some(([, init]) => init?.method === "POST"
-      && JSON.parse(String(init.body)).kind === "context.open")).toBe(true));
-    await settled();
-    expect(screen.queryByRole("heading", testScreen)).toBeNull(); expect(a.model.posted).toEqual([]);
-    await a.back.click();
-    await editable(); await settled();
-    expect(screen.getByText("kommen")).toBeTruthy();
-    expect(a.kinds()).toEqual(["assignment.present"]);
-    const posted = a.fetcher.mock.calls.filter(([, init]) => init?.method === "POST").map(([, init]) => JSON.parse(String(init!.body)).kind as string)
-      .filter(kind => kind === "context.open" || kind === "context.close");
-    expect(posted).toEqual(["context.open", "context.close"]);
-    expect(besidesContext(a.kinds())).toEqual(["assignment.present"]);
-    expect(a.todayReply).not.toHaveBeenCalled();
+    it("A1 native Back on a question stops the test and keeps its closed screen; the next Back returns to Today", async () => {
+      const a = app({ sessions: [active()], reported: S1 });
+      render(root());
+      await editable();
+      await a.back.click();
+      await screen.findByText("Занятие завершено", undefined, exchange);
+      await settled();
+      expect(screen.queryByRole("navigation", navigation)).toBeNull();
+      expect(a.model.posted.map(post => [post.kind, post.payload])).toEqual([["session.stop", { reason: "stop" }]]);
+      a.server.session = null;
+      await a.back.click();
+      await screen.findByRole("navigation", navigation, exchange);
+      expect(a.model.posted).toHaveLength(1);
+    });
+
+    it("A2 no ready conjugations: no button; ready ones without a confirmed timer mode: a disabled button that sends nothing", async () => {
+      app({ ready: 0 });
+      render(root());
+      await screen.findByText(/Готово: 0/, undefined, exchange);
+      expect(screen.queryByRole("button", { name: /Тест спряжений/ })).toBeNull();
+      cleanup();
+      const a = app({ transitionMode: null });
+      render(root());
+      const button = await screen.findByRole("button", { name: /Тест спряжений/ }, exchange) as HTMLButtonElement;
+      await settled();
+      expect(button.disabled).toBe(true);
+      fireEvent.click(button); await settled();
+      expect(a.model.posted).toEqual([]); expect(screen.queryByRole("heading", testScreen)).toBeNull();
+    });
+
+    it("A3 a restart with an open session continues at its shown form: nothing is sent, no «Вход подтверждён», no Today", async () => {
+      const a = app({ sessions: [active()], reported: S1 });
+      render(root());
+      await screen.findByRole("heading", testScreen, exchange);
+      await editable(); await settled();
+      expect(screen.getByText("kommen")).toBeTruthy();
+      expect(a.model.posted).toEqual([]); expect(screen.queryByText("Вход подтверждён")).toBeNull();
+      expect(a.todayReply).not.toHaveBeenCalled();
+    });
+
+    // The mode read itself opens the route (ApplicationDocument start("conjugation")); the host's claim of an open session
+    // is only a fallback that needs the host's own read, so it cannot stand in for it while that read is still under way.
+    it("A3 a restart with an open session opens the test route from the mode read, before the host has read the session", async () => {
+      const a = app({ sessions: [active()], reported: S1 });
+      // The host's read is the first session read made once the test route is on screen (the mode read opens the route;
+      // StrictMode repeats the mode read's setup, so counting reads would hold the wrong one). Holding it keeps the host's
+      // snapshot unsettled, so its claim cannot open the route.
+      const hostRead = a.model.hold((url, method) => method === "GET" && url.pathname.includes("/sessions/")
+        && document.querySelector("h1")?.textContent !== "Сегодня");
+      render(root());
+      await hostRead.entered;
+      await settled();
+      expect(screen.getByRole("heading", testScreen)).toBeTruthy();
+      expect(screen.queryByRole("navigation", navigation)).toBeNull();
+      hostRead.release();
+      await editable();
+      expect(a.model.posted).toEqual([]);
+    });
+
+    it("A4 a restart with a prefetched form confirms its display exactly once, after it is shown", async () => {
+      const a = app({ sessions: [active({ presented: false })], reported: S1 });
+      render(root());
+      await editable(); await settled();
+      expect(a.kinds()).toEqual(["assignment.present"]);
+      expect(a.model.posted[0]).toMatchObject({ session_id: S1, assignment_id: FORMS[0] });
+    });
+
+    // pending owner answer 5.1.1 (D-CONJ-HOST): TEMPORARY expectation. A refused start stays on the module's screen; only a
+    // return from the background (a new access, so a new owner without that session) leads back to Today.
+    it("A5 a refused start stays on the test screen; after a foreground Today offers a new start with another session ID", async () => {
+      const a = app();
+      a.model.server.rejectStart = "NO_MATERIAL";
+      render(root());
+      fireEvent.click(await startButton());
+      await screen.findByText("Не удалось обновить занятие.", undefined, exchange);
+      const todays = a.todayReply.mock.calls.length;
+      await settled();
+      expect(a.starts()).toHaveLength(1); expect(a.todayReply.mock.calls.length).toBe(todays);
+      await foreground();
+      fireEvent.click(await startButton());
+      await editable();
+      expect(a.starts()).toHaveLength(2);
+      expect(a.starts()[1].session_id).not.toBe(a.starts()[0].session_id);
+    });
+
+    // C085: an explicit Back is the one way out of a refused start; it clears, cancels and starts nothing.
+    it("A5 native Back after a refused start shows a fresh Today that stays; a new tap starts another session", async () => {
+      const a = app();
+      a.model.server.rejectStart = "NO_MATERIAL";
+      render(root());
+      fireEvent.click(await startButton());
+      await screen.findByText("Не удалось обновить занятие.", undefined, exchange);
+      await settled();
+      const todays = a.todayReply.mock.calls.length;
+      await a.back.click();
+      await screen.findByRole("navigation", navigation, exchange);
+      await settled();
+      expect(screen.queryByRole("heading", testScreen)).toBeNull();
+      expect(a.todayReply.mock.calls.length).toBeGreaterThan(todays); expect(a.model.posted).toHaveLength(1);
+      fireEvent.click(await startButton());
+      await editable();
+      expect(a.starts()).toHaveLength(2); expect(a.starts()[1].session_id).not.toBe(a.starts()[0].session_id);
+    });
+
+    it("A7 an own unconfirmed start of an earlier document is shown before Today, and Today waits until it is resolved", async () => {
+      const a = app();
+      render(root());
+      const lost = a.model.hold((url, method) => method === "POST" && url.pathname.endsWith("/commands"));
+      fireEvent.click(await startButton());
+      await lost.entered;
+      cleanup();
+      const check = a.model.hold((url, method) => method === "GET" && url.pathname.includes("/commands/"));
+      const todays = a.todayReply.mock.calls.length;
+      render(root());
+      await check.entered;
+      await screen.findByRole("heading", testScreen, exchange);
+      await settled();
+      expect(a.todayReply.mock.calls.length).toBe(todays);
+      expect(screen.queryByRole("navigation", navigation)).toBeNull();
+      check.release(); lost.release();
+    });
+
+    it("A8 the summary's «На Сегодня» closes the session and shows a fresh Today with its navigation", async () => {
+      const a = app({ sessions: [active({ status: "summary", assignment: null })], reported: S1 });
+      render(root());
+      await screen.findByText("Итог спряжений", undefined, exchange);
+      const todays = a.todayReply.mock.calls.length;
+      a.server.session = null;
+      fireEvent.click(screen.getByRole("button", { name: "На Сегодня" }));
+      await screen.findByRole("navigation", navigation, exchange);
+      expect(a.todayReply.mock.calls.length).toBeGreaterThan(todays);
+      expect(a.model.posted.map(post => [post.kind, post.payload])).toEqual([["session.stop", { reason: "summary_home" }]]);
+    });
+
+    it("A9 a return from the background keeps the same session and form; no new start", async () => {
+      const a = app();
+      render(root());
+      fireEvent.click(await startButton());
+      fireEvent.change(await editable(), { target: { value: "komm" } });
+      a.server.session = a.starts()[0].session_id;
+      const opens = a.openReply.mock.calls.length;
+      await foreground();
+      await waitFor(() => expect(a.openReply.mock.calls.length).toBeGreaterThan(opens));
+      await settled();
+      expect((await editable()).value).toBe("komm");
+      expect(a.starts()).toHaveLength(1); expect(a.kinds()).toEqual(["session.start", "assignment.present"]);
+    });
+
+    it("A10 a closure at midnight during the test keeps the closed screen with its reason; Back returns to Today", async () => {
+      const a = app({ sessions: [active()], reported: S1 });
+      render(root());
+      await editable();
+      a.model.close(S1, "midnight"); a.server.session = null;
+      await foreground();
+      await screen.findByText("Занятие закрыто: начался новый день", undefined, exchange);
+      const todays = a.todayReply.mock.calls.length;
+      await settled();
+      expect(a.todayReply.mock.calls.length).toBe(todays); expect(a.model.posted).toEqual([]);
+      await a.back.click();
+      await screen.findByRole("navigation", navigation, exchange);
+      expect(a.model.posted).toEqual([]);
+    });
+
+    it.each<[Language, RegExp, string]>([["uk", /Тест відмінювання/, "Тест дієвідмін"], ["en", /Conjugation quiz/, "Conjugation test"]])(
+      "A12 %s: the existing button and screen titles", async (language, button, title) => {
+        app({ language });
+        render(root());
+        fireEvent.click(await startButton(button));
+        await screen.findByRole("heading", { name: title, level: 1 }, exchange);
+      });
+  });
+
+  describe("the launch card over a conjugation session (answer S01)", () => {
+    const LAUNCH = cardIdOf(3);
+    it("A6 the card opens first and the form is not confirmed under it; Back shows the same form and confirms it once", async () => {
+      launch(`?card=${LAUNCH}`);
+      const a = app({ sessions: [active({ presented: false })], reported: S1 });
+      const card = serveLaunchCard(a.fetcher as never, LAUNCH, { learning: true });
+      render(root());
+      await screen.findByText("В очереди на изучение", undefined, exchange);
+      // StrictMode repeats the card document's setup: the first controller is disposed at once, and both read the same origin.
+      expect(card.origins()).toEqual(strict ? ["?origin=message", "?origin=message"] : ["?origin=message"]);
+      await waitFor(() => expect(a.fetcher.mock.calls.some(([, init]) => init?.method === "POST"
+        && JSON.parse(String(init.body)).kind === "context.open")).toBe(true));
+      await settled();
+      expect(screen.queryByRole("heading", testScreen)).toBeNull(); expect(a.model.posted).toEqual([]);
+      await a.back.click();
+      await editable(); await settled();
+      expect(screen.getByText("kommen")).toBeTruthy();
+      expect(a.kinds()).toEqual(["assignment.present"]);
+      const posted = a.fetcher.mock.calls.filter(([, init]) => init?.method === "POST").map(([, init]) => JSON.parse(String(init!.body)).kind as string)
+        .filter(kind => kind === "context.open" || kind === "context.close");
+      expect(posted).toEqual(["context.open", "context.close"]);
+      expect(besidesContext(a.kinds())).toEqual(["assignment.present"]);
+      expect(a.todayReply).not.toHaveBeenCalled();
+    });
   });
 });

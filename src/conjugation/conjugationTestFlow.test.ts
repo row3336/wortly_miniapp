@@ -370,6 +370,33 @@ describe("conjugation test flow: timer (§5; a return waits for Next, DC 2.19)",
     expect(corrected.schedule).toHaveBeenCalledTimes(1);
   });
 
+  it("a replacement flow shares nothing with the disposed one: its own timer, no draft, no timer history, and the late old callback is dead", () => {
+    ticket = stepTicket();
+    const old = harness();
+    old.show(old.input(answer(result(true))));
+    old.flow.dispose();
+    const [oldTimer] = old.timers;
+    expect(oldTimer.cancelled).toBe(true);
+    // The same snapshot reaches a new flow (StrictMode's re-setup): it arms its own timer, once, with its own actions.
+    const next = harness();
+    next.show(next.input(answer(result(true))));
+    expect(next.timers).toHaveLength(1);
+    oldTimer.run();
+    expect(old.actions.openStep).not.toHaveBeenCalled(); expect(next.actions.openStep).not.toHaveBeenCalled();
+    next.fire();
+    next.fire(next.timers[0]);
+    expect(onlyArgument(next.actions.openStep)).toBe(ticket);
+    // Intents and projections of the disposed flow send nothing and show nothing of the session.
+    everyIntent(old.flow, presentationTicket());
+    expect(old.calls()).toBe(0); expect(old.onToday).not.toHaveBeenCalled();
+    expect(old.flow.project(old.input(answer(result(true))))).toMatchObject({ screen: "loading" });
+    // A draft typed in the old flow does not reach the new one.
+    const q = harness();
+    q.show(q.input(snap())); q.flow.setDraft("komm"); q.flow.dispose();
+    const fresh = harness();
+    expect(fresh.show(fresh.input(snap()))).toMatchObject({ screen: "question", draft: "" });
+  });
+
   it("a stale callback (other generation, cancelled, other ticket) does nothing", () => {
     ticket = stepTicket();
     const h = harness();
