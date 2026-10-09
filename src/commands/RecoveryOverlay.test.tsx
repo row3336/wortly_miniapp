@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Language } from "../i18n/language";
 import { recoveryCover } from "./CommandRecovery";
-import { RecoveryOverlay, type RecoveryScreen } from "./RecoveryOverlay";
+import { ClosedCheckStatus, RecoveryOverlay, type RecoveryScreen } from "./RecoveryOverlay";
 
 afterEach(() => cleanup());
 const waiting = (status: Extract<RecoveryScreen, { kind: "waiting" }>["status"]): RecoveryScreen => ({ kind: "waiting", status, pauseSeconds: null });
@@ -50,5 +50,21 @@ describe("the wait for the card to show (Q25.2)", () => {
     const unconfirmed = waiting("unconfirmed");
     expect(recoveryCover(unconfirmed, { primary: { pendingIntent: { kind: "assignment.present" } } })).toBeNull();
     expect(recoveryCover(unconfirmed, { primary: { pendingIntent: { kind: "answer.submit" } } })).toBe(unconfirmed);
+  });
+});
+
+describe("the closed-session check under counter_unknown (state Н6)", () => {
+  // The session is closed, so the unconfirmed status must not offer 9.2.9 or the Stop button of 9.2.10: only 9.2.1.
+  it.each([
+    ["ru", "Проверяем, сохранилось ли действие…"],
+    ["uk", "Перевіряємо, чи збереглася дія…"],
+    ["en", "Checking whether your action was saved…"],
+  ] as const)("%s: shows 9.2.1 without 9.2.9 and without a button", (language: Language, checking) => {
+    const { container } = render(<ClosedCheckStatus screen={waiting("unconfirmed")} language={language} className="learning-closed-check" />);
+    expect(container.querySelector("p")?.textContent).toBe(checking);
+    expect(container.textContent).not.toMatch(/Не удалось подтвердить|Не вдалося підтвердити|couldn't confirm/);
+    expect(container.querySelector(".wortly-loader")).not.toBeNull();
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(screen.queryByText(/Завершить занятие|Завершити заняття|End session/)).toBeNull();
   });
 });
