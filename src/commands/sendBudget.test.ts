@@ -31,7 +31,7 @@ const binding: BudgetBinding = { ...identity, family: "primary", target: { field
 const other = (commandId: string, profileId: string, sessionId = SESSION): BudgetBinding =>
   ({ ...binding, commandId, profileId, sessionId });
 
-type Subject = { store: SendBudgetStore; seed(commandId: string, value: unknown): void; peek(commandId: string): unknown };
+type Subject = { store: SendBudgetStore; seed(commandId: StoreKey, value: unknown): void; peek(commandId: StoreKey): unknown };
 const SUBJECTS: Array<[string, () => Promise<Subject>]> = [
   ["MemorySendBudget", async () => {
     const store = new MemorySendBudget();
@@ -995,5 +995,19 @@ describe.each(SUBJECTS)("the damaged-key enumerator (D-CP5A-DAMAGE-EXIT table 4.
       expect(await refused(() => store.clearDamaged(bad)), String(bad)).toBe("invalid_input");
       expect(await refused(() => store.createAndReserve(startOf(NEW_SESSION), attempt(1), 1_000, [bad])), String(bad)).toBe("invalid_input");
     }
+  });
+
+  it("CP5a-4 H1: a number and the same digits as a string are different keys: clearDamaged never crosses them", async () => {
+    // Memory used to coerce the key to a string, so 42 removed "42" while IndexedDB left it: the two disagreed.
+    const { store, seed, peek } = await make();
+    seed("42", { slots: "x" });
+    expect(await store.clearDamaged(42)).toBe(false);
+    expect(peek("42")).toEqual({ slots: "x" });
+    seed(42, { slots: "y" });
+    expect(await store.clearDamaged("42")).toBe(true);
+    expect(peek("42")).toBeUndefined();
+    expect(peek(42)).toEqual({ slots: "y" });
+    expect(await store.clearDamaged(42)).toBe(true);
+    expect(peek(42)).toBeUndefined();
   });
 });

@@ -535,6 +535,17 @@ describe("IdbSendBudget — the damaged-key enumerator (D-CP5A-DAMAGE-EXIT table
     expect(await store.listDamagedKeys()).toEqual([42, DAMAGED]);
   });
 
+  it("CP5a-4 H2: put through the double accepts +-Infinity as a key like IndexedDB, and refuses NaN", async () => {
+    const fake = new FakeIndexedDb();
+    await IdbSendBudget.open(fake.factory);
+    const write = await otherWindow(fake);
+    for (const key of [Infinity, -Infinity]) {
+      await write({ commandId: key });
+      expect(rows(fake).get(key)).toEqual({ commandId: key });
+    }
+    await expect(write({ commandId: NaN })).rejects.toThrow();
+  });
+
   it("CL125 open: a damaged record under a Date key cannot be named — it is not listed and keeps blocking", async () => {
     const fake = new FakeIndexedDb();
     const store = await IdbSendBudget.open(fake.factory);

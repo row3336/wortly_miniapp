@@ -595,7 +595,8 @@ export function orphanOf(key: StoreKey, current: unknown, profileId: string, ses
  * survive a reload and other windows do not see it, so it never serves as a fallback store (D-CP5 9.1, Е01).
  */
 export class MemorySendBudget implements SendBudgetStore {
-  private readonly values = new Map<string, unknown>();
+  // Keyed by StoreKey exactly like IndexedDB: 42 and "42" are different keys.
+  private readonly values = new Map<StoreKey, unknown>();
   private queue: Promise<unknown> = Promise.resolve();
 
   private run<R>(action: () => R): Promise<R> {
@@ -611,12 +612,12 @@ export class MemorySendBudget implements SendBudgetStore {
     });
   }
 
-  /** Test access: put any raw value (e.g. a corrupt record) under a command_id. */
-  seed(commandId: string, value: unknown): void {
+  /** Test access: put any raw value (e.g. a corrupt record) under a key. */
+  seed(commandId: StoreKey, value: unknown): void {
     this.values.set(commandId, structuredClone(value));
   }
   /** Test access: the raw stored value. */
-  peek(commandId: string): unknown {
+  peek(commandId: StoreKey): unknown {
     return structuredClone(this.values.get(commandId));
   }
 
@@ -682,15 +683,15 @@ export class MemorySendBudget implements SendBudgetStore {
     return this.run(() => clearAllowed(this.values.get(id), id, profile) && this.remove(id));
   }
   clearDamaged(key: StoreKey): Promise<boolean> {
-    const id = String(canonicalStoreKey(key));
+    const id = canonicalStoreKey(key);
     return this.run(() => this.values.has(id) && isDamaged(id, this.values.get(id)) && this.remove(id));
   }
   /** Deletes the record and takes its key out of every release, as one step. */
-  private remove(id: string): true {
+  private remove(id: StoreKey): true {
     const { puts, deletes } = releasesWithout([...this.values.entries()], id);
     this.values.delete(id);
     puts.forEach(release => this.values.set(release.commandId, structuredClone(release)));
-    deletes.forEach(key => this.values.delete(String(key)));
+    deletes.forEach(key => this.values.delete(key));
     return true;
   }
   forgetHashOfOtherProfiles(profileId: string): Promise<number> {

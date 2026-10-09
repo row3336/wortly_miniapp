@@ -79,7 +79,7 @@ class FakeObjectStore {
   }
   private key(store: StoreData, value: unknown): FakeKey {
     const key = typeof value === "object" && value !== null ? (value as Record<string, unknown>)[store.keyPath] : undefined;
-    if (typeof key !== "string" && !(typeof key === "number" && Number.isFinite(key))) throw domError("DataError");
+    if (typeof key !== "string" && !(typeof key === "number" && !Number.isNaN(key))) throw domError("DataError");
     return key;
   }
   get(key: FakeKey): FakeRequest {
