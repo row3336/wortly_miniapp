@@ -1,7 +1,7 @@
 /** Top-level sections of the main navigation (К09-038). */
 export const tabs = ["today", "dictionary", "settings"] as const;
 export type Tab = (typeof tabs)[number];
-export type StudyScreen = "learning" | "oral" | "written";
+export type StudyScreen = "learning" | "oral" | "written" | "conjugation";
 /** Screens of the application document (TA табл. 4.1). */
 export type ScreenId = Tab | StudyScreen | "statistics" | "card";
 /** Screens opened on top of another one; they always return to their source. */
@@ -52,7 +52,7 @@ export type NavigationAction =
 export const initialRoute: Route = { screen: "today", subject: null, back: null, restored: null, direction: "none" };
 
 export function isStudy(screen: ScreenId): screen is StudyScreen {
-  return screen === "learning" || screen === "oral" || screen === "written";
+  return screen === "learning" || screen === "oral" || screen === "written" || screen === "conjugation";
 }
 function isTab(screen: ScreenId): screen is Tab {
   return (tabs as readonly ScreenId[]).includes(screen);

@@ -10,13 +10,13 @@ import type { BusyAccess } from "./busyAccess";
 import { RemoteStopNotice } from "../study/RemoteStopScreen";
 
 type Props = { access: OpenedAccess; transport: HttpOptions; language: Language }
-  & Pick<TodayScreenProps, "onNavigate" | "enabledDestinations" | "onOpenLearning" | "onStartQuiz" | "canStartQuiz">;
+  & Pick<TodayScreenProps, "onNavigate" | "enabledDestinations" | "onOpenLearning" | "onStartQuiz" | "canStartQuiz" | "onStartConjugation">;
 
 type DocumentProps = Omit<Props, "access"> & { access: OpenedAccess | BusyAccess;
   notice?: TodayScreenProps["notice"]; onRefresh?: () => void };
 
 function TodayDocument({ access, transport, language, onNavigate, enabledDestinations, onOpenLearning, onStartQuiz, canStartQuiz,
-  notice, onRefresh }: DocumentProps) {
+  onStartConjugation, notice, onRefresh }: DocumentProps) {
   const [state, setState] = useState<TodayState>({ kind: "loading" });
   const [retry, setRetry] = useState<(() => void) | undefined>();
   useEffect(() => {
@@ -37,7 +37,7 @@ function TodayDocument({ access, transport, language, onNavigate, enabledDestina
 
   return <TodayScreen state={state} language={language} onRetry={() => onRefresh ? onRefresh() : retry?.()} notice={notice}
     onNavigate={onNavigate} enabledDestinations={enabledDestinations} onOpenLearning={onOpenLearning}
-    onStartQuiz={onStartQuiz} canStartQuiz={canStartQuiz} />;
+    onStartQuiz={onStartQuiz} canStartQuiz={canStartQuiz} onStartConjugation={onStartConjugation} />;
 }
 
 export function BusyTodayHost(props: { access: BusyAccess; transport: HttpOptions; language: Language;

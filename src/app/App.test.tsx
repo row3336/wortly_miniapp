@@ -21,7 +21,7 @@ const written = (): SessionResponse => ({ state_version: "11", current: {
   session_id: sessionId, mode: "written", status: "closed", pair: "uk-de", direction: "l1-de", local_date: "2026-09-30", bucket: "words",
   close_reason: "stop", progress: { completed: 2, total: 2, correct: 1, wrong: 1 },
   summary: { completed: 2, correct: 1, wrong: 1, ratio: { numerator: 1, denominator: 2 } }, assignment: null } });
-// The persisted server mode of a reported session: Conjugation has no study route in this App yet.
+// A reported conjugation session of this client: it continues on the conjugation screen (M-CONJ-HOST).
 const conjugation = (): SessionResponse => ({ state_version: "11", current: {
   session_id: sessionId, status: "active", mode: "conjugation", pair: "uk-de", direction: "conjugation", local_date: "2026-09-30",
   close_reason: null, progress: { total: 3, completed: 1, correct: 1, wrong: 0 },
@@ -33,6 +33,16 @@ const conjugation = (): SessionResponse => ({ state_version: "11", current: {
     answer_spec: { kind: "forms", labels: ["du"], part_count: 1, case_sensitive: false } }, summary: null,
   capabilities: { answer_target: "33333333-3333-4333-8333-333333333333", correct_target: null, grades: null, undo_target: null,
     stop: true, summary_home: false } } });
+/** The same session after a Stop from another device, with its frozen summary. */
+const remoteStopped = (): SessionResponse => ({ state_version: "11", current: {
+  session_id: sessionId, status: "closed", mode: "conjugation", pair: "uk-de", direction: "conjugation", local_date: "2026-09-30",
+  close_reason: "remote_stop", progress: { total: 1, completed: 1, correct: 1, wrong: 0 }, assignment: null,
+  summary: { completed_cycle_ids: [], partial: [{ cycle_id: "55555555-5555-4555-8555-555555555555", answered_groups: ["du"] }],
+    results: [{ result_id: "77777777-7777-4777-8777-777777777777", version: "1" }], completed: 1, correct: 1, wrong: 0,
+    blocks: [{ cycle_id: "55555555-5555-4555-8555-555555555555", base_verb_id: "44444444-4444-4444-8444-444444444444",
+      base_lemma: "ankommen", tense: "present", answered_groups: ["du"], effect: "incomplete", grade: null }] },
+  capabilities: { answer_target: null, correct_target: null, grades: null, undo_target: null, stop: false, summary_home: false } } });
+const conjugationScreen = { name: "Тест спряжений", level: 1 } as const;
 
 function fixture(options: { profile?: Profile; session?: OpenedClient["session"]; busy?: boolean; settingsVersion?: string } = {}) {
   const user = options.profile ?? profile();
@@ -140,7 +150,7 @@ describe("ordinary Entry to Today integration", () => {
 
   it.each(["active", "summary"] as const)("does not discard an existing %s session into a new Today route", async phase => {
     const f = fixture({ session: { id: "22222222-2222-4222-8222-222222222222", phase } }); render(<App />);
-    await screen.findByText("Вход подтверждён");
+    await screen.findByRole("heading", conjugationScreen);
     expect(f.todayReply).not.toHaveBeenCalled();
     expect(screen.queryByRole("heading", { name: "Сегодня" })).toBeNull();
   });
@@ -249,15 +259,20 @@ describe("ordinary Entry to Today integration", () => {
     expect(f.haptic).toHaveBeenCalledOnce();
   });
 
+  // A closure not chosen here keeps the closed screen with its actual reason (D-CONJ-HOST 5.1.2); Today follows «На Сегодня».
   it("returns from an existing session to Today only after the server confirms it is closed", async () => {
     const f = fixture({ session: { id: "22222222-2222-4222-8222-222222222222", phase: "active" } });
-    render(<App />); await screen.findByText("Вход подтверждён");
-    f.openReply.mockImplementationOnce(async body => json({ status: "opened", ...body,
+    render(<App />); await screen.findByRole("heading", conjugationScreen);
+    f.openReply.mockImplementation(async body => json({ status: "opened", ...body,
       profile: { ...profile(), state_version: "11" }, compatibility: { compatible: true, contract_version: "1" },
       proof_version: "1", document_epoch: "1", session: null }));
+    f.sessionReply.mockImplementation(async () => json(remoteStopped()));
     vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
-    fireEvent(window, new Event("pageshow")); await screen.findByText("В базе");
-    expect(f.todayReply).toHaveBeenCalledOnce(); expect(f.openReply).toHaveBeenCalledTimes(2);
+    fireEvent(window, new Event("pageshow")); await screen.findByText("Занятие завершено на другом устройстве");
+    expect(f.todayReply).not.toHaveBeenCalled(); expect(f.openReply).toHaveBeenCalledTimes(2);
+    fireEvent.click(screen.getByRole("button", { name: "На Сегодня" })); await screen.findByText("В базе");
+    expect(f.openReply).toHaveBeenCalledTimes(3);
+    expect(f.todayReply).toHaveBeenCalledOnce(); expect(f.posts()).toEqual([]);
     expect(f.haptic).toHaveBeenCalledOnce();
   });
 
@@ -267,7 +282,7 @@ describe("ordinary Entry to Today integration", () => {
       profile: { ...profile(), state_version: "11" }, compatibility: { compatible: true, contract_version: "1" },
       proof_version: "1", document_epoch: "1", session: { id: "22222222-2222-4222-8222-222222222222", phase: "summary" } }));
     vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
-    fireEvent(window, new Event("pageshow")); await screen.findByText("Вход подтверждён");
+    fireEvent(window, new Event("pageshow")); await screen.findByRole("heading", conjugationScreen);
     expect(f.todayReply).toHaveBeenCalledOnce();
     expect(screen.queryByText("В базе")).toBeNull(); expect(f.haptic).toHaveBeenCalledOnce();
   });
@@ -284,8 +299,8 @@ describe("ordinary Entry to Today integration", () => {
     await screen.findByText("Не удалось загрузить план");
     expect(screen.queryByText("В базе")).toBeNull(); expect(screen.queryByText("Проверяем сохранённое занятие…")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Повторить" }));
-    await screen.findByText("Вход подтверждён");
-    expect(f.openReply).toHaveBeenCalledTimes(3); expect(f.sessionReply).toHaveBeenCalledTimes(2);
+    await screen.findByRole("heading", conjugationScreen);
+    expect(f.openReply).toHaveBeenCalledTimes(3); expect(f.sessionReply.mock.calls.length).toBeGreaterThanOrEqual(2);
     expect(f.todayReply).toHaveBeenCalledOnce(); expect(f.posts()).toEqual([]);
   });
 

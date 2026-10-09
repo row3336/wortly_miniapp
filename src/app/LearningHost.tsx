@@ -30,8 +30,8 @@ export type LearningHostProps = {
   onSettings(): void;
   /** Other sections reachable from Today; without it only Settings is. */
   onNavigate?(destination: "dictionary" | "statistics"): void;
-  /** Ordinary quiz rows of the Today screen this host renders; their owners live elsewhere in the document. */
-  quizzes?: Pick<TodayScreenProps, "onStartQuiz" | "canStartQuiz">;
+  /** Ordinary quiz rows and the conjugation test of the Today screen this host renders; their owners live elsewhere in the document. */
+  quizzes?: Pick<TodayScreenProps, "onStartQuiz" | "canStartQuiz" | "onStartConjugation">;
 };
 
 const copy = {
@@ -166,6 +166,7 @@ export function LearningHost(props: LearningHostProps) {
     return <TodayHost access={props.access} transport={props.transport} language={props.language}
       onOpenLearning={requestStart} enabledDestinations={props.onNavigate ? ["settings", "dictionary", "statistics"] : ["settings"]}
       onStartQuiz={props.quizzes?.onStartQuiz} canStartQuiz={props.quizzes?.canStartQuiz}
+      onStartConjugation={props.quizzes?.onStartConjugation}
       onNavigate={destination => {
         if (destination === "settings") openSettings();
         else if (destination !== "today") { bound.requested = null; props.onNavigate?.(destination); }

@@ -51,7 +51,7 @@ describe("route model (TA §1: screen_id and return context)", () => {
   });
 
   it("Back never leaves a session by navigation: the session's own exit decides (stop without confirmation)", () => {
-    for (const screen of ["learning", "oral", "written"] as const) {
+    for (const screen of ["learning", "oral", "written", "conjugation"] as const) {
       const route = run({ type: "open", screen });
       expect(navigationReducer(route, { type: "back" })).toBe(route);
     }
@@ -75,6 +75,7 @@ describe("Back destination for every screen (TA:86)", () => {
     ["learning", null],
     ["oral", null],
     ["written", null],
+    ["conjugation", null],
   ] as const)("%s → %s", (screen, destination) => {
     const route = screen === "statistics" ? run({ type: "push", screen }) : at(screen);
     expect(backDestination(route)).toBe(destination);

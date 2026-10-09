@@ -27,6 +27,7 @@ export function cardOrigin(source: ScreenId | null, entry?: Entry): CardOrigin {
       return { kind: "quiz", direction: "de-l1" };
     case "dictionary":
     case "learning":
+    case "conjugation":
     case "today":
     case "card":
     case "statistics":

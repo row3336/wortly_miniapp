@@ -211,15 +211,23 @@ describe("Learning through the actual App document", () => {
       prompt: { verb: "ankommen", translation: "прибывать", language: "ru", pronoun: "du", tense: "present" },
       answer_spec: { kind: "forms", labels: ["du"], part_count: 1, case_sensitive: false } }, summary: null,
     capabilities: { answer_target: id(5), correct_target: null, grades: null, undo_target: null, stop: true, summary_home: false } };
-  it.each([["conjugation", conjugation, "Вход подтверждён"],
-    ["unavailable", { session_id: id(3), status: "unavailable" }, "Не удалось загрузить план"]] as const)(
-    "2: a %s session is never routed into Learning", async (_mode, projection, text) => {
-      const a = app({ session: id(3) });
-      a.route(async (url, init, base) => String(url).includes("/sessions/") ? response({ current: projection, state_version: "1" }) : base(url, init));
-      render(<App />); await screen.findByText(text); await settled();
-      expect(a.posts()).toEqual([]); expect(a.gets("/commands/")).toEqual([]);
-      expect(screen.queryByRole("textbox")).toBeNull(); expect(a.todayReply).not.toHaveBeenCalled();
-    });
+  it("2: an unavailable session is never routed into Learning", async () => {
+    const a = app({ session: id(3) });
+    a.route(async (url, init, base) => String(url).includes("/sessions/")
+      ? response({ current: { session_id: id(3), status: "unavailable" }, state_version: "1" }) : base(url, init));
+    render(<App />); await screen.findByText("Не удалось загрузить план"); await settled();
+    expect(a.posts()).toEqual([]); expect(a.gets("/commands/")).toEqual([]);
+    expect(screen.queryByRole("textbox")).toBeNull(); expect(a.todayReply).not.toHaveBeenCalled();
+  });
+  // M-CONJ-HOST: an open conjugation session of this client continues on its own screen at the server's form (tz_app:48).
+  it("2: a conjugation session is never routed into Learning and continues on the conjugation screen", async () => {
+    const a = app({ session: id(3) });
+    a.route(async (url, init, base) => String(url).includes("/sessions/") ? response({ current: conjugation, state_version: "1" }) : base(url, init));
+    render(<App />); await screen.findByRole("heading", { name: "Тест спряжений", level: 1 }, exchange); await editable(); await settled();
+    expect(screen.getByText("ankommen")).toBeTruthy();
+    expect(a.posts()).toEqual([]); expect(a.gets("/commands/")).toEqual([]);
+    expect(screen.queryByText("Вход подтверждён")).toBeNull(); expect(a.todayReply).not.toHaveBeenCalled();
+  });
   // An open written session of this client continues on the written screen at its server step (В02, tz_app:48);
   // its assignment is already presented, so nothing is posted.
   it("2: a written session is never routed into Learning and continues on the written screen", async () => {
@@ -832,7 +840,7 @@ describe("the launch card over a resumed session", () => {
     expect(besidesContext(kinds(a))).toEqual([]);
   });
 
-  it("conjugation: the card opens over «Вход подтверждён» and Back returns to it; nothing is started or sent", async () => {
+  it("conjugation: the card opens over the conjugation test and Back returns to the same form; nothing is started or sent", async () => {
     launch(`?card=${LAUNCH}`);
     const back = fakeBack();
     const a = app({ session: id(3), back });
@@ -850,20 +858,22 @@ describe("the launch card over a resumed session", () => {
     expect(card.views()).toEqual([`/api/v1/dictionary/cards/${LAUNCH}/view`]);
     expect(card.origins()).toEqual(["?origin=message"]);
     expect(LAUNCH).not.toBe(conjugation.assignment.card_id);
-    expect(screen.queryByText("Вход подтверждён")).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Тест спряжений", level: 1 })).toBeNull();
+    expect(screen.queryByRole("textbox")).toBeNull();
     await waitFor(() => expect(kinds(a)).toEqual(["context.open"]));
     await pause();
     expect(besidesContext(kinds(a))).toEqual([]);
 
     const opens = a.openReply.mock.calls.length;
     await back.click();
-    await screen.findByText("Вход подтверждён", undefined, exchange);
+    await screen.findByRole("heading", { name: "Тест спряжений", level: 1 }, exchange);
+    expect(screen.getByText("ankommen")).toBeTruthy(); await editable();
     expect(screen.queryByRole("main", { name: "Карточка" })).toBeNull();
     await waitFor(() => expect(kinds(a)).toEqual(["context.open", "context.close"]));
     await pause();
     expect(besidesContext(kinds(a))).toEqual([]);
     expect(a.openReply.mock.calls.length).toBe(opens);
-    expect(screen.queryByRole("textbox")).toBeNull(); expect(a.todayReply).not.toHaveBeenCalled();
+    expect(a.todayReply).not.toHaveBeenCalled();
     expect(card.views()).toHaveLength(1);
   });
 

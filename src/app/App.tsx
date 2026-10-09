@@ -24,6 +24,8 @@ import { createRemoteSessionApi } from "../study/remoteSessionApi";
 import type { SettingsObservation } from "../settings/useSettingsDocument";
 import { OralSessionPendingStore, OralStopPendingStore } from "../oral/oralPending";
 import type { OralStores } from "./OralHost";
+import { ConjugationSessionPendingStore, ConjugationStopPendingStore } from "../conjugation/conjugationPending";
+import type { ConjugationStores } from "./ConjugationHost";
 import packageJson from "../../package.json";
 
 /** The entry is still being decided: the launch screen keeps waiting (М20). Every other state is an answer, success or refusal. */
@@ -45,6 +47,7 @@ export function App() {
   const [pendingStore, setPendingStore] = useState<SettingsPendingStore | null>(null);
   const [storage, setStorage] = useState<AsyncStorage | null>(null);
   const [oralStores, setOralStores] = useState<OralStores | null>(null);
+  const [conjugationStores, setConjugationStores] = useState<ConjugationStores | null>(null);
   const [documentCheck, setDocumentCheck] = useState(false);
   // Read once at launch; the opened document takes it after the ordinary entry (answer Q20).
   const [launchCard] = useState(() => new LaunchCard(launchCardId(window.location.search), () => forgetLaunchCard(window)));
@@ -94,6 +97,7 @@ export function App() {
     setPendingStore(new SettingsPendingStore(readyStorage));
     // One pair per storage, shared by every oral owner of this App.
     setOralStores({ study: new OralSessionPendingStore(readyStorage), stop: new OralStopPendingStore(readyStorage) });
+    setConjugationStores({ study: new ConjugationSessionPendingStore(readyStorage), stop: new ConjugationStopPendingStore(readyStorage) });
     setStorage(readyStorage);
     void readSavedLanguage(readyStorage).then((saved) => {
       if (!active) return;
@@ -190,7 +194,7 @@ export function App() {
         />
       );
     }
-    if (entryState.kind === "opened" && access && transport && pendingStore && storage && oralStores) {
+    if (entryState.kind === "opened" && access && transport && pendingStore && storage && oralStores && conjugationStores) {
       // While a DOCUMENT_STALE is being checked the document stays mounted (a live window goes on as it was) but out
       // of sight, so a replaced window never shows its module's refusal before it closes (2.33). The wrapper is
       // always there: adding it only for the check would remount the document. Inert stops focus and clicks, and the
@@ -198,7 +202,8 @@ export function App() {
       return <>
         <div className="document-check" style={{ display: documentCheck ? "none" : "contents" }} inert={documentCheck}>
           <ApplicationDocument key={access.key} access={access} transport={transport} pendingStore={pendingStore}
-            storage={storage} oralStores={oralStores} newId={newId} language={language} foreground={foreground} onCurrent={observeSettings}
+            storage={storage} oralStores={oralStores} conjugationStores={conjugationStores} newId={newId} language={language}
+            foreground={foreground} onCurrent={observeSettings}
             launchCard={launchCard} />
         </div>
         {documentCheck && <EntryScreen state={{ kind: "checking" }} language={language} afterStale />}

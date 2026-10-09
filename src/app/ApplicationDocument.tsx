@@ -26,10 +26,11 @@ import { useBackLayer } from "./navigationBack";
 import { useScreenTransition } from "./navigationMotion";
 import type { OpenedAccess } from "./openedAccess";
 import { useOralHost, type OralStores } from "./OralHost";
+import { useConjugationHost, type ConjugationStores } from "./ConjugationHost";
 
 type Props = {
   access: OpenedAccess; transport: HttpOptions; pendingStore: SettingsPendingStore; language: Language;
-  storage: AsyncStorage; newId(): string; oralStores: OralStores;
+  storage: AsyncStorage; newId(): string; oralStores: OralStores; conjugationStores: ConjugationStores;
   foreground(): Promise<OpenedAccess | null>;
   onCurrent(current: SettingsObservation): void;
   /** The card a bot button asked for at launch (answer Q20); taken by the first document only. */
@@ -56,17 +57,17 @@ type ModeSeed = { seed: string | null; pair: string; version?: string } | null;
 const seedFor = (selection: ModeSeed, pair: string) => selection !== null && selection.pair === pair ? selection.seed : null;
 
 type ModeRead =
-  | { kind: "pending" | "failed" | "other" }
-  | { kind: "learning" | "oral" | "written"; id: string; version: string }
+  | { kind: "pending" | "failed" }
+  | { kind: "learning" | "oral" | "written" | "conjugation"; id: string; version: string }
   | { kind: "closed"; id: string };
-/** Only an active/summary Learning, oral or written projection proves the mode; OpenedAccess.session carries no mode. */
+/** Only an active/summary projection proves the mode; OpenedAccess.session carries no mode. The resume read accepts
+ * exactly these four modes (sessionProjection.ts), so every open session continues on its own route. */
 function classify(state: SessionResumeState): ModeRead {
   if (state.kind === "loading" || state.kind === "idle") return { kind: "pending" };
   if (state.kind !== "ready" || !("mode" in state.data.current)) return { kind: "failed" };
   const current = state.data.current;
   if (current.status === "closed") return { kind: "closed", id: current.session_id.toLowerCase() };
-  return current.mode === "learning" || current.mode === "oral" || current.mode === "written"
-    ? { kind: current.mode, id: current.session_id, version: state.data.state_version } : { kind: "other" };
+  return { kind: current.mode, id: current.session_id, version: state.data.state_version };
 }
 
 /** Keyed by the opened document, never by the identity of a foreground access handle. */
@@ -98,6 +99,8 @@ export function ApplicationDocument(props: Props) {
   // The written owner is re-seeded only from a fresh mode read, never on its own route: there a reseed would replace
   // the owner and the result view that waits for «Далее» after background (К05-152).
   const [writtenSelected, setWrittenSelected] = useState<ModeSeed>(null);
+  // The conjugation owner, like the oral one, is re-seeded only from a fresh mode read.
+  const [conjugationSelected, setConjugationSelected] = useState<ModeSeed>(null);
   const current = useRef(props);
   current.current = props;
   const latest = useRef(floor);
@@ -153,34 +156,35 @@ export function ApplicationDocument(props: Props) {
 
   const session = props.access.session, pair = props.access.profile.dictionary_language;
   const seed = seedFor(selected, pair), oralSeed = seedFor(oralSelected, pair), writtenSeed = seedFor(writtenSelected, pair);
-  // A session reported after selection is read again only on Today or the oral route, and only when no Host adopted it.
-  const readAfter = selected !== null && session !== null && (at === "today" || at === "oral")
+  const conjugationSeed = seedFor(conjugationSelected, pair);
+  // A session reported after selection is read again only on Today, the oral or the conjugation route, and only when no
+  // Host adopted it.
+  const readAfter = selected !== null && session !== null && (at === "today" || at === "oral" || at === "conjugation")
     && !(seed !== null && !seedReleased.current && sameId(session.id, seed))
     && !(oralSeed !== null && sameId(session.id, oralSeed)) && !(writtenSeed !== null && sameId(session.id, writtenSeed))
+    && !(conjugationSeed !== null && sameId(session.id, conjugationSeed))
     && !hostClaimed.current;
   const resume = useSessionResumeDocument({ access: props.access, transport: props.transport,
     minimumStateVersion: floor?.version, enabled: session !== null && (selected === null || readAfter) });
   const read = selected === null && session === null ? { kind: "pending" } as const : classify(resume.state);
-  const readId = read.kind === "learning" || read.kind === "oral" || read.kind === "written" || read.kind === "closed" ? read.id : null;
+  const readId = "id" in read ? read.id : null;
   // The launch card opens once, when the start settles (the mode read chose the start screen), over that screen (answer
   // S01): over Today, or over a resumed session, which Back then returns to at the same place. It is pushed in the same
   // update as the start route, so the session is never shown (nor its question committed as shown) before the card.
   // It is a message entry: it takes no rights of the quiz under it (cardOrigin) and is not a dictionary opening (S02).
   const launchCard = useRef(props.launchCard);
-  const start = useCallback((screen: "learning" | "oral" | "written" | null) => {
+  const start = useCallback((screen: "learning" | "oral" | "written" | "conjugation" | null) => {
     if (screen !== null) navigate({ type: "open", screen });
     const cardId = launchCard.current?.take() ?? null;
     if (cardId !== null) navigate({ type: "push", screen: "card", subject: cardId, entry: "message" });
   }, []);
   useEffect(() => {
     // Leaving the seed's pair closes that session on the server: it is never a seed again, even after a return.
-    for (const [selection, select] of [[selected, setSelected], [oralSelected, setOralSelected], [writtenSelected, setWrittenSelected]] as const) {
+    for (const [selection, select] of [[selected, setSelected], [oralSelected, setOralSelected], [writtenSelected, setWrittenSelected],
+      [conjugationSelected, setConjugationSelected]] as const) {
       if (selection !== null && selection.seed !== null && selection.pair !== pair) { select({ ...selection, seed: null }); return; }
     }
     if (selected === null && session === null) { setSelected({ seed: null, pair }); start(null); return; }
-    // A session of a mode this client does not run (conjugation) keeps the start undecided, but the launch card still
-    // opens over its screen and returns to it (root decision on S01); nothing of that session is started or sent.
-    if (selected === null && read.kind === "other") { start(null); return; }
     if (selected === null && read.kind === "learning") {
       setSelected({ seed: read.id, pair, version: read.version }); start("learning"); return;
     }
@@ -196,12 +200,18 @@ export function ApplicationDocument(props: Props) {
       if (selected === null) { setSelected({ seed: null, pair }); start("written"); } else navigate({ type: "open", screen: "written" });
       return;
     }
+    // The conjugation test continues from the server's step (TA:48); the launch card opens over it (answer S01).
+    if ((selected === null || readAfter) && read.kind === "conjugation") {
+      setConjugationSelected({ seed: read.id, pair, version: read.version });
+      if (selected === null) { setSelected({ seed: null, pair }); start("conjugation"); } else navigate({ type: "open", screen: "conjugation" });
+      return;
+    }
     // A closed session is never resumed: one fresh open per closed id, then a manual retry.
     if ((selected === null || readAfter) && read.kind === "closed" && !synchronizedClosed.current.has(read.id)) {
       synchronizedClosed.current.add(read.id);
       void synchronize();
     }
-  }, [selected, oralSelected, writtenSelected, session, pair, read.kind, readId, readAfter, synchronize, start]);
+  }, [selected, oralSelected, writtenSelected, conjugationSelected, session, pair, read.kind, readId, readAfter, synchronize, start]);
   // The launch card host that has shown its content: closing it after that forgets the card in the address (answer S03).
   const shownLaunch = useRef<string | null>(null);
 
@@ -229,7 +239,7 @@ export function ApplicationDocument(props: Props) {
   const failed = <TodayScreen state={{ kind: "failed", reason: "load" }} language={props.language} onRetry={retry} />;
   // No mode, no closure and no permission to Start is inferred from an unresolved read.
   const readScreen = (): ReactNode => {
-    if (read.kind === "other" || read.kind === "learning") return <EntryScreen state={{ kind: "opened" }} language={props.language} />;
+    if (read.kind === "learning") return <EntryScreen state={{ kind: "opened" }} language={props.language} />;
     if (read.kind === "failed" || read.kind === "closed" && synchronizedClosed.current.has(read.id) && gate !== "loading") return failed;
     return loading;
   };
@@ -237,7 +247,7 @@ export function ApplicationDocument(props: Props) {
   // hostRoute "settings" means hidden, not navigation: the Host renders nothing and keeps its owner mounted.
   let hostRoute: "today" | "learning" | "settings" = at === "today" || at === "learning" ? at : "settings";
   let screen: ReactNode = null, todayShown = false;
-  // The launch card over an undecided start (a session of another mode) hides its screen until Back.
+  // The launch card over an undecided start hides its screen until Back.
   if (selected === null) screen = at === "card" ? null : readScreen();
   else if (at === "today") {
     if (!(fits && gate === "ready")) {
@@ -268,7 +278,14 @@ export function ApplicationDocument(props: Props) {
     onWritten: () => navigate({ type: "open", screen: "written" }), onToday: today,
     // «Уточнить поля» (M-ACTIONS): the answered card opens on top of the quiz and returns to it.
     onOpenCard: (cardId, details) => navigate({ type: "push", screen: "card", subject: cardId, details }) });
-  if (todayShown && (oral.blocksToday || written.blocksToday)) { hostRoute = "settings"; screen = loading; }
+  // The conjugation owner lives for the whole document too; the Today button «Тест спряжений» starts it (М16).
+  const conjugation = useConjugationHost({ access: props.access, transport: props.transport, stores: props.conjugationStores,
+    newId: props.newId, language: props.language, settings,
+    minimumStateVersion: highest(floor?.version, conjugationSelected?.version), initialSessionId: conjugationSeed,
+    seedPending: at === "conjugation" && readAfter && (read.kind === "pending" || read.kind === "conjugation"),
+    route: at === "conjugation" ? "conjugation" : todayShown ? "today" : "hidden",
+    onConjugation: () => navigate({ type: "open", screen: "conjugation" }), onToday: today });
+  if (todayShown && (oral.blocksToday || written.blocksToday || conjugation.blocksToday)) { hostRoute = "settings"; screen = loading; }
   // One host per opened card route (TA:86, К07-096): a fresh key per route object, so reopening a card while its
   // previous host still awaits a close starts a new host. The slot keeps one position, so leaving keeps the same host.
   let activeCard: CardSlot | null = null;
@@ -282,6 +299,8 @@ export function ApplicationDocument(props: Props) {
   const quizzes = {
     onStartQuiz: (quiz: OrdinaryQuiz) => { if (quiz.direction === "l1-de") written.requestStart(quiz.material); else oral.requestStart(quiz); },
     canStartQuiz: (quiz: OrdinaryQuiz) => quiz.direction === "l1-de" ? written.canRequestStart : oral.canRequestStart,
+    // Without the start right the button stays visible and disabled (TodayScreen gates it by the handler).
+    onStartConjugation: conjugation.canRequestStart ? conjugation.requestStart : undefined,
   };
   return <div className="nav-screen" ref={frame}>
     {selected !== null && <LearningHost access={props.access} transport={props.transport} storage={props.storage}
@@ -295,6 +314,7 @@ export function ApplicationDocument(props: Props) {
     {screen}
     {oral.screen}
     {written.screen}
+    {conjugation.screen}
     {cardSlot && <CardHost key={cardSlot.key} access={props.access} transport={props.transport} language={props.language}
       pendingStore={manualPending} cardId={cardSlot.cardId} origin={cardSlot.origin} newId={props.newId}
       leaving={cardSlot !== activeCard} backSlot={cardBack}
