@@ -1,7 +1,7 @@
 import type { ClosedSessionBoundary, ConjugationCatalog, ConjugationCatalogResponse, ConjugationSessionProjection,
   ErrorDetail, MissingCommandFact, Profile, RejectedCommandFact, SavedCommandFact, StoredCommandFact,
   UnavailableCurrent, UnavailableSession } from "../api/generated";
-import { validProfile } from "../api/entryApi";
+import { validExactProfile } from "../api/entryApi";
 import { ApiError, createJsonTransport, errorCode, httpError, type HttpOptions } from "../api/http";
 import { eventTime, exactKeys, oneOf, record, sameId, uuid, validClosedSessionBoundary, version } from "../api/wireValidation";
 import { validUndoFact } from "../commands/resultUndo";
@@ -107,9 +107,7 @@ function missing(value: unknown, command: ConjugationCommand): MissingStatus | n
   if (!record(value) || !record(value.command) || !exactKeys(value.command, ["id", "status"])
     || value.command.status !== "not_found" || !sameId(value.command.id, command.command_id)
     || !envelope(value, ["command", "current", ...(Object.hasOwn(value, "closed_session") ? ["closed_session"] : [])])
-    || !validProfile(value.current) || !uuid(value.current.profile_id)
-    || !exactKeys(value.current, ["profile_id", "access", "role", "ui_language", "dictionary_language", "time_zone", "state_version"])
-    || !record(value.current.access) || !exactKeys(value.current.access, ["status", "version", "reason"])) return null;
+    || !validExactProfile(value.current)) return null;
   if (Object.hasOwn(value, "closed_session") && (command.kind === "conjugation.schedule"
     || !validClosedSessionBoundary(value.closed_session, command.session_id))) return null;
   return { outcome: "not_found", command: { id: command.command_id, status: "not_found" }, current: value.current,

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ConjugationCatalog, ConjugationResultReadResponse, ConjugationSessionProjection, Profile, SavedCommandFact } from "../api/generated";
 import { createSessionReadApi } from "../study/sessionReadApi";
+import { recordedConjugationUnknownClosed } from "../api/realCoreStatusRecordings.test-support";
 import { createConjugationApi, type ConjugationResultAddress, type ConjugationSessionAddress } from "./conjugationApi";
 import { conjugationIntentHash, copyConjugationIntent, validConjugationIntent, type ConjugationCommand, type ConjugationResultCommand,
   type ConjugationScheduleTransportCommand, type ConjugationSessionCommand } from "./conjugationIntent";
@@ -254,6 +255,20 @@ describe("conjugation transport contract", () => {
     await expect(fixture({ ...missing, closed_session: { ...missing.closed_session, session_id: id(80) } }).api.status("t", "p", start)).rejects.toMatchObject(invalid);
     for (const command of [schedule, start]) {
       expect((await fixture(await withProof(command, { current: { status: "unavailable" }, command: fact(command, "already_applied"), state_version: "9" })).api.status("t", "p", command)).outcome).toBe("accepted");
+    }
+  });
+
+  it("reads not_found with the real core's profile (reapply_closed present) and still rejects unknown profile keys", async () => {
+    // The recording is verbatim: the command under test takes its command and session IDs.
+    const recorded = recordedConjugationUnknownClosed;
+    const lost: ConjugationSessionCommand = { ...start, command_id: recorded.command.id, session_id: recorded.closed_session.session_id };
+    expect(recorded.current).toHaveProperty("reapply_closed", false);
+    expect(await fixture(recorded).api.status("t", "p", lost)).toEqual({ ...recorded, outcome: "not_found" });
+    expect((await fixture({ ...recorded, current: { ...recorded.current, reapply_closed: true } }).api.status("t", "p", lost)).outcome).toBe("not_found");
+    const { reapply_closed: _omitted, ...older } = recorded.current;
+    expect((await fixture({ ...recorded, current: older }).api.status("t", "p", lost)).outcome).toBe("not_found");
+    for (const extra of [{ reapply_closed: "false" }, { reapply_closed: null }, { private: {} }, { reapply_closed: false, private: {} }]) {
+      await expect(fixture({ ...recorded, current: { ...recorded.current, ...extra } }).api.status("t", "p", lost)).rejects.toMatchObject(invalid);
     }
   });
 

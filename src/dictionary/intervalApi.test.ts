@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { DictionaryCardView, OpenDictionaryContext } from "../api/generated";
 import { ApiError, clientContractVersion } from "../api/http";
+import { recordedOralUnknownClosed } from "../api/realCoreStatusRecordings.test-support";
 import {
   commandOutcomeUnknown, createDictionaryIntervalApi, dictionaryIncreaseIntent, dictionaryIntervalIntentHash,
   dictionaryUndoIntent, dictionaryUndoOfferIntent, validDictionaryContextCurrent, type DictionaryIntervalCommand,
@@ -555,6 +556,17 @@ describe("command status", () => {
     const { api } = transport({ status: 200, body: reply({ id: commandId, status: "not_found" }, profile()) });
     expect(await api.commandStatus(token, proof, command(increaseIntent())))
       .toEqual({ outcome: "not_found", command: { id: commandId, status: "not_found" }, current: profile(), state_version: stateVersion });
+  });
+
+  it("returns not_found for the real core's profile (reapply_closed present) and rejects unknown profile keys", async () => {
+    const real = recordedOralUnknownClosed.current;
+    const { api } = transport({ status: 200, body: reply({ id: commandId, status: "not_found" }, real) });
+    expect(await api.commandStatus(token, proof, command(increaseIntent())))
+      .toEqual({ outcome: "not_found", command: { id: commandId, status: "not_found" }, current: real, state_version: stateVersion });
+    for (const extra of [{ reapply_closed: "false" }, { private: {} }, { reapply_closed: false, private: {} }]) {
+      const rejecting = transport({ status: 200, body: reply({ id: commandId, status: "not_found" }, { ...real, ...extra }) });
+      await expect(rejecting.api.commandStatus(token, proof, command(increaseIntent()))).rejects.toMatchObject({ kind: "invalid_response" });
+    }
   });
 
   it("returns a typed mismatch for another payload under the same ID", async () => {

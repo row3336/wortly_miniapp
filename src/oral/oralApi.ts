@@ -1,7 +1,7 @@
 import type { ClosedSessionBoundary, ErrorDetail, OralSessionProjection,
   MissingCommandFact, Profile, RejectedCommandFact, SavedCommandFact, SessionStartCommand,
   StoredCommandFact, UnavailableCurrent, UnavailableSession } from "../api/generated";
-import { validProfile } from "../api/entryApi";
+import { validExactProfile } from "../api/entryApi";
 import { ApiError, createJsonTransport, errorCode, httpError, type HttpOptions } from "../api/http";
 import { record, uuid, sameId, exactKeys, version, eventTime, oneOf, validClosedSessionBoundary } from "../api/wireValidation";
 import { copyOralIntent, oralIntentHash, validOralIntent, type OralCommand } from "./oralIntent";
@@ -111,9 +111,7 @@ export function createOralApi(options: HttpOptions): OralApi {
       }
       const fact = value.command;
       if (fact.status === "not_found" && exactKeys(fact, ["id", "status"]) && sameId(fact.id, command.command_id)
-        && validProfile(value.current) && uuid(value.current.profile_id)
-        && exactKeys(value.current, ["profile_id", "access", "role", "ui_language", "dictionary_language", "time_zone", "state_version"])
-        && record(value.current.access) && exactKeys(value.current.access, ["status", "version", "reason"])) {
+        && validExactProfile(value.current)) {
         if (Object.hasOwn(value, "closed_session") && !validClosedSessionBoundary(value.closed_session, command.session_id)) {
           throw new ApiError("invalid_response");
         }

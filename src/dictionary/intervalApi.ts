@@ -3,7 +3,7 @@ import type {
   ErrorDetail, MissingCommandFact, OpenDictionaryContext, Profile, RejectedCommandFact,
   SavedCommandFact, StoredCommandFact, UnavailableCurrent,
 } from "../api/generated";
-import { validProfile } from "../api/entryApi";
+import { validExactProfile } from "../api/entryApi";
 import { ApiError, createJsonTransport, errorCode, httpError, type HttpOptions } from "../api/http";
 import { count, date, eventTime, exactKeys, oneOf, record, sameId, uuid, version } from "../api/wireValidation";
 import { intentHash } from "../commands/intentHash";
@@ -460,9 +460,7 @@ export function createDictionaryIntervalApi(options: HttpOptions): DictionaryInt
       const fact = value.command;
       if (fact.status === "not_found") {
         if (exactKeys(value, ["command", "current", "state_version"]) && exactKeys(fact, ["id", "status"])
-          && sameId(fact.id, command.command_id) && validProfile(value.current) && uuid(value.current.profile_id)
-          && exactKeys(value.current, ["profile_id", "access", "role", "ui_language", "dictionary_language", "time_zone", "state_version"])
-          && record(value.current.access) && exactKeys(value.current.access, ["status", "version", "reason"])) {
+          && sameId(fact.id, command.command_id) && validExactProfile(value.current)) {
           return { outcome: "not_found", command: { id: command.command_id, status: "not_found" },
             current: value.current, state_version: value.state_version };
         }

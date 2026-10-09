@@ -20,6 +20,7 @@ export interface EntryApi {
 }
 
 import { ApiError as EntryApiError, createJsonTransport, httpError, type HttpOptions } from "./http";
+import { exactKeys, uuid } from "./wireValidation";
 export { ApiError as EntryApiError } from "./http";
 
 type FetchOptions = HttpOptions;
@@ -64,6 +65,16 @@ export function validProfile(value: unknown): value is Profile {
     && language(value.ui_language)
     && language(value.dictionary_language)
     && (value.time_zone === null || typeof value.time_zone === "string");
+}
+
+const PROFILE_KEYS = ["profile_id", "access", "role", "ui_language", "dictionary_language", "time_zone", "state_version"];
+
+/** validProfile plus no unknown keys, for status replies that must not carry private fields.
+ * reapply_closed stays optional (an older core omits it) and is the only key allowed beyond the fixed list. */
+export function validExactProfile(value: unknown): value is Profile {
+  return validProfile(value) && uuid(value.profile_id)
+    && exactKeys(value, Object.hasOwn(value, "reapply_closed") ? [...PROFILE_KEYS, "reapply_closed"] : PROFILE_KEYS)
+    && exactKeys(value.access, ["status", "version", "reason"]);
 }
 
 function validAuth(value: unknown): value is AuthResponse {

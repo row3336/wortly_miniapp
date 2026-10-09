@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { OralSessionProjection, Profile } from "../api/generated";
 import { createOralApi, type OralCommand } from "./oralApi";
 import { copyOralIntent, validOralIntent } from "./oralIntent";
+import { recordedOralUnknownClosed } from "../api/realCoreStatusRecordings.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const origin = { client_instance_id: id(1), document_id: id(2), session_id: id(3) };
@@ -257,6 +258,26 @@ describe("oral adapter facts, missing-command closure and transport failures", (
   it("rejects extra private profile fields during not_found", async () => {
     await expect(fixture({ ...missing(), current: { ...profile, private: {} } }).api.status("token", "proof", commands[3]))
       .rejects.toMatchObject({ kind: "invalid_response" });
+  });
+  describe("not_found with the profile of the real core (reapply_closed present)", () => {
+    // The recording is verbatim: the command under test takes its command and session IDs.
+    const recorded = recordedOralUnknownClosed;
+    const lost: OralCommand = { ...commands[3], command_id: recorded.command.id, session_id: recorded.closed_session.session_id };
+    it("accepts the recorded reply, reapply_closed included", async () => {
+      expect(recorded.current).toHaveProperty("reapply_closed", false);
+      expect(await fixture(recorded).api.status("token", "proof", lost)).toEqual({ ...recorded, outcome: "not_found" });
+    });
+    it("accepts a closed reapply and a reply of an older core without the field", async () => {
+      expect(await fixture({ ...recorded, current: { ...recorded.current, reapply_closed: true } }).api.status("token", "proof", lost))
+        .toMatchObject({ outcome: "not_found", current: { reapply_closed: true } });
+      const { reapply_closed: _omitted, ...older } = recorded.current;
+      expect(await fixture({ ...recorded, current: older }).api.status("token", "proof", lost)).toMatchObject({ outcome: "not_found" });
+    });
+    it.each([{ reapply_closed: "false" }, { reapply_closed: null }, { private: {} }, { reapply_closed: false, private: {} }])(
+      "rejects a malformed or unknown profile key %j", async extra => {
+        await expect(fixture({ ...recorded, current: { ...recorded.current, ...extra } }).api.status("token", "proof", lost))
+          .rejects.toMatchObject({ kind: "invalid_response" });
+      });
   });
   it.each([{ command: { id: id(90), status: "not_found" } },
     { current: { session_id: id(3), status: "not_found" } },
