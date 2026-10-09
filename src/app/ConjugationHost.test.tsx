@@ -33,13 +33,22 @@ function setup(options: Options = {}) {
   const model = conjugationServer({ sessions: options.sessions, version: "10" });
   const values = new Map<string, string>();
   if (options.saved) values.set(studyKey, JSON.stringify({ schemaVersion: 1, profileId: id(50), clientInstanceId: id(1), pair: "ru-de", intent: options.saved }));
-  const storage: AsyncStorage = { get: async k => values.get(k) ?? null, set: async (k, v) => { values.set(k, v); }, remove: async k => { values.delete(k); } };
+  const fail = { remove: false };
+  const storage: AsyncStorage = { get: async k => values.get(k) ?? null, set: async (k, v) => { values.set(k, v); },
+    remove: async k => { if (fail.remove) throw new Error("storage unavailable"); values.delete(k); } };
   const data = settingsResponse(); data.state_version = "10"; data.needs_setup = false;
   data.settings.dictionary_language.value = "ru"; data.settings.transition_mode.value = "normal"; options.settings?.(data);
   let releaseSettings: () => void = () => undefined;
   const settingsGate = options.holdSettings ? new Promise<void>(done => { releaseSettings = done; }) : null;
+  // The next command POST is answered by this reply instead of the model; reads can be failed to make a session read stale.
+  const override: { current: null | (() => Response | Promise<Response>) } = { current: null };
+  const reads = { fail: false };
   const fetcher = vi.fn<typeof fetch>(async (url, init) => {
     const path = new URL(String(url), "https://model.invalid").pathname;
+    if (override.current && init?.method === "POST" && path.endsWith("/commands")) {
+      const reply = override.current; override.current = null; model.posted.push(JSON.parse(String(init.body))); return await reply();
+    }
+    if (reads.fail && init?.method !== "POST" && path.includes("/sessions/")) throw new TypeError("offline");
     if (path.endsWith("/settings")) { if (settingsGate) await settingsGate; return response(data); }
     if (path.endsWith("/settings/topics")) return response({ topics: [], state_version: data.state_version });
     return await model.handle(url, init) ?? response({ error: { code: "UNEXPECTED" } }, 500);
@@ -70,7 +79,7 @@ function setup(options: Options = {}) {
   render(<Harness />);
   const starts = () => model.posted.filter(post => post.kind === "session.start");
   const stops = () => model.posted.filter(post => post.kind === "session.stop");
-  return { model, fetcher, values, onToday, onConjugation, host, back, haptic, starts, stops, releaseSettings,
+  return { model, fetcher, values, fail, override, reads, onToday, onConjugation, host, back, haptic, starts, stops, releaseSettings,
     route: (route: ConjugationHostOptions["route"]) => act(() => setRoute(route)),
     /** A new access object of the same document tuple, as after a foreground. */
     reopen: () => act(() => setAccess(opened(++generation))),
@@ -216,6 +225,77 @@ describe("useConjugationHost: start from Today", () => {
     await macrotasks();
     expect(h.back.bound).toBe(0);
     expect(h.onToday).not.toHaveBeenCalled(); expect(h.model.posted).toEqual([]);
+  });
+
+  // The five test runs below pin the guards of `refusedStart` (ConjugationHost.tsx): R1, R3, R4 and R5 (twice, via
+  // it.each). The refusal codes are the synthetic model's; none of them is evidence of a refusal stored by the server
+  // (Ж01). In every case the block on Today stays and no refused-start Back appears (R4: the question's own Back only).
+  const blocked = (h: ReturnType<typeof setup>) => {
+    expect(h.host.current!.blocksToday).toBe(true); expect(h.back.bound).toBe(0);
+    expect(h.onToday).not.toHaveBeenCalled();
+  };
+
+  it("H5 R1: a refused start whose pending slot cannot be cleared stays claimed: no Back, the slot is kept", async () => {
+    const h = setup();
+    h.fail.remove = true;
+    h.model.server.rejectStart = "NO_MATERIAL";
+    await h.start();
+    await waitFor(() => expect(h.starts()).toHaveLength(1));
+    await macrotasks(25);
+    expect(screen.getByText("Не удалось обновить данные на этом устройстве.")).toBeTruthy();
+    expect(h.values.has(studyKey)).toBe(true);
+    blocked(h);
+    await h.back.click();
+    expect(h.onToday).not.toHaveBeenCalled(); expect(h.model.posted).toHaveLength(1);
+  });
+
+  it("H5 R3: a refusal of another start (stored receipt A) is no refusal of the open session S1 on screen", async () => {
+    const A = id(61), h = setup({ seed: true, sessions: [active()], saved: { command_id: id(60), kind: "session.start", session_id: A, payload: { mode: "conjugation" } } });
+    await screen.findByRole("button", { name: "Повторить действие" });
+    h.override.current = () => { h.reads.fail = true; return response({ command: { id: id(60), status: "rejected" }, error: { code: "SESSION_BUSY" },
+      current: { session_id: A, status: "unavailable" }, state_version: "11" }, 409); };
+    fireEvent.click(screen.getByRole("button", { name: "Проверить статус" }));
+    await macrotasks(20);
+    fireEvent.click(screen.getByRole("button", { name: "Повторить действие" }));
+    await screen.findByText("Занятие открыто на другом устройстве");
+    await macrotasks(10);
+    expect(h.starts()).toHaveLength(1); expect(h.starts()[0].session_id).toBe(A);
+    blocked(h);
+  });
+
+  // Defensive server input, not the behaviour of a correct client: every press starts a fresh session ID, so a number
+  // that already exists as an open session is never sent. The host must still not read such a reply as a refusal.
+  it("H5 R4 (defensive server input): a refused start answered with the open projection of that number is no refusal", async () => {
+    const h = setup({ sessions: [active({ id: id(100) })] });
+    h.model.server.rejectStart = "SESSION_CLOSED";
+    await h.start();
+    await waitFor(() => expect(h.starts()).toHaveLength(1));
+    await macrotasks(25);
+    expect(h.starts()[0].session_id).toBe(id(100));
+    expect(h.host.current!.blocksToday).toBe(true); expect(h.onToday).not.toHaveBeenCalled();
+    expect(await screen.findByRole("button", { name: "Проверить" })).toBeTruthy();
+    // The open question keeps its own Back, which is Stop; it is not the refused-start Back and leaves nothing.
+    expect(h.back.bound).toBe(1);
+    await h.back.click(); await macrotasks();
+    expect(h.model.kinds()).toContain("session.stop"); expect(h.onToday).not.toHaveBeenCalled();
+  });
+
+  it.each(["SESSION_BUSY", "SESSION_CLOSED"])("H5 R5: a rejected %s of an answer is no refusal of a start", async code => {
+    const h = setup({ seed: true, sessions: [active()] });
+    await editable();
+    h.override.current = async () => {
+      const read = await (await h.model.handle(`https://model.invalid/api/v1/sessions/${S1}`, { method: "GET" })!)!.json();
+      const posted = h.model.posted[h.model.posted.length - 1], step = read.current;
+      h.reads.fail = true;
+      return response({ command: { id: posted.command_id, status: "rejected" }, error: { code }, action: null, result: null, step,
+        capabilities: { ...step.capabilities }, state_version: read.state_version }, 409);
+    };
+    fireEvent.change(await editable(), { target: { value: "kommt" } });
+    fireEvent.click(screen.getByRole("button", { name: "Проверить" }));
+    await screen.findByText(code === "SESSION_BUSY" ? "Занятие открыто на другом устройстве" : "Занятие завершено.");
+    await macrotasks(10);
+    expect(h.model.kinds()).toEqual(["answer.submit"]);
+    blocked(h);
   });
 
   it("H10 an own unconfirmed receipt without a reported session claims the route before Today, once", async () => {
