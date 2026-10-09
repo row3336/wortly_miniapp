@@ -1,7 +1,7 @@
 import type { ClosedSessionBoundary, PublicAssignment, SessionProjection, WrittenPractice, WrittenStep, WrittenSummary } from "../api/generated";
 import { CLOSE_REASONS, sameId } from "../api/wireValidation";
 import type { ResultTimerView } from "../commands/resultTimer";
-import { StudyView, type StudyLanes, type StudyPhase } from "../commands/studyView";
+import { StudyView, type EmptyStop, type StudyLanes, type StudyPhase } from "../commands/studyView";
 import type { WrittenAnswer } from "./writtenApi";
 import type { WrittenCommandSnapshot } from "./writtenCommandController";
 import { WrittenDocumentCommands, type WrittenDocumentOptions, type WrittenDocumentSnapshot } from "./writtenDocumentCommands";
@@ -69,6 +69,8 @@ export type WrittenViewSnapshot = {
   canStop: boolean;
   canSummaryHome: boolean;
   canRetryPrimary: boolean;
+  /** The last Stop of this session that sent nothing: internal facts, nothing of it is shown (EmptyStop). */
+  emptyStop: EmptyStop | null;
   /** A prefetched question waits for the host to be enabled (confirmed settings); until then the view cannot leave "loading". */
   waitingForSettings: boolean;
   /**

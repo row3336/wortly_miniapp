@@ -41,7 +41,7 @@ function lanes() {
     retry: vi.fn(async () => {}), refresh: vi.fn(async () => {}), clearSettled: vi.fn(async () => {}),
     readSession: vi.fn(async () => ({ state_version: String(version), current: current(assignment(6, "presented")) as object })),
     readResult: vi.fn(async () => ({ state_version: String(version), step: current(assignment(6, "presented")), ...answer(4) })),
-    setRecoveryActive: vi.fn(), dispose: vi.fn(),
+    setRecoveryActive: vi.fn(), dispose: vi.fn(), knowsClosed: vi.fn(() => false),
   } satisfies StudyCommands;
   return { state, commands, replies, publish: () => publish(structuredClone(state)),
     connect: (onUpdate: (state: StudyLanes) => void) => { publish = onUpdate; return commands; } };
@@ -55,6 +55,9 @@ type Fake = ReturnType<typeof lanes>["commands"];
 class TestView extends StudyView<Fake, StudyCurrent, StudyAnswer, Snapshot> {
   closed: { sessionId: string; reason: string | null }[] = [];
   closeNow = false;
+  /** A later step of a read throws (M-WRITTEN-STUCK, C101). */
+  failAfterRead = false;
+  protected afterRead(): Promise<void> { return this.failAfterRead ? Promise.reject(new Error("after read failed")) : Promise.resolve(); }
   protected close(sessionId: string, reason: string | null): void { this.cancelTimer(); this.phase = "closed"; this.closed.push({ sessionId, reason }); }
   protected closure(): { reason: string | null } | null { return this.closeNow ? { reason: "stop" } : null; }
   protected recoveredSession(state: StudyLanes): string | null { return state.primary.pendingIntent?.session_id ?? null; }
@@ -359,5 +362,87 @@ describe("shared study view: a pair changed elsewhere (M-WRITTEN-STUCK)", () => 
     expect(f.controller.closed).toEqual([]);
     expect(f.controller.snapshot().phase).not.toBe("closed");
     expect(f.controller.snapshot().current).toBeNull();
+  });
+});
+
+describe("shared study view: the facts of an empty Stop (M-WRITTEN-STUCK)", () => {
+  type Stops = { tapStop(): unknown; unsentStop(tap: unknown): Promise<boolean> };
+  it("S6: a read ignored below the view's floor stays ignored; without the lanes' closure no refusal is proven", async () => {
+    const f = view(); await f.controller.refresh();
+    f.state.stateVersion = "9";
+    f.commands.readSession.mockResolvedValueOnce({ state_version: "8", current: current(null, "closed") });
+    const stops = f.controller as unknown as Stops;
+    expect(await stops.unsentStop(stops.tapStop())).toBe(true);
+    expect(f.controller.closed).toEqual([]);
+    expect(f.controller.snapshot().emptyStop).toEqual({ sessionId: SESSION, refusal: null, read: "ignored", joined: false });
+  });
+  it("S7: the lanes' closure is the proven refusal; a failed read stays a failed read", async () => {
+    const f = view(); await f.controller.refresh();
+    f.commands.knowsClosed.mockReturnValue(true);
+    f.commands.readSession.mockRejectedValueOnce(new Error("offline"));
+    const stops = f.controller as unknown as Stops;
+    await stops.unsentStop(stops.tapStop());
+    expect(f.controller.closed).toEqual([]);
+    expect(f.controller.snapshot()).toMatchObject({ phase: "stale", problem: "load",
+      emptyStop: { sessionId: SESSION, refusal: "session_closed", read: "failed" } });
+  });
+});
+
+describe("shared study view: the read an empty Stop got (M-WRITTEN-STUCK, C101)", () => {
+  type Stops = { tapStop(): unknown; unsentStop(tap: unknown): Promise<boolean>; readOnce(): Promise<{ outcome: string; joined: boolean }> };
+  const stops = (f: ReturnType<typeof view>) => f.controller as unknown as Stops;
+  const emptyStop = (f: ReturnType<typeof view>) => stops(f).unsentStop(stops(f).tapStop());
+  const gated = () => {
+    let release!: () => void;
+    const gate = new Promise<void>(done => { release = done; });
+    return { gate, release };
+  };
+  const reply = (version: string) => ({ state_version: version, current: current(assignment(6, "presented")) as object });
+  const settle = () => new Promise(done => setTimeout(done, 5));
+  beforeEach(() => { vi.useRealTimers(); });
+
+  it("S8: a later step of the read throws: the Stop rejects, the session GET's outcome is still kept", async () => {
+    const f = view(); await f.controller.refresh();
+    f.controller.failAfterRead = true;
+    await expect(emptyStop(f)).rejects.toThrow("after read failed");
+    expect(f.controller.snapshot().emptyStop).toMatchObject({ read: "applied", joined: false });
+  });
+  it("S9: a closure the lanes learn only from this Stop's own read is not its refusal", async () => {
+    const f = view(); await f.controller.refresh();
+    const before = f.commands.readSession.mock.calls.length;
+    f.commands.knowsClosed.mockImplementation(() => f.commands.readSession.mock.calls.length > before);
+    f.commands.readSession.mockResolvedValueOnce({ state_version: "5", current: { ...current(null, "closed"), close_reason: "remote_stop" } });
+    await emptyStop(f);
+    expect(f.controller.snapshot()).toMatchObject({ phase: "closed", emptyStop: { refusal: null, read: "applied" } });
+  });
+  it("S10: a Stop that joins a queue another call made is joined; its creator's own read is not", async () => {
+    const f = view(); await f.controller.refresh();
+    const reads = f.commands.readSession.mock.calls.length, held = gated();
+    f.commands.readSession.mockImplementation(async () => reply(f.state.stateVersion));
+    f.commands.readSession.mockImplementationOnce(async () => { await held.gate; return reply("5"); });
+    const r0 = f.controller.refresh(); await settle();
+    f.state.stateVersion = "6";
+    const creator = stops(f).readOnce(), stopping = emptyStop(f); await settle();
+    held.release(); await r0;
+    expect(await creator).toMatchObject({ outcome: "applied", joined: false });
+    await stopping;
+    expect(f.controller.snapshot().emptyStop).toMatchObject({ read: "applied", joined: true });
+    expect(f.commands.readSession.mock.calls.length - reads).toBe(2);
+  });
+  it("S11: a queue that awaits a read a subscriber started reports it joined", async () => {
+    const f = view(); await f.controller.refresh();
+    const reads = f.commands.readSession.mock.calls.length, held = gated();
+    f.commands.readSession.mockImplementation(async () => reply(f.state.stateVersion));
+    f.commands.readSession.mockImplementationOnce(async () => { await held.gate; return reply("5"); });
+    const r0 = f.controller.refresh(); await settle();
+    f.state.stateVersion = "6";
+    const queued = stops(f).readOnce();
+    // The first publication after the first read ends starts a read before the queue looks again.
+    let subscriber: Promise<void> | null = null;
+    f.onUpdate.mockImplementation(() => { subscriber ??= f.controller.refresh(); });
+    held.release(); await r0;
+    expect(await queued).toEqual({ outcome: "applied", joined: true });
+    await subscriber;
+    expect(f.commands.readSession.mock.calls.length - reads).toBe(2);
   });
 });

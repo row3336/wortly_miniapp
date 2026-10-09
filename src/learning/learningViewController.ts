@@ -1,7 +1,7 @@
 import type { LearningSessionProjection, PublicAssignment } from "../api/generated";
 import { CLOSE_REASONS, sameId } from "../api/wireValidation";
 import type { ResultTimerView } from "../commands/resultTimer";
-import { StudyView, type StudyLanes, type StudyPhase } from "../commands/studyView";
+import { StudyView, type EmptyStop, type StudyLanes, type StudyPhase } from "../commands/studyView";
 import type { LearningCommandSnapshot, LearningTransition } from "./learningCommandController";
 import { LearningDocumentCommands, type LearningDocumentSnapshot } from "./learningDocumentCommands";
 
@@ -44,6 +44,8 @@ export type LearningViewSnapshot = {
   canStop: boolean;
   canAdvancePreview: boolean;
   canRetryPrimary: boolean;
+  /** The last Stop of this session that sent nothing: internal facts, nothing of it is shown (EmptyStop). */
+  emptyStop: EmptyStop | null;
 };
 
 const closeReason = (value: string | null | undefined): CloseReason =>

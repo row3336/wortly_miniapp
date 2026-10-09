@@ -39,6 +39,23 @@ type LaneView = {
 export type StudyLanes = DocumentLanesSnapshot<LaneView>;
 /** What a Stop tap discarded, and the stop lane before it was sent. */
 type StopTap = { phase: StudyPhase; draft: string; draftAssignmentId: string | null; lane: LaneView };
+/**
+ * How the session GET of one read ended, and only that GET: its reply taken by the view ("applied"), its reply not
+ * taken (below the floor, another session or pair, or the view moved on meanwhile: "ignored"), the GET itself failed
+ * ("failed"), or no GET was made (the lane check failed or ended the read before it: "not_read"). Later steps of the
+ * read (the result read, a recovered result) never change it.
+ */
+export type StudyReadOutcome = "applied" | "ignored" | "failed" | "not_read";
+/** The read one call got: its session GET outcome, and joined when that read had started before the call. */
+export type StudyRead = { outcome: StudyReadOutcome; joined: boolean };
+/** A queue of reads and the read it last awaited, known even when a later step of that read threw. */
+type ReadQueue = { task: Promise<StudyRead>; last: StudyRead | null };
+/**
+ * The last Stop of this session that sent nothing, as separate facts: why the lanes refused it, when they prove a
+ * reason ("session_closed": they saw this session closed; null: no proven reason), and the read it got (read: null while
+ * it runs; joined: that read had started before the tap). Internal facts only: nothing here is shown, offered or stored.
+ */
+export type EmptyStop = { sessionId: string; refusal: "session_closed" | null; read: StudyReadOutcome | null; joined: boolean };
 /** Recovery states that end without an outcome of the action: nothing is sent or checked any more. */
 const ENDED_RECOVERY: ReadonlySet<string> = new Set(["refused", "terminated", "conflict"]);
 /**
@@ -61,6 +78,8 @@ export type StudyCommands = {
   /** S07: repeat only the local cleanup of a confirmed primary outcome; nothing is requested. */
   clearSettled(): Promise<void>;
   readSession(sessionId: string): Promise<SessionRead>;
+  /** The lanes saw this session closed under the current document (DocumentLanes.knowsClosed). */
+  knowsClosed(sessionId: string): boolean;
   readResult(address: ResultAddress): Promise<ResultRead>;
   /** The activity of this view drives the automatic recovery of the primary action (Я15.3, Я15.7). */
   setRecoveryActive(active: boolean): void;
@@ -96,6 +115,8 @@ export type StudyViewFields<C, A, D> = {
   /** «Шаг назад»: only the server's undo_target of the answer on screen, on its result or on the summary (К05-066, RA Д02). */
   canUndo: boolean;
   canRetryPrimary: boolean;
+  /** The last Stop of the current session that sent nothing (internal facts, see EmptyStop); null otherwise. */
+  emptyStop: EmptyStop | null;
 };
 /** Mode rules that differ on purpose; each keeps the mode's established behavior. */
 export type StudyViewRules = {
@@ -132,10 +153,13 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
   protected waitNext = false;
   private readonly timer = new ResultTimer();
   protected operation: Promise<void> | null = null;
-  protected reading: Promise<void> | null = null;
+  /** The read in flight; it resolves to the outcome of its own session GET. */
+  protected reading: Promise<StudyReadOutcome> | null = null;
   private readingSource: OpenedAccess | null = null;
+  private emptyStop: EmptyStop | null = null;
   private readingMinimumVersion = "0";
-  private queuedRead: Promise<void> | null = null;
+  /** Reads a newer handle or version required after the one in flight; last is the read they last awaited. */
+  private queuedRead: ReadQueue | null = null;
   /** Reads that paused the countdown and have not finished their tail yet; the pause outlives overlapping reads (П02). */
   private pausingReads = 0;
   protected stopping: Promise<void> | null = null;
@@ -179,6 +203,7 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
   protected tapStop(): StopTap {
     const tap: StopTap = { phase: this.phase, draft: this.draft, draftAssignmentId: this.draftAssignmentId, lane: this.commands.snapshot().stop };
     this.cancelTimer(); this.pendingGradeAdvance = null; this.draft = ""; this.draftAssignmentId = null; this.phase = "stopping";
+    this.emptyStop = null;
     return tap;
   }
   /**
@@ -194,7 +219,13 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
     // The view moved on meanwhile (e.g. it closed from the lanes): that state stands.
     if (!this.is("stopping")) return true;
     this.phase = tap.phase; this.draft = tap.draft; this.draftAssignmentId = tap.draftAssignmentId;
-    await this.refresh();
+    const sessionId = this.sessionId;
+    // The refusal is what the lanes prove now, never derived from canStop (readiness and work in flight also clear it).
+    const facts: EmptyStop | null = sessionId
+      ? { sessionId, refusal: this.commands.knowsClosed(sessionId) ? "session_closed" : null, read: null, joined: false } : null;
+    this.emptyStop = facts;
+    // Known as soon as the session GET ended, even if a later step of the read then throws.
+    await this.readOnce(read => { if (facts) { facts.read = read.outcome; facts.joined = read.joined; } });
     return true;
   }
 
@@ -212,23 +243,25 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
     if (!sameId(this.draftAssignmentId ?? "", assignment.id)) this.draft = "";
     this.draftAssignmentId = assignment.id; this.question = structuredClone(assignment);
   }
-  protected capture(step: object | null, version: string | null): void {
-    if (!step || !version || BigInt(version) < BigInt(this.commands.snapshot().stateVersion)) return;
+  /** Take a step of a read or a lane; true when it was taken (the view's state now follows it). */
+  protected capture(step: object | null, version: string | null): boolean {
+    if (!step || !version || BigInt(version) < BigInt(this.commands.snapshot().stateVersion)) return false;
     if (!("pair" in step)) {
       if ("session_id" in step && typeof step.session_id === "string"
         && (this.rules.ignoreUnboundUnavailable ? !this.sessionId || !sameId(step.session_id, this.sessionId)
-          : this.sessionId && !sameId(step.session_id, this.sessionId))) return;
-      this.current = null; this.currentVersion = version; this.question = null; this.cancelTimer(); this.phase = "stale"; return;
+          : this.sessionId && !sameId(step.session_id, this.sessionId))) return false;
+      this.current = null; this.currentVersion = version; this.question = null; this.cancelTimer(); this.phase = "stale"; return true;
     }
     const projection = step as C;
     const own = this.sessionId !== null && sameId(projection.session_id, this.sessionId);
     // A closed projection of this view's own session is its closure whatever pair it names: the pair changed elsewhere
     // and the server closed the session (pair_changed). Open steps of another pair stay ignored; nothing of them is shown.
-    if (projection.pair !== this.pair && !(own && projection.status === "closed")) return;
-    if (this.sessionId !== null && !own) return;
+    if (projection.pair !== this.pair && !(own && projection.status === "closed")) return false;
+    if (this.sessionId !== null && !own) return false;
     this.sessionId = projection.session_id; this.current = structuredClone(projection); this.currentVersion = version;
     this.captured(projection, version);
     if (projection.status === "closed") this.close(projection.session_id, projection.close_reason);
+    return true;
   }
   private observe(state: StudyLanes): void {
     if (this.disposed || !state.live) return;
@@ -295,7 +328,8 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
       grades: canRevise ? [...this.answer?.capabilities.grades?.values ?? []] : [],
       canUndo: ready && answerFresh && (resultView || this.is("summary")) && !!this.answer?.capabilities.undo_target,
       canRetryPrimary: live && interactive && !this.operation && !this.reading && !this.stopping
-        && commands.primary.canRetry && !commands.stop.pending } };
+        && commands.primary.canRetry && !commands.stop.pending,
+      emptyStop: live && this.emptyStop && this.sessionId && sameId(this.emptyStop.sessionId, this.sessionId) ? { ...this.emptyStop } : null } };
   }
   private canNext(): boolean { return this.view().fields.canNext; }
   private armTimer(): void {
@@ -442,44 +476,58 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
     }
     this.pendingGradeAdvance = null; this.armTimer();
   }
-  async refresh(): Promise<void> {
-    if (!this.live()) return;
+  async refresh(): Promise<void> { await this.readOnce(); }
+  /**
+   * One read of the session (its lanes checked first), coalesced with a read in flight as refresh always was. The
+   * result is the outcome of the read this call awaited: its own, the one in flight it joined, or the last read of the
+   * queue that a newer handle or version required. settled learns that outcome as soon as the session GET has ended,
+   * also when a later step of the read (afterRead, continueView) then throws and this call rejects.
+   */
+  protected async readOnce(settled?: (read: StudyRead) => void): Promise<StudyRead> {
+    const known = (read: StudyRead) => { settled?.(read); return read; };
+    if (!this.live()) return known({ outcome: "not_read", joined: false });
     if (this.reading) {
       if (this.readingSource === this.options.access()
-        && BigInt(this.readingMinimumVersion) >= BigInt(this.commands.snapshot().stateVersion)) return this.reading;
-      if (!this.queuedRead) {
-        // A newer handle or confirmed Settings version can invalidate this read: coalesce, then read again.
-        const pending = this.reading;
-        const queued = (async () => {
-          await pending;
-          while (this.live()) {
-            // A subscriber can already have started a read while the old task was publishing: await that read
-            // directly, never our own queue.
-            const existing = this.reading;
-            const source = existing ? this.readingSource : this.options.access();
-            const minimum = existing ? this.readingMinimumVersion : this.commands.snapshot().stateVersion;
-            if (existing) await existing;
-            else await this.refresh();
-            const floor = BigInt(this.commands.snapshot().stateVersion);
-            if (source === this.options.access() && (BigInt(minimum) >= floor || BigInt(this.currentVersion ?? "0") >= floor)) break;
-          }
-        })().finally(() => { if (this.queuedRead === queued) this.queuedRead = null; this.settlePause(); });
-        this.queuedRead = queued;
+        && BigInt(this.readingMinimumVersion) >= BigInt(this.commands.snapshot().stateVersion)) {
+        return known({ outcome: await this.reading, joined: true });
       }
-      return this.queuedRead;
+      if (this.queuedRead) return this.awaitQueue(this.queuedRead, true, settled);
+      // A newer handle or confirmed Settings version can invalidate this read: coalesce, then read again.
+      const pending = this.reading;
+      const queue: ReadQueue = { task: Promise.resolve({ outcome: "not_read", joined: false }), last: null };
+      queue.task = (async (): Promise<StudyRead> => {
+        queue.last = { outcome: await pending, joined: true };
+        while (this.live()) {
+          // A subscriber can already have started a read while the old task was publishing: await that read
+          // directly, never our own queue.
+          const existing = this.reading;
+          const source = existing ? this.readingSource : this.options.access();
+          const minimum = existing ? this.readingMinimumVersion : this.commands.snapshot().stateVersion;
+          if (existing) queue.last = { outcome: await existing, joined: true };
+          else await this.readOnce(read => { queue.last = read; });
+          const floor = BigInt(this.commands.snapshot().stateVersion);
+          if (source === this.options.access() && (BigInt(minimum) >= floor || BigInt(this.currentVersion ?? "0") >= floor)) break;
+        }
+        return queue.last;
+      })().finally(() => { if (this.queuedRead === queue) this.queuedRead = null; this.settlePause(); });
+      this.queuedRead = queue;
+      return this.awaitQueue(queue, false, settled);
     }
     this.readingSource = this.options.access();
     this.readingMinimumVersion = this.commands.snapshot().stateVersion;
     // A read only pauses the countdown: the same result received again continues it, any other state starts afresh (П02).
     this.timer.pause(); this.pausingReads++; this.problem = null;
+    // Only the session GET sets it; a failure of any other step leaves it as that GET ended.
+    let outcome: StudyReadOutcome = "not_read";
     const task = (async () => {
       await this.commands.refresh(); if (!this.live() || this.is("closed")) return;
       const state = this.commands.snapshot(), pending = state.primary.pendingIntent;
       this.sessionId ??= this.recoveredSession(state);
       if (this.sessionId === null) { this.phase = "idle"; return; }
-      const read = await this.commands.readSession(this.sessionId);
-      if (!this.live() || this.is("closed", "stopping") || this.commands.snapshot().stop.pending) return;
-      this.capture(read.current, read.state_version);
+      let read: SessionRead;
+      try { read = await this.commands.readSession(this.sessionId); } catch (error) { outcome = "failed"; throw error; }
+      if (!this.live() || this.is("closed", "stopping") || this.commands.snapshot().stop.pending) { outcome = "ignored"; return; }
+      outcome = this.capture(read.current, read.state_version) ? "applied" : "ignored";
       if (this.is("closed")) return;
       const ended = endedRecovery(state) !== null;
       if (pending?.kind === "answer.submit" && !ended) {
@@ -507,12 +555,19 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
         this.chooseCurrent();
       }
     })().catch(() => { if (this.live() && !this.is("closed", "stopping")) { this.phase = "stale"; this.problem = "load"; } })
+      .then(() => outcome)
       .finally(() => { if (this.reading === task) this.reading = null; this.emit(); });
-    this.reading = task; await task;
+    this.reading = task; known({ outcome: await task, joined: false });
     try {
       await this.afterRead();
       await this.continueView();
     } finally { this.pausingReads--; this.settlePause(); }
+    return { outcome, joined: false };
+  }
+  /** The read a queue last awaited; joined also when this call joined another caller's queue. */
+  private async awaitQueue(queue: ReadQueue, joined: boolean, settled?: (read: StudyRead) => void): Promise<StudyRead> {
+    const mark = (read: StudyRead): StudyRead => ({ ...read, joined: joined || read.joined });
+    try { return mark(await queue.task); } finally { if (queue.last) settled?.(mark(queue.last)); }
   }
   /** The pause is forgotten only when no read is left that could arm the same result again. */
   private settlePause(): void {

@@ -208,6 +208,12 @@ export class DocumentLanes<C extends LaneState, T extends { kind: string; sessio
     this.emit();
     return reply;
   }
+  /**
+   * These lanes saw this session closed under the current document: a closed projection or a closed boundary at or
+   * above the version floor, or an accepted Stop of it (a real closure whatever the version of its reply). Stop and
+   * actions of it are refused locally. Only that fact: no reason is kept, and readiness or work in flight never count.
+   */
+  knowsClosed(sessionId: string): boolean { return this.live() && this.closed.has(sessionId.toLowerCase()); }
   /** Screen reads share the clock of mutations; an older reply cannot reopen a question. */
   async readSession(sessionId: string): Promise<SR> {
     const reply = await this.loadSession(sessionId);

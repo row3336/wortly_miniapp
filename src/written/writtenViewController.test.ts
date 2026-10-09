@@ -771,7 +771,8 @@ describe("a pair changed elsewhere and an empty Stop (M-WRITTEN-STUCK)", () => {
     expect(sessionReads(h)).toBe(reads + 1);
     await vi.waitFor(() => expect(h.view.snapshot().closed?.summaryRead).toBe("known"));
     expect(h.view.snapshot()).toMatchObject({ phase: "closed", canStop: false,
-      closed: { reason: "remote_stop", natural: false, summary: { completed: 1, correct: 1, wrong: 0 } } });
+      closed: { reason: "remote_stop", natural: false, summary: { completed: 1, correct: 1, wrong: 0 } },
+      emptyStop: { refusal: "session_closed", read: "applied" } });
   });
   it("W2: an unknown closure gets no new exit: the read fails, the screen stays where Stop was tapped", async () => {
     const h = await closedUnderTheView(), posts = h.posts().length;
@@ -779,7 +780,7 @@ describe("a pair changed elsewhere and an empty Stop (M-WRITTEN-STUCK)", () => {
     await h.view.stop();
     expect(h.posts()).toHaveLength(posts);
     // The failed read keeps its existing state and reason; no waiting for Stop and no closure is shown.
-    expect(h.view.snapshot()).toMatchObject({ phase: "stale", closed: null });
+    expect(h.view.snapshot()).toMatchObject({ phase: "stale", closed: null, emptyStop: { refusal: "session_closed", read: "failed" } });
     expect(h.view.snapshot().problem).not.toBeNull();
   });
   it("W2: a view closed meanwhile is neither reopened nor read again by the empty Stop", async () => {
@@ -825,7 +826,8 @@ describe("a pair changed elsewhere and an empty Stop (M-WRITTEN-STUCK)", () => {
     await expect(h.view.stop()).rejects.toThrow("invalid intent");
     expect(h.posts().filter(post => post.kind === "session.stop")).toHaveLength(0);
     expect(sessionReads(h)).toBe(reads + 1);
-    expect(h.view.snapshot()).toMatchObject({ phase: "question", draft: "Hau", canStop: true });
+    expect(h.view.snapshot()).toMatchObject({ phase: "question", draft: "Hau", canStop: true,
+      emptyStop: { refusal: null, read: "applied" } });
   });
   /** Three empty Exit taps: each sends nothing and reads the session exactly once; nothing is read afterwards. */
   async function threeEmptyTaps(h: ReturnType<typeof harness>) {
@@ -837,6 +839,8 @@ describe("a pair changed elsewhere and an empty Stop (M-WRITTEN-STUCK)", () => {
       expect(h.posts()).toHaveLength(posts);
       expect(gets() - before).toBe(1);
       expect(h.view.snapshot().closed).toBeNull();
+      // The lanes' proof and the failed read are kept apart: neither is turned into a confirmed summary.
+      expect(h.view.snapshot().emptyStop).toMatchObject({ refusal: "session_closed", read: "failed" });
     }
     const quiet = gets(); await new Promise(done => setTimeout(done, 300));
     expect(gets()).toBe(quiet);
@@ -855,13 +859,13 @@ describe("a pair changed elsewhere and an empty Stop (M-WRITTEN-STUCK)", () => {
     const h = harness({ cards: [6, 7] }); await h.started(); h.view.setDraft("Hau");
     h.dropRequest(); await h.view.stop();
     expect(h.kinds().filter(kind => kind === "session.stop")).toHaveLength(1);
-    expect(h.view.snapshot()).toMatchObject({ phase: "stopping", draft: "", canStop: false, closed: null,
+    expect(h.view.snapshot()).toMatchObject({ phase: "stopping", draft: "", canStop: false, closed: null, emptyStop: null,
       commands: { stop: { pending: true } } });
   });
   it("W3: an accepted Stop closes and its input stays discarded", async () => {
     const h = harness({ cards: [6, 7] }); await h.started(); h.view.setDraft("Hau");
     await h.view.stop();
-    expect(h.view.snapshot()).toMatchObject({ phase: "closed", draft: "", closed: { reason: "stop" } });
+    expect(h.view.snapshot()).toMatchObject({ phase: "closed", draft: "", closed: { reason: "stop" }, emptyStop: null });
   });
   it("W4: an earlier Stop outcome of another session does not count as sent by this Stop", async () => {
     const h = harness({ cards: [6, 7] }); await h.started(); await h.view.stop();
@@ -876,5 +880,144 @@ describe("a pair changed elsewhere and an empty Stop (M-WRITTEN-STUCK)", () => {
     expect(h.posts()).toHaveLength(posts);
     expect(h.view.snapshot().commands.stop.resolved).toMatchObject({ commandId: earlier.commandId });
     await vi.waitFor(() => expect(h.view.snapshot()).toMatchObject({ phase: "closed", closed: { reason: "remote_stop" } }));
+  });
+  it("W9: an empty Stop of an earlier session does not follow a new session", async () => {
+    const h = await closedUnderTheView();
+    await h.view.stop();
+    await vi.waitFor(() => expect(h.view.snapshot().emptyStop).toMatchObject({ refusal: "session_closed", read: "applied" }));
+    h.server.state.closeReason = null; await h.view.start("words");
+    expect(h.view.snapshot()).toMatchObject({ phase: "question", emptyStop: null });
+  });
+});
+
+describe("the read an empty Stop got (M-WRITTEN-STUCK, C101)", () => {
+  type Lanes = { commands: { readSession(sessionId: string): Promise<unknown>; begin(action: object): Promise<void>;
+    refresh(): Promise<void>; knowsClosed(sessionId: string): boolean } };
+  const lanesOf = (view: WrittenViewController) => (view as unknown as Lanes).commands;
+  const closeView = (h: ReturnType<typeof harness>) =>
+    (h.view as unknown as { close(sessionId: string, reason: string | null): void }).close(h.view.snapshot().sessionId!, "remote_stop");
+  const sessionGets = (h: ReturnType<typeof harness>) => h.gets("/sessions/").filter(url => !url.includes("result_id=")).length;
+  const flush = () => new Promise(done => setTimeout(done, 20));
+  /** A shown correct result whose next Stop is refused before any request. */
+  async function refusedStop() {
+    const h = harness({ cards: [6, 7] }); await h.started(); await h.answer("Haus");
+    expect(h.view.snapshot().phase).toBe("result_correct");
+    const lanes = lanesOf(h.view), begin = lanes.begin.bind(lanes);
+    lanes.begin = async () => { throw new Error("refused"); };
+    return { h, restore: () => { lanes.begin = begin; } };
+  }
+  /** Hold (or fail) the result GET only. */
+  function resultGate(h: ReturnType<typeof harness>, fail: boolean) {
+    const gate = deferred<void>();
+    h.fetcher.mockImplementation(async (...call) => {
+      if (String(call[0]).includes("result_id=")) { await gate.promise; if (fail) throw new TypeError("network"); }
+      return h.server.handle(...call);
+    });
+    return gate;
+  }
+  function sessionGate(h: ReturnType<typeof harness>) {
+    const gate = deferred<void>();
+    h.fetcher.mockImplementationOnce(async (...call) => { await gate.promise; return h.server.handle(...call); });
+    return gate;
+  }
+
+  it("T1: a later step that fails does not change the session GET's outcome", async () => {
+    const { h } = await refusedStop(); resultGate(h, true).resolve();
+    await expect(h.view.stop()).rejects.toThrow("refused");
+    // The read as a whole failed (its existing state), its session GET was taken.
+    expect(h.view.snapshot()).toMatchObject({ phase: "stale", problem: "load",
+      emptyStop: { refusal: null, read: "applied", joined: false } });
+  });
+  it("T2a: a Stop that joins a read held on its session GET gets that read's outcome, marked joined", async () => {
+    const { h } = await refusedStop(); const gate = sessionGate(h);
+    const r0 = h.view.refresh(); await flush();
+    const stopping = h.view.stop().catch(error => error); await flush();
+    expect(h.view.snapshot().emptyStop).toMatchObject({ read: null });
+    gate.resolve(); await r0; await stopping;
+    expect(sessionGets(h)).toBe(1);
+    expect(h.view.snapshot().emptyStop).toMatchObject({ read: "applied", joined: true });
+  });
+  it("T2b: a Stop that joins a read past its session GET still gets that GET's outcome", async () => {
+    const { h } = await refusedStop(); const gate = resultGate(h, false);
+    const r0 = h.view.refresh(); await flush();
+    const stopping = h.view.stop().catch(error => error); await flush();
+    gate.resolve(); await r0; await stopping;
+    expect(h.view.snapshot()).toMatchObject({ phase: "result_correct", emptyStop: { read: "applied", joined: true } });
+  });
+  it("T2c: the joined read failing later keeps its session GET's outcome", async () => {
+    const { h } = await refusedStop(); const gate = resultGate(h, true);
+    const r0 = h.view.refresh(); await flush();
+    const stopping = h.view.stop().catch(error => error); await flush();
+    gate.resolve(); await r0; await stopping;
+    expect(h.view.snapshot()).toMatchObject({ phase: "stale", problem: "load", emptyStop: { read: "applied", joined: true } });
+  });
+  it("T3: a newer handle during the read: the Stop gets the outcome of the queued second read, its own", async () => {
+    const { h } = await refusedStop(); const gate = sessionGate(h);
+    const r0 = h.view.refresh(); await flush();
+    h.replace({});
+    const stopping = h.view.stop().catch(error => error); await flush();
+    gate.resolve(); await r0.catch(() => undefined); await stopping; await flush();
+    expect(sessionGets(h)).toBe(2);
+    expect(h.view.snapshot().emptyStop).toMatchObject({ read: "applied", joined: false });
+  });
+  it("T4: a joined read whose reply comes after the view closed reports it ignored", async () => {
+    const { h } = await refusedStop(); const gate = sessionGate(h);
+    const r0 = h.view.refresh(); await flush();
+    const stopping = h.view.stop().catch(error => error); await flush();
+    closeView(h);
+    gate.resolve(); await r0; await stopping;
+    expect(h.view.snapshot()).toMatchObject({ phase: "closed", emptyStop: { read: "ignored", joined: true } });
+  });
+  it("T5: a closure known before the GET: no GET, not_read", async () => {
+    const { h } = await refusedStop(); const lanes = lanesOf(h.view), refresh = lanes.refresh.bind(lanes);
+    const reads = sessionGets(h);
+    lanes.refresh = async () => { await refresh(); closeView(h); };
+    await expect(h.view.stop()).rejects.toThrow("refused");
+    // The read itself made no GET; the closed view then reads its summary once (afterRead), as for any closure.
+    expect(sessionGets(h)).toBe(reads + 1);
+    expect(h.view.snapshot()).toMatchObject({ phase: "closed", emptyStop: { read: "not_read", joined: false } });
+  });
+  it("T6: a failed lane check makes no GET: not_read, never failed", async () => {
+    const { h } = await refusedStop(); const reads = sessionGets(h);
+    lanesOf(h.view).refresh = async () => { throw new Error("lane check failed"); };
+    await expect(h.view.stop()).rejects.toThrow("refused");
+    expect(sessionGets(h)).toBe(reads);
+    expect(h.view.snapshot()).toMatchObject({ phase: "stale", problem: "load", emptyStop: { read: "not_read" } });
+  });
+  it("T7: the session GET itself failing is failed", async () => {
+    const { h } = await refusedStop(); h.offline();
+    await expect(h.view.stop()).rejects.toThrow("refused");
+    expect(h.view.snapshot()).toMatchObject({ phase: "stale", emptyStop: { read: "failed", joined: false } });
+  });
+  it("MQ1, MQ2: the lanes know a closure only at or above their floor, and only while the document is live", async () => {
+    const h = harness({ cards: [6, 7] }); await h.started(); await h.answer("Haus");
+    const lanes = lanesOf(h.view), sessionId = h.view.snapshot().sessionId!;
+    Object.assign(h.server.state, { status: "closed", closeReason: "remote_stop", assignment: null });
+    h.server.state.version -= 1;
+    await expect(lanes.readSession(sessionId)).rejects.toThrow();
+    expect(lanes.knowsClosed(sessionId)).toBe(false);
+    h.server.state.version += 2;
+    await lanes.readSession(sessionId);
+    expect(lanes.knowsClosed(sessionId)).toBe(true);
+    h.revoke();
+    expect(lanes.knowsClosed(sessionId)).toBe(false);
+  });
+  it("MQ3: a new tap drops the facts of the previous empty Stop; a sent Stop has none", async () => {
+    const { h, restore } = await refusedStop();
+    await expect(h.view.stop()).rejects.toThrow("refused");
+    expect(h.view.snapshot().emptyStop).toMatchObject({ read: "applied" });
+    restore();
+    const gate = h.hold(), stopping = h.view.stop();
+    await vi.waitFor(() => expect(h.view.snapshot().phase).toBe("stopping"));
+    expect(h.view.snapshot().emptyStop).toBeNull();
+    gate.resolve(); await stopping;
+    expect(h.view.snapshot()).toMatchObject({ phase: "closed", emptyStop: null });
+  });
+  it("MQ6: a revoked document shows no facts of an empty Stop", async () => {
+    const { h } = await refusedStop();
+    await expect(h.view.stop()).rejects.toThrow("refused");
+    expect(h.view.snapshot().emptyStop).not.toBeNull();
+    h.revoke();
+    expect(h.view.snapshot()).toMatchObject({ phase: "disposed", emptyStop: null });
   });
 });

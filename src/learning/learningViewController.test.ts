@@ -619,7 +619,8 @@ describe("Learning: a pair changed elsewhere and an empty Stop (M-WRITTEN-STUCK)
     await f.view.stop();
     expect(f.posts()).toHaveLength(posts);
     // One read shows the closure the lanes know, with its reason.
-    expect(f.view.snapshot()).toMatchObject({ phase: "closed", canStop: false, closed: { sessionId: id(3), reason: "remote_stop" } });
+    expect(f.view.snapshot()).toMatchObject({ phase: "closed", canStop: false, closed: { sessionId: id(3), reason: "remote_stop" },
+      emptyStop: { refusal: "session_closed", read: "applied" } });
   });
   it("L4: while a Stop check is in flight Stop is not offered: a tap neither exits nor discards the input", async () => {
     const f = harness(); await f.view.refresh(); f.view.setDraft("Hau");
@@ -647,7 +648,8 @@ describe("Learning: a pair changed elsewhere and an empty Stop (M-WRITTEN-STUCK)
     await expect(f.view.stop()).rejects.toThrow("invalid intent");
     expect(f.posts().filter(post => post.kind === "session.stop")).toHaveLength(0);
     expect(sessionReads(f)).toBe(reads + 1);
-    expect(f.view.snapshot()).toMatchObject({ phase: "question", draft: "Hau", canStop: true, closed: null });
+    expect(f.view.snapshot()).toMatchObject({ phase: "question", draft: "Hau", canStop: true, closed: null,
+      emptyStop: { refusal: null, read: "applied" } });
   });
   it("L6: offline: each of 3 empty taps tries one read, sends nothing, opens no exit, no read loop", async () => {
     const f = await closedUnderTheView();
@@ -660,6 +662,7 @@ describe("Learning: a pair changed elsewhere and an empty Stop (M-WRITTEN-STUCK)
       expect(f.posts()).toHaveLength(posts);
       expect(gets() - before).toBe(1);
       expect(f.view.snapshot().closed).toBeNull();
+      expect(f.view.snapshot()).toMatchObject({ phase: "stale", emptyStop: { refusal: "session_closed", read: "failed" } });
     }
     const quiet = gets(); await new Promise(done => setTimeout(done, 300));
     expect(gets()).toBe(quiet);
