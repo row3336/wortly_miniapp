@@ -37,6 +37,8 @@ type LaneView = {
   stateVersion: string | null;
 };
 export type StudyLanes = DocumentLanesSnapshot<LaneView>;
+/** What a Stop tap discarded, and the stop lane before it was sent. */
+type StopTap = { phase: StudyPhase; draft: string; draftAssignmentId: string | null; lane: LaneView };
 /** Recovery states that end without an outcome of the action: nothing is sent or checked any more. */
 const ENDED_RECOVERY: ReadonlySet<string> = new Set(["refused", "terminated", "conflict"]);
 /**
@@ -170,6 +172,31 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
   protected afterRead(): Promise<void> { return Promise.resolve(); }
   /** Stop and its exact retry; they never queue behind a stalled answer request. */
   protected abstract runStop(send: () => Promise<void>): Promise<void>;
+  /**
+   * A Stop tap: Exit discards unsent study input (recorded answers stay, К05-065) and waits for Stop. The returned tap
+   * keeps what was discarded and the stop lane before sending, for unsentStop.
+   */
+  protected tapStop(): StopTap {
+    const tap: StopTap = { phase: this.phase, draft: this.draft, draftAssignmentId: this.draftAssignmentId, lane: this.commands.snapshot().stop };
+    this.cancelTimer(); this.pendingGradeAdvance = null; this.draft = ""; this.draftAssignmentId = null; this.phase = "stopping";
+    return tap;
+  }
+  /**
+   * Stop of this tap sent nothing: the lanes refused it locally (a session they know closed, a joined check, not ready)
+   * or before any request. Every send starts the lane afresh (a new pending record), so an unchanged lane that is not
+   * pending is no request at all; a Stop without its answer stays pending and keeps waiting. Then nothing was exited:
+   * the screen returns to where Stop was tapped with its unsent input, and one session read shows the server's actual
+   * state (a closure the lanes already know closes this view with its reason). true when nothing was sent.
+   */
+  protected async unsentStop(tap: StopTap): Promise<boolean> {
+    const after = this.commands.snapshot().stop;
+    if (after.pending || after.resolved?.commandId !== tap.lane.resolved?.commandId) return false;
+    // The view moved on meanwhile (e.g. it closed from the lanes): that state stands.
+    if (!this.is("stopping")) return true;
+    this.phase = tap.phase; this.draft = tap.draft; this.draftAssignmentId = tap.draftAssignmentId;
+    await this.refresh();
+    return true;
+  }
 
   protected is(...phases: StudyPhase[]): boolean { return phases.includes(this.phase); }
   protected live(): boolean { return !this.disposed && this.commands.snapshot().live; }
@@ -194,8 +221,11 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
       this.current = null; this.currentVersion = version; this.question = null; this.cancelTimer(); this.phase = "stale"; return;
     }
     const projection = step as C;
-    if (projection.pair !== this.pair) return;
-    if (this.sessionId !== null && !sameId(projection.session_id, this.sessionId)) return;
+    const own = this.sessionId !== null && sameId(projection.session_id, this.sessionId);
+    // A closed projection of this view's own session is its closure whatever pair it names: the pair changed elsewhere
+    // and the server closed the session (pair_changed). Open steps of another pair stay ignored; nothing of them is shown.
+    if (projection.pair !== this.pair && !(own && projection.status === "closed")) return;
+    if (this.sessionId !== null && !own) return;
     this.sessionId = projection.session_id; this.current = structuredClone(projection); this.currentVersion = version;
     this.captured(projection, version);
     if (projection.status === "closed") this.close(projection.session_id, projection.close_reason);

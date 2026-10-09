@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WrittenIntent } from "./writtenIntent";
 import { WrittenViewController } from "./writtenViewController";
-import { deferred, id, tick, writtenFixture, type ServerOptions } from "./writtenFixtures.test-support";
+import { deferred, id, profile, tick, writtenFixture, type ServerOptions } from "./writtenFixtures.test-support";
 
 const owners: WrittenViewController[] = [];
 afterEach(() => { owners.splice(0).forEach(owner => owner.dispose()); vi.useRealTimers(); });
@@ -706,5 +706,175 @@ describe("liveness of the snapshot", () => {
     expect(h.view.snapshot()).toMatchObject({ phase: "question", bucket: "words" });
     h.revoke();
     expect(h.view.snapshot()).toMatchObject({ phase: "disposed", bucket: null, current: null, question: null });
+  });
+});
+
+describe("a pair changed elsewhere and an empty Stop (M-WRITTEN-STUCK)", () => {
+  type Lanes = { commands: { readSession(sessionId: string): Promise<unknown>; begin(action: object): Promise<void>; refresh(): Promise<void> } };
+  const lanesOf = (view: WrittenViewController) => (view as unknown as Lanes).commands;
+  const closeElsewhere = (h: ReturnType<typeof harness>, reason: "pair_changed" | "remote_stop" = "pair_changed") =>
+    Object.assign(h.server.state, { status: "closed", closeReason: reason, assignment: null, version: h.server.state.version + 1 });
+  const sessionReads = (h: ReturnType<typeof harness>) => h.gets(`/sessions/${h.server.state.sessionId}?client_instance_id`).length;
+  /** A shown correct result whose session the lanes already know closed while the view does not (DESIGN 2.2). */
+  async function closedUnderTheView() {
+    const h = harness({ cards: [6, 7] }); await h.started(); await h.answer("Haus");
+    closeElsewhere(h, "remote_stop");
+    // Only the lanes read the session: the view keeps its screen.
+    await lanesOf(h.view).readSession(h.view.snapshot().sessionId!);
+    expect(h.view.snapshot()).toMatchObject({ phase: "result_correct", canStop: true, closed: null });
+    return h;
+  }
+  /** A lost applied answer; then the pair changed elsewhere and a new owner of the new pair is created on return. */
+  async function newOwnerOfAnotherPair() {
+    const h = harness({ cards: [6, 7] }); await h.started();
+    h.loseReply(); const online = h.offline(); await h.answer("Haus");
+    await vi.waitFor(() => expect(h.values.has("wortly.pending.written_session")).toBe(true));
+    h.view.dispose();
+    // Another device changed the pair: the server closed the old-pair session; this document is rebound to the new pair.
+    closeElsewhere(h);
+    h.replace({ profile: { ...profile(), dictionary_language: "uk" } }); online();
+    const owner = new WrittenViewController({ access: h.access, storage: h.storage, transport: h.transport, newId: h.newId,
+      sessionId: null, transitionMode: () => "normal", onUpdate: vi.fn() });
+    owners.push(owner);
+    return { h, owner };
+  }
+
+  it("W1: a new owner of another pair closes the old session it recovered by its answer's receipt", async () => {
+    const { h, owner } = await newOwnerOfAnotherPair();
+    await owner.refresh();
+    await vi.waitFor(() => expect(owner.snapshot().closed?.summaryRead).toBe("known"));
+    expect(owner.snapshot()).toMatchObject({ phase: "closed", canStop: false, canNext: false, question: null,
+      closed: { reason: "pair_changed", natural: false, summary: { completed: 1, correct: 1, wrong: 0 } } });
+    expect(h.kinds().filter(kind => kind === "session.stop")).toHaveLength(0);
+  });
+  for (const change of ["profile", "installation"] as const) {
+    it(`W1: a read that returns under a foreign ${change} closes nothing`, async () => {
+      const { h, owner } = await newOwnerOfAnotherPair();
+      const gate = deferred<void>(), handle = h.fetcher.getMockImplementation()!;
+      h.fetcher.mockImplementation(async (url, init) => {
+        if (String(url).includes("/sessions/")) await gate.promise;
+        return handle(url, init);
+      });
+      const reading = owner.refresh();
+      await vi.waitFor(() => expect(h.gets("/sessions/").length).toBeGreaterThan(0));
+      h.replace(change === "profile" ? { profile: { ...profile(), profile_id: id(51), dictionary_language: "uk" } }
+        : { client_instance_id: id(9), profile: { ...profile(), dictionary_language: "uk" } });
+      gate.resolve(); await reading.catch(() => undefined); await new Promise(done => setTimeout(done, 0));
+      expect(owner.snapshot()).toMatchObject({ phase: "disposed", closed: null });
+      expect((owner as unknown as { closedFacts: unknown }).closedFacts).toBeNull();
+    });
+  }
+  it("W2: a Stop the lanes refuse locally sends nothing; one read shows the closure they know, with its reason", async () => {
+    const h = await closedUnderTheView(), posts = h.posts().length, reads = sessionReads(h);
+    await h.view.stop();
+    expect(h.posts()).toHaveLength(posts);
+    expect(sessionReads(h)).toBe(reads + 1);
+    await vi.waitFor(() => expect(h.view.snapshot().closed?.summaryRead).toBe("known"));
+    expect(h.view.snapshot()).toMatchObject({ phase: "closed", canStop: false,
+      closed: { reason: "remote_stop", natural: false, summary: { completed: 1, correct: 1, wrong: 0 } } });
+  });
+  it("W2: an unknown closure gets no new exit: the read fails, the screen stays where Stop was tapped", async () => {
+    const h = await closedUnderTheView(), posts = h.posts().length;
+    h.offline();
+    await h.view.stop();
+    expect(h.posts()).toHaveLength(posts);
+    // The failed read keeps its existing state and reason; no waiting for Stop and no closure is shown.
+    expect(h.view.snapshot()).toMatchObject({ phase: "stale", closed: null });
+    expect(h.view.snapshot().problem).not.toBeNull();
+  });
+  it("W2: a view closed meanwhile is neither reopened nor read again by the empty Stop", async () => {
+    const h = await closedUnderTheView(), lanes = lanesOf(h.view), begin = lanes.begin.bind(lanes);
+    const sessionId = h.view.snapshot().sessionId!, refresh = vi.spyOn(h.view, "refresh");
+    // The closure reaches the view while the refused Stop is in hand.
+    lanes.begin = async action => {
+      await begin(action);
+      (h.view as unknown as { close(sessionId: string, reason: string | null): void }).close(sessionId, "remote_stop");
+    };
+    await h.view.stop();
+    expect(h.view.snapshot()).toMatchObject({ phase: "closed", closed: { reason: "remote_stop" } });
+    expect(refresh).not.toHaveBeenCalled();
+    expect(h.kinds().filter(kind => kind === "session.stop")).toHaveLength(0);
+  });
+  it("W5: while a Stop check is in flight Stop is not offered: a tap neither exits nor discards the input", async () => {
+    const h = harness({ cards: [6, 7] }); await h.started(); h.view.setDraft("Hau");
+    const tap = vi.spyOn(h.view as never, "tapStop"), checking = lanesOf(h.view).refresh();
+    expect(h.view.snapshot().canStop).toBe(false);
+    await h.view.stop(); await checking;
+    expect(tap).not.toHaveBeenCalled();
+    expect(h.kinds().filter(kind => kind === "session.stop")).toHaveLength(0);
+    expect(h.view.snapshot()).toMatchObject({ phase: "question", draft: "Hau", canStop: true });
+    await h.view.stop();
+    expect(h.kinds().filter(kind => kind === "session.stop")).toHaveLength(1);
+    expect(h.view.snapshot()).toMatchObject({ phase: "closed", draft: "", closed: { reason: "stop" } });
+  });
+  it("W5: a Stop retry that joins a check in flight of its unknown Stop keeps waiting, sends no second Stop", async () => {
+    const h = harness({ cards: [6, 7] }); await h.started(); h.view.setDraft("Hau");
+    h.dropRequest(); await h.view.stop();
+    await lanesOf(h.view).refresh();
+    expect(h.view.snapshot()).toMatchObject({ phase: "stopping", commands: { stop: { pending: true, canRetry: true } } });
+    const refresh = vi.spyOn(h.view, "refresh"), gate = h.hold(), checking = lanesOf(h.view).refresh();
+    const retrying = h.view.retry("stop");
+    gate.resolve(); await checking; await retrying;
+    expect(refresh).not.toHaveBeenCalled();
+    expect(h.view.snapshot()).toMatchObject({ phase: "stopping", draft: "", commands: { stop: { pending: true } } });
+  });
+  it("W6: a Stop refused before any request keeps the unsent input, reads once and still surfaces the refusal", async () => {
+    const h = harness({ cards: [6, 7] }); await h.started(); h.view.setDraft("Hau");
+    const lanes = lanesOf(h.view), reads = sessionReads(h);
+    lanes.begin = async () => { throw new Error("invalid intent"); };
+    await expect(h.view.stop()).rejects.toThrow("invalid intent");
+    expect(h.posts().filter(post => post.kind === "session.stop")).toHaveLength(0);
+    expect(sessionReads(h)).toBe(reads + 1);
+    expect(h.view.snapshot()).toMatchObject({ phase: "question", draft: "Hau", canStop: true });
+  });
+  /** Three empty Exit taps: each sends nothing and reads the session exactly once; nothing is read afterwards. */
+  async function threeEmptyTaps(h: ReturnType<typeof harness>) {
+    const gets = () => h.fetcher.mock.calls.filter(call => (call[1]?.method ?? "GET") === "GET").length;
+    const posts = h.posts().length;
+    for (let tap = 0; tap < 3; tap += 1) {
+      const before = gets();
+      await h.view.stop(); await new Promise(done => setTimeout(done, 30));
+      expect(h.posts()).toHaveLength(posts);
+      expect(gets() - before).toBe(1);
+      expect(h.view.snapshot().closed).toBeNull();
+    }
+    const quiet = gets(); await new Promise(done => setTimeout(done, 300));
+    expect(gets()).toBe(quiet);
+  }
+  it("W7: reads below the version floor: each of 3 empty taps reads once, sends nothing, no read loop", async () => {
+    const h = await closedUnderTheView();
+    // The server now answers with an older state version than the lanes have seen.
+    h.server.state.version -= 1;
+    await threeEmptyTaps(h);
+  });
+  it("W8: offline: each of 3 empty taps tries one read, sends nothing, opens no exit, no read loop", async () => {
+    const h = await closedUnderTheView(); h.offline();
+    await threeEmptyTaps(h);
+  });
+  it("W3: a Stop sent without its answer keeps waiting and its input stays discarded", async () => {
+    const h = harness({ cards: [6, 7] }); await h.started(); h.view.setDraft("Hau");
+    h.dropRequest(); await h.view.stop();
+    expect(h.kinds().filter(kind => kind === "session.stop")).toHaveLength(1);
+    expect(h.view.snapshot()).toMatchObject({ phase: "stopping", draft: "", canStop: false, closed: null,
+      commands: { stop: { pending: true } } });
+  });
+  it("W3: an accepted Stop closes and its input stays discarded", async () => {
+    const h = harness({ cards: [6, 7] }); await h.started(); h.view.setDraft("Hau");
+    await h.view.stop();
+    expect(h.view.snapshot()).toMatchObject({ phase: "closed", draft: "", closed: { reason: "stop" } });
+  });
+  it("W4: an earlier Stop outcome of another session does not count as sent by this Stop", async () => {
+    const h = harness({ cards: [6, 7] }); await h.started(); await h.view.stop();
+    const earlier = h.view.snapshot().commands.stop.resolved!;
+    expect(h.view.snapshot().phase).toBe("closed");
+    h.server.state.closeReason = null; await h.view.start("words"); await h.answer("Haus");
+    expect(h.view.snapshot().sessionId).not.toBe(earlier.sessionId);
+    closeElsewhere(h, "remote_stop");
+    await lanesOf(h.view).readSession(h.view.snapshot().sessionId!);
+    const posts = h.posts().length;
+    await h.view.stop();
+    expect(h.posts()).toHaveLength(posts);
+    expect(h.view.snapshot().commands.stop.resolved).toMatchObject({ commandId: earlier.commandId });
+    await vi.waitFor(() => expect(h.view.snapshot()).toMatchObject({ phase: "closed", closed: { reason: "remote_stop" } }));
   });
 });

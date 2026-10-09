@@ -307,3 +307,57 @@ describe("shared study view: «Шаг назад» (M-UNDO)", () => {
     expect(f.commands.begin.mock.calls.map(call => call[0].kind)).toEqual(["answer.submit", "result.undo", "assignment.present"]);
   });
 });
+
+describe("shared study view: a pair changed elsewhere (M-WRITTEN-STUCK)", () => {
+  const OTHER = id(30);
+  /** A projection of another pair, as the server reports a session after the pair changed on another device. */
+  const foreign = (status: StudyCurrent["status"], session = SESSION): StudyCurrent =>
+    ({ session_id: session, status, pair: "uk-de", close_reason: status === "closed" ? "pair_changed" : null,
+      assignment: status === "active" ? assignment(6, "presented") : null });
+
+  it("S1: a closed projection of its own session closes the view whatever pair it names", async () => {
+    const f = view();
+    f.commands.readSession.mockResolvedValueOnce({ state_version: "5", current: foreign("closed") });
+    await f.controller.refresh();
+    expect(f.controller.snapshot().phase).toBe("closed");
+    expect(f.controller.closed).toEqual([{ sessionId: SESSION, reason: "pair_changed" }]);
+    // The closed step of the other pair opens nothing: no question, nothing to answer.
+    expect(f.controller.snapshot()).toMatchObject({ question: null, canSubmit: false, current: { status: "closed" } });
+  });
+  it("S5: a closed projection of its own session below the lanes' version floor is ignored", async () => {
+    const f = view(); await f.controller.refresh();
+    f.state.stateVersion = "20";
+    f.state.primary = { ...idle(), current: foreign("closed"), stateVersion: "19" };
+    f.publish();
+    expect(f.controller.closed).toEqual([]);
+    expect(f.controller.snapshot().phase).not.toBe("closed");
+  });
+  it("S2: an open projection of its own session in another pair is still ignored", async () => {
+    for (const status of ["active", "summary"] as const) {
+      const f = view(); await f.controller.refresh();
+      const before = f.controller.snapshot();
+      expect(before.phase).toBe("question");
+      f.commands.readSession.mockResolvedValueOnce({ state_version: "5", current: foreign(status) });
+      await f.controller.refresh();
+      expect(f.controller.closed).toEqual([]);
+      // Nothing of the other pair is shown: the view keeps its own step.
+      expect(f.controller.snapshot()).toMatchObject({ phase: "question", current: { pair: "ru-de", status: "active" } });
+    }
+  });
+  it("S3: a closed projection of another session in another pair is ignored", async () => {
+    const f = view(); await f.controller.refresh();
+    f.commands.readSession.mockResolvedValueOnce({ state_version: "5", current: foreign("closed", OTHER) });
+    await f.controller.refresh();
+    expect(f.controller.closed).toEqual([]);
+    expect(f.controller.snapshot()).toMatchObject({ phase: "question", current: { session_id: SESSION, pair: "ru-de" } });
+  });
+  it("S4: a view without a session ignores a closed projection of another pair", () => {
+    const f = view({ sessionId: null });
+    f.state.stateVersion = "6";
+    f.state.primary = { ...idle(), current: foreign("closed"), stateVersion: "6" };
+    f.publish();
+    expect(f.controller.closed).toEqual([]);
+    expect(f.controller.snapshot().phase).not.toBe("closed");
+    expect(f.controller.snapshot().current).toBeNull();
+  });
+});

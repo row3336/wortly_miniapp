@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { LearningSessionProjection } from "../api/generated";
 import { tick } from "../commands/recoveryTime.test-support";
 import { LearningViewController } from "./learningViewController";
-import { current, deferred, id, missing, original, pending, primaryKey, response } from "./learningFixtures.test-support";
+import { current, deferred, id, missing, original, pending, primaryKey, profile, response } from "./learningFixtures.test-support";
 
 const owners: LearningViewController[] = [];
 afterEach(() => { owners.splice(0).forEach(owner => owner.dispose()); vi.useRealTimers(); });
@@ -582,5 +582,92 @@ describe("Learning question, result and presentation lifecycle", () => {
     expect(f.posts().map(x => x.kind)).toEqual(["answer.submit"]); await f.view.stop("summary_home");
     expect(f.posts()[1]).toMatchObject({ kind: "session.stop", payload: { reason: "summary_home" } });
     expect(f.view.snapshot().phase).toBe("closed");
+  });
+});
+
+describe("Learning: a pair changed elsewhere and an empty Stop (M-WRITTEN-STUCK)", () => {
+  type Lanes = { commands: { readSession(sessionId: string): Promise<unknown> } };
+  const closedElsewhere = (reason: "pair_changed" | "remote_stop"): LearningSessionProjection =>
+    ({ ...current(), status: "closed", close_reason: reason, assignment: null });
+
+  it("L1: a new owner of another pair closes the old session it recovered by its answer's receipt", async () => {
+    const f = harness(); await f.view.refresh(); f.view.setDraft("Haus");
+    f.fetcher.mockImplementationOnce(async (...call) => { await f.handler(...call); throw new Error("lost response"); });
+    f.fetcher.mockImplementation(async () => { throw new Error("offline"); });
+    await f.view.submit();
+    await vi.waitFor(() => expect(f.values.has(primaryKey)).toBe(true));
+    f.view.dispose();
+    // Another device changed the pair: the server closed the old-pair session; this document is rebound to the new pair.
+    f.setStep(closedElsewhere("pair_changed"));
+    f.replace({ profile: { ...profile(), dictionary_language: "uk" }, session: null }); f.fetcher.mockImplementation(f.handler);
+    const owner = new LearningViewController({ access: f.access, storage: f.storage, newId: f.newId,
+      transport: { fetcher: f.fetcher, timeoutMs: 30000, maxResponseBytes: 100000 }, sessionId: null, transitionMode: () => "normal",
+      onUpdate: vi.fn() });
+    owners.push(owner);
+    await owner.refresh();
+    await vi.waitFor(() => expect(owner.snapshot().phase).toBe("closed"));
+    expect(owner.snapshot()).toMatchObject({ closed: { sessionId: id(3), reason: "pair_changed" }, canStop: false, canNext: false });
+    expect(f.posts().filter(post => post.kind === "session.stop")).toHaveLength(0);
+  });
+  it("L2: a Stop the lanes refuse locally sends nothing; one read shows the closure they know", async () => {
+    const f = harness(); await f.view.refresh(); f.view.setDraft("Haus"); await f.view.submit();
+    f.setStep(closedElsewhere("remote_stop"));
+    // Only the lanes read the session: the view keeps its screen.
+    await (f.view as unknown as Lanes).commands.readSession(id(3));
+    expect(f.view.snapshot()).toMatchObject({ phase: "result_correct", canStop: true, closed: null });
+    const posts = f.posts().length;
+    await f.view.stop();
+    expect(f.posts()).toHaveLength(posts);
+    // One read shows the closure the lanes know, with its reason.
+    expect(f.view.snapshot()).toMatchObject({ phase: "closed", canStop: false, closed: { sessionId: id(3), reason: "remote_stop" } });
+  });
+  it("L4: while a Stop check is in flight Stop is not offered: a tap neither exits nor discards the input", async () => {
+    const f = harness(); await f.view.refresh(); f.view.setDraft("Hau");
+    const tap = vi.spyOn(f.view as never, "tapStop");
+    const checking = (f.view as unknown as { commands: { refresh(): Promise<void> } }).commands.refresh();
+    await f.view.stop(); await checking;
+    expect(tap).not.toHaveBeenCalled();
+    expect(f.posts().filter(post => post.kind === "session.stop")).toHaveLength(0);
+    expect(f.view.snapshot()).toMatchObject({ phase: "question", draft: "Hau", canStop: true, closed: null });
+  });
+  /** A shown result whose session the lanes already know closed while the view does not. */
+  async function closedUnderTheView() {
+    const f = harness(); await f.view.refresh(); f.view.setDraft("Haus"); await f.view.submit();
+    f.setStep(closedElsewhere("remote_stop"));
+    await (f.view as unknown as Lanes).commands.readSession(id(3));
+    expect(f.view.snapshot()).toMatchObject({ phase: "result_correct", canStop: true, closed: null });
+    return f;
+  }
+  const sessionReads = (f: Fixture) => f.fetcher.mock.calls
+    .filter(call => (call[1]?.method ?? "GET") === "GET" && String(call[0]).includes("/sessions/")).length;
+  it("L5: a Stop refused before any request keeps the unsent input, reads once and still surfaces the refusal", async () => {
+    const f = harness(); await f.view.refresh(); f.view.setDraft("Hau");
+    const reads = sessionReads(f);
+    (f.view as unknown as { commands: { begin(action: object): Promise<void> } }).commands.begin = async () => { throw new Error("invalid intent"); };
+    await expect(f.view.stop()).rejects.toThrow("invalid intent");
+    expect(f.posts().filter(post => post.kind === "session.stop")).toHaveLength(0);
+    expect(sessionReads(f)).toBe(reads + 1);
+    expect(f.view.snapshot()).toMatchObject({ phase: "question", draft: "Hau", canStop: true, closed: null });
+  });
+  it("L6: offline: each of 3 empty taps tries one read, sends nothing, opens no exit, no read loop", async () => {
+    const f = await closedUnderTheView();
+    f.fetcher.mockImplementation(async () => { throw new TypeError("network"); });
+    const gets = () => f.fetcher.mock.calls.filter(call => (call[1]?.method ?? "GET") === "GET").length;
+    const posts = f.posts().length;
+    for (let tap = 0; tap < 3; tap += 1) {
+      const before = gets();
+      await f.view.stop(); await new Promise(done => setTimeout(done, 30));
+      expect(f.posts()).toHaveLength(posts);
+      expect(gets() - before).toBe(1);
+      expect(f.view.snapshot().closed).toBeNull();
+    }
+    const quiet = gets(); await new Promise(done => setTimeout(done, 300));
+    expect(gets()).toBe(quiet);
+  });
+  it("L3: a Stop sent without its answer keeps waiting", async () => {
+    const f = harness(); await f.view.refresh(); f.view.setDraft("Haus"); await f.view.submit();
+    f.fetcher.mockRejectedValueOnce(new Error("Stop not delivered")); await f.view.stop();
+    expect(f.posts().filter(post => post.kind === "session.stop")).toHaveLength(1);
+    expect(f.view.snapshot()).toMatchObject({ phase: "stopping", canStop: false, closed: null, commands: { stop: { pending: true } } });
   });
 });

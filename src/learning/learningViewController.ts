@@ -150,15 +150,18 @@ export class LearningViewController extends StudyView<LearningDocumentCommands, 
   /** Stop and its exact retry must never queue behind a stalled answer request. */
   protected runStop(send: () => Promise<void>, reason?: "stop" | "summary_home"): Promise<void> {
     if (this.stopping) return this.stopping;
-    this.cancelTimer(); this.pendingGradeAdvance = null; this.draft = ""; this.draftAssignmentId = null; this.phase = "stopping";
-    const sessionId = this.sessionId;
-    const task = send().then(() => {
-      if (!this.live() || !sessionId) return;
+    const tap = this.tapStop(), sessionId = this.sessionId;
+    const task = send().then(async () => {
+      if (!this.live() || !sessionId || await this.unsentStop(tap)) return;
       const state = this.commands.snapshot().stop;
       // A retried Stop (from the base) carries no reason: the closed projection or the boundary names it.
       if (state.outcome === "accepted") this.close(sessionId, reason ?? (this.current?.status === "closed" ? this.current.close_reason : null));
       else if (state.outcome === "not_applied") this.close(sessionId, state.closedSession?.close_reason ?? null);
       else if (state.outcome === "rejected") { this.phase = "stale"; this.problem = state.rejectionCode ?? "stop_rejected"; }
+    }, async (error: unknown) => {
+      // A Stop refused before any request (its intent) shows no waiting either; the refusal itself still surfaces.
+      if (this.live() && sessionId) await this.unsentStop(tap);
+      throw error;
     }).finally(() => { if (this.stopping === task) this.stopping = null; this.emit(); });
     this.stopping = task; this.emit(); return task;
   }

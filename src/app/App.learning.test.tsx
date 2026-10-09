@@ -116,6 +116,8 @@ function app(options: { session?: string | null; status?: TodayResponse["learnin
   return { f, server, settingsReply, openReply, todayReply, fetcher, posts, studyPosts, gets,
     route(next: Route) { const base = learning; learning = (url, init) => next(url, init, base); },
     holdOpen(gate: Promise<void>) { openGate = gate; },
+    /** Another device changed the dictionary pair: profile, Settings and Today follow it; the study fixture keeps its step. */
+    changePairElsewhere(value: "en" | "ru" | "uk") { stored.settings.dictionary_language.value = value; version++; },
     version: () => String(version) };
 }
 type Server = ReturnType<typeof app>;
@@ -944,3 +946,28 @@ describe("the launch card over a resumed session", () => {
   });
 });
 
+describe("Learning: a pair changed elsewhere after a lost answer (M-WRITTEN-STUCK)", () => {
+  const enPair = "Активная пара: Английский ↔ Немецкий";
+  it("A3: the return shows Today of the new pair; no Stop is sent and no «Завершаем занятие…» stays", async () => {
+    const a = app(); const input = await startToQuestion(a);
+    fireEvent.change(input, { target: { value: "Haus" } });
+    // The answer commits, its reply is lost, and study reads fail while the device is away.
+    let offline = true;
+    a.route(async (url, init, base) => {
+      if (isPost(init, "answer.submit")) { await base(url, init); throw new TypeError("network"); }
+      if (offline && (init?.method ?? "GET") === "GET") throw new TypeError("network");
+      return base(url, init);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Проверить" }));
+    await waitFor(() => expect(a.posts().some(post => post.kind === "answer.submit")).toBe(true));
+    await settled();
+    // Another device changes the pair: the server closes the old-pair session.
+    a.f.setStep({ ...current(a.server.session!), status: "closed", close_reason: "pair_changed", assignment: null, preview: null });
+    a.server.session = null; a.changePairElsewhere("en"); offline = false;
+    await act(async () => { window.dispatchEvent(new Event("pageshow")); });
+    await screen.findByText(enPair, undefined, exchange);
+    await settled();
+    expect(screen.queryByText("Завершаем занятие…")).toBeNull();
+    expect(a.studyPosts().filter(post => post.kind === "session.stop")).toEqual([]);
+  });
+});

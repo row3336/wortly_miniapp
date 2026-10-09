@@ -251,11 +251,9 @@ export class WrittenViewController extends StudyView<WrittenDocumentCommands, Cu
   /** Stop and its exact retry never queue behind a stalled answer request. */
   protected runStop(send: () => Promise<void>, reason?: "stop" | "summary_home"): Promise<void> {
     if (this.stopping) return this.stopping;
-    // Exit discards unsent study input; recorded answers stay (К05-065).
-    this.cancelTimer(); this.pendingGradeAdvance = null; this.draft = ""; this.draftAssignmentId = null; this.phase = "stopping";
-    const sessionId = this.sessionId;
-    const task = send().then(() => {
-      if (!this.live() || !sessionId) return;
+    const tap = this.tapStop(), sessionId = this.sessionId;
+    const task = send().then(async () => {
+      if (!this.live() || !sessionId || await this.unsentStop(tap)) return;
       const state = this.commands.snapshot().stop;
       const own = state.resolved?.kind === "session.stop" && sameId(state.resolved.sessionId, sessionId);
       if (own && state.outcome === "accepted") {
@@ -269,6 +267,10 @@ export class WrittenViewController extends StudyView<WrittenDocumentCommands, Cu
         this.close(sessionId, state.closedSession?.close_reason ?? null);
         if (reason === "summary_home" && this.closedFacts && sameId(this.closedFacts.sessionId, sessionId)) this.closedFacts.homeRequested = true;
       } else if (state.outcome === "rejected") { this.phase = "stale"; this.problem = state.rejectionCode ?? "stop_rejected"; }
+    }, async (error: unknown) => {
+      // A Stop refused before any request (its intent) shows no waiting either; the refusal itself still surfaces.
+      if (this.live() && sessionId) await this.unsentStop(tap);
+      throw error;
     }).finally(() => { if (this.stopping === task) this.stopping = null; this.emit(); });
     this.stopping = task; this.emit(); return task;
   }
