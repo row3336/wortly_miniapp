@@ -25,8 +25,21 @@ export function staleDocument(bound: BoundDocument, documentId: string | null | 
 }
 /** The bare refusal (/client/open, session reads). */
 export const staleRefusal = { error: { code: "DOCUMENT_STALE" } };
-/** The command envelope of a refused write: rejected fact, unavailable projection (study/coordinator.py). */
-export function staleCommand(commandId: string, sessionId: string | null, stateVersion: number) {
-  return { command: { id: commandId, status: "rejected" }, current: { session_id: sessionId, status: "unavailable" },
-    state_version: String(stateVersion), error: { code: "DOCUMENT_STALE" } };
+/** Kinds whose reply the core flattens to the answer step envelope (api/app.py lifts `current` to the top). */
+export const answerKinds: readonly string[] = ["answer.submit", "result.grade", "result.correct", "result.undo"];
+/** The capabilities of the unavailable answer step (written_projection, learning_answer_projection, conjugation_projection). */
+export const unavailableAnswerCapabilities = { answer_target: null, correct_target: null, grades: null, undo_target: null,
+  stop: false, summary_home: false };
+/**
+ * The command envelope of a refused study write: rejected fact, unavailable projection (study/coordinator.py). Session
+ * kinds carry `current`; answer kinds the flattened unavailable step. The exact bodies are the core's own, as its HTTP
+ * test asserts them (A-V1-OPEN-2 test_probe_v1open2_stale_http.py session_shape / answer_shape).
+ */
+export function staleCommand(commandId: string, sessionId: string | null, stateVersion: number, kind = "session.start",
+  code = "DOCUMENT_STALE") {
+  const head = { command: { id: commandId, status: "rejected" }, state_version: String(stateVersion), error: { code } };
+  const unavailable = { session_id: sessionId, status: "unavailable" };
+  return answerKinds.includes(kind)
+    ? { ...head, action: null, result: null, step: unavailable, capabilities: { ...unavailableAnswerCapabilities } }
+    : { command: head.command, current: unavailable, state_version: head.state_version, error: head.error };
 }

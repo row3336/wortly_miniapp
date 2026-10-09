@@ -8,7 +8,8 @@ import { createLearningSessionApi, type LearningSessionRead, type LearningSessio
 import type { LearningSessionIntent } from "./learningSessionIntent";
 import { LearningSessionPendingStore, LearningStopPendingStore, type LearningSessionPending } from "./learningSessionPending";
 import type { LearningAnswerIntent, LearningCommandIntent } from "./learningCommandIntent";
-import type { LearningAnswerReply, LearningAnswerStatus } from "./learningAnswerApi";
+import { createLearningResultApi, type LearningAnswerReply, type LearningAnswerStatus } from "./learningAnswerApi";
+import { staleCommand } from "../app/openRules.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const slot = "wortly.pending.learning_session", stopSlot = "wortly.pending.learning_stop";
@@ -627,5 +628,32 @@ describe("Authoritative closure of a missing Learning command", () => {
     gate.resolve(missingClosed()); await work;
     expect(f.values.has(slot)).toBe(true);
     expect(f.controller.snapshot()).toMatchObject({ phase: "disposed", outcome: null, closedSession: null });
+  });
+});
+
+describe("D-STALE-WINDOW 3.1.4 guard: the core's business refusal envelope settles the Learning record", () => {
+  const result = { assignment_id: id(6), result_id: id(7), expected_result_version: "1" };
+  const answers = [
+    { command_id: id(4), session_id: id(3), kind: "answer.submit", assignment_id: id(6), payload: { text: "Haus" } },
+    { command_id: id(4), session_id: id(3), kind: "result.grade", ...result, payload: { grade: 5 } },
+    { command_id: id(4), session_id: id(3), kind: "result.correct", ...result, payload: {} },
+    { command_id: id(4), session_id: id(3), kind: "result.undo", ...result, payload: {} },
+  ] as LearningCommandIntent[];
+  /** The real adapters over a transport that answers every POST with this envelope of the core. */
+  function wired(f: ReturnType<typeof fixture>, body: (intent: LearningCommandIntent) => unknown, status: number) {
+    const fetcher = vi.fn<typeof fetch>(async (_url, init) => new Response(JSON.stringify(body(JSON.parse(String(init!.body)))), { status }));
+    const http = { fetcher, timeoutMs: 1000, maxResponseBytes: 100000 };
+    const sessions = createLearningSessionApi(http), results = createLearningResultApi(http);
+    const origin = { client_instance_id: id(1), document_id: id(2) };
+    const send = vi.fn((intent: LearningCommandIntent): Promise<unknown> => ["answer.submit", "result.grade", "result.correct", "result.undo"].includes(intent.kind)
+      ? results.send("t", "p", { ...intent, ...origin } as never) : sessions.send("t", "p", { ...intent, ...origin } as never));
+    return { controller: f.make({ send: send as never }), send };
+  }
+  const envelope = (code: string) => (intent: LearningCommandIntent) => staleCommand(intent.command_id, intent.session_id, 8, intent.kind, code);
+  it.each([...intents.slice(0, 5), ...answers])("$kind: a business refusal (SESSION_CLOSED) still settles and clears", async intent => {
+    const f = fixture(), { controller } = wired(f, envelope("SESSION_CLOSED"), 409);
+    await controller.refresh(); await controller.begin(action(intent as LearningSessionIntent));
+    expect(f.values.has(slot)).toBe(false);
+    expect(controller.snapshot()).toMatchObject({ outcome: "rejected", pending: false, rejectionCode: "SESSION_CLOSED" });
   });
 });

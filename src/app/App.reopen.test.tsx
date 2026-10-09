@@ -90,7 +90,7 @@ function device(options: { locks?: boolean; session?: boolean; close?: boolean; 
     if (path.endsWith("/settings")) return response({ ...structuredClone(stored), state_version: String(server.version) });
     if (staleDocument(server, body?.document_id ?? address.searchParams.get("document_id"))) {
       refused.push(path);
-      if (path.endsWith("/commands") && body?.command_id) return response(staleCommand(body.command_id, server.session, server.version), 409);
+      if (path.endsWith("/commands") && body?.command_id) return response(staleCommand(body.command_id, server.session, server.version, body.kind), 409);
       return response(staleRefusal, 409);
     }
     // A live document's session read refused as DOCUMENT_STALE, as the core answers a closed context of the live document.

@@ -447,10 +447,8 @@ describe("Written quiz through the actual App document", () => {
       const document = body?.document_id ?? address.searchParams.get("document_id");
       if (!document || document === live.document) return base(url, init);
       if (!body?.command_id) return response(staleRefusal, 409);
-      const { current, ...refused } = staleCommand(body.command_id, body.session_id, a.server.state.version);
       // An answer command answers with the written step envelope (written_projection.safe_written_projection).
-      return response(body.kind !== "answer.submit" ? { current, ...refused } : { ...refused, action: null, result: null, step: current,
-        capabilities: { answer_target: null, correct_target: null, grades: null, undo_target: null, stop: false, summary_home: false } }, 409);
+      return response(staleCommand(body.command_id, body.session_id, a.server.state.version, body.kind), 409);
     });
     const first = render(<App />);
     await startWords();

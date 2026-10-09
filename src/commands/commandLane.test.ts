@@ -228,6 +228,7 @@ describe("planned pause and outdated client (M-COMPAT-HDR)", () => {
     [new ApiError("http", 503, "WRITE_UNAVAILABLE"), "network"],
     [new ApiError("http", 503), "network"],
     [new ApiError("http", 409, "DOCUMENT_STALE"), "network"],
+    [new ApiError("http", 409, "SESSION_CLOSED"), "network"],
     [new ApiError("http", 500, "MAINTENANCE"), "network"],
     [new ApiError("network"), "network"],
     [new ApiError("invalid_response"), "network"],

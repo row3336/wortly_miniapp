@@ -44,7 +44,7 @@ export function replaceDocument(fetcher: ReturnType<typeof vi.fn<Fetch>>, hold: 
       await hold;
       return options.foreground === "live" ? base(url, init) : reply(staleRefusal, 409);
     }
-    if (init?.method === "POST" && body?.command_id) return reply(staleCommand(body.command_id, body.session_id ?? null, 9999), 409);
+    if (init?.method === "POST" && body?.command_id) return reply(staleCommand(body.command_id, body.session_id ?? null, 9999, body.kind), 409);
     return reply(staleRefusal, 409);
   });
   return { foregrounds: () => foregrounds, restore: () => fetcher.mockImplementation(base) };
@@ -60,7 +60,7 @@ export function refuseOnce(fetcher: ReturnType<typeof vi.fn<Fetch>>, match: (pat
     if (path.endsWith("/client/open") && body?.event === "foreground") { foregrounds += 1; await hold; return base(url, init); }
     if (refused === 0 && match(path, init)) {
       refused += 1;
-      if (init?.method === "POST" && body?.command_id) return reply(staleCommand(body.command_id, body.session_id ?? null, 9999), 409);
+      if (init?.method === "POST" && body?.command_id) return reply(staleCommand(body.command_id, body.session_id ?? null, 9999, body.kind), 409);
       return reply(staleRefusal, 409);
     }
     return base(url, init);

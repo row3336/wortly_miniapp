@@ -470,3 +470,23 @@ describe("identity, tagged results and document/version lifetime", () => {
     }) }); await c.refresh(); expect(onDenied).toHaveBeenCalledOnce(); expect(c.snapshot()).toMatchObject({ problem: "forbidden", canRetry: false });
   });
 });
+
+describe("D-STALE-WINDOW 3.1.4 guard: the core's business refusal envelope settles the intent", () => {
+  /** The core's refusal envelope of this intent (study/coordinator.py; app.py flattens answer kinds; schedule projects its catalog). */
+  function refusal(intent: ConjugationIntent, code: string): Record<string, unknown> {
+    const head = { command: { id: intent.command_id, status: "rejected" }, state_version: "9", error: { code } };
+    if (intent.kind === "conjugation.schedule") return { ...head, current: catalog() };
+    if (["answer.submit", "result.grade", "result.correct", "result.undo"].includes(intent.kind)) return { ...head, action: null, result: null,
+      step: { session_id: id(3), status: "unavailable" },
+      capabilities: { answer_target: null, correct_target: null, grades: null, undo_target: null, stop: false, summary_home: false } };
+    return { ...head, current: { session_id: id(3), status: "unavailable" } };
+  }
+  it.each(intents)("$kind refused as SESSION_CLOSED still settles rejected and clears its record", async intent => {
+    const f = fixture(undefined, intent); await f.controller.refresh();
+    f.model.intercept = async (_url, init) => init.method === "POST"
+      ? new Response(JSON.stringify(refusal(intent, "SESSION_CLOSED")), { status: 409 }) : null;
+    await f.controller.begin(action(intent));
+    expect(f.values.has(f.key)).toBe(false);
+    expect(f.controller.snapshot()).toMatchObject({ outcome: "rejected", pending: false, rejectionCode: "SESSION_CLOSED" });
+  });
+});

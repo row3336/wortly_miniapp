@@ -135,7 +135,9 @@ export function writtenServer(options: ServerOptions = {}) {
     command: { id: intent.command_id, status: "rejected" }, state_version: String(state.version), error: { code } } });
   function apply(intent: WrittenIntent): { status: number; body: Record<string, unknown> } {
     if (intent.kind === "session.start") {
-      if (options.refuseStart) return { status: 409, body: { current: { session_id: intent.session_id, status: "not_found" },
+      // A refusal of the source (DOCUMENT_STALE) projects no session at all: the core's unavailable current.
+      if (options.refuseStart) return { status: 409, body: { current: { session_id: intent.session_id,
+        status: options.refuseStart === "DOCUMENT_STALE" ? "unavailable" : "not_found" },
         command: { id: intent.command_id, status: "rejected" }, state_version: String(state.version), error: { code: options.refuseStart } } };
       state.sessionId = intent.session_id; state.status = "active"; state.index = 0; state.assignment = "prefetched"; state.version++;
       return { status: 200, body: { command: fact(intent), current: projection(), state_version: String(state.version) } };
