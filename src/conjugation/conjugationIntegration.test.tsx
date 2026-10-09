@@ -123,6 +123,12 @@ function model(initial: Session[] = [{ id: S1, status: "active", assignment: B1,
         return response({ command: { id: intent.command_id, status: "rejected" }, action: null, result: null, step,
           capabilities: { ...step.capabilities }, error: { code }, state_version: stateVersion }, 409);
       }
+      // core sessions.py: summary_home outside the summary phase is a VALIDATION_FAILED refusal (V-1).
+      if (intent.kind === "session.stop" && intent.payload.reason === "summary_home" && sessions.get(intent.session_id)?.status !== "summary"
+        && !accepted.has(intent.command_id)) {
+        return response({ current: projection(sessions.get(intent.session_id)!), command: { id: intent.command_id, status: "rejected" },
+          error: { code: "VALIDATION_FAILED" }, state_version: stateVersion }, 422);
+      }
       if (!accepted.has(intent.command_id)) { accepted.set(intent.command_id, intent); apply(intent); }
       const { body, r } = envelopeFor(intent);
       if (server.lostReply) throw new TypeError("synthetic lost reply after server commit");
@@ -854,6 +860,59 @@ describe("M-UNDO-CONJ hook + flow + screen", () => {
     m.server.lostReply = false;
     fireEvent.click(await screen.findByRole("button", { name: "Проверить статус" }));
     await screen.findByRole("textbox");
+    expect(m.posted.filter(c => c.kind === "result.undo")).toHaveLength(1);
+  });
+});
+
+describe("V-1 (C083): «На Сегодня» after «Шаг назад» through the real controller, flow and screen", () => {
+  const stops = (m: ReturnType<typeof model>) => m.posted.filter(c => c.kind === "session.stop").map(c => c.payload);
+
+  it("a click handler kept from before the undo cannot send summary_home; the next natural summary closes once", async () => {
+    const m = model(undefined, true), a1 = m.access(1), ref = { current: m.controller(a1) };
+    await ref.current.refresh();
+    const d = drive(ref, a1);
+    d.show(); d.flow.setDraft("kommst"); d.show(); d.flow.submit();
+    await d.settle(); d.flow.next();
+    expect(await d.settle()).toMatchObject({ screen: "summary", canHome: true, canUndo: true });
+    const held = m.hold((_url, method) => method === "POST");
+    d.flow.undo();
+    // No commit in between: the flow still holds the summary view in which «На Сегодня» was allowed.
+    d.flow.home();
+    await held.entered;
+    expect(d.show()).toMatchObject({ screen: "summary", canHome: false, canStop: true });
+    d.flow.home();
+    held.release();
+    expect(await d.settle()).toMatchObject({ screen: "question", question: { assignmentId: REISSUED } });
+    expect(stops(m)).toEqual([]);
+    expect(d.onToday).not.toHaveBeenCalled();
+    d.flow.committed(ref.current.snapshot().presentationTicket!);
+    await d.settle();
+    d.flow.setDraft("kommst"); d.show(); d.flow.submit();
+    await d.settle(); d.flow.next();
+    expect(await d.settle()).toMatchObject({ screen: "summary", canHome: true });
+    d.flow.home();
+    expect(await d.settle()).toMatchObject({ screen: "closed", reason: "summary_home" });
+    expect(stops(m)).toEqual([{ reason: "summary_home" }]);
+    expect(d.onToday).toHaveBeenCalledTimes(1);
+  });
+
+  it("screen: the rendered «На Сегодня» clicked right after «Шаг назад» sends nothing and is disabled until the undo settles", async () => {
+    const m = model(undefined, true), sink = { timers: 0, disposed: 0 };
+    render(<Host options={hostOptions(m)} sink={sink} />);
+    await typed("kommst");
+    fireEvent.click(screen.getByRole("button", { name: "Проверить" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Далее" }));
+    const home = await screen.findByRole("button", { name: "На Сегодня" }) as HTMLButtonElement;
+    await waitFor(() => expect(home.disabled).toBe(false));
+    const held = m.hold((_url, method) => method === "POST");
+    fireEvent.click(screen.getByRole("button", { name: "Шаг назад" }));
+    fireEvent.click(home);
+    await held.entered;
+    await waitFor(() => expect((screen.getByRole("button", { name: "На Сегодня" }) as HTMLButtonElement).disabled).toBe(true));
+    fireEvent.click(screen.getByRole("button", { name: "На Сегодня" }));
+    held.release();
+    await screen.findByRole("textbox");
+    expect(stops(m)).toEqual([]);
     expect(m.posted.filter(c => c.kind === "result.undo")).toHaveLength(1);
   });
 });

@@ -420,6 +420,10 @@ export class ConjugationDocumentController implements ConjugationDocumentActions
     const right = this.stopRight;
     // Stop needs open activity like any mutation, but not a ready study lane (unknown study must not block it).
     const canStopBase = study && stopReady && !closed && !!right && this.fresh(right.version) && this.selected(right.sessionId);
+    // «На Сегодня» ends the natural summary, so unlike Stop it also waits for a ready study lane and a fresh summary
+    // step (V-1, C083): an undo in flight could reopen the session and turn the summary_home into a refusal that a
+    // late copy of the same command would replay on the next summary. stop() re-reads this before it begins.
+    const summaryReady = mutate && step?.step.status === "summary";
 
     let phase: ConjugationDocumentSnapshot["phase"];
     if (!live) phase = "disposed";
@@ -455,7 +459,7 @@ export class ConjugationDocumentController implements ConjugationDocumentActions
         && !!step && sameId(step.step.capabilities.answer_target ?? "", assignment.id),
       canCorrect: mutate && !!caps?.correct_target && target3(caps.correct_target),
       canUndo: mutate && !!caps?.undo_target && target3(caps.undo_target),
-      canStop: canStopBase && !!right?.stop, canSummaryHome: canStopBase && !!right?.home,
+      canStop: canStopBase && !!right?.stop, canSummaryHome: canStopBase && !!right?.home && summaryReady,
       allowedGrades,
       canRetry: { study: study && commands.study.canRetry && !this.tasks.study, stop: study && commands.stop.canRetry && !this.tasks.stop },
     };

@@ -90,7 +90,8 @@ function fixture(config: { seed?: string | null; saved?: ConjugationIntent[]; se
     if (intent.kind === "assignment.present") s.presented = true;
     if (intent.kind === "answer.submit") {
       const grade = "text" in intent.payload && intent.payload.text === "kommst" ? 4 : 2;
-      s.results.push({ result_id: R1, assignment_id: intent.assignment_id, action_id: id(41), version: "1", grade });
+      // The first answer is R1; an answer after an undo is a new result (core never reuses a result ID).
+      s.results.push({ result_id: id(31 + s.results.length), assignment_id: intent.assignment_id, action_id: id(41 + s.results.length), version: "1", grade });
       if (config.lastAnswer) { s.status = "summary"; s.assignment = null; } else { s.assignment = B2; }
       s.presented = false;
     }
@@ -120,6 +121,12 @@ function fixture(config: { seed?: string | null; saved?: ConjugationIntent[]; se
       if (server.rejectNext) {
         const code = server.rejectNext; server.rejectNext = null;
         return response({ ...envelopeFor(intent).body, command: { id: intent.command_id, status: "rejected" }, error: { code }, state_version: stateVersion }, 409);
+      }
+      // core sessions.py: summary_home outside the summary phase is a VALIDATION_FAILED refusal (V-1).
+      if (intent.kind === "session.stop" && intent.payload.reason === "summary_home" && sessions.get(intent.session_id)?.status !== "summary"
+        && !accepted.has(intent.command_id)) {
+        return response({ ...envelopeFor(intent).body, command: { id: intent.command_id, status: "rejected" }, error: { code: "VALIDATION_FAILED" },
+          state_version: stateVersion }, 422);
       }
       if (!accepted.has(intent.command_id)) { accepted.set(intent.command_id, intent); apply(intent); }
       const { body, r } = envelopeFor(intent);
@@ -1195,5 +1202,234 @@ describe("M-UNDO-CONJ: «Шаг назад» (result.undo) of the form on screen
     await g.controller.refresh();
     expect(g.posted).toEqual([]);
     expect(s(g.controller)).toMatchObject({ phase: "unknown", canUndo: false, commands: { study: { pending: true, kind: "result.undo" } } });
+  });
+});
+
+describe("V-1 (C083): «На Сегодня» waits for a ready study lane and a fresh natural summary; Stop does not", () => {
+  const stops = (f: ReturnType<typeof fixture>) => f.posted.filter(c => c.kind === "session.stop").map(c => c.payload);
+  async function atSummary(f: ReturnType<typeof fixture>) {
+    const snap = await answered(f);
+    f.controller.openStep(snap.stepTicket!);
+    expect(s(f.controller)).toMatchObject({ phase: "summary", display: { kind: "summary" }, canUndo: true, canSummaryHome: true, canStop: true });
+  }
+  /** After an accepted undo: open, show and answer the reissued form, then open the new summary. */
+  async function answerAgain(f: ReturnType<typeof fixture>) {
+    f.controller.openStep(s(f.controller).stepTicket!);
+    await f.controller.shown(s(f.controller).presentationTicket!);
+    await f.controller.submit({ text: "kommst" }, REISSUED);
+    f.controller.openStep(s(f.controller).stepTicket!);
+  }
+
+  it("U→C: while the undo is in flight the button is closed and a held click sends nothing; Stop stays open", async () => {
+    const f = fixture({ lastAnswer: true });
+    await atSummary(f);
+    const before = s(f.controller); // the snapshot an old click handler was rendered from
+    expect(before.canSummaryHome).toBe(true);
+    const held = f.hold((_url, method) => method === "POST");
+    const undo = f.controller.undo();
+    // Synchronously, before any update reaches the screen: the controller re-reads its own state.
+    await f.controller.stop("summary_home");
+    await held.entered;
+    expect(s(f.controller)).toMatchObject({ canSummaryHome: false, canStop: true, canUndo: false });
+    await f.controller.stop("summary_home");
+    held.release(); await undo;
+    // Every published snapshot while the undo was pending kept the button closed.
+    const published = f.updates.mock.calls.map(([snap]) => snap as ReturnType<typeof s>);
+    expect(published.filter(snap => snap.commands.study.kind === "result.undo" && snap.commands.study.pending).some(snap => snap.canSummaryHome)).toBe(false);
+    expect(s(f.controller)).toMatchObject({ phase: "prefetched", canSummaryHome: false, terminalSessionIds: [] });
+    expect(stops(f)).toEqual([]);
+    // The person answers the reissued form: the new natural summary allows «На Сегодня» again, exactly once.
+    await answerAgain(f);
+    expect(s(f.controller)).toMatchObject({ phase: "summary", canSummaryHome: true });
+    await f.controller.stop("summary_home");
+    expect(stops(f)).toEqual([{ reason: "summary_home" }]);
+    expect(s(f.controller)).toMatchObject({ phase: "closed", terminalSessionIds: [S1] });
+    expect(f.posted.map(c => c.kind)).toEqual(["answer.submit", "result.undo", "assignment.present", "answer.submit", "session.stop"]);
+  });
+
+  it("C→U: a started summary_home closes undo and new study until its outcome is known", async () => {
+    const f = fixture({ lastAnswer: true });
+    await atSummary(f);
+    const held = f.hold((_url, method) => method === "POST");
+    const home = f.controller.stop("summary_home");
+    expect(s(f.controller)).toMatchObject({ canUndo: false, canSummaryHome: false });
+    await f.controller.undo();
+    await held.entered;
+    expect(s(f.controller)).toMatchObject({ phase: "stopping", canUndo: false, canSubmit: false, canStart: false });
+    await f.controller.undo();
+    held.release(); await home;
+    expect(f.posted.map(c => c.kind)).toEqual(["answer.submit", "session.stop"]);
+    expect(s(f.controller)).toMatchObject({ phase: "closed", canUndo: false });
+  });
+
+  it("C→U: a definite refusal of summary_home is an outcome; only then the undo is offered again", async () => {
+    const f = fixture({ lastAnswer: true });
+    await atSummary(f);
+    f.server.rejectNext = "VALIDATION_FAILED";
+    await f.controller.stop("summary_home");
+    expect(s(f.controller)).toMatchObject({ commands: { stop: { outcome: "rejected", pending: false } }, canUndo: true, canSummaryHome: true });
+    await f.controller.undo();
+    expect(f.posted.map(c => c.kind)).toEqual(["answer.submit", "session.stop", "result.undo"]);
+  });
+
+  it("lost undo reply: summary_home stays closed while the undo is unknown; Stop is a positive control", async () => {
+    const f = fixture({ lastAnswer: true });
+    await atSummary(f);
+    f.server.lostReply = true;
+    await f.controller.undo();
+    f.server.lostReply = false;
+    expect(s(f.controller)).toMatchObject({ phase: "unknown", canSummaryHome: false, canStop: true });
+    await f.controller.stop("summary_home");
+    expect(stops(f)).toEqual([]);
+    await f.controller.stop("stop");
+    expect(stops(f)).toEqual([{ reason: "stop" }]);
+    expect(s(f.controller)).toMatchObject({ phase: "closed" });
+  });
+
+  it("lost summary_home reply: no undo or answer until the same-ID check settles it", async () => {
+    const f = fixture({ lastAnswer: true });
+    await atSummary(f);
+    f.server.lostReply = true;
+    await f.controller.stop("summary_home");
+    f.server.lostReply = false;
+    expect(s(f.controller)).toMatchObject({ phase: "unknown", canUndo: false, canSummaryHome: false,
+      commands: { stop: { pending: true, kind: "session.stop" } } });
+    await f.controller.undo();
+    expect(f.posted.map(c => c.kind)).toEqual(["answer.submit", "session.stop"]);
+    await f.controller.refresh();
+    expect(s(f.controller)).toMatchObject({ phase: "closed", commands: { stop: { outcome: "accepted" } } });
+    expect(f.posted.filter(c => c.kind === "result.undo")).toEqual([]);
+  });
+
+  it("a fresh projection during the undo does not reopen the button", async () => {
+    const f = fixture({ lastAnswer: true });
+    await atSummary(f);
+    // The undo is unknown and its retry is held at the POST: a fresh session read still says «summary».
+    f.server.failPost = true;
+    await f.controller.undo();
+    f.server.failPost = false;
+    await f.controller.refresh();
+    expect(s(f.controller)).toMatchObject({ canRetry: { study: true }, canSummaryHome: false,
+      currentStep: null, commands: { study: { pending: true, kind: "result.undo" } } });
+    const held = f.hold((_url, method) => method === "POST");
+    const retry = f.controller.retry("study");
+    await held.entered;
+    expect(s(f.controller)).toMatchObject({ canSummaryHome: false, canStop: true });
+    await f.controller.stop("summary_home");
+    held.release(); await retry;
+    expect(stops(f)).toEqual([]);
+    expect(s(f.controller)).toMatchObject({ canSummaryHome: false, currentStep: { step: { status: "active" } } });
+  });
+
+  it("return from the background while the undo is in flight: the new document keeps summary_home closed, Stop open", async () => {
+    const f = fixture({ lastAnswer: true });
+    await atSummary(f);
+    const held = f.hold((_url, method) => method === "POST");
+    const undo = f.controller.undo();
+    await held.entered;
+    f.controller.setActivity({ enabled: true, visible: false });
+    expect(s(f.controller)).toMatchObject({ canSummaryHome: false, canStop: false });
+    const second = new ConjugationDocumentController({ ...f.options, initialResultAddress: { session_id: S1, assignment_id: B1, result_id: R1 } });
+    await second.refresh();
+    // The durable undo is not yet applied: the server still shows the summary and grants summary_home.
+    expect(s(second)).toMatchObject({ phase: "unknown", canSummaryHome: false, canStop: true,
+      commands: { study: { pending: true, kind: "result.undo" } } });
+    await second.stop("summary_home");
+    held.release(); await undo;
+    await second.refresh();
+    expect(s(second)).toMatchObject({ canSummaryHome: false, commands: { study: { outcome: "accepted" } } });
+    expect(stops(f)).toEqual([]);
+  });
+
+  // C090 §3: a summary_home retained from an earlier document is resent only by the manual retry, which re-proves the
+  // server's natural summary by GET (conjugationCommandController retryProblem); an applied one is restored as a fact.
+  const savedHome: ConjugationIntent = { command_id: id(70), kind: "session.stop", session_id: S1, payload: { reason: "summary_home" } };
+  const reopened = (): Session => ({ id: S1, status: "active", assignment: REISSUED, presented: false,
+    results: [{ result_id: R1, assignment_id: B1, action_id: id(41), version: "2", grade: 4, undone: true }] });
+
+  it("a retained summary_home is never sent while the session is active again", async () => {
+    const f = fixture({ saved: [savedHome], sessions: [reopened()] });
+    await f.controller.refresh();
+    expect(s(f.controller)).toMatchObject({ canSummaryHome: false, commands: { stop: { pending: true, kind: "session.stop" } } });
+    await f.controller.retry("stop");
+    await f.controller.stop("summary_home");
+    expect(stops(f)).toEqual([]);
+    expect(s(f.controller)).toMatchObject({ canSummaryHome: false, commands: { stop: { problem: "step_changed" } } });
+    expect(f.sessions.get(S1)).toMatchObject({ status: "active" });
+  });
+
+  it("the same retained summary_home at a valid natural summary is sent exactly once with its own ID", async () => {
+    const f = fixture({ saved: [savedHome], sessions: [summarySeed()] });
+    await f.controller.refresh();
+    expect(f.posted).toEqual([]); // recovery alone never resends
+    expect(s(f.controller).canRetry.stop).toBe(true);
+    await Promise.all([f.controller.retry("stop"), f.controller.retry("stop")]);
+    await f.controller.retry("stop");
+    expect(f.posted.map(c => [c.command_id, c.kind, c.payload])).toEqual([[id(70), "session.stop", { reason: "summary_home" }]]);
+    expect(f.newId).not.toHaveBeenCalled();
+    expect(s(f.controller)).toMatchObject({ phase: "closed", terminalSessionIds: [S1], commands: { stop: { outcome: "accepted", pending: false } } });
+  });
+
+  it("the session reopens between the check and the retry click: the retry re-proves by GET and sends nothing", async () => {
+    const f = fixture({ saved: [savedHome], sessions: [summarySeed()] });
+    await f.controller.refresh();
+    expect(s(f.controller).canRetry.stop).toBe(true);
+    // Another window undoes the answer after this document's check; the click still holds the old offer.
+    f.sessions.set(S1, reopened()); f.server.bump();
+    const before = f.gets.length;
+    await f.controller.retry("stop");
+    expect(stops(f)).toEqual([]);
+    expect(f.gets.slice(before).some(g => g.includes(`/commands/${id(70)}`))).toBe(true);
+    expect(f.sessions.get(S1)).toMatchObject({ status: "active" });
+  });
+
+  it.each([
+    ["the summary", null],
+    ["the earlier result A", { session_id: S1, assignment_id: B1, result_id: R1 }],
+  ])("an already applied summary_home is restored as a closed fact while the screen shows %s", async (_screen, address) => {
+    const f = fixture({ sessions: [summarySeed()] });
+    // Commit the summary_home on the model server, then persist it as if its reply had been lost.
+    await f.options.transport.fetcher("/api/v1/commands", { method: "POST", body: JSON.stringify({ ...savedHome, client_instance_id: id(1), document_id: id(2) }) });
+    f.posted.length = 0;
+    await f.storage.set(stopKey, pendingRecord(savedHome));
+    const controller = new ConjugationDocumentController({ ...f.options, initialResultAddress: address });
+    await controller.refresh();
+    expect(f.posted).toEqual([]);
+    expect(s(controller)).toMatchObject({ phase: "closed", display: { kind: "closed" }, terminalSessionIds: [S1], canSummaryHome: false,
+      canUndo: false, canSubmit: false, commands: { stop: { outcome: "accepted", pending: false } } });
+    expect(f.values.has(stopKey)).toBe(false);
+  });
+
+  it("a definite refusal of the undo: summary_home returns after the re-read and is sent exactly once", async () => {
+    const f = fixture({ lastAnswer: true });
+    await atSummary(f);
+    f.server.rejectNext = "VERSION_CONFLICT";
+    const held = f.hold((_url, method) => method === "POST");
+    const undo = f.controller.undo();
+    await held.entered;
+    expect(s(f.controller)).toMatchObject({ canSummaryHome: false, canStop: true });
+    await f.controller.stop("summary_home");
+    held.release(); await undo;
+    expect(s(f.controller)).toMatchObject({ phase: "summary", canSummaryHome: true, commands: { study: { outcome: "rejected" } } });
+    await f.controller.stop("summary_home");
+    await f.controller.stop("summary_home");
+    expect(stops(f)).toEqual([{ reason: "summary_home" }]);
+    expect(f.posted.map(c => c.kind)).toEqual(["answer.submit", "result.undo", "session.stop"]);
+  });
+
+  it("a pending result.correct keeps summary_home closed; Stop stays open", async () => {
+    const f = fixture({ lastAnswer: true });
+    await f.controller.refresh();
+    await f.controller.submit({ text: "wrong" }, B1);
+    f.controller.openStep(s(f.controller).stepTicket!);
+    expect(s(f.controller)).toMatchObject({ phase: "summary", canSummaryHome: true, canCorrect: true });
+    const held = f.hold((_url, method) => method === "POST");
+    const grade = f.controller.correct();
+    await held.entered;
+    expect(s(f.controller)).toMatchObject({ canSummaryHome: false, canStop: true });
+    await f.controller.stop("summary_home");
+    held.release(); await grade;
+    expect(stops(f)).toEqual([]);
+    expect(f.posted.map(c => c.kind)).toEqual(["answer.submit", "result.correct"]);
   });
 });
