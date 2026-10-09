@@ -74,8 +74,14 @@ describe("the waiting screen", () => {
     expect(recoveryScreen(view({ name: "sending", attempt: 2 }))).toMatchObject({ status: "resending" });
     expect(recoveryScreen(view({ name: "retry_wait", attempt: 2, dueAt: 0 }))).toMatchObject({ status: "resending" });
     for (const state of [{ name: "checking" }, { name: "pre_send_check", attempt: 2 }, { name: "window_check" },
-      { name: "counter_unknown", check: 1, cause: "unknown" }, { name: "suspended" }] as const) {
-      expect(recoveryScreen(view(state))).toMatchObject({ kind: "waiting", status: "checking" });
+      { name: "suspended" }] as const) {
+      expect(recoveryScreen(view(state))).toEqual({ kind: "waiting", status: "checking", pauseSeconds: null });
+    }
+    // An unreliable number of sends, whether the count is missing or the proven sends are fewer than the six busy slots
+    // (C093 §6): 9.2.9 with the voluntary Stop, never an exhaustion.
+    for (const cause of ["unknown", "unconfirmed"] as const) {
+      expect(recoveryScreen(view({ name: "counter_unknown", check: 1, cause })))
+        .toEqual({ kind: "waiting", status: "unconfirmed", pauseSeconds: null });
     }
     expect(recoveryScreen(view({ name: "unreachable", probe: 1, pauseSeconds: null }))).toMatchObject({ status: "offline" });
     expect(recoveryScreen(view({ name: "maintenance", probe: 1, pauseSeconds: 90, budgetSpent: false })))

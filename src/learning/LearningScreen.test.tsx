@@ -121,7 +121,10 @@ describe("Learning screen with its real command owner", () => {
     render(<LiveScreen f={f} />); await act(() => f.view.refresh());
     await waitFor(() => expect(f.view.snapshot().commands.recovery?.state.name).toBe("counter_unknown"));
     expect(input().value).toBe("Haus"); expect(input().readOnly).toBe(true); expect(f.posts()).toEqual([]);
-    expect(document.querySelector(".recovery-overlay")?.textContent).toBe("Проверяем, сохранилось ли действие…");
+    // 9.2.9 + the voluntary Stop 9.2.10 (R10, C093 §6), not the checking text 9.2.1; no resend or manual check.
+    expect(document.querySelector(".recovery-overlay")?.textContent)
+      .toBe("Не удалось подтвердить последнее действие. Мы продолжаем проверять. Можно завершить занятие.Завершить занятие");
+    expect(Array.from(document.querySelectorAll(".recovery-overlay button")).map(button => button.textContent)).toEqual(["Завершить занятие"]);
     for (const name of ["Повторить отправку", "Проверить состояние"]) expect(screen.queryByRole("button", { name })).toBeNull();
     expect(f.newId).not.toHaveBeenCalled();
   });

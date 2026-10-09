@@ -149,6 +149,7 @@ export function LearningScreen({ state, language, submitOnEnter, actions, render
     {showRecovery && <CommandRecovery className="learning-recovery" language={language} lanes={manualLanes} localOnly={localOnly}
       canRetryPrimary={state.canRetryPrimary} canRetryStop={stop.canRetry}
       onCheck={() => { void (localOnly ? actions.cleanup() : actions.refresh()); }} onRetry={lane => { void actions.retry(lane); }} />}
-    {recovering && <RecoveryOverlay screen={recovering} language={language} />}
+    {recovering && <RecoveryOverlay screen={recovering} language={language} canEnd={state.canStop}
+      onEnd={() => { if (state.canStop) void actions.stop("stop"); }} />}
   </main>;
 }
