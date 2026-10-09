@@ -1,9 +1,13 @@
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SettingsResponse, Topic } from "../api/generated";
 import type { SettingsDraft } from "./settingsController";
 import { SettingsScreen, type SettingsScreenProps } from "./SettingsScreen";
+import type { FeedbackDocument } from "../feedback/useFeedbackDocument";
+import { resetKeys } from "./settingsApi";
+import { settingsCopy } from "./settingsCopy";
+import { settingsFeedbackCopy } from "./settingsFeedbackCopy";
 
 const big = "9007199254740995";
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -45,11 +49,11 @@ function draft(input: unknown, rest: Partial<SettingsDraft> = {}): SettingsDraft
 }
 function fixture() {
   const props: SettingsScreenProps = {
-    snapshot: { phase: "ready", data: current(), dataCurrent: true, drafts: {}, pending: null, outcome: null,
-      problem: null, canEdit: true, canRetry: false },
+    snapshot: { phase: "ready", data: current(), dataCurrent: true, drafts: {}, pending: null, resetPending: null,
+      outcome: null, resetOutcome: null, problem: null, canEdit: true, canReset: true, canRetry: false },
     language: "ru", catalog: { phase: "ready", topics },
     actions: { edit: vi.fn(), save: vi.fn(async () => {}), acceptCurrent: vi.fn(), keepMine: vi.fn(async () => {}),
-      refresh: vi.fn(async () => {}), retry: vi.fn(async () => {}) },
+      refresh: vi.fn(async () => {}), retry: vi.fn(async () => {}), reset: vi.fn(async () => {}) },
     onReloadTopics: vi.fn(), onToday: vi.fn(),
   };
   return props;
@@ -485,5 +489,161 @@ describe("Mix with the material chosen by CEFR level (M-SET-MIX-LEVEL, 2.21г)",
     const f = levelFixture(true), { container } = render(<SettingsScreen {...f} />); openAdditional(container);
     const ids = mixRadios()[0].getAttribute("aria-describedby")!.split(" ");
     expect(ids.map(item => document.getElementById(item)?.textContent).join(" ")).toMatch(/Сохранённое значение снова начнёт действовать/);
+  });
+});
+
+describe("returning the initial settings (M-SET-RESET, D-SET-RESET 4.1, 5.3.1)", () => {
+  const feedback = { state: { phase: "ready", text: "", canEdit: true, canSend: false, canRetry: false, confirmed: false,
+    refusal: false, problem: null }, actions: { edit: vi.fn(), send: vi.fn(), retry: vi.fn() } } as unknown as FeedbackDocument;
+  const resetButton = () => screen.getByRole("button", { name: "Сброс настроек" });
+  const resetRecord = { schemaVersion: 1 as const, profileId: id(1), clientInstanceId: id(2),
+    intent: { command_id: id(100), kind: "settings.reset" as const, payload: {} } };
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  it("stands after the collapsed additional settings and before the message to the developer", () => {
+    const f = fixture(); const { container } = render(<SettingsScreen {...f} feedback={feedback} />);
+    const details = container.querySelector("details")!;
+    const developer = screen.getByRole("region", { name: settingsFeedbackCopy.ru.title });
+    expect(details.contains(resetButton())).toBe(false);
+    expect(details.compareDocumentPosition(resetButton()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(resetButton().compareDocumentPosition(developer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("asks first with the approved Q08 text, which names only the general blocks", async () => {
+    const f = fixture(); render(<SettingsScreen {...f} />);
+    fireEvent.click(resetButton());
+    const dialog = screen.getByRole("dialog", { name: "Вернуть исходные настройки?" });
+    expect(dialog.getAttribute("aria-modal")).toBe("true");
+    expect([...dialog.querySelectorAll("p")].map(item => item.textContent)).toEqual([
+      "Сбросятся настройки Learning, повторов после ошибок, проверки ответов и перехода между карточками.",
+      "Языки, выбранный учебный материал и настройки напоминаний сохранятся. Текущая группа, результаты и сроки повторов не изменятся.",
+    ]);
+    expect(within(dialog).getAllByRole("button").map(button => button.textContent)).toEqual(["Вернуть", "Отмена"]);
+    for (const key of resetKeys) expect(dialog.textContent).not.toContain(settingsCopy.ru.fields[key]);
+    expect(f.actions.reset).not.toHaveBeenCalled();
+  });
+
+  it.each(["cancel", "escape", "back"] as const)("closes on %s without a command and returns focus to the button", async way => {
+    const handlers = new Set<() => void>();
+    vi.stubGlobal("Telegram", { WebApp: { BackButton: { show() {}, hide() {}, onClick: (h: () => void) => { handlers.add(h); },
+      offClick: (h: () => void) => { handlers.delete(h); } } } });
+    const f = fixture(); render(<SettingsScreen {...f} />);
+    resetButton().focus(); fireEvent.click(resetButton());
+    const dialog = screen.getByRole("dialog");
+    expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Отмена" }));
+    if (way === "cancel") fireEvent.click(within(dialog).getByRole("button", { name: "Отмена" }));
+    else if (way === "escape") fireEvent.keyDown(dialog, { key: "Escape" });
+    else { expect(handlers.size).toBe(1); act(() => { for (const handler of [...handlers]) handler(); }); }
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(f.actions.reset).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(resetButton());
+    expect(handlers.size).toBe(0);
+  });
+
+  it("«Вернуть» closes the window and asks the owner once; the button follows canReset", () => {
+    const f = fixture(); const view = render(<SettingsScreen {...f} />);
+    fireEvent.click(resetButton()); fireEvent.click(screen.getByRole("button", { name: "Вернуть" }));
+    expect(screen.queryByRole("dialog")).toBeNull(); expect(f.actions.reset).toHaveBeenCalledOnce();
+    f.snapshot = { ...f.snapshot, canReset: false }; view.rerender(<SettingsScreen {...f} />);
+    expect((resetButton() as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("shows waiting, then success only from the outcome; a refusal says nothing changed", () => {
+    const f = fixture();
+    f.snapshot = { ...f.snapshot, phase: "sending", resetPending: resetRecord, canEdit: false, canReset: false };
+    const view = render(<SettingsScreen {...f} />);
+    // One line, next to the button: the top status line stays silent about the reset (QA finding 2).
+    expect(screen.getAllByRole("status").map(item => item.textContent)).toEqual(["Возвращаем исходные настройки"]);
+    expect(screen.queryByText("Исходные настройки возвращены.")).toBeNull();
+    f.snapshot = { ...f.snapshot, phase: "ready", resetPending: null, canEdit: true, canReset: true,
+      resetOutcome: { commandId: id(100), status: "accepted" } };
+    view.rerender(<SettingsScreen {...f} />);
+    expect(screen.getByRole("status").textContent).toBe("Исходные настройки возвращены.");
+    f.snapshot = { ...f.snapshot, resetOutcome: { commandId: id(100), status: "rejected", code: "DOCUMENT_STALE" } };
+    view.rerender(<SettingsScreen {...f} />);
+    expect(screen.getByRole("alert").textContent).toBe("Не удалось вернуть исходные настройки. Ничего не изменилось. Попробуй ещё раз.");
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it.each(["network", "not_found"] as const)("an unknown outcome (%s) offers the exact retry and keeps new writes disabled", reason => {
+    const f = fixture();
+    f.snapshot = { ...f.snapshot, phase: "unresolved", resetPending: resetRecord, problem: { reason }, canEdit: false, canReset: false, canRetry: true };
+    const { container } = render(<SettingsScreen {...f} />);
+    const unknown = "Пока не удалось подтвердить возврат исходных настроек. Проверь состояние или повтори отправку.";
+    // Shown and announced once, in the reset block, with its retry there (QA finding 2).
+    expect(screen.getAllByRole("alert").map(item => item.textContent)).toEqual([unknown]);
+    expect(screen.queryByRole("status")).toBeNull();
+    const block = container.querySelector(".settings-reset-status")!;
+    expect(block.textContent).toContain(unknown);
+    expect((resetButton() as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getAllByRole("button", { name: "Повторить отправку" })).toHaveLength(1);
+    fireEvent.click(within(block as HTMLElement).getByRole("button", { name: "Повторить отправку" }));
+    expect(f.actions.retry).toHaveBeenCalledOnce();
+    expect(screen.getByRole("button", { name: "Обновить настройки" })).toBeDefined();
+    expect(f.actions.reset).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["client_changed", "unresolved"], ["pending_changed", "unresolved"], [null, "checking"],
+  ] as const)("with no retry available (%s, %s) the block never suggests one (defect 2.1)", (reason, phase) => {
+    // A status check clears the problem while it runs (settingsController refresh), so it says nothing failed yet.
+    const f = fixture();
+    f.snapshot = { ...f.snapshot, phase, resetPending: { ...resetRecord, clientInstanceId: reason === "client_changed" ? id(9) : id(2) },
+      problem: reason ? { reason } : null, canEdit: false, canReset: false, canRetry: false };
+    const { container } = render(<SettingsScreen {...f} />);
+    expect(container.querySelector(".settings-reset-status")?.textContent).toBe("");
+    expect(screen.queryByText(/Пока не удалось подтвердить возврат/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Повторить отправку" })).toBeNull();
+  });
+
+  it("after «Вернуть» focus moves to the reset result, not to the button that is disabled now", () => {
+    const f = fixture(); const { container, rerender } = render(<SettingsScreen {...f} />);
+    resetButton().focus(); fireEvent.click(resetButton());
+    fireEvent.click(screen.getByRole("button", { name: "Вернуть" }));
+    const status = container.querySelector(".settings-reset-status");
+    expect(document.activeElement).toBe(status);
+    f.snapshot = { ...f.snapshot, phase: "sending", resetPending: resetRecord, canEdit: false, canReset: false };
+    rerender(<SettingsScreen {...f} />);
+    expect(document.activeElement).toBe(status);
+    expect(status?.textContent).toBe("Возвращаем исходные настройки");
+  });
+
+  it("without settings data the top line still reports the unknown reset once, with its retry", () => {
+    const f = fixture();
+    f.snapshot = { ...f.snapshot, phase: "unresolved", data: null, resetPending: resetRecord, problem: { reason: "network" },
+      canEdit: false, canReset: false, canRetry: true };
+    render(<SettingsScreen {...f} />);
+    expect(screen.getAllByRole("alert").map(item => item.textContent))
+      .toEqual(["Пока не удалось подтвердить возврат исходных настроек. Проверь состояние или повтори отправку.Повторить отправку"]);
+    fireEvent.click(screen.getByRole("button", { name: "Повторить отправку" })); expect(f.actions.retry).toHaveBeenCalledOnce();
+  });
+
+  it("a retryable reason without an approved reset text keeps the top line and its retry, not a second line", () => {
+    const f = fixture();
+    f.snapshot = { ...f.snapshot, phase: "unresolved", resetPending: resetRecord, problem: { reason: "stale_response" },
+      canEdit: false, canReset: false, canRetry: true };
+    const { container } = render(<SettingsScreen {...f} />);
+    expect(container.querySelector(".settings-reset-status")?.textContent).toBe("");
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "Повторить отправку" })).toHaveLength(1);
+  });
+
+  it("a mismatch shows the existing text and no reset status or retry", () => {
+    const f = fixture();
+    f.snapshot = { ...f.snapshot, phase: "unresolved", resetPending: { ...resetRecord, mismatch: true },
+      problem: { reason: "mismatch", code: "COMMAND_PAYLOAD_MISMATCH" }, canEdit: false, canReset: false };
+    render(<SettingsScreen {...f} />);
+    expect(screen.getByRole("alert").textContent).toBe(settingsCopy.ru.problems.mismatch);
+    expect(screen.queryByRole("status")).toBeNull(); expect(screen.queryByRole("button", { name: "Повторить отправку" })).toBeNull();
+  });
+
+  it.each([
+    ["uk", "Скидання налаштувань", "Повернути початкові налаштування?", ["Повернути", "Скасувати"]],
+    ["en", "Restore default settings", "Restore default settings?", ["Restore", "Cancel"]],
+  ] as const)("uses the approved %s button, window title and buttons", (language, button, title, buttons) => {
+    const f = fixture(); render(<SettingsScreen {...f} language={language} />);
+    fireEvent.click(screen.getByRole("button", { name: button }));
+    const dialog = screen.getByRole("dialog", { name: title });
+    expect(within(dialog).getAllByRole("button").map(item => item.textContent)).toEqual([...buttons]);
   });
 });

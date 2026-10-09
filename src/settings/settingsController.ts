@@ -3,8 +3,9 @@ import { ApiError } from "../api/http";
 import { version as validVersion } from "../api/wireValidation";
 import { ClosedAccessError, type OpenedAccess } from "../app/openedAccess";
 import { PendingStoreError, validId } from "../commands/pendingSlot";
-import { allowedSettingValue, type SettingKey, type SettingSaveReply, type SettingsApi } from "./settingsApi";
+import { allowedSettingValue, resetKeys, type SettingKey, type SettingSaveReply, type SettingsApi } from "./settingsApi";
 import { SettingsPendingStore, type SettingsPending } from "./settingsPending";
+import type { SettingsResetPending, SettingsResetPendingStore } from "./settingsResetPending";
 
 type Draft = { input: unknown; original?: unknown; fieldVersion: string; revision: number };
 export type SettingsDraft = Omit<Draft, "revision"> & {
@@ -17,6 +18,8 @@ export type SettingsDraft = Omit<Draft, "revision"> & {
 type Problem = { reason: "network" | "storage" | "invalid_pending" | "pending_changed" | "expired" | "forbidden"
   | "context_closed" | "context_refreshed" | "client_changed" | "profile_changed" | "mismatch" | "not_found" | "stale_response"; code?: string };
 type Outcome = { commandId: string; key: SettingKey; status: "accepted" | "rejected"; code?: string };
+/** The server's answer to a reset; shown only once the server reported it (TA 12.4). */
+type ResetOutcome = Omit<Outcome, "key">;
 export type SettingsSnapshot = {
   phase: "loading" | "ready" | "sending" | "checking" | "unresolved" | "blocked" | "disposed";
   data: SettingsResponse | null;
@@ -24,14 +27,19 @@ export type SettingsSnapshot = {
   dataCurrent: boolean;
   drafts: Partial<Record<SettingKey, SettingsDraft>>;
   pending: SettingsPending | null;
+  /** A sent reset. At most one of `pending` and `resetPending` is present. */
+  resetPending: SettingsResetPending | null;
   outcome: Outcome | null;
+  resetOutcome: ResetOutcome | null;
   problem: Problem | null;
   canEdit: boolean;
+  canReset: boolean;
   canRetry: boolean;
 };
 type Options = {
   api: SettingsApi;
   pendingStore: SettingsPendingStore;
+  resetStore: SettingsResetPendingStore;
   access(): OpenedAccess | null;
   newId(): string;
   minimumStateVersion?(): string | null;
@@ -48,7 +56,10 @@ function draftValue(data: SettingsProjection, key: SettingKey, input: unknown): 
   return input;
 }
 
-/** A document's editors and one sent intent. Foreground updates access, never recreates drafts. */
+/**
+ * A document's editors and one sent intent, a field save or a reset (D-SET-RESET 4.3.1). Foreground updates access,
+ * never recreates drafts.
+ */
 export class SettingsController {
   private readonly scope: { key: string; profileId: string; clientId: string; documentId: string };
   private readonly lifetime = new AbortController();
@@ -58,10 +69,12 @@ export class SettingsController {
   private revision = 0;
   private submittedRevision: number | null = null;
   private pending: SettingsPending | null = null;
+  private resetPending: SettingsResetPending | null = null;
   private loaded = false;
   private settled = false;
   private version: string | null = null;
   private outcome: Outcome | null = null;
+  private resetOutcome: ResetOutcome | null = null;
   private problem: Problem | null = null;
   private writeBlocked: "expired" | "forbidden" | "profile_changed" | null = null;
   private running: Promise<void> | null = null;
@@ -88,8 +101,10 @@ export class SettingsController {
     if (!access) throw new ClosedAccessError();
     return access;
   }
+  /** The one sent intent of this document, whichever kind it is. */
+  private sent(): SettingsPending | SettingsResetPending | null { return this.pending ?? this.resetPending; }
   private editable(): boolean {
-    return !!this.currentAccess() && this.loaded && this.dataIsCurrent() && !this.pending && !this.writeBlocked;
+    return !!this.currentAccess() && this.loaded && this.dataIsCurrent() && !this.sent() && !this.writeBlocked;
   }
   private minimumVersion(): string | null {
     const access = this.currentAccess();
@@ -105,8 +120,9 @@ export class SettingsController {
     return this.data !== null && (minimum === null || BigInt(this.data.state_version) >= BigInt(minimum));
   }
   private retryAllowed(): boolean {
-    return !!this.currentAccess() && !this.running && !this.writeBlocked && !this.settled && !!this.pending
-      && !this.pending.mismatch && this.pending.clientInstanceId === this.scope.clientId
+    const sent = this.sent();
+    return !!this.currentAccess() && !this.running && !this.writeBlocked && !this.settled && !!sent
+      && !sent.mismatch && sent.clientInstanceId === this.scope.clientId
       && !!this.problem && ["network", "storage", "not_found", "context_refreshed", "stale_response"].includes(this.problem.reason);
   }
 
@@ -127,8 +143,10 @@ export class SettingsController {
         canKeepMine: this.editable() && !this.running && valid && conflict && !exhausted };
     }
     return structuredClone({ phase: this.phase, data: available && !this.writeBlocked ? this.data : null, dataCurrent, drafts,
-      pending: available ? this.pending : null, outcome: available ? this.outcome : null,
-      problem: available ? this.problem : { reason: "context_closed" }, canEdit: this.editable(), canRetry: this.retryAllowed() });
+      pending: available ? this.pending : null, resetPending: available ? this.resetPending : null,
+      outcome: available ? this.outcome : null, resetOutcome: available ? this.resetOutcome : null,
+      problem: available ? this.problem : { reason: "context_closed" }, canEdit: this.editable(),
+      canReset: this.editable() && !this.running, canRetry: this.retryAllowed() });
   }
   private emit(): void { if (this.live()) this.options.onUpdate(this.snapshot()); }
 
@@ -147,7 +165,7 @@ export class SettingsController {
       } else if (error instanceof ClosedAccessError) {
         this.problem = { reason: this.currentAccess() ? "context_refreshed" : "context_closed" };
       } else this.problem = { reason: "network", ...(error instanceof ApiError ? { code: error.code } : {}) };
-      this.phase = this.pending ? "unresolved" : "blocked";
+      this.phase = this.sent() ? "unresolved" : "blocked";
     }).finally(() => {
       if (this.running === task) this.running = null;
       this.emit();
@@ -187,6 +205,7 @@ export class SettingsController {
     this.drafts[key] = { ...(before ?? { original: structuredClone(this.data!.settings[key].value),
       fieldVersion: this.data!.settings[key].version }), input: copied, revision: ++this.revision };
     this.outcome = null;
+    this.resetOutcome = null;
     this.emit();
   }
   acceptCurrent(key: SettingKey): void {
@@ -212,15 +231,28 @@ export class SettingsController {
     this.submittedRevision = this.drafts[key]!.revision;
   }
   private async clearSettled(): Promise<void> {
-    if (!this.pending || !this.settled) return;
-    await this.options.pendingStore.clear(this.pending, this.lifetime.signal);
+    if (!this.settled) return;
+    if (this.pending) await this.options.pendingStore.clear(this.pending, this.lifetime.signal);
+    else if (this.resetPending) await this.options.resetStore.clear(this.resetPending, this.lifetime.signal);
+    else return;
     if (!this.live()) return;
     this.pending = null;
+    this.resetPending = null;
     this.settled = false;
     this.submittedRevision = null;
     this.idle();
   }
   private async resolve(status: Outcome["status"], code?: string): Promise<void> {
+    if (this.resetPending) {
+      this.outcome = null;
+      this.resetOutcome = { commandId: this.resetPending.intent.command_id, status, ...(code ? { code } : {}) };
+      this.settled = true;
+      // Owner answer R12: a confirmed reset discards the unsaved drafts of the fields it returned, so the initial
+      // values show. A refusal or an unknown outcome is not a reset and keeps them; other fields are untouched.
+      if (status === "accepted") for (const key of resetKeys) delete this.drafts[key];
+      await this.clearSettled();
+      return;
+    }
     if (!this.pending) return;
     const intent = this.pending.intent;
     this.outcome = { commandId: intent.command_id, key: intent.payload.key, status, ...(code ? { code } : {}) };
@@ -239,8 +271,9 @@ export class SettingsController {
   }
 
   private async checkPending(): Promise<void> {
-    const pending = this.pending!;
-    const reply = await this.access().run(({ token }) => this.options.api.status(token, this.scope.profileId, pending.intent));
+    const save = this.pending, reset = this.resetPending, pending = (save ?? reset)!;
+    const reply = await this.access().run(({ token }) => save ? this.options.api.status(token, this.scope.profileId, save.intent)
+      : this.options.api.resetStatus(token, this.scope.profileId, reset!.intent));
     if (!this.live()) return;
     this.access();
     if (reply.outcome === "accepted") {
@@ -281,50 +314,68 @@ export class SettingsController {
       this.problem = null;
       this.emit();
       if (!this.loaded) {
-        this.pending = await this.options.pendingStore.load(this.scope.profileId, this.lifetime.signal);
+        const save = await this.options.pendingStore.load(this.scope.profileId, this.lifetime.signal);
         if (!this.live()) return;
         this.access();
+        const reset = await this.options.resetStore.load(this.scope.profileId, this.lifetime.signal);
+        if (!this.live()) return;
+        this.access();
+        // One sent intent per document: both slots filled means the recorded state cannot be trusted.
+        if (save && reset) throw new PendingStoreError("invalid");
+        this.pending = save;
+        this.resetPending = reset;
         this.loaded = true;
         this.restoreDraft();
       }
       if (this.settled) { await this.clearSettled(); if (!this.live()) return; }
-      if (this.pending?.mismatch) {
-        await this.options.pendingStore.markMismatch(this.pending, this.lifetime.signal);
+      if (this.sent()?.mismatch) {
+        await this.markMismatch();
         if (!this.live()) return;
         await this.readCurrent();
         if (!this.live()) return;
         this.phase = "unresolved";
         this.problem = { reason: "mismatch", code: "COMMAND_PAYLOAD_MISMATCH" };
-      } else if (this.pending) await this.checkPending();
+      } else if (this.sent()) await this.checkPending();
       else { await this.readCurrent(); if (this.live()) this.idle(); }
     });
   }
 
+  private async markMismatch(): Promise<void> {
+    if (this.pending) {
+      this.pending = { ...this.pending, mismatch: true };
+      await this.options.pendingStore.markMismatch(this.pending, this.lifetime.signal);
+    } else if (this.resetPending) {
+      this.resetPending = { ...this.resetPending, mismatch: true };
+      await this.options.resetStore.markMismatch(this.resetPending, this.lifetime.signal);
+    }
+  }
   private async applyReply(reply: SettingSaveReply): Promise<void> {
     this.accept(reply.current, reply.state_version);
     if (reply.outcome === "mismatch") {
       this.phase = "unresolved";
       this.problem = { reason: "mismatch", code: reply.error.code };
-      if (this.pending) {
-        this.pending = { ...this.pending, mismatch: true };
-        await this.options.pendingStore.markMismatch(this.pending, this.lifetime.signal);
-      }
+      await this.markMismatch();
     } else await this.resolve(reply.outcome, reply.outcome === "rejected" ? reply.error.code : undefined);
   }
+  /** The intent is stored before it is sent; a retry sends the stored envelope again, never a new ID (TA 9). */
   private async sendPending(source: OpenedAccess): Promise<void> {
-    const pending = this.pending;
-    if (!pending || !this.live()) return;
+    const save = this.pending, reset = this.resetPending;
+    if (!(save ?? reset) || !this.live()) return;
     if (this.access() !== source) throw new ClosedAccessError();
     this.phase = "sending";
     this.problem = null;
     this.emit();
-    await this.options.pendingStore.save(pending, this.lifetime.signal);
+    if (save) await this.options.pendingStore.save(save, this.lifetime.signal);
+    else await this.options.resetStore.save(reset!, this.lifetime.signal);
     if (!this.live()) return;
     // A foreground refresh must resolve the saved intent before an explicit
     // retry. Finishing a storage write cannot transfer a send to its new handle.
     if (this.access() !== source) throw new ClosedAccessError();
-    const reply = await source.run(({ token, proof, documentId }) => this.options.api.save(token, proof, this.scope.profileId,
-      { ...structuredClone(pending.intent), client_instance_id: pending.clientInstanceId, document_id: documentId }));
+    const reply = await source.run(({ token, proof, documentId }) => save
+      ? this.options.api.save(token, proof, this.scope.profileId,
+        { ...structuredClone(save.intent), client_instance_id: save.clientInstanceId, document_id: documentId })
+      : this.options.api.reset(token, proof, this.scope.profileId,
+        { ...structuredClone(reset!.intent), client_instance_id: reset!.clientInstanceId, document_id: documentId }));
     if (!this.live()) return;
     if (this.access() !== source) throw new ClosedAccessError();
     await this.applyReply(reply);
@@ -337,10 +388,24 @@ export class SettingsController {
     return this.run(async () => {
       if (this.access() !== source) throw new ClosedAccessError();
       this.outcome = null;
+      this.resetOutcome = null;
       this.submittedRevision = draft.revision;
       this.pending = { schemaVersion: 1, profileId: this.scope.profileId, clientInstanceId: this.scope.clientId,
         intent: { command_id: this.options.newId(), kind: "setting.save", expected_field_version: draft.fieldVersion,
           payload: { key, value: value as SettingsPending["intent"]["payload"]["value"] } } };
+      await this.sendPending(source);
+    });
+  }
+  /** One confirmed press creates one intent; a press while anything is sent or running creates none. */
+  reset(): Promise<void> {
+    if (!this.editable() || this.running) return this.running ?? Promise.resolve();
+    const source = this.access();
+    return this.run(async () => {
+      if (this.access() !== source) throw new ClosedAccessError();
+      this.outcome = null;
+      this.resetOutcome = null;
+      this.resetPending = { schemaVersion: 1, profileId: this.scope.profileId, clientInstanceId: this.scope.clientId,
+        intent: { command_id: this.options.newId(), kind: "settings.reset", payload: {} } };
       await this.sendPending(source);
     });
   }

@@ -3,9 +3,11 @@ import type { OpenedClient, Profile, SavedCommandFact, SettingsResponse } from "
 import { ApiError } from "../api/http";
 import { createOpenedAccess, type OpenedAccess } from "../app/openedAccess";
 import type { AsyncStorage } from "../platform/storage";
-import { type EditableSettingIntent, type SettingIntent, type SettingKey, type SettingSaveReply, type SettingStatusReply, type SettingsApi } from "./settingsApi";
+import { type EditableSettingIntent, type SettingIntent, type SettingKey, type SettingSaveReply, type SettingStatusReply, type SettingsApi,
+  type SettingsResetIntent } from "./settingsApi";
 import { SettingsController, type SettingsSnapshot } from "./settingsController";
 import { SettingsPendingStore, type SettingsPending } from "./settingsPending";
+import { SettingsResetPendingStore, type SettingsResetPending } from "./settingsResetPending";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const big = "9007199254740995";
@@ -65,17 +67,45 @@ function rejected(data = current(next), mismatch = false): SettingSaveReply {
   return { outcome: mismatch ? "mismatch" : "rejected", command: { id: id(100), status: "rejected" },
     error: { code: mismatch ? "COMMAND_PAYLOAD_MISMATCH" : "VERSION_CONFLICT" }, current: data, state_version: data.state_version };
 }
+const resetSlot = "wortly.pending.settings-reset";
+const resetIntent = (commandId = id(100)): SettingsResetIntent => ({ command_id: commandId, kind: "settings.reset", payload: {} });
+const resetRecord = (commandId = id(100)): SettingsResetPending => ({ schemaVersion: 1, profileId: id(1), clientInstanceId: id(2),
+  intent: resetIntent(commandId) });
+/** The server's settings after a reset: the eleven fields at their initial values, versions advanced. */
+function resetData(): SettingsResponse {
+  const data = current(next);
+  const initial: Record<string, unknown> = { learning_group_size: 5, learning_content: "words", learning_mix: false,
+    review_error_mode: "soft", transition_mode: "normal", strict_case: true, include_preterite: false, include_comparative: false,
+    learning_intervals_seconds: [30, 120, 600, 3600, 10800, 18000], retry_gap: 3, retry_count: 4 };
+  for (const [key, value] of Object.entries(initial)) {
+    const field = data.settings[key as SettingKey];
+    Object.assign(field, { value, version: String(BigInt(field.version) + 1n) });
+  }
+  return data;
+}
+const resetFact = (commandId = id(100)): SavedCommandFact => ({ id: commandId,
+  kind: "settings.reset", status: "applied", applied_at: "2026-10-08T00:00:00Z", target_id: id(1), action_id: null, result_id: null,
+  context_id: null, object_version: "7" });
+function resetApplied(data = resetData()): Extract<SettingStatusReply, { outcome: "accepted" }> {
+  return { outcome: "accepted", command: { ...resetFact(), status: "already_applied" }, current: data, state_version: data.state_version };
+}
+function resetAccepted(commandId = id(100)): SettingSaveReply {
+  const data = resetData();
+  return { outcome: "accepted", command: resetFact(commandId), current: data, state_version: data.state_version };
+}
 function persisted() {
   const values = new Map<string, string>();
   const storage: AsyncStorage = { get: vi.fn(async key => values.get(key) ?? null),
     set: vi.fn(async (key, value) => { values.set(key, value); }), remove: vi.fn(async key => { values.delete(key); }) };
-  return { values, storage, store: new SettingsPendingStore(storage) };
+  return { values, storage, store: new SettingsPendingStore(storage), resetStore: new SettingsResetPendingStore(storage) };
 }
 function fixture(options: { disk?: ReturnType<typeof persisted>; opened?: OpenedClient; minimumStateVersion?(): string | null } = {}) {
   const disk = options.disk ?? persisted();
   const api = { get: vi.fn<SettingsApi["get"]>(async () => current()),
     save: vi.fn<SettingsApi["save"]>(async (_token, _proof, _profile, request) => accepted(request)),
-    status: vi.fn<SettingsApi["status"]>(async () => missing()) };
+    status: vi.fn<SettingsApi["status"]>(async () => missing()),
+    reset: vi.fn<SettingsApi["reset"]>(async (_token, _proof, _profile, request) => resetAccepted(request.command_id)),
+    resetStatus: vi.fn<SettingsApi["resetStatus"]>(async () => missing()) };
   const states: SettingsSnapshot[] = [];
   const onDenied = vi.fn();
   let access: OpenedAccess | null = null;
@@ -89,7 +119,7 @@ function fixture(options: { disk?: ReturnType<typeof persisted>; opened?: Opened
   replace();
   let sequence = 100;
   const newId = vi.fn(() => id(sequence++));
-  const controller = new SettingsController({ api, pendingStore: disk.store, access: () => access,
+  const controller = new SettingsController({ api, pendingStore: disk.store, resetStore: disk.resetStore, access: () => access,
     newId, minimumStateVersion: options.minimumStateVersion, onUpdate: state => states.push(state) });
   return { controller, api, disk, states, onDenied, newId, replace, close: () => { access = null; } };
 }
@@ -642,5 +672,200 @@ describe("review error mode and learning content (M-SET)", () => {
     await f.controller.save("review_error_mode"); expect(f.api.save).not.toHaveBeenCalled();
     await f.controller.keepMine("review_error_mode");
     expect(f.api.save.mock.calls[0][3]).toMatchObject({ expected_field_version: "5", payload: { key: "review_error_mode", value: "soft" } });
+  });
+});
+
+describe("settings reset (M-SET-RESET, D-SET-RESET 4.2, owner answers R11/R12)", () => {
+  async function ready(f = fixture()) { await f.controller.refresh(); return f; }
+  async function seedReset(disk: ReturnType<typeof persisted>, record = resetRecord()) {
+    await disk.resetStore.save(record, new AbortController().signal);
+  }
+
+  it("a double press sends one command, stored first; success and data come only from the server's reply", async () => {
+    const f = await ready(); const sending = gate<SettingSaveReply>();
+    f.api.reset.mockImplementationOnce(async (token, proof, subject, request) => {
+      expect([token, proof, subject]).toEqual(["synthetic-token-initial", "synthetic-proof-initial", id(1)]);
+      expect(JSON.parse(f.disk.values.get(resetSlot)!)).toEqual(resetRecord());
+      expect(request).toEqual({ ...resetIntent(), client_instance_id: id(2), document_id: id(3) });
+      return sending.promise;
+    });
+    const first = f.controller.reset(); const duplicate = f.controller.reset();
+    expect(duplicate).toBe(first); await vi.waitFor(() => expect(f.api.reset).toHaveBeenCalledOnce());
+    expect(f.controller.snapshot()).toMatchObject({ phase: "sending", resetPending: resetRecord(), resetOutcome: null,
+      canEdit: false, canReset: false, data: current() });
+    expect(f.controller.reset()).toBe(first); expect(f.api.reset).toHaveBeenCalledOnce();
+    sending.resolve(resetAccepted()); await first;
+    expect(f.controller.snapshot()).toMatchObject({ phase: "ready", resetPending: null, pending: null, canEdit: true, canReset: true,
+      resetOutcome: { commandId: id(100), status: "accepted" }, outcome: null, data: resetData() });
+    expect(f.disk.values.size).toBe(0); expect(f.newId).toHaveBeenCalledOnce(); expect(f.api.save).not.toHaveBeenCalled();
+  });
+
+  it("an unsent field save blocks the reset and a sent reset blocks saving", async () => {
+    const f = await editing(); const saving = gate<SettingSaveReply>(); f.api.save.mockReturnValueOnce(saving.promise);
+    const save = f.controller.save("retry_count"); await vi.waitFor(() => expect(f.api.save).toHaveBeenCalledOnce());
+    expect(f.controller.snapshot().canReset).toBe(false);
+    void f.controller.reset(); saving.resolve(accepted()); await save;
+    expect(f.api.reset).not.toHaveBeenCalled(); expect(f.disk.values.has(resetSlot)).toBe(false);
+    expect(f.controller.snapshot().canReset).toBe(true);
+
+    const resetting = gate<SettingSaveReply>(); f.api.reset.mockReturnValueOnce(resetting.promise);
+    const reset = f.controller.reset(); await vi.waitFor(() => expect(f.api.reset).toHaveBeenCalledOnce());
+    f.controller.edit("retry_count", "9"); expect(f.controller.save("retry_count")).toBe(reset);
+    expect(f.controller.snapshot()).toMatchObject({ canEdit: false, drafts: {} });
+    expect(f.api.save).toHaveBeenCalledOnce(); expect(f.disk.values.has(slot)).toBe(false);
+    resetting.reject(new ApiError("network")); await reset;
+    f.controller.edit("retry_count", "9"); await f.controller.save("retry_count");
+    expect(f.controller.snapshot()).toMatchObject({ phase: "unresolved", canEdit: false, canReset: false, drafts: {} });
+    expect(f.api.save).toHaveBeenCalledOnce();
+  });
+
+  it.each([new ApiError("network"), new ApiError("http", 503), new ApiError("invalid_response")])(
+    "a lost reply %# keeps the intent; the manual repeat sends the same ID and body, never a new one", async error => {
+      const f = await ready(); f.api.reset.mockRejectedValueOnce(error); await f.controller.reset();
+      expect(f.controller.snapshot()).toMatchObject({ phase: "unresolved", canRetry: true, canReset: false, canEdit: false,
+        resetOutcome: null, resetPending: resetRecord(), problem: { reason: "network" } });
+      expect(JSON.parse(f.disk.values.get(resetSlot)!)).toEqual(resetRecord());
+      await f.controller.reset(); expect(f.api.reset).toHaveBeenCalledOnce();
+      f.replace(opened(), 1, "renewed"); await f.controller.retry();
+      expect(f.api.reset.mock.calls[1]).toEqual(["synthetic-token-renewed", "synthetic-proof-renewed", id(1), f.api.reset.mock.calls[0][3]]);
+      expect(f.newId).toHaveBeenCalledOnce();
+      expect(f.controller.snapshot()).toMatchObject({ resetPending: null, resetOutcome: { status: "accepted" } });
+    });
+
+  it("on opening, an unconfirmed reset is checked by status first; an applied one succeeds without a POST", async () => {
+    const disk = persisted(); await seedReset(disk); const f = fixture({ disk }); const data = resetData();
+    f.api.resetStatus.mockResolvedValueOnce(resetApplied(data));
+    await f.controller.refresh();
+    expect(f.api.resetStatus).toHaveBeenCalledExactlyOnceWith("synthetic-token-initial", id(1), resetIntent());
+    expect(f.api.reset).not.toHaveBeenCalled(); expect(f.api.get).not.toHaveBeenCalled(); expect(f.api.status).not.toHaveBeenCalled();
+    expect(f.controller.snapshot()).toMatchObject({ phase: "ready", resetPending: null, data, resetOutcome: { status: "accepted" } });
+    expect(f.disk.values.size).toBe(0);
+  });
+
+  it("not_found shows the current state and offers only the manual repeat of the same ID", async () => {
+    const disk = persisted(); await seedReset(disk); const data = opened(); data.document_id = id(30);
+    const f = fixture({ disk, opened: data }); await f.controller.refresh();
+    expect(f.api.resetStatus).toHaveBeenCalledOnce(); expect(f.api.get).toHaveBeenCalledOnce(); expect(f.api.reset).not.toHaveBeenCalled();
+    expect(f.controller.snapshot()).toMatchObject({ phase: "unresolved", resetPending: resetRecord(), canRetry: true, canReset: false,
+      problem: { reason: "not_found" }, data: current() });
+    await f.controller.retry();
+    expect(f.api.reset).toHaveBeenCalledExactlyOnceWith("synthetic-token-initial", "synthetic-proof-initial", id(1),
+      { ...resetIntent(), client_instance_id: id(2), document_id: id(30) });
+    expect(f.newId).not.toHaveBeenCalled();
+  });
+
+  it("a refresh while unresolved checks the status before anything can be repeated", async () => {
+    const f = await ready(); f.api.reset.mockRejectedValueOnce(new ApiError("network")); await f.controller.reset();
+    await f.controller.refresh();
+    expect(f.api.resetStatus).toHaveBeenCalledExactlyOnceWith("synthetic-token-initial", id(1), resetIntent());
+    expect(f.api.reset).toHaveBeenCalledOnce();
+    expect(f.controller.snapshot()).toMatchObject({ problem: { reason: "not_found" }, canRetry: true });
+  });
+
+  it("a mismatch is never repeated and survives reopening", async () => {
+    const f = await ready(); f.api.reset.mockResolvedValueOnce(rejected(current(next), true)); await f.controller.reset();
+    expect(f.controller.snapshot()).toMatchObject({ phase: "unresolved", canRetry: false, canReset: false,
+      resetPending: { mismatch: true }, problem: { reason: "mismatch" }, resetOutcome: null });
+    await f.controller.retry(); expect(f.api.reset).toHaveBeenCalledOnce();
+    expect(JSON.parse(f.disk.values.get(resetSlot)!)).toEqual({ ...resetRecord(), mismatch: true });
+    const reopened = fixture({ disk: f.disk }); await reopened.controller.refresh();
+    expect(reopened.api.resetStatus).not.toHaveBeenCalled(); expect(reopened.api.reset).not.toHaveBeenCalled();
+    expect(reopened.controller.snapshot()).toMatchObject({ canRetry: false, problem: { reason: "mismatch" }, resetPending: { mismatch: true } });
+  });
+
+  it("a refusal changes nothing: data from current, every draft kept, no repeat offered", async () => {
+    const f = await editing(); f.controller.edit("ui_language", "en"); const data = current(next);
+    const refusal = rejected(data); if (refusal.outcome !== "accepted") refusal.error = { code: "DOCUMENT_STALE" };
+    f.api.reset.mockResolvedValueOnce(refusal); await f.controller.reset();
+    expect(f.controller.snapshot()).toMatchObject({ phase: "ready", resetPending: null, canRetry: false, canReset: true, data,
+      resetOutcome: { status: "rejected", code: "DOCUMENT_STALE" },
+      drafts: { retry_count: { input: "4" }, ui_language: { input: "en" } } });
+    expect(f.disk.values.size).toBe(0);
+  });
+
+  it("R12: a confirmed reset discards only the drafts of the reset fields and shows the initial values", async () => {
+    const f = await editing();
+    f.controller.edit("learning_group_size", "7"); f.controller.edit("review_error_mode", "strict");
+    f.controller.edit("ui_language", "en"); f.controller.edit("learning_reminder_pause_seconds", "900");
+    f.controller.edit("material", { mode: "level", selected_level: "B1" });
+    await f.controller.reset();
+    const state = f.controller.snapshot();
+    expect(Object.keys(state.drafts).sort()).toEqual(["learning_reminder_pause_seconds", "material", "ui_language"]);
+    expect(state.drafts).toMatchObject({ ui_language: { input: "en", conflict: false }, learning_reminder_pause_seconds: { input: "900" } });
+    expect(state.data?.settings).toMatchObject({ retry_count: { value: 4 }, learning_group_size: { value: 5 },
+      review_error_mode: { value: "soft" } });
+  });
+
+  // Taken over from the independent QA (M-SET-RESET-QA, qa_reset.test.ts; mutations M01, M02).
+  const resetDrafts: Record<string, unknown> = { learning_group_size: "7", learning_content: "phrases", learning_mix: true,
+    review_error_mode: "soft", transition_mode: "accelerated", strict_case: false, include_preterite: true, include_comparative: true,
+    learning_intervals_seconds: ["40", "50"], retry_gap: "9", retry_count: "9" };
+  const outsideDrafts: Record<string, unknown> = { ui_language: "en", dictionary_language: "ru", learning_reminder_pause_seconds: "1200",
+    material: { mode: "level", selected_level: "B1" } };
+  async function withAllDrafts() {
+    const f = await ready();
+    for (const [key, value] of Object.entries({ ...resetDrafts, ...outsideDrafts })) f.controller.edit(key as SettingKey, value);
+    expect(Object.keys(f.controller.snapshot().drafts)).toHaveLength(15);
+    return f;
+  }
+  const inputs = (state: SettingsSnapshot) => Object.fromEntries(Object.entries(state.drafts).map(([key, draft]) => [key, draft!.input]));
+
+  it("R12: an accepted reset drops the drafts of all eleven reset fields and keeps the four others intact", async () => {
+    const f = await withAllDrafts(); await f.controller.reset();
+    const state = f.controller.snapshot();
+    expect(state.resetOutcome?.status).toBe("accepted");
+    expect(inputs(state)).toEqual(outsideDrafts);
+    for (const key of Object.keys(outsideDrafts)) {
+      expect(state.drafts[key as SettingKey]).toMatchObject({ conflict: false, error: null, canSave: true });
+    }
+  });
+
+  it("R12: a mismatch keeps every draft", async () => {
+    const f = await withAllDrafts(); f.api.reset.mockResolvedValueOnce(rejected(current(next), true)); await f.controller.reset();
+    expect(f.controller.snapshot().problem?.reason).toBe("mismatch");
+    expect(inputs(f.controller.snapshot())).toEqual({ ...resetDrafts, ...outsideDrafts });
+  });
+
+  it("the reset is not offered while a refresh runs, and a press then sends nothing", async () => {
+    const f = await ready(); const reading = gate<SettingsResponse>(); f.api.get.mockReturnValueOnce(reading.promise);
+    const refreshing = f.controller.refresh();
+    expect(f.controller.snapshot().canReset).toBe(false);
+    await vi.waitFor(() => expect(f.api.get).toHaveBeenCalledTimes(2));
+    expect(f.controller.snapshot()).toMatchObject({ phase: "checking", canReset: false });
+    expect(f.controller.reset()).toBe(refreshing);
+    reading.resolve(current()); await refreshing;
+    expect(f.api.reset).not.toHaveBeenCalled(); expect(f.newId).not.toHaveBeenCalled();
+    expect(f.controller.snapshot().canReset).toBe(true);
+  });
+
+  it("R12: an unknown outcome keeps the drafts until the status confirms the reset", async () => {
+    const f = await editing(); f.controller.edit("ui_language", "en");
+    f.api.reset.mockRejectedValueOnce(new ApiError("network")); await f.controller.reset();
+    expect(f.controller.snapshot().drafts).toMatchObject({ retry_count: { input: "4" }, ui_language: { input: "en" } });
+    const data = resetData();
+    f.api.resetStatus.mockResolvedValueOnce(resetApplied(data));
+    await f.controller.refresh();
+    expect(Object.keys(f.controller.snapshot().drafts)).toEqual(["ui_language"]);
+    expect(f.controller.snapshot()).toMatchObject({ resetOutcome: { status: "accepted" }, data });
+  });
+
+  it("a later edit or save clears the reset result", async () => {
+    const f = await ready(); await f.controller.reset();
+    expect(f.controller.snapshot().resetOutcome?.status).toBe("accepted");
+    f.controller.edit("ui_language", "en"); expect(f.controller.snapshot().resetOutcome).toBeNull();
+  });
+
+  it("both slots filled cannot be trusted: nothing is checked or sent and editing stays blocked", async () => {
+    const disk = persisted(); await seed(disk); await seedReset(disk); const f = fixture({ disk });
+    await f.controller.refresh();
+    expect(f.controller.snapshot()).toMatchObject({ problem: { reason: "invalid_pending" }, canEdit: false, canReset: false, canRetry: false });
+    for (const call of [f.api.status, f.api.resetStatus, f.api.save, f.api.reset]) expect(call).not.toHaveBeenCalled();
+    expect(disk.values.size).toBe(2);
+  });
+
+  it("an expired login during the reset keeps the intent without claiming success", async () => {
+    const f = await ready(); f.api.reset.mockRejectedValueOnce(new ApiError("http", 401)); await f.controller.reset();
+    expect(f.controller.snapshot()).toMatchObject({ data: null, resetOutcome: null, canRetry: false, canReset: false,
+      resetPending: resetRecord(), problem: { reason: "expired" } });
   });
 });

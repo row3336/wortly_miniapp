@@ -1,7 +1,7 @@
 import { StrictMode, useLayoutEffect, type PropsWithChildren } from "react";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { SettingCommand } from "../api/generated";
+import type { SettingCommand, SettingsResetCommand, SettingsResponse } from "../api/generated";
 import type { EditableSettingIntent, SettingIntent, SettingKey } from "./settingsApi";
 import { deferred, fixture, id, profile, response } from "../learning/learningFixtures.test-support";
 import { SettingsPendingStore, type SettingsPending } from "./settingsPending";
@@ -212,5 +212,60 @@ describe("application-owned settings for study and the editor", () => {
     await waitFor(() => expect(result.current.confirmed).not.toBeNull());
     result.current.confirmed!.settings.transition_mode.value = "accelerated";
     rerender(options); expect(result.current.confirmed?.settings.transition_mode.value).toBeNull();
+  });
+});
+
+describe("settings reset through the document owner (M-SET-RESET, D-SET-RESET 4.3.4, 5.3.7)", () => {
+  const resetSlot = "wortly.pending.settings-reset";
+  const resetPending = { schemaVersion: 1, profileId: id(50), clientInstanceId: id(1),
+    intent: { command_id: id(100), kind: "settings.reset", payload: {} } };
+  /** The server side of a reset: retry_count returns to 4 and the reply carries the full current settings. */
+  function resetOn(data: SettingsResponse) {
+    return async (command: SettingsResetCommand) => {
+      data.state_version = String(BigInt(data.state_version) + 1n);
+      data.settings.retry_count = { value: 4, version: String(BigInt(data.settings.retry_count.version) + 1n) };
+      const { state_version, ...current } = structuredClone(data);
+      return response({ command: { id: command.command_id, kind: "settings.reset", status: "applied",
+        applied_at: "2026-10-08T00:00:00Z", target_id: id(50), action_id: null, result_id: null, context_id: null,
+        object_version: "3" }, current, state_version });
+    };
+  }
+
+  it("sends one reset, confirms the server's settings and discards only the reset fields' drafts", async () => {
+    const { result, post, data, f } = setup();
+    await waitFor(() => expect(result.current.state.canReset).toBe(true));
+    act(() => { result.current.actions.edit("retry_count", "8"); result.current.actions.edit("ui_language", "en"); });
+    post.mockImplementationOnce(resetOn(data) as never);
+    await act(() => result.current.actions.reset());
+    expect(post).toHaveBeenCalledOnce();
+    expect(post.mock.calls[0][0]).toMatchObject({ kind: "settings.reset", payload: {}, client_instance_id: id(1) });
+    expect(result.current.confirmed?.settings.retry_count.value).toBe(4);
+    expect(result.current.state.resetOutcome?.status).toBe("accepted");
+    expect(Object.keys(result.current.state.drafts)).toEqual(["ui_language"]);
+    expect(f.values.has(resetSlot)).toBe(false);
+  });
+
+  it("a new foreground handle withholds the reset until its recovery read", async () => {
+    let inspect = false, observed = false;
+    const { result, f, options, rerender, post } = setup(undefined, false, undefined, document => {
+      if (!inspect) return;
+      inspect = false; observed = true;
+      expect(document.state.canReset).toBe(false); void document.actions.reset();
+    });
+    await waitFor(() => expect(result.current.confirmed).not.toBeNull());
+    f.replace(); inspect = true; rerender({ ...options, access: f.access() });
+    await waitFor(() => expect(result.current.confirmed).not.toBeNull());
+    expect(observed).toBe(true); expect(post).not.toHaveBeenCalled(); expect(f.values.has(resetSlot)).toBe(false);
+  });
+
+  it("an unconfirmed reset withholds confirmed settings, is checked first and repeats only on request", async () => {
+    const { result, post, status, data, f } = setup(undefined, false, f => { f.values.set(resetSlot, JSON.stringify(resetPending)); });
+    await waitFor(() => expect(result.current.state.canRetry).toBe(true));
+    expect(status).toHaveBeenCalledExactlyOnceWith(id(100)); expect(post).not.toHaveBeenCalled();
+    expect(result.current.confirmed).toBeNull(); expect(result.current.state.canReset).toBe(false);
+    post.mockImplementationOnce(resetOn(data) as never);
+    await act(() => result.current.actions.retry());
+    expect(post.mock.calls[0][0]).toMatchObject({ command_id: id(100), kind: "settings.reset", payload: {} });
+    expect(result.current.confirmed?.settings.retry_count.value).toBe(4); expect(f.values.has(resetSlot)).toBe(false);
   });
 });

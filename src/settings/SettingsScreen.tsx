@@ -1,4 +1,4 @@
-import { useId } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { SettingConstraint, Topic } from "../api/generated";
 import { BottomNav } from "../app/BottomNav";
 import type { FeedbackDocument } from "../feedback/useFeedbackDocument";
@@ -7,10 +7,11 @@ import type { SettingKey } from "./settingsApi";
 import type { SettingsController, SettingsSnapshot } from "./settingsController";
 import { catalogAllows, MaterialEditor, materialParts, type CatalogState } from "./MaterialEditor";
 import { SettingsFeedback } from "./SettingsFeedback";
+import { SettingsResetDialog } from "./SettingsResetDialog";
 import { languageNames, settingsCopy } from "./settingsCopy";
 import "./settings.css";
 
-type Actions = Pick<SettingsController, "edit" | "save" | "acceptCurrent" | "keepMine" | "refresh" | "retry">;
+type Actions = Pick<SettingsController, "edit" | "save" | "acceptCurrent" | "keepMine" | "refresh" | "retry" | "reset">;
 export type SettingsScreenProps = {
   snapshot: SettingsSnapshot;
   catalog: CatalogState;
@@ -159,18 +160,62 @@ function SettingField({ setting, ...props }: SettingsScreenProps & { setting: Se
   </section>;
 }
 
+/**
+ * The one line that reports a sent reset, next to its button; the screen's top lines then stay silent about it, so a
+ * state is shown and announced once. Д2.1.9 asks to retry, so it is the line only while the retry is available: not
+ * during a status check, nor for client_changed, pending_changed or mismatch (their own top-line texts apply).
+ */
+function resetLine(snapshot: SettingsSnapshot): "sending" | "unknown" | null {
+  if (!snapshot.data || !snapshot.resetPending) return null;
+  if (snapshot.phase === "sending") return "sending";
+  return snapshot.canRetry && !!snapshot.problem && ["network", "not_found"].includes(snapshot.problem.reason) ? "unknown" : null;
+}
+
+/**
+ * Returning the initial settings (TA 12.4): the button opens the Q08 confirmation; only «Вернуть» sends, and the
+ * result is shown once the server answered. An unknown outcome is retried with the same command from here.
+ */
+function SettingsReset({ snapshot, language, onReset, onRetry }: { snapshot: SettingsSnapshot; language: Language;
+  onReset(): void; onRetry(): void }) {
+  const t = settingsCopy[language].reset;
+  const [asking, setAsking] = useState(false);
+  const [confirmed, setConfirmed] = useState(false);
+  const status = useRef<HTMLDivElement>(null);
+  // The button is disabled as soon as the reset is sent, so focus would fall to the page; it moves to the
+  // result instead. This runs after the closed window returned focus to the button.
+  useEffect(() => { if (confirmed) { setConfirmed(false); status.current?.focus(); } }, [confirmed]);
+  const line = resetLine(snapshot), outcome = snapshot.resetOutcome;
+  return <div className="settings-group settings-reset">
+    <div className="settings-actions">
+      <button type="button" className="settings-secondary" disabled={!snapshot.canReset} onClick={() => setAsking(true)}>{t.button}</button>
+      <div className="settings-reset-status" ref={status} tabIndex={-1}>
+        {line === "sending" && <span role="status">{t.sending}</span>}
+        {line === "unknown" && <p className="settings-error" role="alert">{t.unknown}</p>}
+        {line === "unknown" && <button className="settings-secondary" type="button" onClick={onRetry}>{settingsCopy[language].retry}</button>}
+        {outcome?.status === "accepted" && <span className="settings-saved" role="status">{t.done}</span>}
+        {outcome?.status === "rejected" && <p className="settings-error" role="alert">{t.failed}</p>}
+      </div>
+    </div>
+    {asking && <SettingsResetDialog language={language} canConfirm={snapshot.canReset} onCancel={() => setAsking(false)}
+      onConfirm={() => { setAsking(false); setConfirmed(true); onReset(); }} />}
+  </div>;
+}
+
 /** Presentation only: callbacks retain command identity and lifetime in the host/controller. */
 export function SettingsScreen(props: SettingsScreenProps) {
   const { snapshot, language, actions, onToday, onDictionary, feedback } = props;
   const t = settingsCopy[language];
   const busy = ["loading", "checking", "sending"].includes(snapshot.phase);
+  const line = resetLine(snapshot);
   return <main className="settings-screen" lang={language}>
     <header className="settings-header"><h1>{t.title}</h1>
       <button type="button" className="settings-secondary" disabled={busy} onClick={() => { void actions.refresh(); }}>{t.refresh}</button>
     </header>
-    {busy && <p role="status">{snapshot.phase === "sending" ? t.saving : snapshot.data ? t.refreshing : t.loading}</p>}
-    {snapshot.problem && <div className="settings-error" role="alert">
-      <p>{snapshot.pending && snapshot.problem.reason === "network" ? t.unknown : t.problems[snapshot.problem.reason]}</p>
+    {busy && line !== "sending" && <p role="status">{snapshot.phase === "sending" ? snapshot.resetPending ? t.reset.sending : t.saving
+      : snapshot.data ? t.refreshing : t.loading}</p>}
+    {snapshot.problem && line !== "unknown" && <div className="settings-error" role="alert">
+      <p>{snapshot.resetPending && ["network", "not_found"].includes(snapshot.problem.reason) ? t.reset.unknown
+        : snapshot.pending && snapshot.problem.reason === "network" ? t.unknown : t.problems[snapshot.problem.reason]}</p>
       {snapshot.canRetry && <button className="settings-secondary" type="button" onClick={() => { void actions.retry(); }}>{t.retry}</button>}
     </div>}
     {!snapshot.data && !busy && !snapshot.problem && <p role="alert">{t.unavailable}</p>}
@@ -182,6 +227,8 @@ export function SettingsScreen(props: SettingsScreenProps) {
         <h2 id={`settings-${group.name}`}>{t[group.name]}</h2>
         <div className="settings-group-body">{group.fields.map(setting => <SettingField key={setting} setting={setting} {...props} />)}</div>
       </section>)}
+    {snapshot.data && <SettingsReset snapshot={snapshot} language={language} onReset={() => { void actions.reset(); }}
+      onRetry={() => { void actions.retry(); }} />}
     {feedback && <SettingsFeedback feedback={feedback} language={language} />}
     <BottomNav current="settings" language={language} enabled={onDictionary ? ["today", "dictionary"] : ["today"]}
       onNavigate={tab => { if (tab === "today") onToday(); else if (tab === "dictionary") onDictionary?.(); }} />

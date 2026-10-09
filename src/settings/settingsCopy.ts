@@ -19,12 +19,18 @@ type Copy = {
   /** Why Mix is muted while the material is chosen by CEFR level (2.21г): locked, or still active because a value is required. */
   mixByLevel: { locked: string };
   fields: Record<SettingKey, string>;
+  /** Returning the initial settings: the button, its confirmation window (Q08) and the states after confirming. */
+  reset: { button: string; title: string; resets: string; kept: string; confirm: string; cancel: string;
+    sending: string; done: string; failed: string; unknown: string };
   problems: Record<NonNullable<SettingsSnapshot["problem"]>["reason"], string>;
 };
 
 // Wording approved by the owner (R10, 08.10.2026); display conditions follow TA. Approved by R10: only mixByLevel.locked (Б4.3.31);
 // every other field here is still a working copy for G05 and the owner fixes its wording. Hints follow TA:126 (Mix), TA:160 and K04-102 (strict mode),
 // K04-105 (Learning content), 2.21г (Mix is not applied for a CEFR level); modes and contents are labelled by the server's enum values.
+// `reset` is approved in all three languages by R10 (catalog answers_claude_round2_20261008.md table 2.3, rows Сброс-2..5 and
+// Д2.1.6–Д2.1.9) with the owner's edit of the button (Сброс-1, table 3.1 there); the Ukrainian button is Codex's spelling fix
+// of the owner's entry. The window title is not renamed after the button. Display conditions follow TA 12.4.
 export const settingsCopy: Record<Language, Copy> = {
   ru: {
     title: "Настройки", today: "Сегодня", dictionary: "Словарь", navigation: "Основная навигация",
@@ -63,6 +69,14 @@ export const settingsCopy: Record<Language, Copy> = {
       retry_count: "Повторов после ошибки",
       learning_reminder_pause_seconds: "Пауза между напоминаниями, секунды",
       review_error_mode: "Строгий режим повторов", learning_content: "Состав Learning",
+    },
+    reset: {
+      button: "Сброс настроек", title: "Вернуть исходные настройки?",
+      resets: "Сбросятся настройки Learning, повторов после ошибок, проверки ответов и перехода между карточками.",
+      kept: "Языки, выбранный учебный материал и настройки напоминаний сохранятся. Текущая группа, результаты и сроки повторов не изменятся.",
+      confirm: "Вернуть", cancel: "Отмена", sending: "Возвращаем исходные настройки", done: "Исходные настройки возвращены.",
+      failed: "Не удалось вернуть исходные настройки. Ничего не изменилось. Попробуй ещё раз.",
+      unknown: "Пока не удалось подтвердить возврат исходных настроек. Проверь состояние или повтори отправку.",
     },
     problems: {
       network: "Не удалось обновить настройки. Попробуй ещё раз.", storage: "Не удалось завершить сохранение на этом устройстве. Обнови настройки.",
@@ -117,6 +131,14 @@ export const settingsCopy: Record<Language, Copy> = {
       learning_reminder_pause_seconds: "Пауза між нагадуваннями, секунди",
       review_error_mode: "Суворий режим повторень", learning_content: "Склад Learning",
     },
+    reset: {
+      button: "Скидання налаштувань", title: "Повернути початкові налаштування?",
+      resets: "Скинуться налаштування Learning, повторень після помилок, перевірки відповідей і переходу між картками.",
+      kept: "Мови, вибраний навчальний матеріал і налаштування нагадувань збережуться. Поточна група, результати й терміни повторень не зміняться.",
+      confirm: "Повернути", cancel: "Скасувати", sending: "Повертаємо початкові налаштування", done: "Початкові налаштування повернуто.",
+      failed: "Не вдалося повернути початкові налаштування. Нічого не змінилося. Спробуй ще раз.",
+      unknown: "Поки не вдалося підтвердити повернення початкових налаштувань. Перевір стан або повтори надсилання.",
+    },
     problems: {
       network: "Не вдалося оновити налаштування. Спробуй ще раз.", storage: "Не вдалося завершити збереження на цьому пристрої. Онови налаштування.",
       invalid_pending: "Не вдалося відновити незавершене збереження. Нові зміни поки недоступні.",
@@ -169,6 +191,14 @@ export const settingsCopy: Record<Language, Copy> = {
       retry_count: "Retries after an error",
       learning_reminder_pause_seconds: "Pause between reminders, seconds",
       review_error_mode: "Strict review mode", learning_content: "Learning content",
+    },
+    reset: {
+      button: "Restore default settings", title: "Restore default settings?",
+      resets: "Learning, retries after errors, answer checking and card transition settings will be reset.",
+      kept: "Languages, selected study material and reminder settings will be preserved. Your current group, results and review dates will not change.",
+      confirm: "Restore", cancel: "Cancel", sending: "Restoring default settings", done: "Default settings restored.",
+      failed: "Could not restore default settings. Nothing has changed. Please try again.",
+      unknown: "Restoring default settings has not been confirmed yet. Check its status or retry sending.",
     },
     problems: {
       network: "Could not refresh settings. Try again.", storage: "Could not finish saving on this device. Refresh settings.",

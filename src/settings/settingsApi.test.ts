@@ -1,10 +1,10 @@
 import { settingsResponse as current } from "./settingsRead.test-support";
 import { describe, expect, it, vi } from "vitest";
 import { clientContractVersion } from "../api/http";
-import type { Profile, SavedCommandFact, SettingCommand, SettingsResponse } from "../api/generated";
+import type { Profile, SavedCommandFact, SettingCommand, SettingsResetCommand, SettingsResponse } from "../api/generated";
 import {
-  allowedSettingValue, createSettingsApi, validSettingIntent,
-  type EditableSettingIntent, type SettingIntent,
+  allowedSettingValue, createSettingsApi, resetKeys, validSettingIntent, validSettingsResetIntent,
+  type EditableSettingIntent, type SettingIntent, type SettingsResetIntent,
 } from "./settingsApi";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -427,6 +427,106 @@ describe("Settings recovery status", () => {
     { command: { ...fact(), status: "already_applied" }, current: { status: "unavailable", settings: {} } },
   ])("rejects conflicting status addresses and branches %#", async body => {
     await expect(setup({ ...body, state_version: big }).api.status("synthetic", subject, intent()))
+      .rejects.toMatchObject({ kind: "invalid_response" });
+  });
+});
+
+describe("Settings reset exchange (M-SET-RESET, D-SET-RESET 4.3.3)", () => {
+  const resetIntent = (): SettingsResetIntent => ({ command_id: id(1), kind: "settings.reset", payload: {} });
+  const resetCommand = (): SettingsResetCommand => ({ ...resetIntent(), client_instance_id: id(2), document_id: id(3) });
+  // A reset has no field version: its fact carries the settings row version, unrelated to any intent field.
+  const resetFact = (): SavedCommandFact => ({ ...fact(), kind: "settings.reset", object_version: "7" });
+  const resetReply = () => ({ command: resetFact(), current: current(), state_version: big });
+
+  it("lists exactly the eleven fields of TC 13.1 and never the reminder pause, languages or material", () => {
+    expect([...resetKeys].sort()).toEqual(["include_comparative", "include_preterite", "learning_content", "learning_group_size",
+      "learning_intervals_seconds", "learning_mix", "retry_count", "retry_gap", "review_error_mode", "strict_case", "transition_mode"]);
+  });
+
+  it("posts the exact empty-payload command and accepts the fact with its row version", async () => {
+    const { api, fetcher } = setup(resetReply());
+    await expect(api.reset("synthetic", "synthetic-proof", subject, resetCommand())).resolves.toEqual({
+      outcome: "accepted", command: resetFact(), current: current(), state_version: big });
+    const [url, init] = fetcher.mock.calls[0];
+    expect(url).toBe("/api/v1/commands");
+    expect(init?.headers).toMatchObject({ "X-Origin-Proof": "synthetic-proof" });
+    expect(JSON.parse(init!.body as string)).toEqual({ command_id: id(1), kind: "settings.reset", client_instance_id: id(2),
+      document_id: id(3), payload: {} });
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { kind: "setting.save" }, { id: id(99) }, { target_id: id(99) }, { target_id: null }, { object_version: null },
+    { object_version: "0" }, { action_id: id(9) }, { applied_at: "2026-02-30T00:00:00Z" }, { status: "rejected" },
+  ])("refuses an unrelated or malformed reset fact %#", async corrupt => {
+    const body = resetReply(); Object.assign(body.command, corrupt);
+    await expect(setup(body).api.reset("synthetic", "proof", subject, resetCommand())).rejects.toMatchObject({ kind: "invalid_response" });
+  });
+
+  it("refuses an accepted reply without the complete settings projection", async () => {
+    const body = resetReply(); delete (body.current.settings as Partial<SettingsResponse["settings"]>).retry_count;
+    await expect(setup(body).api.reset("synthetic", "proof", subject, resetCommand())).rejects.toMatchObject({ kind: "invalid_response" });
+    const empty = { ...resetReply(), current: { status: "unavailable" } };
+    await expect(setup(empty).api.reset("synthetic", "proof", subject, resetCommand())).rejects.toMatchObject({ kind: "invalid_response" });
+  });
+
+  it("a save fact does not confirm a reset, nor a reset fact a save", async () => {
+    await expect(setup(reply()).api.reset("synthetic", "proof", subject, resetCommand())).rejects.toMatchObject({ kind: "invalid_response" });
+    const body = { ...resetReply(), command: { ...resetFact(), object_version: "9007199254740996" } };
+    await expect(setup(body).api.save("synthetic", "proof", subject, command())).rejects.toMatchObject({ kind: "invalid_response" });
+  });
+
+  it.each([403, 409, 422])("recognizes addressed refusals and a mismatch (%s)", async status => {
+    const body = { ...resetReply(), command: { id: id(1), status: "rejected" }, error: { code: "DOCUMENT_STALE" } };
+    await expect(setup(body, status).api.reset("synthetic", "proof", subject, resetCommand()))
+      .resolves.toMatchObject({ outcome: "rejected", error: { code: "DOCUMENT_STALE" }, current: current() });
+    body.error.code = "COMMAND_PAYLOAD_MISMATCH";
+    await expect(setup(body, status).api.reset("synthetic", "proof", subject, resetCommand())).resolves.toMatchObject({ outcome: "mismatch" });
+  });
+
+  it("an old core's plain 422 without current (unknown kind) is not read as a refusal (QA finding 3)", async () => {
+    await expect(setup({ error: { code: "VALIDATION_FAILED" } }, 422).api.reset("synthetic", "proof", subject, resetCommand()))
+      .rejects.toMatchObject({ kind: "http", status: 422 });
+  });
+
+  it("a lost reply is unknown, and the caller's repeat sends the identical body", async () => {
+    const { api, fetcher } = setup(resetReply());
+    fetcher.mockRejectedValueOnce(new Error("lost-after-commit"));
+    await expect(api.reset("synthetic", "proof", subject, resetCommand())).rejects.toMatchObject({ kind: "network" });
+    expect(fetcher).toHaveBeenCalledOnce();
+    await api.reset("synthetic", "proof", subject, resetCommand());
+    expect(fetcher.mock.calls[0][1]?.body).toBe(fetcher.mock.calls[1][1]?.body);
+  });
+
+  it.each([
+    { payload: { key: "retry_count" } }, { kind: "setting.save" }, { command_id: "not-an-id" },
+    { expected_field_version: "1" }, { client_instance_id: "x" },
+  ])("never sends a malformed reset command %#", async corrupt => {
+    const { api, fetcher } = setup(resetReply());
+    await expect(api.reset("synthetic", "proof", subject, { ...resetCommand(), ...corrupt } as SettingsResetCommand)).rejects.toThrow();
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("validates the stored reset intent exactly", () => {
+    expect(validSettingsResetIntent(resetIntent())).toBe(true);
+    for (const corrupt of [{ payload: { extra: 1 } }, { kind: "setting.save" }, { command_id: "x" }, { extra: 1 }, { payload: null }]) {
+      expect(validSettingsResetIntent({ ...resetIntent(), ...corrupt })).toBe(false);
+    }
+  });
+
+  it("status: accepted only for the reset fact, not_found keeps the same profile", async () => {
+    const accepted = { command: { ...resetFact(), status: "already_applied" }, current: current(), state_version: big };
+    await expect(setup(accepted).api.resetStatus("synthetic", subject, resetIntent())).resolves.toMatchObject({ outcome: "accepted" });
+    const missing = setup({ command: { id: id(1), status: "not_found" }, current: profile(), state_version: big });
+    await expect(missing.api.resetStatus("synthetic", subject, resetIntent())).resolves.toMatchObject({ outcome: "not_found" });
+    expect(missing.fetcher).toHaveBeenCalledExactlyOnceWith(`/api/v1/commands/${id(1)}`, expect.objectContaining({ method: "GET" }));
+    for (const command of [{ ...fact(), status: "already_applied" }, { ...resetFact(), status: "already_applied", target_id: id(99) },
+      resetFact()]) {
+      await expect(setup({ command, current: current(), state_version: big }).api.resetStatus("synthetic", subject, resetIntent()))
+        .rejects.toMatchObject({ kind: "invalid_response" });
+    }
+    const partial = current(); delete (partial.settings as Partial<SettingsResponse["settings"]>).strict_case;
+    await expect(setup({ ...accepted, current: partial }).api.resetStatus("synthetic", subject, resetIntent()))
       .rejects.toMatchObject({ kind: "invalid_response" });
   });
 });

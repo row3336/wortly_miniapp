@@ -1,9 +1,9 @@
 import type {
   ErrorDetail, MissingCommandFact, Profile, RejectedCommandFact, SavedCommandFact, SettingCommand,
-  SettingsProjection, SettingsResponse, StoredCommandFact, UnavailableCurrent,
+  SettingsProjection, SettingsResetCommand, SettingsResponse, StoredCommandFact, UnavailableCurrent,
 } from "../api/generated";
 import { validProfile } from "../api/entryApi";
-import { ApiError, createJsonTransport, errorCode, httpError, type HttpOptions } from "../api/http";
+import { ApiError, createJsonTransport, errorCode, httpError, type HttpOptions, type JsonReply } from "../api/http";
 
 // root decision (C+M-SET-READINESS-FIELDS, P12/P14): the server may still carry these two keys while an older
 // build is deployed. They are skipped when decoding and never edited or sent from here.
@@ -16,7 +16,17 @@ export type SettingIntent = Pick<SettingCommand, "command_id" | "kind" | "expect
 export type EditableSettingIntent = Omit<SettingIntent, "payload"> & {
   payload: Omit<SettingCommand["payload"], "key"> & { key: SettingKey };
 };
+/** The confirmed reset to the initial values (CT 6.2, TC 13.1); its payload is always empty. */
+export type SettingsResetIntent = Pick<SettingsResetCommand, "command_id" | "kind" | "payload">;
+/**
+ * The eleven fields `settings.reset` returns to their initial values (TC 13.1.5–13.1.15). The server owns the
+ * values; this list only decides which unsaved drafts an accepted reset discards (owner answer R12).
+ */
+export const resetKeys = ["learning_group_size", "learning_content", "learning_mix", "review_error_mode",
+  "transition_mode", "strict_case", "include_preterite", "include_comparative", "learning_intervals_seconds",
+  "retry_gap", "retry_count"] as const satisfies readonly SettingKey[];
 type Current = { current: SettingsProjection; state_version: string };
+/** The reply to a sent settings command, a save or a reset alike. */
 export type SettingSaveReply = Current & (
   | { outcome: "accepted"; command: SavedCommandFact }
   | { outcome: "rejected" | "mismatch"; command: RejectedCommandFact; error: ErrorDetail }
@@ -30,6 +40,8 @@ export interface SettingsApi {
   get(token: string): Promise<SettingsResponse>;
   save(token: string, proof: string, profileId: string, command: SettingCommand): Promise<SettingSaveReply>;
   status(token: string, profileId: string, intent: SettingIntent): Promise<SettingStatusReply>;
+  reset(token: string, proof: string, profileId: string, command: SettingsResetCommand): Promise<SettingSaveReply>;
+  resetStatus(token: string, profileId: string, intent: SettingsResetIntent): Promise<SettingStatusReply>;
 }
 
 const integers = ["retry_gap", "retry_count", "learning_group_size", "learning_reminder_pause_seconds"] as const;
@@ -37,7 +49,7 @@ const booleans = ["learning_mix", "strict_case", "include_preterite", "include_c
 const languages = ["ru", "uk", "en"];
 const levels = ["A1", "A2", "B1", "B2", "C1", "C2"];
 const transitions = ["normal", "accelerated"];
-// Always present and never null. K04-102: review_error_mode is strict initially;
+// Always present and never null. K04-102, P07: review_error_mode is soft initially;
 // K04-105: learning_content is words initially and independent of learning_mix.
 const requiredChoices = {
   review_error_mode: ["strict", "soft"],
@@ -174,20 +186,78 @@ export function validSettingIntent(value: unknown): value is EditableSettingInte
     && valueShape(value.payload.key, value.payload.value);
 }
 
+export function validSettingsResetIntent(value: unknown): value is SettingsResetIntent {
+  return record(value) && exact(value, ["command_id", "kind", "payload"]) && uuid(value.command_id)
+    && value.kind === "settings.reset" && record(value.payload) && exact(value.payload, []);
+}
+
 // The wire command may still name a retired key; only an editable one passes.
 function snapshot(value: unknown): EditableSettingIntent {
   if (!validSettingIntent(value)) throw new Error("invalid setting intent");
   return structuredClone(value);
 }
+function resetSnapshot(value: unknown): SettingsResetIntent {
+  if (!validSettingsResetIntent(value)) throw new Error("invalid settings reset intent");
+  return { command_id: value.command_id, kind: value.kind, payload: {} };
+}
 function requireSubject(token: string, profileId: string): void {
   if (!token || !uuid(profileId)) throw new Error("invalid setting subject");
 }
-function acceptedFact(value: unknown, profileId: string, intent: SettingIntent): value is SavedCommandFact {
-  return record(value) && sameId(value.id, intent.command_id) && value.kind === "setting.save"
+function settingsFact(value: unknown, profileId: string, commandId: string, kind: string): value is SavedCommandFact {
+  return record(value) && sameId(value.id, commandId) && value.kind === kind
     && oneOf(value.status, ["applied", "already_applied"]) && eventTime(value.applied_at)
     && sameId(value.target_id, profileId) && version(value.object_version)
-    && value.object_version === String(BigInt(intent.expected_field_version) + 1n)
     && value.action_id === null && value.result_id === null && value.context_id === null;
+}
+function acceptedFact(value: unknown, profileId: string, intent: SettingIntent): value is SavedCommandFact {
+  return settingsFact(value, profileId, intent.command_id, "setting.save")
+    && value.object_version === String(BigInt(intent.expected_field_version) + 1n);
+}
+/** A reset has no single field version to advance; its fact carries the settings row version after commit. */
+function resetFact(value: unknown, profileId: string, intent: SettingsResetIntent): value is SavedCommandFact {
+  return settingsFact(value, profileId, intent.command_id, "settings.reset");
+}
+type Fact = (value: unknown) => value is SavedCommandFact;
+
+/** A command reply counts only with the complete current settings; an accepted fact must be the one we sent. */
+function commandReply(reply: JsonReply, commandId: string, accepted: Fact): SettingSaveReply {
+  const value = reply.value;
+  if (record(value) && validSettingsCurrent(value.current) && version(value.state_version)) {
+    const current = { current: withoutRetired(value.current), state_version: value.state_version };
+    if (reply.status === 200 && accepted(value.command) && value.error == null) {
+      return { ...current, outcome: "accepted", command: value.command };
+    }
+    const code = errorCode(value);
+    if ([403, 409, 422].includes(reply.status) && record(value.command)
+      && sameId(value.command.id, commandId) && value.command.status === "rejected" && code) {
+      return { ...current, outcome: code === "COMMAND_PAYLOAD_MISMATCH" ? "mismatch" : "rejected",
+        command: { id: value.command.id as string, status: "rejected" }, error: { code } };
+    }
+  }
+  if (!reply.ok) throw httpError(reply);
+  throw new ApiError("invalid_response");
+}
+function statusReply(reply: JsonReply, profileId: string, commandId: string,
+  accepted: Fact): SettingStatusReply {
+  if (!reply.ok) throw httpError(reply);
+  const value = reply.value;
+  if (reply.status !== 200 || !record(value) || !record(value.command) || !version(value.state_version)
+    || value.error != null) throw new ApiError("invalid_response");
+  const fact = value.command;
+  if (fact.status === "not_found" && sameId(fact.id, commandId)
+    && validProfile(value.current) && sameId(value.current.profile_id, profileId)) {
+    return { outcome: "not_found", command: { id: fact.id as string, status: "not_found" },
+      current: value.current, state_version: value.state_version };
+  }
+  if (accepted(fact) && fact.status === "already_applied") {
+    if (validSettingsCurrent(value.current)) return { outcome: "accepted", command: fact as StoredCommandFact,
+      current: withoutRetired(value.current), state_version: value.state_version };
+    if (record(value.current) && exact(value.current, ["status"]) && value.current.status === "unavailable") {
+      return { outcome: "accepted", command: fact as StoredCommandFact,
+        current: { status: "unavailable" }, state_version: value.state_version };
+    }
+  }
+  throw new ApiError("invalid_response");
 }
 
 export function createSettingsApi(options: HttpOptions): SettingsApi {
@@ -210,45 +280,28 @@ export function createSettingsApi(options: HttpOptions): SettingsApi {
         expected_field_version: command.expected_field_version, payload: command.payload });
       const body = { ...intent, client_instance_id: command.client_instance_id, document_id: command.document_id };
       const reply = await request("/commands", { method: "POST", token, proof, body });
-      const value = reply.value;
-      if (record(value) && validSettingsCurrent(value.current) && version(value.state_version)) {
-        const current = { current: withoutRetired(value.current), state_version: value.state_version };
-        if (reply.status === 200 && acceptedFact(value.command, profileId, intent) && value.error == null) {
-          return { ...current, outcome: "accepted", command: value.command };
-        }
-        const code = errorCode(value);
-        if ([403, 409, 422].includes(reply.status) && record(value.command)
-          && sameId(value.command.id, intent.command_id) && value.command.status === "rejected" && code) {
-          return { ...current, outcome: code === "COMMAND_PAYLOAD_MISMATCH" ? "mismatch" : "rejected",
-            command: { id: value.command.id as string, status: "rejected" }, error: { code } };
-        }
-      }
-      if (!reply.ok) throw httpError(reply);
-      throw new ApiError("invalid_response");
+      return commandReply(reply, intent.command_id, (fact): fact is SavedCommandFact => acceptedFact(fact, profileId, intent));
     },
     async status(token, profileId, original) {
       requireSubject(token, profileId);
       const intent = snapshot(original);
       const reply = await request(`/commands/${intent.command_id}`, { method: "GET", token });
-      if (!reply.ok) throw httpError(reply);
-      const value = reply.value;
-      if (reply.status !== 200 || !record(value) || !record(value.command) || !version(value.state_version)
-        || value.error != null) throw new ApiError("invalid_response");
-      const fact = value.command;
-      if (fact.status === "not_found" && sameId(fact.id, intent.command_id)
-        && validProfile(value.current) && sameId(value.current.profile_id, profileId)) {
-        return { outcome: "not_found", command: { id: fact.id as string, status: "not_found" },
-          current: value.current, state_version: value.state_version };
-      }
-      if (acceptedFact(fact, profileId, intent) && fact.status === "already_applied") {
-        if (validSettingsCurrent(value.current)) return { outcome: "accepted", command: fact as StoredCommandFact,
-          current: withoutRetired(value.current), state_version: value.state_version };
-        if (record(value.current) && exact(value.current, ["status"]) && value.current.status === "unavailable") {
-          return { outcome: "accepted", command: fact as StoredCommandFact,
-            current: { status: "unavailable" }, state_version: value.state_version };
-        }
-      }
-      throw new ApiError("invalid_response");
+      return statusReply(reply, profileId, intent.command_id, (fact): fact is SavedCommandFact => acceptedFact(fact, profileId, intent));
+    },
+    async reset(token, proof, profileId, command) {
+      requireSubject(token, profileId);
+      if (!proof || !record(command) || !exact(command, ["command_id", "kind", "client_instance_id", "document_id", "payload"])
+        || !uuid(command.client_instance_id) || !uuid(command.document_id)) throw new Error("invalid settings reset command");
+      const intent = resetSnapshot({ command_id: command.command_id, kind: command.kind, payload: command.payload });
+      const body = { ...intent, client_instance_id: command.client_instance_id, document_id: command.document_id };
+      const reply = await request("/commands", { method: "POST", token, proof, body });
+      return commandReply(reply, intent.command_id, (fact): fact is SavedCommandFact => resetFact(fact, profileId, intent));
+    },
+    async resetStatus(token, profileId, original) {
+      requireSubject(token, profileId);
+      const intent = resetSnapshot(original);
+      const reply = await request(`/commands/${intent.command_id}`, { method: "GET", token });
+      return statusReply(reply, profileId, intent.command_id, (fact): fact is SavedCommandFact => resetFact(fact, profileId, intent));
     },
   };
 }

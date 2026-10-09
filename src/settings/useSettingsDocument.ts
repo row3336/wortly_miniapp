@@ -8,6 +8,7 @@ import type { Language } from "../i18n/language";
 import { createSettingsApi } from "./settingsApi";
 import { SettingsController, type SettingsSnapshot } from "./settingsController";
 import type { SettingsPendingStore } from "./settingsPending";
+import { SettingsResetPendingStore } from "./settingsResetPending";
 import type { SettingsScreenProps } from "./SettingsScreen";
 
 export type SettingsObservation = {
@@ -35,7 +36,16 @@ type Owner = {
   run(action: () => Promise<void>): Promise<void>;
 };
 const initial: SettingsSnapshot = { phase: "loading", data: null, dataCurrent: false, drafts: {}, pending: null,
-  outcome: null, problem: null, canEdit: false, canRetry: false };
+  resetPending: null, outcome: null, resetOutcome: null, problem: null, canEdit: false, canReset: false, canRetry: false };
+
+// The reset slot shares the application storage of the settings slot, and one instance per storage serializes its
+// writes across document lifetimes, as the settings slot instance does.
+const resetStores = new WeakMap<SettingsPendingStore, SettingsResetPendingStore>();
+function resetStoreOf(store: SettingsPendingStore): SettingsResetPendingStore {
+  let reset = resetStores.get(store);
+  if (!reset) { reset = new SettingsResetPendingStore(store.backing); resetStores.set(store, reset); }
+  return reset;
+}
 
 /** One settings command owner per opened document, independent of whether its editor is visible. */
 export function useSettingsDocument(options: Options): SettingsDocument {
@@ -63,7 +73,7 @@ export function useSettingsDocument(options: Options): SettingsDocument {
       });
     };
     const controller = new SettingsController({ api: createSettingsApi(current.transport), pendingStore: current.pendingStore,
-      access: () => latest.current.access, newId: () => window.crypto.randomUUID(),
+      resetStore: resetStoreOf(current.pendingStore), access: () => latest.current.access, newId: () => window.crypto.randomUUID(),
       minimumStateVersion: () => latest.current.minimumStateVersion ?? null, onUpdate: publish });
     const bound: Owner = { key: current.access.key, transport: current.transport, store: current.pendingStore, controller,
       source: null, lastAccess: current.access, minimum: current.minimumStateVersion ?? current.access.profile.state_version,
@@ -108,15 +118,16 @@ export function useSettingsDocument(options: Options): SettingsDocument {
       keepMine: key => { const bound = recovered(); return bound?.run(() => bound.controller.keepMine(key)) ?? Promise.resolve(); },
       acceptCurrent: key => recovered()?.controller.acceptCurrent(key),
       retry: () => { const bound = recovered(); return bound?.run(() => bound.controller.retry()) ?? Promise.resolve(); },
+      reset: () => { const bound = recovered(); return bound?.run(() => bound.controller.reset()) ?? Promise.resolve(); },
       refresh: () => currentOwner.current()?.refresh() ?? Promise.resolve(),
     };
   }, []);
   const bound = lookup();
   let state = bound?.controller.snapshot() ?? initial;
-  if (bound?.source !== options.access) state = { ...state, canEdit: false, canRetry: false,
+  if (bound?.source !== options.access) state = { ...state, canEdit: false, canReset: false, canRetry: false,
     drafts: Object.fromEntries(Object.entries(state.drafts).map(([key, draft]) => [key, { ...draft, canSave: false, canKeepMine: false }])) };
   const confirmed = bound?.source === options.access && state.phase === "ready" && state.dataCurrent && !state.pending
-    ? state.data : null;
+    && !state.resetPending ? state.data : null;
   const feedbackStore = useMemo(() => new FeedbackPendingStore(options.pendingStore.backing), [options.pendingStore]);
   const feedback = useFeedbackDocument({ access: options.access, transport: options.transport, pendingStore: feedbackStore });
   return { state, confirmed, actions, feedback };
