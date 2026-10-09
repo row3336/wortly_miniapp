@@ -50,7 +50,7 @@ export type ClosedSessionBoundary = { "session_id": string; "status": "closed"; 
 
 export type CommandFact = { "id": string; "status": "applied" | "already_applied"; "applied_at": string; "target_id": (string | null); "object_version": string; };
 
-export type CommandStatusResponse = { "command": (StoredCommandFact | MissingCommandFact); "current": (Profile | ModeState | UnavailableCurrent | SettingsProjection | SessionProjection | LearningSessionProjection | OralSessionProjection | ConjugationSessionProjection | UnavailableSession | RemoteSessionProjection | SessionStartCancelProjection | LearningCurrentProjection | ConjugationCatalog | FeedbackCurrent | OnboardingProjection); "state_version": string; "closed_session"?: (ClosedSessionBoundary | null); "verified_intent_hash"?: (string | null); };
+export type CommandStatusResponse = { "command": (StoredCommandFact | MissingCommandFact | RefusedStartFact); "current": (Profile | ModeState | UnavailableCurrent | SettingsProjection | SessionProjection | LearningSessionProjection | OralSessionProjection | ConjugationSessionProjection | UnavailableSession | RemoteSessionProjection | SessionStartCancelProjection | LearningCurrentProjection | ConjugationCatalog | FeedbackCurrent | OnboardingProjection); "state_version": string; "closed_session"?: (ClosedSessionBoundary | null); "verified_intent_hash"?: (string | null); "error"?: (ErrorDetail | null); };
 
 export type CommonFieldSavePayload = { "card_id": string; "field_name": ("translation" | "gender" | "singular" | "plural" | "article" | "infinitive" | "preterite" | "participle_ii" | "auxiliary" | "separability" | "positive" | "comparative" | "superlative"); "scope": "common"; "language": ("uk" | "en" | "ru" | null); "value": (Array<string> | CommonGrammarForm | "separable" | "inseparable" | "unknown"); };
 
@@ -381,6 +381,8 @@ export type ReferenceNoun = { "gender": ("masculine" | "feminine" | "neuter" | n
 export type ReferencePreposition = { "category": GrammarTerm; "cases": Array<GrammarTerm>; };
 
 export type ReferenceVerb = { "infinitive": (string | null); "infinitive_status": "applicable" | "not_applicable" | "unknown"; "preterite": (string | null); "preterite_status": "applicable" | "not_applicable" | "unknown"; "participle_ii": (string | null); "participle_ii_status": "applicable" | "not_applicable" | "unknown"; "auxiliary": ("haben" | "sein" | null); "auxiliary_status": "applicable" | "not_applicable" | "unknown"; "separability": "separable" | "inseparable" | "unknown"; };
+
+export type RefusedStartFact = { "id": string; "kind": "session.start"; "status": "rejected"; "refused_at": string; };
 
 export type RegisterRequest = { "client_instance_id": string; "registration_id": string; };
 
