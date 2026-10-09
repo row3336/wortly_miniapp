@@ -46,7 +46,7 @@ export type CardTranslations = { "common": Array<string>; "personal": (PersonalC
 
 export type ClosedDictionaryContext = { "status": "closed"; "context": DictionaryContextReference; };
 
-export type ClosedSessionBoundary = { "session_id": string; "status": "closed"; "close_reason": "midnight" | "pair_changed" | "timezone_date_changed" | "stop" | "remote_stop" | "summary_home"; };
+export type ClosedSessionBoundary = { "session_id": string; "status": "closed"; "close_reason": "midnight" | "pair_changed" | "timezone_date_changed" | "stop" | "remote_stop" | "summary_home" | "save_failed"; };
 
 export type CommandFact = { "id": string; "status": "applied" | "already_applied"; "applied_at": string; "target_id": (string | null); "object_version": string; };
 
@@ -94,7 +94,7 @@ export type ConjugationScheduleResponse = { "command": (SavedCommandFact | Rejec
 
 export type ConjugationSessionCapabilities = { "answer_target": (string | null); "correct_target": null; "grades": null; "undo_target": null; "stop": boolean; "summary_home": boolean; };
 
-export type ConjugationSessionProjection = { "session_id": string; "status": "active" | "summary" | "closed"; "mode": "conjugation"; "pair": "ru-de" | "uk-de" | "en-de"; "direction": "conjugation"; "local_date": string; "close_reason": ("midnight" | "pair_changed" | "timezone_date_changed" | "stop" | "remote_stop" | "summary_home" | null); "progress": WrittenProgress; "assignment": (ConjugationAssignment | null); "summary": (ConjugationSummary | null); "capabilities": ConjugationSessionCapabilities; };
+export type ConjugationSessionProjection = { "session_id": string; "status": "active" | "summary" | "closed"; "mode": "conjugation"; "pair": "ru-de" | "uk-de" | "en-de"; "direction": "conjugation"; "local_date": string; "close_reason": ("midnight" | "pair_changed" | "timezone_date_changed" | "stop" | "remote_stop" | "summary_home" | "save_failed" | null); "progress": WrittenProgress; "assignment": (ConjugationAssignment | null); "summary": (ConjugationSummary | null); "capabilities": ConjugationSessionCapabilities; };
 
 export type ConjugationSlot = { "cycle_id": string; "pronoun_group": "ich" | "du" | "er_sie_es" | "wir" | "ihr" | "sie_sie"; };
 
@@ -260,7 +260,7 @@ export type LearningResultTarget = { "session_id": string; "assignment_id": stri
 
 export type LearningSessionGroup = { "id": string; "status": "assembling" | "active" | "completed"; "version": string; "preview_position": number; "total": number; };
 
-export type LearningSessionProjection = { "session_id": string; "status": "active" | "summary" | "closed"; "mode": "learning"; "pair": "ru-de" | "uk-de" | "en-de"; "local_date": string; "close_reason": ("midnight" | "pair_changed" | "timezone_date_changed" | "stop" | "remote_stop" | "summary_home" | null); "group": LearningSessionGroup; "preview": (LearningPreviewAddress | null); "assignment": (PublicAssignment | null); };
+export type LearningSessionProjection = { "session_id": string; "status": "active" | "summary" | "closed"; "mode": "learning"; "pair": "ru-de" | "uk-de" | "en-de"; "local_date": string; "close_reason": ("midnight" | "pair_changed" | "timezone_date_changed" | "stop" | "remote_stop" | "summary_home" | "save_failed" | null); "group": LearningSessionGroup; "preview": (LearningPreviewAddress | null); "assignment": (PublicAssignment | null); };
 
 export type LearningStartPayload = { "mode": "learning"; };
 
@@ -320,7 +320,7 @@ export type OralPrompt = { "text": string; "language": "de"; "conjunction_hint":
 
 export type OralRevealCommand = { "command_id": string; "client_instance_id": string; "document_id": string; "session_id": string; "kind": "oral.reveal"; "assignment_id": string; "payload": EmptyPayload; };
 
-export type OralSessionProjection = { "session_id": string; "status": "active" | "summary" | "closed"; "mode": "oral"; "pair": "ru-de" | "uk-de" | "en-de"; "direction": "de-l1"; "local_date": string; "bucket": ("words" | "phrases" | null); "close_reason": ("midnight" | "pair_changed" | "timezone_date_changed" | "stop" | "remote_stop" | "summary_home" | null); "progress": WrittenProgress; "assignment": (OralAssignment | RevealedOralAssignment | null); "summary": (WrittenSummary | null); "practice": OralPractice; "capabilities": OralCapabilities; };
+export type OralSessionProjection = { "session_id": string; "status": "active" | "summary" | "closed"; "mode": "oral"; "pair": "ru-de" | "uk-de" | "en-de"; "direction": "de-l1"; "local_date": string; "bucket": ("words" | "phrases" | null); "close_reason": ("midnight" | "pair_changed" | "timezone_date_changed" | "stop" | "remote_stop" | "summary_home" | "save_failed" | null); "progress": WrittenProgress; "assignment": (OralAssignment | RevealedOralAssignment | null); "summary": (WrittenSummary | null); "practice": OralPractice; "capabilities": OralCapabilities; };
 
 export type OralStartPayload = { "mode": "oral"; "bucket": "words" | "phrases"; };
 
@@ -390,7 +390,7 @@ export type RejectedCommandFact = { "id": string; "status": "rejected"; };
 
 export type RemoteSessionCommandResponse = { "command": (SavedCommandFact | RejectedCommandFact); "current": (RemoteSessionProjection | UnavailableSession); "state_version": string; "error"?: (ErrorDetail | null); };
 
-export type RemoteSessionProjection = { "session_id": string; "status": "active" | "summary" | "closed"; "close_reason": ("midnight" | "pair_changed" | "timezone_date_changed" | "stop" | "remote_stop" | "summary_home" | null); };
+export type RemoteSessionProjection = { "session_id": string; "status": "active" | "summary" | "closed"; "close_reason": ("midnight" | "pair_changed" | "timezone_date_changed" | "stop" | "remote_stop" | "summary_home" | "save_failed" | null); };
 
 export type ResultCorrectCommand = { "command_id": string; "client_instance_id": string; "document_id": string; "session_id": string; "kind": "result.correct"; "assignment_id": string; "result_id": string; "expected_result_version": string; "payload": EmptyPayload; };
 
@@ -410,7 +410,7 @@ export type SessionCancelStartResponse = { "command": (SavedCommandFact | Reject
 
 export type SessionCommandResponse = { "command": (SavedCommandFact | RejectedCommandFact); "current": (SessionProjection | LearningSessionProjection | OralSessionProjection | ConjugationSessionProjection | UnavailableSession); "state_version": string; "error"?: (ErrorDetail | null); };
 
-export type SessionProjection = { "session_id": string; "status": "active" | "summary" | "closed"; "mode": "written"; "pair": "ru-de" | "uk-de" | "en-de"; "direction": "l1-de"; "local_date": string; "bucket": ("words" | "phrases" | null); "close_reason": ("midnight" | "pair_changed" | "timezone_date_changed" | "stop" | "remote_stop" | "summary_home" | null); "progress": WrittenProgress; "assignment": (PublicAssignment | null); "summary": (WrittenSummary | null); };
+export type SessionProjection = { "session_id": string; "status": "active" | "summary" | "closed"; "mode": "written"; "pair": "ru-de" | "uk-de" | "en-de"; "direction": "l1-de"; "local_date": string; "bucket": ("words" | "phrases" | null); "close_reason": ("midnight" | "pair_changed" | "timezone_date_changed" | "stop" | "remote_stop" | "summary_home" | "save_failed" | null); "progress": WrittenProgress; "assignment": (PublicAssignment | null); "summary": (WrittenSummary | null); };
 
 export type SessionReference = { "id": string; "phase": "active" | "summary"; };
 
@@ -520,7 +520,7 @@ export type WrittenResultReadResponse = { "action": (WrittenAction | null); "res
 
 export type WrittenStatusResponse = { "action": (WrittenAction | null); "result": (WrittenResult | null); "step": (WrittenStep | UnavailableSession | UnavailableCurrent); "capabilities": WrittenCapabilities; "command": StoredCommandFact; "state_version": string; "verified_intent_hash"?: (string | null); };
 
-export type WrittenStep = { "session_id": string; "status": "active" | "summary" | "closed"; "mode": "written"; "pair": "ru-de" | "uk-de" | "en-de"; "direction": "l1-de"; "local_date": string; "bucket": ("words" | "phrases" | null); "close_reason": ("midnight" | "pair_changed" | "timezone_date_changed" | "stop" | "remote_stop" | "summary_home" | null); "progress": WrittenProgress; "assignment": (PublicAssignment | null); "summary": (WrittenSummary | null); "practice": WrittenPractice; "review_progress": (CurrentReviewProgress | null); };
+export type WrittenStep = { "session_id": string; "status": "active" | "summary" | "closed"; "mode": "written"; "pair": "ru-de" | "uk-de" | "en-de"; "direction": "l1-de"; "local_date": string; "bucket": ("words" | "phrases" | null); "close_reason": ("midnight" | "pair_changed" | "timezone_date_changed" | "stop" | "remote_stop" | "summary_home" | "save_failed" | null); "progress": WrittenProgress; "assignment": (PublicAssignment | null); "summary": (WrittenSummary | null); "practice": WrittenPractice; "review_progress": (CurrentReviewProgress | null); };
 
 export type WrittenSummary = { "completed": number; "correct": number; "wrong": number; "ratio": (SummaryRatio | null); };
 
