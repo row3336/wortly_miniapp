@@ -123,7 +123,8 @@ const isPost = (init: RequestInit | undefined, kind: string) => init?.method ===
 
 async function settled() { for (let i = 0; i < 3; i++) await act(async () => {}); }
 async function startButton(a: Server) {
-  await screen.findByRole("button", { name: /Новая группа слов/ });
+  // The first App render of a file pays the cold module start (about 1.2 s on a loaded machine), beyond the default 1 s.
+  await screen.findByRole("button", { name: /Новая группа слов/ }, exchange);
   await waitFor(() => expect(a.settingsReply).toHaveBeenCalled()); await settled();
   return screen.getByRole("button", { name: /Новая группа слов/ });
 }

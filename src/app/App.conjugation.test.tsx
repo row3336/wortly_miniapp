@@ -146,6 +146,24 @@ describe("the conjugation test through the actual App document", () => {
     expect(a.todayReply).not.toHaveBeenCalled();
   });
 
+  // The mode read itself opens the route (ApplicationDocument start("conjugation")); the host's claim of an open session
+  // is only a fallback that needs the host's own read, so it cannot stand in for it while that read is still under way.
+  it("A3 a restart with an open session opens the test route from the mode read, before the host has read the session", async () => {
+    const a = app({ sessions: [active()], reported: S1 });
+    // Observed order of session reads, not a contract: two belong to the mode read (the route opens after them), the host
+    // makes the third. Holding the third keeps the host's snapshot unsettled, so its claim cannot open the route.
+    let reads = 0;
+    const hostRead = a.model.hold((url, method) => method === "GET" && url.pathname.includes("/sessions/") && ++reads === 3);
+    render(<App />);
+    await hostRead.entered;
+    await settled();
+    expect(screen.getByRole("heading", testScreen)).toBeTruthy();
+    expect(screen.queryByRole("navigation", navigation)).toBeNull();
+    hostRead.release();
+    await editable();
+    expect(a.model.posted).toEqual([]);
+  });
+
   it("A4 a restart with a prefetched form confirms its display exactly once, after it is shown", async () => {
     const a = app({ sessions: [active({ presented: false })], reported: S1 });
     render(<App />);
@@ -170,6 +188,25 @@ describe("the conjugation test through the actual App document", () => {
     await editable();
     expect(a.starts()).toHaveLength(2);
     expect(a.starts()[1].session_id).not.toBe(a.starts()[0].session_id);
+  });
+
+  // C085: an explicit Back is the one way out of a refused start; it clears, cancels and starts nothing.
+  it("A5 native Back after a refused start shows a fresh Today that stays; a new tap starts another session", async () => {
+    const a = app();
+    a.model.server.rejectStart = "NO_MATERIAL";
+    render(<App />);
+    fireEvent.click(await startButton());
+    await screen.findByText("Не удалось обновить занятие.", undefined, exchange);
+    await settled();
+    const todays = a.todayReply.mock.calls.length;
+    await a.back.click();
+    await screen.findByRole("navigation", navigation, exchange);
+    await settled();
+    expect(screen.queryByRole("heading", testScreen)).toBeNull();
+    expect(a.todayReply.mock.calls.length).toBeGreaterThan(todays); expect(a.model.posted).toHaveLength(1);
+    fireEvent.click(await startButton());
+    await editable();
+    expect(a.starts()).toHaveLength(2); expect(a.starts()[1].session_id).not.toBe(a.starts()[0].session_id);
   });
 
   it("A7 an own unconfirmed start of an earlier document is shown before Today, and Today waits until it is resolved", async () => {

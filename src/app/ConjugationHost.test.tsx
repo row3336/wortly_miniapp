@@ -142,6 +142,16 @@ describe("useConjugationHost: start from Today", () => {
     expect(h.onToday).toHaveBeenCalledOnce();
   });
 
+  it("H3 an empty route returns to Today each time it is opened, not only the first time", async () => {
+    const h = setup();
+    await waitFor(() => expect(screen.getByTestId("today").textContent).toBe("shown"));
+    await h.route("conjugation");
+    await waitFor(() => expect(h.onToday).toHaveBeenCalledTimes(1));
+    await h.route("conjugation");
+    await waitFor(() => expect(h.onToday).toHaveBeenCalledTimes(2));
+    expect(h.model.posted).toEqual([]);
+  });
+
   it("H4 while the start is on its way the screen loads; it shows no refresh failure", async () => {
     const h = setup();
     const held = h.model.hold((url, method) => method === "POST" && url.pathname.endsWith("/commands"));
@@ -155,16 +165,57 @@ describe("useConjugationHost: start from Today", () => {
     await editable();
   });
 
-  // pending owner answer 5.1.1 (D-CONJ-HOST): TEMPORARY expectation. The host adds nothing to a refused start; the screen
-  // stays as the module shows it. Replace this test once the owner chooses what a refused start shows.
-  it.each(["NO_MATERIAL", "SETUP_REQUIRED"])("H5 a refused start (%s) stays on the module's screen: one start, no Today, no retry", async code => {
+  // pending owner answer 5.1.1 (D-CONJ-HOST): TEMPORARY expectation. The screen of a refused start stays as the module
+  // shows it and nothing leaves by itself; only native Back returns to Today (C085). Replace once the owner chooses.
+  it.each([["NO_MATERIAL", "Не удалось обновить занятие."], ["SETUP_REQUIRED", "Не удалось обновить занятие."],
+    ["SESSION_BUSY", "Занятие открыто на другом устройстве"], ["SESSION_CLOSED", "Занятие завершено."]])(
+    "H5 a refused start (%s) stays on the module's screen; Back returns to Today once and the host does not take it back", async (code, text) => {
+      const h = setup();
+      h.model.server.rejectStart = code;
+      await h.start();
+      await screen.findByText(text);
+      await macrotasks();
+      expect(h.starts()).toHaveLength(1); expect(h.model.posted).toHaveLength(1);
+      expect(h.onToday).not.toHaveBeenCalled(); expect(h.haptic).not.toHaveBeenCalled();
+      expect(h.back.bound).toBe(1);
+      await h.back.click();
+      await macrotasks();
+      expect(h.onToday).toHaveBeenCalledOnce();
+      expect(screen.getByTestId("today").textContent).toBe("shown");
+      // No claim of the refused session: the route stays on Today, nothing is cleared, cancelled or started again.
+      expect(h.onConjugation).toHaveBeenCalledOnce(); expect(h.model.posted).toHaveLength(1);
+      expect(h.values.has(studyKey)).toBe(false);
+    });
+
+  it("H5 a refusal outside the final list (VERSION_CONFLICT) gives Back nothing to do", async () => {
     const h = setup();
-    h.model.server.rejectStart = code;
+    h.model.server.rejectStart = "VERSION_CONFLICT";
     await h.start();
     await screen.findByText("Не удалось обновить занятие.");
     await macrotasks();
-    expect(h.starts()).toHaveLength(1); expect(h.model.posted).toHaveLength(1);
-    expect(h.onToday).not.toHaveBeenCalled(); expect(h.haptic).not.toHaveBeenCalled();
+    expect(h.back.bound).toBe(0);
+    expect(h.onToday).not.toHaveBeenCalled();
+  });
+
+  it("H5 an unknown start outcome (lost request) is no proof: Back does not leave", async () => {
+    const h = setup();
+    h.model.server.loseNextPost = true;
+    await h.start();
+    await waitFor(() => expect(h.starts()).toHaveLength(1));
+    await macrotasks();
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(h.back.bound).toBe(0);
+    await h.back.click();
+    expect(h.onToday).not.toHaveBeenCalled(); expect(h.values.has(studyKey)).toBe(true);
+  });
+
+  it("H5 a stale read of an open session is no refusal: Back does not leave", async () => {
+    const h = setup({ seed: true, sessions: [active({ presented: false, status: "active" })] });
+    h.model.server.failReads = true;
+    await screen.findByText("Не удалось обновить занятие.");
+    await macrotasks();
+    expect(h.back.bound).toBe(0);
+    expect(h.onToday).not.toHaveBeenCalled(); expect(h.model.posted).toEqual([]);
   });
 
   it("H10 an own unconfirmed receipt without a reported session claims the route before Today, once", async () => {

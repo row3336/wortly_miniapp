@@ -48,6 +48,9 @@ export function leavesToToday(reason: CloseReason | null): boolean {
   return reason === "summary_home";
 }
 
+/** Refusals of session.start that end this start for good (Ж01): no retry of the same ID can succeed. */
+const finalStartRefusals: readonly string[] = ["SESSION_BUSY", "NO_MATERIAL", "SETUP_REQUIRED", "SESSION_CLOSED"];
+
 // The written quiz's block for a start without confirmed settings (useWrittenHost.tsx). Not shared yet: src/written is
 // owned by another package now (D-CONJ-HOST 5.2.12, deferred); the wording is the same, no new strings.
 const copy = {
@@ -142,8 +145,15 @@ export function useConjugationHost(options: ConjugationHostOptions): Conjugation
   const study = state?.commands.study, stop = state?.commands.stop;
   const lanesPending = !!study?.pending || !!stop?.pending;
   const live = state !== null && state.phase !== "disposed" && state.phase !== "loading";
-  // Own receipts and a still open own session are shown before Today; a closed session is not resumed.
-  const claim = live && (lanesPending || state.phase === "unknown"
+  // A start the server refused for good (C085): the refused session never opened, nothing of it is pending, so the test
+  // has nothing to show or resume. Only such a proven refusal counts; an unknown outcome, a lost reply, a stale read or
+  // a mismatch are not proof. (The server's finality of these codes: C-START-REFUSAL.)
+  const refusedStart = live && !lanesPending && state.currentStep === null && study?.outcome === "rejected"
+    && study.resolved?.kind === "session.start" && study.resolved.sessionId !== null && state.sessionId !== null
+    && study.resolved.sessionId.toLowerCase() === state.sessionId.toLowerCase()
+    && finalStartRefusals.includes(study.rejectionCode ?? "");
+  // Own receipts and a still open own session are shown before Today; a closed session is not resumed, nor a refused start.
+  const claim = live && !refusedStart && (lanesPending || state.phase === "unknown"
     || state.sessionId !== null && state.phase !== "closed" && state.phase !== "idle")
     ? state.sessionId ?? study?.sessionId ?? stop?.sessionId ?? "receipt" : null;
   useEffect(() => {
@@ -189,6 +199,9 @@ export function useConjugationHost(options: ConjugationHostOptions): Conjugation
     if (view.screen === "summary" && view.canHome) back = () => flow.home();
     else if (view.screen !== "closed" && view.canStop) back = () => flow.stop();
     else if (view.screen === "closed") back = () => flow.today();
+    // pending owner answer 5.1.1 (D-CONJ-HOST): only an explicit Back leaves a refused start (C085); the screen itself,
+    // an automatic return and its wording stay as the module has them. It clears nothing and sends nothing.
+    else if (refusedStart) back = () => leave.current(state.sessionId?.toLowerCase() ?? null);
     else if (awaitingStop) back = () => {};
   }
   useBackLayer("screen", back);

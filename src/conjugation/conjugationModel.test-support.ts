@@ -52,6 +52,10 @@ export function conjugationServer(options: { sessions?: ModelSession[]; version?
   const server = {
     /** The next session.start is refused with this code (core conjugation_sessions.py: NO_MATERIAL, SETUP_REQUIRED, …). */
     rejectStart: null as string | null,
+    /** The next POST is lost on its way: the client cannot know whether it was applied. */
+    loseNextPost: false,
+    /** Session reads fail with a server error while set. */
+    failReads: false,
     hold: null as null | { match: (url: URL, method: string) => boolean; gate: Promise<void>; entered: () => void },
   };
   const bump = () => { stateVersion = String(BigInt(stateVersion) + 1n); return stateVersion; };
@@ -116,6 +120,7 @@ export function conjugationServer(options: { sessions?: ModelSession[]; version?
     if (server.hold?.match(url, method)) { const hold = server.hold; server.hold = null; hold.entered(); await hold.gate; }
     if (commandPost) {
       const command = body as unknown as ConjugationCommand; posted.push(command);
+      if (server.loseNextPost) { server.loseNextPost = false; throw new TypeError("synthetic lost request"); }
       const { client_instance_id: _c, document_id: _d, ...intent } = command;
       if (!accepted.has(intent.command_id)) {
         if (intent.kind === "session.start" && server.rejectStart) {
@@ -140,6 +145,7 @@ export function conjugationServer(options: { sessions?: ModelSession[]; version?
       return response({ ...reply, command: fact(intent, "already_applied", r), verified_intent_hash: await conjugationIntentHash(intent),
         state_version: stateVersion });
     }
+    if (server.failReads) return response({ error: { code: "WRITE_UNAVAILABLE" } }, 503);
     const sessionId = url.pathname.split("/").at(-1)!, s = sessions.get(sessionId);
     if (!s) return response({ current: { session_id: sessionId, status: "not_found" }, state_version: stateVersion });
     if (url.searchParams.has("result_id")) {
