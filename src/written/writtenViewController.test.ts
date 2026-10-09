@@ -324,6 +324,287 @@ describe("Stop and summary (Д02, Т96)", () => {
     expect(h.posts().at(-1)).toMatchObject({ kind: "session.stop", payload: { reason: "summary_home" } });
     expect(h.view.snapshot()).toMatchObject({ phase: "closed", closed: { reason: "summary_home" } });
   });
+  // Q27-А: a closure not chosen in this window keeps its server reason and reads the summary of the closed session.
+  for (const reason of ["midnight", "timezone_date_changed", "pair_changed", "remote_stop"] as const) {
+    it(`an external closure (${reason}) met by an answer keeps its reason and reads the summary once`, async () => {
+      const h = harness({ cards: [6, 7, 8] }); await h.started(); await h.answer("Haus"); await h.view.next();
+      Object.assign(h.server.state, { status: "closed", closeReason: reason, assignment: null, version: h.server.state.version + 1 });
+      await h.answer("Tisch");
+      await vi.waitFor(() => expect(h.view.snapshot().closed?.summaryRead).toBe("known"));
+      expect(h.view.snapshot()).toMatchObject({ phase: "closed", closed: { reason,
+        summary: { completed: 1, correct: 1, wrong: 0, ratio: { numerator: 1, denominator: 1 } } } });
+      expect(h.kinds().filter(kind => kind === "session.stop")).toHaveLength(0);
+    });
+  }
+  it("F3 the own Stop of a session already closed elsewhere shows that closure's summary and reason at once, no manual check", async () => {
+    const h = harness({ cards: [6, 7] }); await h.started(); await h.answer("Haus");
+    Object.assign(h.server.state, { status: "closed", closeReason: "remote_stop", assignment: null, version: h.server.state.version + 1 });
+    await h.view.stop();
+    await vi.waitFor(() => expect(h.view.snapshot().closed?.summaryRead).toBe("known"));
+    expect(h.view.snapshot()).toMatchObject({ phase: "closed", closed: { reason: "remote_stop",
+      summary: { completed: 1, correct: 1, wrong: 0 } } });
+    expect(h.kinds().filter(kind => kind === "session.stop")).toHaveLength(1);
+  });
+  it("an external closure seen by a read keeps its reason and its summary without another read", async () => {
+    const h = harness({ cards: [6, 7] }); await h.started(); await h.answer("Haus");
+    Object.assign(h.server.state, { status: "closed", closeReason: "remote_stop", assignment: null, version: h.server.state.version + 1 });
+    await h.view.refresh();
+    await vi.waitFor(() => expect(h.view.snapshot().closed?.summaryRead).toBe("known"));
+    expect(h.view.snapshot().closed).toMatchObject({ reason: "remote_stop", summary: { completed: 1, correct: 1, wrong: 0 } });
+  });
+  it("F1 a natural end closed later by the server stays natural: no reason shown, no rights, no summary read", async () => {
+    const h = harness({ cards: [6] }); await h.started(); await h.answer("Haus"); await h.view.next();
+    expect(h.view.snapshot()).toMatchObject({ phase: "summary", canSummaryHome: true });
+    Object.assign(h.server.state, { status: "closed", closeReason: "midnight", assignment: null, version: h.server.state.version + 1 });
+    await h.view.refresh();
+    expect(h.view.snapshot()).toMatchObject({ phase: "closed", closed: { reason: "midnight", natural: true, homeRequested: false },
+      summary: { completed: 1, correct: 1, wrong: 0 }, canUndo: false, canStop: false, canSummaryHome: false, canSubmit: false });
+  });
+  it("F1 an active session closed from outside is not natural, even with its numbers known", async () => {
+    const h = harness({ cards: [6, 7] }); await h.started(); await h.answer("Haus");
+    Object.assign(h.server.state, { status: "closed", closeReason: "midnight", assignment: null, version: h.server.state.version + 1 });
+    await h.view.refresh();
+    await vi.waitFor(() => expect(h.view.snapshot().closed?.summaryRead).toBe("known"));
+    expect(h.view.snapshot().closed).toMatchObject({ reason: "midnight", natural: false });
+  });
+  it("F1 «На Сегодня» met by SESSION_CLOSED on a natural summary is the requested return home", async () => {
+    const h = harness({ cards: [6] }); await h.started(); await h.answer("Haus"); await h.view.next();
+    Object.assign(h.server.state, { status: "closed", closeReason: "midnight", assignment: null, version: h.server.state.version + 1 });
+    await h.view.stop("summary_home");
+    expect(h.view.snapshot()).toMatchObject({ phase: "closed", closed: { natural: true, homeRequested: true } });
+  });
+  // D1: «Шаг назад» from the summary reopened the session; a later closure is an interruption, never a natural end.
+  it("D1 undo from the summary applied, its reply lost, closed by midnight before any read: interrupted, not natural", async () => {
+    const h = harness({ cards: [6], undo: true }); await h.started(); await h.answer("Haus"); await h.view.next();
+    expect(h.view.snapshot()).toMatchObject({ phase: "summary", canUndo: true });
+    h.fetcher.mockImplementationOnce(async (...call) => {
+      await h.server.handle(...call);
+      Object.assign(h.server.state, { status: "closed", closeReason: "midnight", assignment: null, version: h.server.state.version + 1 });
+      throw new TypeError("network");
+    });
+    await h.view.undo();
+    await h.view.refresh();
+    await vi.waitFor(() => expect(h.view.snapshot().closed?.summaryRead).toBe("known"));
+    expect(h.view.snapshot().closed).toMatchObject({ reason: "midnight", natural: false, summary: { completed: 0, correct: 0, wrong: 0 } });
+  });
+  for (const lost of [false, true]) {
+    it(`D1 undo from the summary (reply lost: ${lost}), then midnight: interrupted with its reason`, async () => {
+      const h = harness({ cards: [6], undo: true }); await h.started(); await h.answer("Haus"); await h.view.next();
+      if (lost) h.loseReply();
+      await h.view.undo();
+      await vi.waitFor(() => expect(h.server.state.status).toBe("active"));
+      Object.assign(h.server.state, { status: "closed", closeReason: "midnight", assignment: null, version: h.server.state.version + 1 });
+      await h.view.refresh();
+      await vi.waitFor(() => expect(h.view.snapshot().closed?.summaryRead).toBe("known"));
+      expect(h.view.snapshot().closed).toMatchObject({ reason: "midnight", natural: false, summary: { completed: 0 } });
+    });
+  }
+  it("D2 a reopened session whose closure comes without a projection is not natural, even when its summary cannot be read", async () => {
+    const h = harness({ cards: [6], undo: true }); await h.started(); await h.answer("Haus"); await h.view.next();
+    await h.view.undo();
+    await vi.waitFor(() => expect(h.view.snapshot().phase).toBe("question"));
+    // Midnight closes the reopened session; the answer never reaches the server and every session read fails, so the
+    // closure is known only from the status check of that answer (closed_session, no projection).
+    Object.assign(h.server.state, { status: "closed", closeReason: "midnight", assignment: null, version: h.server.state.version + 1 });
+    let dropped = false;
+    h.fetcher.mockImplementation(async (url, init) => {
+      const parsed = new URL(String(url), "http://localhost");
+      if (init?.method === "POST" && !dropped) { dropped = true; throw new TypeError("network"); }
+      if ((init?.method ?? "GET") === "GET" && parsed.pathname.includes("/sessions/")) throw new TypeError("network");
+      return h.server.handle(url, init);
+    });
+    await h.answer("Haus");
+    await vi.waitFor(() => expect(h.view.snapshot().phase).toBe("closed"));
+    await vi.waitFor(() => expect(h.view.snapshot().closed?.summaryRead).toBe("failed"));
+    expect(h.view.snapshot().closed).toMatchObject({ natural: false });
+  });
+  // C088: every card of the session excluded (K07-071): core's ordinary summary with real zeros and ratio null.
+  const zeroCounts = { completed: 0, total: 0, correct: 0, wrong: 0 }, zeroSummary = { completed: 0, correct: 0, wrong: 0, ratio: null };
+  /** Rewrites every session step the server sends: an emptied queue, its summary as given (null = missing). */
+  function emptied(h: ReturnType<typeof harness>, summary: object | null) {
+    const rewrite = (value: unknown): unknown => Array.isArray(value) ? value.map(rewrite) : value && typeof value === "object"
+      ? Object.fromEntries(Object.entries(value).map(([key, item]) => [key, key === "progress" ? zeroCounts
+        : key === "summary" && item !== null ? summary : rewrite(item)])) : value;
+    h.fetcher.mockImplementation(async (url, init) => {
+      const reply = await h.server.handle(url, init);
+      return new Response(JSON.stringify(rewrite(await reply.json())), { status: reply.status });
+    });
+  }
+  it("D3 a real summary of 0 of 0 (every card excluded) closed later is a natural end, without rights", async () => {
+    const h = harness({ cards: [6] }); await h.started(); emptied(h, zeroSummary);
+    Object.assign(h.server.state, { status: "summary", assignment: null, version: h.server.state.version + 1 });
+    await h.view.refresh();
+    expect(h.view.snapshot()).toMatchObject({ phase: "summary", summary: zeroSummary });
+    Object.assign(h.server.state, { status: "closed", closeReason: "midnight", version: h.server.state.version + 1 });
+    await h.view.refresh();
+    await vi.waitFor(() => expect(h.view.snapshot().closed?.summaryRead).toBe("known"));
+    expect(h.view.snapshot()).toMatchObject({ phase: "closed", closed: { reason: "midnight", natural: true },
+      canUndo: false, canStop: false, canSummaryHome: false, canSubmit: false });
+  });
+  it("D3 a closed 0 of 0 without an earlier summary of the session is not a natural end", async () => {
+    const h = harness({ cards: [6] }); await h.started(); emptied(h, zeroSummary);
+    Object.assign(h.server.state, { status: "closed", closeReason: "midnight", assignment: null, version: h.server.state.version + 1 });
+    await h.view.refresh();
+    await vi.waitFor(() => expect(h.view.snapshot().closed?.summaryRead).toBe("known"));
+    expect(h.view.snapshot().closed).toMatchObject({ reason: "midnight", natural: false });
+  });
+  it("D3 a summary step whose summary is missing proves no natural end", async () => {
+    const h = harness({ cards: [6] }); await h.started(); emptied(h, null);
+    Object.assign(h.server.state, { status: "summary", assignment: null, version: h.server.state.version + 1 });
+    await h.view.refresh();
+    Object.assign(h.server.state, { status: "closed", closeReason: "midnight", version: h.server.state.version + 1 });
+    await h.view.refresh();
+    // The wire decoder already refuses such a step (stale); whatever is shown, no natural end is made up.
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(h.view.snapshot().closed?.natural ?? null).not.toBe(true);
+  });
+  it("D3 counts that disagree with their summary prove no natural end", async () => {
+    const h = harness({ cards: [6] }); await h.started(); emptied(h, { completed: 1, correct: 1, wrong: 0, ratio: { numerator: 1, denominator: 1 } });
+    Object.assign(h.server.state, { status: "summary", assignment: null, version: h.server.state.version + 1 });
+    await h.view.refresh();
+    Object.assign(h.server.state, { status: "closed", closeReason: "midnight", version: h.server.state.version + 1 });
+    await h.view.refresh();
+    // The wire decoder already refuses such a step (stale); whatever is shown, no natural end is made up.
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(h.view.snapshot().closed?.natural ?? null).not.toBe(true);
+  });
+  it("C088 a lost «Шаг назад» reply, the closure and failed reads: no completed summary is made up", async () => {
+    const h = harness({ cards: [6], undo: true }); await h.started(); await h.answer("Haus"); await h.view.next();
+    // The undo is applied but its reply is lost; then midnight closes the session, and every later request fails.
+    h.fetcher.mockImplementation(async (url, init) => {
+      if (init?.method === "POST") {
+        await h.server.handle(url, init);
+        Object.assign(h.server.state, { status: "closed", closeReason: "midnight", assignment: null, version: h.server.state.version + 1 });
+      }
+      throw new TypeError("network");
+    });
+    await h.view.undo();
+    await h.view.refresh();
+    await new Promise(resolve => setTimeout(resolve, 100));
+    expect(h.view.snapshot().phase).not.toBe("summary");
+    expect(h.view.snapshot().closed?.natural ?? null).not.toBe(true);
+  });
+  it("C088 while «Шаг назад» from the summary is unresolved nothing is shown as finished; its refusal confirms the natural end", async () => {
+    const h = harness({ cards: [6], undo: true }); await h.started(); await h.answer("Haus"); await h.view.next();
+    const gate = h.hold(); const undoing = h.view.undo();
+    await vi.waitFor(() => expect(h.view.snapshot().commands.primary.pendingIntent?.kind).toBe("result.undo"));
+    // Midnight closes the session before the held undo reaches the server.
+    Object.assign(h.server.state, { status: "closed", closeReason: "midnight", assignment: null, version: h.server.state.version + 1 });
+    expect(h.view.snapshot()).toMatchObject({ phase: "undoing", closed: null, summary: { completed: 1 } });
+    // The undo meets the closed session and is refused: the summary stood, so the end was natural.
+    gate.resolve(); await undoing;
+    await vi.waitFor(() => expect(h.view.snapshot().closed?.natural).toBe(true));
+    expect(h.view.snapshot()).toMatchObject({ phase: "closed", closed: { reason: "midnight" }, canUndo: false, canStop: false,
+      canSummaryHome: false });
+  });
+  it("C088 an unknown «Шаг назад», then «Выйти» meets the closed session with whole counts: the end stays unknown", async () => {
+    const h = harness({ cards: [6], undo: true }); await h.started(); await h.answer("Haus"); await h.view.next();
+    // The undo never reaches the server and no check of it can be made; midnight closes the session.
+    h.fetcher.mockImplementation(async (url, init) => {
+      const body = init?.method === "POST" ? JSON.parse(String(init.body)) : null;
+      if (body?.kind === "result.undo" || (init?.method ?? "GET") === "GET" && String(url).includes("/commands/")) throw new TypeError("network");
+      return h.server.handle(url, init);
+    });
+    await h.view.undo();
+    Object.assign(h.server.state, { status: "closed", closeReason: "midnight", assignment: null, version: h.server.state.version + 1 });
+    await h.view.stop();
+    await new Promise(resolve => setTimeout(resolve, 100));
+    expect(h.view.snapshot().closed).toMatchObject({ reason: "midnight", natural: null });
+  });
+  // QA delta 2 (N8–N11): each path that confirms or withdraws a natural end holds on its own.
+  it("N8 a closed projection that no longer counts the whole queue withdraws the end at once, never shown as natural", async () => {
+    const seen: (boolean | null)[] = [];
+    const h = harness({ cards: [6], undo: true }); await h.started(); await h.answer("Haus"); await h.view.next();
+    const view = new WrittenViewController({ access: h.access, storage: h.storage, transport: h.transport, newId: h.newId,
+      sessionId: h.view.snapshot().sessionId, transitionMode: () => "normal",
+      onUpdate: snapshot => { if (snapshot.phase === "closed") seen.push(snapshot.closed?.natural ?? null); } });
+    owners.push(view);
+    await view.refresh();
+    expect(view.snapshot().phase).toBe("summary");
+    // Unseen by this view the session was reopened (its answer undone) and then closed: the closed counts are 0 of 1.
+    for (const item of h.server.results.values()) item.status = "undone";
+    Object.assign(h.server.state, { status: "closed", closeReason: "midnight", assignment: null, version: h.server.state.version + 1 });
+    await view.refresh();
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen).not.toContain(true);
+    expect(view.snapshot().closed?.natural).toBe(false);
+  });
+  it("N1 an active step withdraws the end even without an own undo: a later boundary closure with a failed read is not natural", async () => {
+    const h = harness({ cards: [6], undo: true }); await h.started(); await h.answer("Haus"); await h.view.next();
+    // A second view of the same session saw the natural summary; the first one then undid the answer.
+    const view = new WrittenViewController({ access: h.access, storage: h.storage, transport: h.transport, newId: h.newId,
+      sessionId: h.view.snapshot().sessionId, transitionMode: () => "normal", onUpdate: vi.fn() });
+    owners.push(view);
+    await view.refresh(); expect(view.snapshot().phase).toBe("summary");
+    await h.view.undo(); expect(h.server.state.status).toBe("active");
+    await view.refresh(); expect(view.snapshot().phase).not.toBe("summary");
+    // Midnight closes it; the second view learns that only from the status check of a lost answer, and reads fail.
+    Object.assign(h.server.state, { status: "closed", closeReason: "midnight", assignment: null, version: h.server.state.version + 1 });
+    let dropped = false;
+    h.fetcher.mockImplementation(async (url, init) => {
+      if (init?.method === "POST" && !dropped) { dropped = true; throw new TypeError("network"); }
+      if ((init?.method ?? "GET") === "GET" && String(url).includes("/sessions/")) throw new TypeError("network");
+      return h.server.handle(url, init);
+    });
+    view.setDraft("Haus"); await view.submit();
+    await vi.waitFor(() => expect(view.snapshot().phase).toBe("closed"));
+    expect(view.snapshot().closed?.natural).toBe(false);
+  });
+  /** A natural summary whose «На Сегодня» was lost; the closure is then known only from its status check (boundary). */
+  async function boundaryClosure(reopened: boolean) {
+    const h = harness({ cards: [6] }); await h.started(); await h.answer("Haus"); await h.view.next();
+    h.dropRequest(); await h.view.stop("summary_home");
+    if (reopened) for (const item of h.server.results.values()) item.status = "undone";
+    Object.assign(h.server.state, { status: "closed", closeReason: "midnight", assignment: null, version: h.server.state.version + 1 });
+    const reads = h.gets(`/sessions/${h.server.state.sessionId}?client_instance_id`).length;
+    await h.view.refresh();
+    await vi.waitFor(() => expect(h.view.snapshot().closed?.summaryRead).toBe("known"));
+    return { h, reads };
+  }
+  it("N11 a natural end known only from a boundary is confirmed by one read of the closed session", async () => {
+    const { h, reads } = await boundaryClosure(false);
+    expect(h.gets(`/sessions/${h.server.state.sessionId}?client_instance_id`).length).toBeGreaterThan(reads);
+    expect(h.view.snapshot().closed).toMatchObject({ natural: true, summary: { completed: 1 } });
+  });
+  it("N9 that read withdraws the end when the closed counts are no longer whole", async () => {
+    const { h } = await boundaryClosure(true);
+    expect(h.view.snapshot().closed).toMatchObject({ natural: false, summary: { completed: 0 } });
+  });
+  // QA delta 3 (Q1/Q4/Q7/Q8): the not_applied outcome of an unresolved «Шаг назад», its read of the closed session and the withdrawal proof.
+  const midnight = (h: ReturnType<typeof harness>) =>
+    Object.assign(h.server.state, { status: "closed", closeReason: "midnight", assignment: null, version: h.server.state.version + 1 });
+  // The undo reaches the server (or not), every reply and status check is lost; midnight closes the session; the network returns.
+  for (const applied of [false, true]) {
+    it(`Q1/Q7/Q8 an unknown «Шаг назад» (applied: ${applied}) reads the closed session at once; the network's return settles the end by the undo's outcome`, async () => {
+      vi.useFakeTimers();
+      const h = harness({ cards: [6], undo: true }); await h.started(); await h.answer("Haus"); await h.view.next();
+      let offline = true;
+      h.fetcher.mockImplementation(async (url, init) => {
+        const body = init?.method === "POST" ? JSON.parse(String(init.body)) : null;
+        if (!offline) return h.server.handle(url, init);
+        if (body?.kind === "result.undo") { if (applied) await h.server.handle(url, init); throw new TypeError("network"); }
+        if ((init?.method ?? "GET") === "GET" && String(url).includes("/commands/")) throw new TypeError("network");
+        return h.server.handle(url, init);
+      });
+      void h.view.undo(); await tick(0);
+      midnight(h);
+      void h.view.stop(); await tick(0);
+      // Q8: the closed session is read although the end is unknown; its counts show whether the undo was applied.
+      expect(h.view.snapshot().closed).toMatchObject({ reason: "midnight", natural: applied ? false : null, summaryRead: "known",
+        summary: { completed: applied ? 0 : 1 } });
+      offline = false;
+      for (let i = 0; i < 6; i++) await tick(10_000);
+      // Q1/Q7: not_applied keeps the summary that stood (natural); an accepted undo reopened the session (interrupted).
+      expect(h.view.snapshot().commands.primary.outcome).toBe(applied ? "accepted" : "not_applied");
+      expect(h.view.snapshot().closed).toMatchObject({ natural: !applied, summary: { completed: applied ? 0 : 1 } });
+    });
+  }
+  it("Q4 a closed 0 of 1 read withdraws the proof itself: repeated returns never turn the end natural again", async () => {
+    const { h } = await boundaryClosure(true);
+    expect(h.view.snapshot().closed).toMatchObject({ natural: false, summary: { completed: 0 } });
+    await h.view.refresh(); await h.view.refresh();
+    expect(h.view.snapshot().closed).toMatchObject({ natural: false, summary: { completed: 0 } });
+  });
   it("a known Stop failure offers a retry of the same ID; nothing creates a second Stop", async () => {
     const h = harness(); await h.started();
     h.dropRequest(); await h.view.stop();

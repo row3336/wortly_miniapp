@@ -126,7 +126,10 @@ export function useWrittenHost(options: WrittenHostOptions): WrittenHost {
   const primary = state?.commands.primary, stop = state?.commands.stop;
   const lanesPending = !!primary?.pending || !!stop?.pending;
   const live = state !== null && state.phase !== "disposed" && state.phase !== "loading";
-  const ownSummary = state?.phase === "closed" && state.closed?.reason === "stop";
+  // Any closure but summary_home keeps its summary: the own Stop, and one not chosen here (Q27-А, TA:205).
+  // A closure that answered the own «На Сегодня» is navigation, like summary_home itself (F1, C081).
+  const ownSummary = state?.phase === "closed" && state.closed !== null && state.closed.reason !== "summary_home"
+    && !state.closed.homeRequested;
   // Own receipts and a still open own session are shown before Today; a closed session never is.
   const claim = live && (lanesPending || state.phase === "unknown"
     || state.sessionId !== null && state.phase !== "closed" && state.phase !== "idle")
@@ -155,7 +158,7 @@ export function useWrittenHost(options: WrittenHostOptions): WrittenHost {
     }
     if (current.route !== "written") return;
     const closedId = state.closed?.sessionId.toLowerCase() ?? null;
-    // summary_home and any external closure return to Today once; the own Stop keeps its summary.
+    // summary_home returns to Today once; the own Stop and an external closure keep their «Занятие прервано» summary.
     if (state.phase === "closed" && closedId !== null && !ownSummary && !bound.notified.has(closedId)) {
       bound.notified.add(closedId);
       void current.onToday();

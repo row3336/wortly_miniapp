@@ -1,5 +1,5 @@
-import type { PublicAssignment, SessionProjection, WrittenPractice, WrittenStep, WrittenSummary } from "../api/generated";
-import { sameId } from "../api/wireValidation";
+import type { ClosedSessionBoundary, PublicAssignment, SessionProjection, WrittenPractice, WrittenStep, WrittenSummary } from "../api/generated";
+import { CLOSE_REASONS, sameId } from "../api/wireValidation";
 import type { ResultTimerView } from "../commands/resultTimer";
 import { StudyView, type StudyLanes, type StudyPhase } from "../commands/studyView";
 import type { WrittenAnswer } from "./writtenApi";
@@ -13,9 +13,19 @@ type Step = WrittenCommandSnapshot["current"];
 /** Server facts of a closed session of this owner. summaryRead describes their acquisition only; it grants nothing. */
 export type WrittenClosed = {
   sessionId: string;
-  reason: "stop" | "summary_home" | "other" | null;
+  /** The server's close reason as observed; null while unknown (Q27-А shows it on an interrupted summary). */
+  reason: ClosedSessionBoundary["close_reason"] | null;
   summary: WrittenSummary | null;
   summaryRead: "pending" | "reading" | "failed" | "known";
+  /**
+   * The server had ended this session naturally before it was closed (F1, C081, C088): a server summary projection
+   * of it with consistent counts, not withdrawn since by an active or inconsistent closed projection or an accepted
+   * undo. true keeps the completed summary without a reason; false is an interruption (Q27-А); null is not known
+   * yet: «Шаг назад» from that summary was sent and its outcome is unresolved, so neither summary is shown.
+   */
+  natural: boolean | null;
+  /** The closure answered this owner's own «На Сегодня» (summary_home met by SESSION_CLOSED): navigation only. */
+  homeRequested: boolean;
 };
 type Options = Omit<WrittenDocumentOptions, "onUpdate"> & {
   sessionId: string | null;
@@ -67,8 +77,17 @@ export type WrittenViewSnapshot = {
    */
   resultCardId: string | null;
 };
+/**
+ * Real, consistent counts of a finished step: its summary repeats its progress and the whole queue is done. Core
+ * enters summary only once the queue is exhausted, 0 of 0 when every card was excluded (K07-071).
+ */
+const finished = (step: Current | Step | null): boolean => {
+  if (!step || !("summary" in step) || !step.summary || !("progress" in step)) return false;
+  // The wire decoder already holds the summary to the progress counts (study/sessionProjection).
+  return step.progress.completed === step.progress.total;
+};
 const closeReason = (value: string | null | undefined): WrittenClosed["reason"] =>
-  value === "stop" || value === "summary_home" ? value : value ? "other" : null;
+  value && CLOSE_REASONS.includes(value) ? value as ClosedSessionBoundary["close_reason"] : null;
 
 /** Presentation is local; only document commands can establish a saved answer, presentation or closure. */
 export class WrittenViewController extends StudyView<WrittenDocumentCommands, Current, WrittenAnswer, WrittenViewSnapshot> {
@@ -76,6 +95,10 @@ export class WrittenViewController extends StudyView<WrittenDocumentCommands, Cu
   private practice: { value: WrittenPractice; version: string } | null = null;
   private requestedBucket: "words" | "phrases" | null = null;
   private closedFacts: WrittenClosed | null = null;
+  /** The session whose server summary projection proves a natural end; an undo back to active withdraws it. */
+  private naturalEnd: string | null = null;
+  /** That proof while «Шаг назад» from the summary is unresolved: only the undo's own outcome settles it. */
+  private naturalSuspended: string | null = null;
   private summaryReading: Promise<void> | null = null;
 
   constructor(options: Options) {
@@ -86,12 +109,20 @@ export class WrittenViewController extends StudyView<WrittenDocumentCommands, Cu
     this.cancelTimer(); this.phase = "closed"; this.question = null; this.draft = ""; this.draftAssignmentId = null;
     this.pendingGradeAdvance = null; this.previous = false;
     if (!this.closedFacts || !sameId(this.closedFacts.sessionId, sessionId)) {
-      this.closedFacts = { sessionId, reason: null, summary: null, summaryRead: "pending" };
+      this.closedFacts = { sessionId, reason: null, summary: null, summaryRead: "pending", natural: null, homeRequested: false };
     }
+    this.syncNatural();
     // The first known reason wins; a later observation only fills an unknown one.
     this.closedFacts.reason ??= closeReason(reason);
+    // A closure met by a refused command reads no session by itself: its summary is read outside this update (Q27-А).
+    void Promise.resolve().then(() => this.readClosedSummary());
   }
   protected captured(step: Current, version: string): void {
+    // Not a local phase nor equal counts alone: a server summary step of this session with its summary present.
+    if (step.status === "summary" && finished(step)) { this.naturalEnd = step.session_id; this.naturalSuspended = null; }
+    // An active step withdraws the proof. A closed step never creates or restores it: its counts are checked once, by
+    // knowClosedSummary, whichever way the closure became known (a projection or a boundary).
+    else if (step.status !== "closed") this.withdrawNatural();
     if ("practice" in step && (!this.practice || BigInt(version) >= BigInt(this.practice.version))) {
       this.practice = { value: structuredClone(step.practice), version };
     }
@@ -100,6 +131,7 @@ export class WrittenViewController extends StudyView<WrittenDocumentCommands, Cu
     }
   }
   protected closure(state: StudyLanes): { reason: string | null } | null {
+    this.trackUndo(state);
     const boundary = state.primary.closedSession ?? state.stop.closedSession;
     if (state.stop.outcome === "accepted" && state.stop.resolved?.kind === "session.stop" && this.sessionId
       && sameId(state.stop.resolved.sessionId, this.sessionId)) return { reason: null };
@@ -134,13 +166,15 @@ export class WrittenViewController extends StudyView<WrittenDocumentCommands, Cu
         && sameId(this.answer.result.assignment_id, this.question.id) ? this.question.card_id : null };
   }
   /**
-   * The summary of this owner's own Stop is the closed session projection itself (C-WSUM): the server counted every
-   * answer committed before the closure, so neither a result address nor an unknown receipt is needed. Without that
-   * projection at hand the session is read once. Data only; it restores no right.
+   * The summary of an interrupted session (the own Stop or any closure not chosen here, Q27-А) is the closed session
+   * projection itself (C-WSUM): the server counted every answer committed before the closure, so neither a result
+   * address nor an unknown receipt is needed. Without that projection at hand the session is read once. summary_home
+   * leaves the summary it already showed. Data only; it restores no right.
    */
   private readClosedSummary(): Promise<void> {
     const facts = this.closedFacts;
-    if (!facts || facts.reason !== "stop" || facts.summaryRead === "known" || !this.live()) return Promise.resolve();
+    // A natural end is read too: only its closed projection can confirm that the session was not reopened (D1).
+    if (!facts || facts.reason === "summary_home" || facts.summaryRead === "known" || !this.live()) return Promise.resolve();
     if (this.knowClosedSummary(facts, this.current)) { this.emit(); return Promise.resolve(); }
     if (this.summaryReading) return this.summaryReading;
     const task = (async () => {
@@ -153,15 +187,47 @@ export class WrittenViewController extends StudyView<WrittenDocumentCommands, Cu
     this.summaryReading = task;
     return task;
   }
+  /** «Шаг назад» from a proven summary suspends the proof until its own outcome is known (C088). */
+  private trackUndo(state: StudyLanes): void {
+    const lane = state.primary;
+    if (this.naturalEnd && lane.pending && lane.outcome === null && lane.pendingIntent?.kind === "result.undo"
+      && sameId(lane.pendingIntent.session_id, this.naturalEnd)) {
+      this.naturalSuspended = this.naturalEnd; this.naturalEnd = null;
+    } else if (this.naturalSuspended && lane.resolved?.kind === "result.undo" && lane.outcome !== null
+      && sameId(lane.resolved.sessionId, this.naturalSuspended)) {
+      // Not applied or refused: the summary stood. Accepted: the session was reopened.
+      if (lane.outcome === "accepted") this.naturalSuspended = null;
+      else { this.naturalEnd = this.naturalSuspended; this.naturalSuspended = null; }
+    }
+    this.syncNatural();
+  }
+  private withdrawNatural(): void {
+    this.naturalEnd = null; this.naturalSuspended = null;
+    if (this.closedFacts) this.closedFacts.natural = false;
+  }
+  /**
+   * Closed facts follow the proof. An interruption is final: withdrawNatural clears the proof itself, and a closed
+   * session issues no summary step that could prove it again.
+   */
+  private syncNatural(): void {
+    const facts = this.closedFacts;
+    if (!facts) return;
+    const own = (id: string | null) => id !== null && sameId(id, facts.sessionId);
+    facts.natural = own(this.naturalEnd) ? true : own(this.naturalSuspended) ? null : false;
+  }
   private knowClosedSummary(facts: WrittenClosed, step: Step | Current | null): boolean {
     if (!step || !("summary" in step) || step.status !== "closed" || !step.summary || !sameId(step.session_id, facts.sessionId)) return false;
     facts.summary = structuredClone(step.summary); facts.summaryRead = "known";
+    if (!finished(step)) this.withdrawNatural();
+    // A closure met without its reason (a refused command) learns it from the closed projection.
+    facts.reason ??= closeReason(step.close_reason);
     return true;
   }
   start(bucket: "words" | "phrases"): Promise<void> {
     if (bucket !== "words" && bucket !== "phrases") return Promise.reject(new Error("written bucket required"));
     if (!this.snapshot().canStart) return Promise.resolve();
     this.sessionId = this.options.newId(); this.current = null; this.currentVersion = null; this.summary = null; this.practice = null; this.closedFacts = null;
+    this.naturalEnd = null; this.naturalSuspended = null;
     this.requestedBucket = bucket;
     this.question = null; this.answer = null; this.answerVersion = null; this.draft = ""; this.draftAssignmentId = null;
     this.previous = false; this.pendingGradeAdvance = null; this.waitNext = false;
@@ -197,7 +263,12 @@ export class WrittenViewController extends StudyView<WrittenDocumentCommands, Cu
         // The summary may first wait for an in-flight answer to settle; Stop itself is already confirmed.
         void this.readClosedSummary();
       } else if (own && state.outcome === "not_applied") this.close(sessionId, state.closedSession?.close_reason ?? null);
-      else if (state.outcome === "rejected") { this.phase = "stale"; this.problem = state.rejectionCode ?? "stop_rejected"; }
+      // root decision, pending owner (M-WRITTEN-CLOSED F3): a session already closed elsewhere is that closure, not a
+      // failed Stop; its summary is read at once and shows the actual reason, no manual check.
+      else if (state.outcome === "rejected" && state.rejectionCode === "SESSION_CLOSED") {
+        this.close(sessionId, state.closedSession?.close_reason ?? null);
+        if (reason === "summary_home" && this.closedFacts && sameId(this.closedFacts.sessionId, sessionId)) this.closedFacts.homeRequested = true;
+      } else if (state.outcome === "rejected") { this.phase = "stale"; this.problem = state.rejectionCode ?? "stop_rejected"; }
     }).finally(() => { if (this.stopping === task) this.stopping = null; this.emit(); });
     this.stopping = task; this.emit(); return task;
   }

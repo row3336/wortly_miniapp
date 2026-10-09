@@ -82,7 +82,13 @@ export function WrittenScreen({ state, language, submitOnEnter, actions, onToday
   const pendingResult = state.phase === "changing_result" ? "changing" : state.phase === "unknown" && revising ? "unknown" : null;
   const unknownAnswer = state.phase === "unknown" && primary.pendingIntent?.kind === "answer.submit";
   const closed = state.phase === "closed" ? state.closed : null;
-  const ownStop = closed?.reason === "stop";
+  // Every closure but summary_home is an interrupted session with its summary (Д02; Q27-А for one not chosen here).
+  const interrupted = closed !== null && closed.reason !== "summary_home" && closed.natural === false;
+  // F1 (C081): a natural end closed later keeps its confirmed completed summary; the closed session grants nothing.
+  // summary_home itself, accepted or met by SESSION_CLOSED, is only the way to Today.
+  const naturalClosed = closed !== null && closed.natural === true && closed.reason !== "summary_home" && !closed.homeRequested;
+  // C088: «Шаг назад» from that summary is unresolved, so neither its completed nor an interrupted summary is known.
+  const undecided = closed !== null && closed.natural === null && closed.reason !== "summary_home" && !closed.homeRequested;
   const problemCode = state.problem, phrases = state.bucket === "phrases";
   // 2.31б: the daily count of unique items of the session's group, taken from the server step; never a local tally.
   const practice = state.practice;
@@ -103,7 +109,7 @@ export function WrittenScreen({ state, language, submitOnEnter, actions, onToday
   // An ordinary request in flight shows only its indicator; checking and retry belong to an unknown outcome (TA табл. 5.1).
   const unknownLane = manualLanes.some(lane => lane.pending && lane.outcome === null && lane.phase !== "sending");
   const isClosed = state.phase === "closed" || state.phase === "disposed";
-  const summaryFailed = ownStop && closed?.summaryRead === "failed";
+  const summaryFailed = interrupted && closed.summaryRead === "failed";
   const showRecovery = !isClosed && (unknownLane || !automatic && (!!problem && state.phase !== "idle" || state.phase === "stale"))
     || summaryFailed;
   const recovering = isClosed ? null : recoveryCover(recoveryScreen(state.commands), state.commands);
@@ -119,15 +125,16 @@ export function WrittenScreen({ state, language, submitOnEnter, actions, onToday
   const refineCard = result && !pendingResult && !primary.pending && !stop.pending ? state.resultCardId : null;
   useEnterNext(root, composing, submitOnEnter, result, canNext, actions);
 
-  // Waiting for the summary of the own Stop looks like the application start, never like a zero result.
-  if (ownStop && (closed.summaryRead === "pending" || closed.summaryRead === "reading")) return <main className="app-shell" lang={language} aria-busy="true">
+  // Waiting for the summary of an interrupted session looks like the application start, never like a zero result.
+  if (interrupted && (closed.summaryRead === "pending" || closed.summaryRead === "reading")) return <main className="app-shell" lang={language} aria-busy="true">
     <div role="status" aria-label={t.summary}>
       <Loader />
       <p>{t.loading}</p>
     </div>
   </main>;
 
-  const summary = state.phase === "summary" ? state.summary : ownStop && closed.summaryRead === "known" ? closed.summary : null;
+  const summary = state.phase === "summary" || naturalClosed ? state.summary
+    : interrupted && closed.summaryRead === "known" ? closed.summary : null;
   return <main ref={root} className="written-screen" lang={language} onCompositionStart={() => { composing.current = true; }}
     onCompositionEnd={() => { composing.current = false; }}>
     {!summary && <header className="written-header">
@@ -155,20 +162,21 @@ export function WrittenScreen({ state, language, submitOnEnter, actions, onToday
     {state.phase === "previous_result" && primary.pendingIntent?.kind === "assignment.present" && primary.outcome === null
       && <p role="status">{t.present}</p>}
     {state.canPrevious && <button type="button" className="written-previous" onClick={() => actions.previousResult()}>{t.previous}</button>}
-    {summary && <WrittenSummary summary={summary} outcome={state.phase === "summary" ? "completed" : "interrupted"} language={language}
+    {summary && <WrittenSummary summary={summary} outcome={state.phase === "summary" || naturalClosed ? "completed" : "interrupted"} language={language}
+      closedReason={!interrupted || closed.reason === "stop" || closed.reason === "summary_home" ? undefined : closed.reason}
       canToday={state.phase === "summary" ? state.canSummaryHome : true}
       onUndo={state.phase === "summary" && state.canUndo ? () => { void actions.undo(); } : undefined}
       onToday={() => { if (state.phase === "summary") void actions.stop("summary_home"); else onToday(); }} />}
     {["loading", "stopping", "disposed", "undoing"].includes(state.phase) && <p role="status">
       {state.phase === "loading" ? t.loading : state.phase === "stopping" ? t.stop : state.phase === "undoing"
         ? stepBackCopy[language].pending : t.unavailable}</p>}
-    {state.phase === "closed" && !summary && <p role="status">{t.closed}</p>}
+    {state.phase === "closed" && !summary && <p role="status">{undecided ? t.unknown : t.closed}</p>}
     {state.phase === "unknown" && !state.question && !unknownAnswer && !result && <p role="status">{t.unknown}</p>}
     {problem && !isClosed && <p role="status">{problem}</p>}
     {showRecovery && <CommandRecovery className="written-recovery" language={language} lanes={manualLanes} localOnly={localOnly}
       canRetryPrimary={state.canRetryPrimary} canRetryStop={stop.canRetry}
       onCheck={() => { void (localOnly ? actions.cleanup() : actions.refresh()); }} onRetry={lane => { void actions.retry(lane); }} />}
     {recovering && <RecoveryOverlay screen={recovering} language={language} />}
-    {(state.phase === "idle" && !unresolved || summaryFailed) && <button type="button" className="written-today" onClick={onToday}>{t.today}</button>}
+    {(state.phase === "idle" && !unresolved || summaryFailed || undecided) && <button type="button" className="written-today" onClick={onToday}>{t.today}</button>}
   </main>;
 }

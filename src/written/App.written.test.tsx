@@ -9,6 +9,9 @@ import { deferred, id, profile, response } from "./writtenFixtures.test-support"
 
 useWrittenAppEnvironment();
 
+/** Lets later effects and replies of the rendered state run, so a screen that would leave by itself has left. */
+const settle = () => act(async () => { await new Promise(resolve => setTimeout(resolve, 300)); });
+
 /** A spy on Telegram's close for the stubbed WebApp of app(). */
 function telegramClose() {
   const close = vi.fn();
@@ -55,6 +58,203 @@ describe("Written quiz through the actual App document", () => {
     await screen.findByText(pairText);
     expect(a.posts().at(-1)).toMatchObject({ kind: "session.stop", payload: { reason: "summary_home" } });
     expect(a.haptic).toHaveBeenCalledTimes(3);
+  });
+
+  // Q27-А (TA:205, CT:144): a closure not chosen in this window stays on «Занятие прервано.» with its numbers and reason.
+  const reasons = { midnight: "Занятие закрыто: начался новый день", timezone_date_changed: "Занятие закрыто: сменилась дата",
+    pair_changed: "Занятие закрыто: изменилась языковая пара", remote_stop: "Занятие завершено на другом устройстве" } as const;
+  for (const [reason, text] of Object.entries(reasons)) {
+    it(`W6 an external closure (${reason}) during the quiz keeps the interrupted summary with its reason; Today only on «На Сегодня»`, async () => {
+      const a = app({ cards: [6, 7, 8] }); render(<App />);
+      await startWords(); await answer("Haus");
+      fireEvent.click(screen.getByRole("button", { name: "Далее" }));
+      await screen.findByText("слово 7");
+      Object.assign(a.server.state, { status: "closed", closeReason: reason, assignment: null, version: a.server.state.version + 1 });
+      const todayReads = a.todayReply.mock.calls.length;
+      fireEvent.change(field(), { target: { value: "Tisch" } });
+      fireEvent.click(screen.getByRole("button", { name: "Проверить" }));
+      await screen.findByText("Занятие прервано.", undefined, exchange);
+      // The summary stays: nothing goes to Today by itself (it would read Today again).
+      await settle();
+      expect(screen.getByText("Занятие прервано.")).toBeTruthy();
+      expect(a.todayReply.mock.calls.length).toBe(todayReads);
+      expect(screen.getByText(text)).toBeTruthy();
+      expect(Array.from(document.querySelectorAll(".written-summary dd"), item => item.textContent).slice(0, 3)).toEqual(["1", "1", "0"]);
+      expect(screen.queryByText(pairText)).toBeNull();
+      expect(a.kinds().filter(kind => kind === "session.stop")).toHaveLength(0);
+      fireEvent.click(screen.getByRole("button", { name: "На Сегодня" }));
+      await screen.findByText(pairText, undefined, exchange);
+      expect(a.kinds().filter(kind => kind === "session.stop")).toHaveLength(0);
+    });
+  }
+  it("W8 an external closure whose summary cannot be read offers the check and «На Сегодня», never zeros or Today by itself", async () => {
+    const a = app({ cards: [6, 7, 8] }); render(<App />);
+    await startWords(); await answer("Haus");
+    fireEvent.click(screen.getByRole("button", { name: "Далее" }));
+    await screen.findByText("слово 7");
+    Object.assign(a.server.state, { status: "closed", closeReason: "midnight", assignment: null, version: a.server.state.version + 1 });
+    // Only the read of the closed session fails: the answer itself still meets the server's SESSION_CLOSED.
+    const base = a.fetcher.getMockImplementation()!;
+    a.fetcher.mockImplementation(async (url, init) => {
+      const parsed = new URL(String(url), "http://localhost");
+      if ((init?.method ?? "GET") === "GET" && parsed.pathname.includes("/sessions/") && !parsed.searchParams.has("result_id")) {
+        throw new TypeError("network");
+      }
+      return base(url, init);
+    });
+    const restore = () => { a.fetcher.mockImplementation(base); };
+    fireEvent.change(field(), { target: { value: "Tisch" } });
+    fireEvent.click(screen.getByRole("button", { name: "Проверить" }));
+    await screen.findByRole("button", { name: "На Сегодня" }, exchange);
+    await settle();
+    expect(screen.getByRole("button", { name: "На Сегодня" })).toBeTruthy();
+    expect(screen.queryByText("Занятие прервано.")).toBeNull();
+    expect(document.querySelector(".written-recovery")).not.toBeNull();
+    expect(screen.queryByText(pairText)).toBeNull();
+    restore();
+    fireEvent.click(screen.getByRole("button", { name: "На Сегодня" }));
+    await screen.findByText(pairText, undefined, exchange);
+  });
+  it("W9 the own «Выйти» of a session already closed on another device shows its summary and reason at once (F3)", async () => {
+    const a = app({ cards: [6, 7, 8] }); render(<App />);
+    await startWords(); await answer("Haus");
+    Object.assign(a.server.state, { status: "closed", closeReason: "remote_stop", assignment: null, version: a.server.state.version + 1 });
+    fireEvent.click(screen.getByRole("button", { name: "Выйти" }));
+    await screen.findByText("Занятие прервано.", undefined, exchange);
+    // The own «Выйти» is not «На Сегодня»: the summary stays, nothing goes to Today by itself (D4).
+    const todayReads = a.todayReply.mock.calls.length;
+    await settle();
+    expect(screen.getByText("Занятие прервано.")).toBeTruthy();
+    expect(screen.queryByText(pairText)).toBeNull();
+    expect(a.todayReply.mock.calls.length).toBe(todayReads);
+    expect(screen.getByText(reasons.remote_stop)).toBeTruthy();
+    expect(Array.from(document.querySelectorAll(".written-summary dd"), item => item.textContent).slice(0, 3)).toEqual(["1", "1", "0"]);
+    expect(screen.queryByRole("button", { name: "Проверить состояние" })).toBeNull();
+    expect(screen.queryByText("Занятие завершено.")).toBeNull();
+  });
+  // F5: a Stop of this person from another window (close_reason=stop, CT:80) is shown like the own Stop, without a reason line.
+  it("W10 an external closure with close_reason=stop shows the interrupted summary without a reason line", async () => {
+    const a = app({ cards: [6, 7, 8] }); render(<App />);
+    await startWords(); await answer("Haus");
+    fireEvent.click(screen.getByRole("button", { name: "Далее" }));
+    await screen.findByText("слово 7");
+    Object.assign(a.server.state, { status: "closed", closeReason: "stop", assignment: null, version: a.server.state.version + 1 });
+    fireEvent.change(field(), { target: { value: "Tisch" } });
+    fireEvent.click(screen.getByRole("button", { name: "Проверить" }));
+    await screen.findByText("Занятие прервано.", undefined, exchange);
+    expect(Array.from(document.querySelectorAll(".written-summary p"), item => item.textContent)).toEqual(["Занятие прервано."]);
+    expect(Array.from(document.querySelectorAll(".written-summary dd"), item => item.textContent).slice(0, 3)).toEqual(["1", "1", "0"]);
+    expect(a.kinds().filter(kind => kind === "session.stop")).toHaveLength(0);
+  });
+  // F1 (C081): a natural end closed later by the server stays «Занятие завершено.», names no reason and grants nothing.
+  it("W11 a natural summary closed by the server while hidden stays completed after foreground; Today only by navigation", async () => {
+    const a = app({ cards: [6] }); render(<App />);
+    await startWords(); await answer("Haus");
+    fireEvent.click(screen.getByRole("button", { name: "Далее" }));
+    await screen.findByText("Занятие завершено.");
+    const posted = a.posts().length;
+    Object.assign(a.server.state, { status: "closed", closeReason: "midnight", assignment: null, version: a.server.state.version + 1 });
+    const reads = a.fetcher.mock.calls.length;
+    fireEvent(document, new Event("visibilitychange"));
+    await waitFor(() => expect(a.fetcher.mock.calls.length).toBeGreaterThan(reads), exchange);
+    await settle(); await settle();
+    expect(Array.from(document.querySelectorAll(".written-summary p"), item => item.textContent)).toEqual(["Занятие завершено."]);
+    expect(Array.from(document.querySelectorAll(".written-summary dd"), item => item.textContent).slice(0, 3)).toEqual(["1", "1", "0"]);
+    expect(screen.queryByText("Занятие прервано.")).toBeNull();
+    // The closed session grants nothing: no step back, no exit, no check.
+    for (const name of ["Шаг назад", "Выйти", "Проверить состояние"]) expect(screen.queryByRole("button", { name })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "На Сегодня" }));
+    await screen.findByText(pairText, undefined, exchange);
+    expect(a.posts()).toHaveLength(posted);
+  });
+  it("W12 «На Сегодня» on a natural summary the server has closed meanwhile (SESSION_CLOSED) goes to Today, no check", async () => {
+    const a = app({ cards: [6] }); render(<App />);
+    await startWords(); await answer("Haus");
+    fireEvent.click(screen.getByRole("button", { name: "Далее" }));
+    await screen.findByText("Занятие завершено.");
+    Object.assign(a.server.state, { status: "closed", closeReason: "midnight", assignment: null, version: a.server.state.version + 1 });
+    fireEvent.click(screen.getByRole("button", { name: "На Сегодня" }));
+    await screen.findByText(pairText, undefined, exchange);
+    expect(a.posts().at(-1)).toMatchObject({ kind: "session.stop", payload: { reason: "summary_home" } });
+    expect(a.kinds().filter(kind => kind === "session.stop")).toHaveLength(1);
+    expect(screen.queryByText("Занятие прервано.")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Проверить состояние" })).toBeNull();
+  });
+  it("W13 «Шаг назад» from the natural summary, then midnight: the reopened session is interrupted with its reason (D1, D2)", async () => {
+    const a = app({ cards: [6], undo: true }); render(<App />);
+    await startWords(); await answer("Haus");
+    fireEvent.click(screen.getByRole("button", { name: "Далее" }));
+    await screen.findByText("Занятие завершено.");
+    fireEvent.click(screen.getByRole("button", { name: "Шаг назад" }));
+    await waitFor(() => expect(field().readOnly).toBe(false), exchange);
+    Object.assign(a.server.state, { status: "closed", closeReason: "midnight", assignment: null, version: a.server.state.version + 1 });
+    fireEvent.change(field(), { target: { value: "Haus" } });
+    fireEvent.click(screen.getByRole("button", { name: "Проверить" }));
+    await screen.findByText("Занятие прервано.", undefined, exchange);
+    expect(screen.getByText(reasons.midnight)).toBeTruthy();
+    expect(screen.queryByText("Занятие завершено.")).toBeNull();
+    expect(Array.from(document.querySelectorAll(".written-summary dd"), item => item.textContent).slice(0, 3)).toEqual(["0", "0", "0"]);
+  });
+  // C088 (K07-071): every card excluded is an ordinary summary with real zeros; a later closure keeps it completed.
+  it("W14 a real summary of 0 of 0 closed later by the server stays «Занятие завершено.» without a reason", async () => {
+    const a = app({ cards: [6] }); render(<App />);
+    await startWords();
+    const zero = { completed: 0, total: 0, correct: 0, wrong: 0 }, summary = { completed: 0, correct: 0, wrong: 0, ratio: null };
+    const rewrite = (value: unknown): unknown => Array.isArray(value) ? value.map(rewrite) : value && typeof value === "object"
+      ? Object.fromEntries(Object.entries(value).map(([key, item]) => [key, key === "progress" ? zero
+        : key === "summary" && item !== null ? summary : rewrite(item)])) : value;
+    const base = a.fetcher.getMockImplementation()!;
+    a.fetcher.mockImplementation(async (url, init) => {
+      const reply = await base(url, init), path = new URL(String(url), "http://localhost").pathname;
+      if (!path.includes("/sessions/") && !path.includes("/commands")) return reply;
+      return response(rewrite(await reply.json()), reply.status);
+    });
+    // The only card was excluded elsewhere in this quiz: the server's step is the summary of an emptied queue.
+    Object.assign(a.server.state, { status: "summary", assignment: null, version: a.server.state.version + 1 });
+    fireEvent(document, new Event("visibilitychange"));
+    await screen.findByText("Занятие завершено.", undefined, exchange);
+    Object.assign(a.server.state, { status: "closed", closeReason: "midnight", version: a.server.state.version + 1 });
+    const reads = a.fetcher.mock.calls.length;
+    fireEvent(document, new Event("visibilitychange"));
+    await waitFor(() => expect(a.fetcher.mock.calls.length).toBeGreaterThan(reads), exchange);
+    await settle(); await settle();
+    expect(Array.from(document.querySelectorAll(".written-summary p"), item => item.textContent)).toEqual(["Занятие завершено."]);
+    expect(Array.from(document.querySelectorAll(".written-summary dd"), item => item.textContent)).toEqual(["0", "0", "0", "—"]);
+    expect(screen.queryByRole("button", { name: "Шаг назад" })).toBeNull();
+  });
+  it("W15 an unknown «Шаг назад», then «Выйти» on the closed session: neither a completed nor an interrupted summary (C088)", async () => {
+    const a = app({ cards: [6], undo: true }); render(<App />);
+    await startWords(); await answer("Haus");
+    fireEvent.click(screen.getByRole("button", { name: "Далее" }));
+    await screen.findByText("Занятие завершено.");
+    const base = a.fetcher.getMockImplementation()!;
+    a.fetcher.mockImplementation(async (url, init) => {
+      const body = init?.method === "POST" ? JSON.parse(String(init.body)) : null;
+      if (body?.kind === "result.undo" || (init?.method ?? "GET") === "GET" && String(url).includes("/commands/")) throw new TypeError("network");
+      return base(url, init);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Шаг назад" }));
+    await waitFor(() => expect(screen.queryByText("Занятие завершено.")).toBeNull(), exchange);
+    Object.assign(a.server.state, { status: "closed", closeReason: "midnight", assignment: null, version: a.server.state.version + 1 });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Выйти" })).toBeTruthy(), exchange);
+    fireEvent.click(screen.getByRole("button", { name: "Выйти" }));
+    await screen.findByText("Проверяем, сохранилось ли действие.", undefined, exchange);
+    await settle();
+    expect(screen.queryByText("Занятие завершено.")).toBeNull();
+    expect(screen.queryByText("Занятие прервано.")).toBeNull();
+    expect(screen.queryByText(reasons.midnight)).toBeNull();
+    // The way out stays; the unresolved undo itself is still recovered by its ID before Today (own receipts first).
+    expect(screen.getByRole("button", { name: "На Сегодня" })).toBeTruthy();
+  });
+  it("W7 the own «Выйти» shows the interrupted summary without a closure reason", async () => {
+    const a = app({ cards: [6, 7, 8] }); render(<App />);
+    await startWords(); await answer("Haus");
+    fireEvent.click(screen.getByRole("button", { name: "Выйти" }));
+    await screen.findByText("Занятие прервано.", undefined, exchange);
+    expect(a.posts().at(-1)).toMatchObject({ kind: "session.stop", payload: { reason: "stop" } });
+    for (const text of [...Object.values(reasons), "Занятие закрыто"]) expect(screen.queryByText(text)).toBeNull();
+    // The summary carries only its outcome line: no reason line follows it.
+    expect(Array.from(document.querySelectorAll(".written-summary p"), item => item.textContent)).toEqual(["Занятие прервано."]);
   });
 
   it("W4 while a sent Stop is awaited, Back stays bound and creates no second Stop (Т96)", async () => {
