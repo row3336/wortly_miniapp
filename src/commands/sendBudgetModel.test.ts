@@ -381,7 +381,7 @@ describe("slot protocol model on MemorySendBudget (D-CP5 5.3.9, port of F1-ATTEM
     { attempts: [2, 2], prefill: 0, late: "one", crash: false },
     { attempts: [2, 2], prefill: 4, late: "one", ban: true },
     { attempts: [2, 2], prefill: 4, late: "one", refuse: true },
-    { attempts: [3, 2], prefill: 5, late: "one", ban: true, refuse: true },
+    { attempts: [3, 3], prefill: 5, late: "one", ban: true, refuse: true },
     { attempts: [2, 2], prefill: 5, late: "one", damage: true },
   ])("no violation in every interleaving: $attempts attempts, $prefill sent before, late $late, ban $ban, refuse $refuse, damage $damage", async (config) => {
     const report = await explore(config);

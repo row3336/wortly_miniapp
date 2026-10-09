@@ -649,6 +649,22 @@ describe.each(SUBJECTS)("damaged records and their release (C069, C073, C075 tab
     expect(peek(releaseKey(PROFILE, NEW_SESSION))).toBeUndefined();
   });
 
+  it("delta QA 3 (Q2): only sessionId reads as N, in upper case — no release of N", async () => {
+    const { store, seed, peek } = await make();
+    // target.id stays the old assignment, so the case-insensitive sessionId check is the only evidence of N.
+    seed(DAMAGED, { ...damagedValue, sessionId: NEW_SESSION.toUpperCase() });
+    expect(await store.createAndReserve(startOf(NEW_SESSION, START2), attempt(2), 1_000, [DAMAGED])).toEqual({ outcome: "session_not_new" });
+    expect(peek(releaseKey(PROFILE, NEW_SESSION))).toBeUndefined();
+  });
+
+  it("delta QA 3 (Q1): only target.id reads as N, in upper case — no release of N", async () => {
+    const { store, seed, peek } = await make();
+    // sessionId stays the old session S, so target.id is the only evidence of N.
+    seed(DAMAGED, { ...damagedValue, target: { field: "session_id", id: NEW_SESSION.toUpperCase() } });
+    expect(await store.createAndReserve(startOf(NEW_SESSION, START2), attempt(2), 1_000, [DAMAGED])).toEqual({ outcome: "session_not_new" });
+    expect(peek(releaseKey(PROFILE, NEW_SESSION))).toBeUndefined();
+  });
+
   it("delta QA P1c: the old session S has valid records — a start of S cannot release it", async () => {
     const { store, seed, peek } = await make();
     expect(await store.createAndReserve(binding, attempt(1), 1_000)).toMatchObject({ outcome: "reserved" });
