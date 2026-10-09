@@ -12,7 +12,8 @@ import { aid, json, profileCurrent } from "./actionTestData.test-support";
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 /** Core-shaped card endpoints: view, context, Learning state, card.exclude/return/relearn and feedback.send. */
-function server() {
+/** gate: the context.open reply is built when the server applies it and delivered only once the gate opens. */
+function server(gate?: Promise<void>) {
   const s = { state: 10, excluded: false, version: null as string | null, next: 500, posts: [] as Record<string, any>[],
     contexts: new Map<string, "open" | "closed">(), inbox: new Map<string, string>() };
   const view = (localDate: string | null = "2026-10-07") => {
@@ -50,7 +51,9 @@ function server() {
     if (body.kind === "context.open" || body.kind === "context.close") {
       let contextId: string = body.context_id;
       if (body.kind === "context.open") { contextId = aid(s.next++); s.contexts.set(contextId, "open"); } else s.contexts.set(contextId, "closed");
-      return json({ command: fact({ target_id: CARD, context_id: contextId }), current: context(contextId), state_version: String(s.state) });
+      const reply = json({ command: fact({ target_id: CARD, context_id: contextId }), current: context(contextId), state_version: String(s.state) });
+      if (body.kind === "context.open" && gate) await gate;
+      return reply;
     }
     if (body.kind === "feedback.send") {
       s.inbox.set(body.command_id, aid(950));
@@ -66,8 +69,8 @@ function server() {
   return Object.assign(s, { fetcher });
 }
 
-function fixture(origin: CardOrigin) {
-  const srv = server(), values = new Map<string, string>();
+function fixture(origin: CardOrigin, gate?: Promise<void>) {
+  const srv = server(gate), values = new Map<string, string>();
   const storage: AsyncStorage = { get: async key => values.get(key) ?? null, set: async (key, value) => { values.set(key, value); },
     remove: async key => { values.delete(key); } };
   const opened: OpenedClient = { status: "opened", client_instance_id: aid(1), document_id: aid(2), document_epoch: "1", proof_version: "1",
@@ -144,5 +147,18 @@ describe("card actions in the card host (M-ACTIONS CP2)", () => {
     // The complaint never reaches the application storage (Р7).
     expect([...f.values.keys()].some(key => key.includes("feedback"))).toBe(false);
     expect(f.onBack).not.toHaveBeenCalled();
+  });
+  it("H6 a context.open reply delivered after the action and the card's new read: the context is read once, the pencils work", async () => {
+    let deliver!: () => void;
+    const f = fixture({ kind: "quiz", direction: "de-l1" }, new Promise<void>(done => { deliver = done; }));
+    render(<CardHost {...f.props} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Не повторять" }, exchange));
+    await screen.findByRole("button", { name: "Вернуть в повторы" }, exchange);
+    const pencil = screen.getByRole("button", { name: "Изменить личный перевод" }) as HTMLButtonElement;
+    expect(pencil.disabled).toBe(true);
+    deliver();
+    await waitFor(() => expect(pencil.disabled).toBe(false), exchange);
+    expect(reads(f.srv, "/dictionary/contexts/")).toBe(1);
+    expect(f.srv.posts.map(post => post.kind)).toEqual(["context.open", "card.exclude"]);
   });
 });

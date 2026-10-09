@@ -924,3 +924,63 @@ describe("M-INTV after QA (M-INTV-QA REPORT: QA-O, QA-O2, QA-T, QA-L, QA-U)", ()
   });
 });
 
+
+describe("D-CONTEXT-LATE-OPEN: an accepted open answered below a version seen meanwhile", () => {
+  const contextGets = (f: ReturnType<typeof fixture>) => f.calls().filter(call => call.startsWith("GET /api/v1/dictionary/contexts/"));
+  // The server applies the open at once; its reply is delivered only after a card action elsewhere and the card's new read.
+  function lateOpen(f: ReturnType<typeof fixture>, raise: (state: bigint) => void) {
+    const held = deferred<void>();
+    f.srv.routes.push(async (path, init) => { const early = f.srv.handle(path, init); await held.promise; return early; });
+    const opening = f.controller.open(CARD);
+    return { opening, deliver: async () => { f.srv.state++; raise(f.srv.state); held.resolve(); await opening; await settle(); } };
+  }
+
+  it("the older fact is not shown; its own context is read once and the card's context is ready", async () => {
+    let floor: string | null = null;
+    const f = fixture(41n, () => floor);
+    const late = lateOpen(f, state => { floor = String(state); });
+    await settle();
+    await late.deliver();
+    expect(contextGets(f)).toEqual([`GET /api/v1/dictionary/contexts/${id(500)}`]);
+    expect(f.controller.snapshot()).toMatchObject({ phase: "ready", context: { id: id(500) }, pending: null, problem: null,
+      stateVersion: floor, canIncrease: true });
+    expect(f.posts().map(body => body.kind)).toEqual(["context.open"]);
+  });
+
+  it("an unknown open whose status reply is older: the same one read, no second open", async () => {
+    let floor: string | null = null;
+    const f = fixture(41n, () => floor), held = deferred<void>();
+    f.srv.routes.push(lost(f.srv, true), async (path, init) => { const early = f.srv.handle(path, init); await held.promise; return early; });
+    const opening = f.controller.open(CARD);
+    await settle();
+    f.srv.state++; floor = String(f.srv.state);
+    held.resolve(); await opening; await settle();
+    expect(f.calls().filter(call => call.startsWith("GET"))).toEqual([`GET /api/v1/commands/${id(100)}`,
+      `GET /api/v1/dictionary/contexts/${id(500)}`]);
+    expect(f.controller.snapshot()).toMatchObject({ phase: "ready", problem: null, stateVersion: floor });
+    expect(f.posts().map(body => body.command_id)).toEqual([id(100)]);
+  });
+
+  it("a read that is still older stays hidden: exactly one read, nothing repeats on its own", async () => {
+    let floor: string | null = null;
+    const f = fixture(41n, () => floor);
+    const late = lateOpen(f, state => { floor = String(state + 5n); });
+    await settle();
+    await late.deliver();
+    await settle();
+    expect(contextGets(f)).toHaveLength(1);
+    expect(f.controller.snapshot()).toMatchObject({ problem: { reason: "stale_response" }, canIncrease: false, canUndo: false });
+    expect(f.posts().map(body => body.kind)).toEqual(["context.open"]);
+  });
+
+  it("a close requested while the open was on the way follows it; no read", async () => {
+    let floor: string | null = null;
+    const f = fixture(41n, () => floor);
+    const late = lateOpen(f, state => { floor = String(state); });
+    await settle();
+    void f.controller.close();
+    await late.deliver();
+    expect(f.posts().map(body => body.kind)).toEqual(["context.open", "context.close"]);
+    expect(contextGets(f)).toEqual([]);
+  });
+});

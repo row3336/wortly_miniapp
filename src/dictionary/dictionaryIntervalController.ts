@@ -423,7 +423,7 @@ export class DictionaryIntervalController {
       // A newer read may already show the offer of this increase: it is opened even when this reply is older.
       this.syncOffer();
       this.notify();
-      if (command.kind === "context.open" && this.closeRequested) await this.sendClose();
+      if (command.kind === "context.open") await this.afterOpen();
       return;
     }
     const code = reply.error.code;
@@ -437,6 +437,16 @@ export class DictionaryIntervalController {
     this.notify();
     // One fresh read for a changed preview or a lost right; never an automatic command (TZA:145).
     if (code === "VERSION_CONFLICT" || code === "CAPABILITY_EXPIRED" || code === "DOCUMENT_STALE") await this.read();
+  }
+
+  /**
+   * After an accepted open: a close requested meanwhile follows it. An open fact older than a version seen meanwhile
+   * (the card read again after a card action) shows nothing (K10-097); its own context is read once instead of waiting
+   * for the next raised floor, which may never come while the card stays open.
+   */
+  private async afterOpen(): Promise<void> {
+    if (this.closeRequested) await this.sendClose();
+    else if (this.problem?.reason === "stale_response") await this.read();
   }
 
   /** One status request for an unknown outcome. */
@@ -464,7 +474,7 @@ export class DictionaryIntervalController {
       // A newer read may already show the offer of this increase: it is opened even when this reply is older.
       this.syncOffer();
       this.notify();
-      if (entry.command.kind === "context.open" && this.closeRequested) await this.sendClose();
+      if (entry.command.kind === "context.open") await this.afterOpen();
       return;
     }
     if (status.outcome === "not_found") {
@@ -486,7 +496,8 @@ export class DictionaryIntervalController {
     try {
       const reply = await this.options.port.read({ context_id: this.contextId, card_id: this.cardId, ...this.options.port.origin });
       if (!this.live() || generation !== this.reads) return;
-      this.adopt(reply);
+      // A current read ends a load problem and an own reply's stale one; any other refusal stays shown.
+      if (this.adopt(reply) && this.problem?.reason === "stale_response") this.problem = null;
       if (this.problem?.reason === "load") this.problem = null;
     } catch (error) {
       if (!this.live() || generation !== this.reads) return;
