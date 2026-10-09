@@ -629,10 +629,10 @@ describe("returning the initial settings (M-SET-RESET, D-SET-RESET 4.1, 5.3.1)",
   });
 
   it.each([
-    ["incompatible", "reset", "Эта версия приложения устарела и не может отправлять новые действия. Закрой Wortly и открой его снова через бота."],
-    ["command_refused", "reset", "Пока не удалось подтвердить возврат исходных настроек. Проверь состояние или повтори отправку."],
-    ["incompatible", "save", "Эта версия приложения устарела и не может отправлять новые действия. Закрой Wortly и открой его снова через бота."],
-    ["command_refused", "save", "Пока не удалось подтвердить сохранение. Проверь состояние или повтори отправку."],
+    ["incompatible", "reset", "Нужно обновить приложение: эта версия не может отправлять новые действия. Закрой Wortly и открой снова через бота."],
+    ["command_refused", "reset", "Сервер не принял эту отправку возврата исходных настроек. Выполнен ли возврат раньше, пока не подтверждено. Проверь состояние."],
+    ["incompatible", "save", "Нужно обновить приложение: эта версия не может отправлять новые действия. Закрой Wortly и открой снова через бота."],
+    ["command_refused", "save", "Сервер не принял эту отправку изменения. Принято ли оно раньше, пока не подтверждено. Проверь состояние."],
   ] as const)("a known refusal (%s, %s) uses an existing text and offers no repeat (C082)", (reason, kind, text) => {
     const f = fixture();
     const save = { schemaVersion: 1 as const, profileId: id(1), clientInstanceId: id(2),
@@ -642,6 +642,7 @@ describe("returning the initial settings (M-SET-RESET, D-SET-RESET 4.1, 5.3.1)",
       canEdit: false, canReset: false, canRetry: false };
     render(<SettingsScreen {...f} />);
     expect(screen.getAllByRole("alert").map(item => item.textContent)).toEqual([text]);
+    expect(screen.queryByText(/повтори отправку/)).toBeNull();
     expect(screen.queryByRole("button", { name: "Повторить отправку" })).toBeNull();
     expect(screen.getByRole("button", { name: "Обновить настройки" })).toBeDefined();
   });

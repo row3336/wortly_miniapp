@@ -16,9 +16,12 @@ const refused = { status: 422, body: { error: { code: "VALIDATION_FAILED" } } };
 type Answer = { status: number; body: unknown } | "network";
 const profile = (profileId = id(1)): Profile => ({ profile_id: profileId, access: { status: "admitted", version: "1", reason: null },
   role: "user", ui_language: "ru", dictionary_language: "uk", time_zone: "UTC", state_version: "1" });
-const opened = (clientId = id(2)): OpenedClient => ({ status: "opened", client_instance_id: clientId, document_id: id(3),
+const opened = (clientId = id(2), documentId = id(3)): OpenedClient => ({ status: "opened", client_instance_id: clientId, document_id: documentId,
   document_epoch: "1", proof_version: "1", profile: profile(), session: null, compatibility: { compatible: true, contract_version: "1" } });
 
+// Command IDs never repeat within the file, as real ones never do: a known refusal is held per document in page
+// memory, which one test file shares.
+let sequence = 100;
 function world(storage = memory()) {
   const data = settingsResponse();
   const posts: Array<Record<string, unknown>> = [];
@@ -57,7 +60,6 @@ function world(storage = memory()) {
     return handle;
   }
   open();
-  let sequence = 100;
   const newId = vi.fn(() => id(sequence++));
   const make = () => new SettingsController({ api, pendingStore: new SettingsPendingStore(storage),
     resetStore: new SettingsResetPendingStore(storage), access: () => access, newId, onUpdate: () => {} });
@@ -112,14 +114,72 @@ describe("known refusals of settings commands are not lost replies (C082)", () =
       expect((state.outcome ?? state.resetOutcome)?.status).toBe("accepted");
     });
 
-    it("a newer client/open (a new live access handle) lifts the refusal: after the check the same ID may be repeated", async () => {
+    it("CLIENT_INCOMPATIBLE: a newer compatible client/open (a new live access handle) lifts it; the same ID may be repeated", async () => {
       const w = world(); const c = w.make(); await c.refresh();
-      w.postAnswers.push(refused); await send(c);
+      w.postAnswers.push(incompatible); await send(c);
       // The same document re-opened by Entry: a new handle under the same key (a new key means a new controller).
       w.open(opened(), 1); await c.refresh();
       expect(c.snapshot()).toMatchObject({ problem: { reason: "not_found" }, canRetry: true });
       await c.retry();
       expect(w.posts).toHaveLength(2); expect(w.posts[1].command_id).toBe(w.posts[0].command_id); expect(w.newId).toHaveBeenCalledOnce();
+    });
+
+    it("422: a compatible client/open does not prove the core accepts the payload, so the refusal stands", async () => {
+      const w = world(); const c = w.make(); await c.refresh();
+      w.postAnswers.push(refused); await send(c);
+      w.open(opened(), 1); await c.refresh();
+      expect(c.snapshot()).toMatchObject({ problem: { reason: "command_refused", code: "VALIDATION_FAILED" }, canRetry: false, canEdit: false });
+      w.statusAnswers.push("network"); w.open(opened(), 1); await c.refresh();
+      expect(c.snapshot()).toMatchObject({ problem: { reason: "command_refused" }, canRetry: false });
+      await c.retry(); expect(w.posts).toHaveLength(1);
+      // The earlier attempt found applied still settles the intent.
+      w.statusAnswers.push({ status: 200, body: "applied" }); await c.refresh();
+      expect(c.snapshot()).toMatchObject({ phase: "ready", pending: null, resetPending: null, canEdit: true });
+    });
+
+    it.each([["the same handle", 0], ["a newer handle under the same key", 1],
+      ["a new generation, a new key (Entry retry)", 2]] as const)(
+      "422 outlives a remount of the same document (%s): a new controller does not reopen the repeat (QA delta 2, finding 1)",
+      async (_label, generation) => {
+        const w = world(); const c = w.make(); await c.refresh();
+        w.postAnswers.push(refused); await send(c);
+        // ApplicationDocument remounts when Entry leaves `opened` and comes back (a newer handle, the same key), and a
+        // new generation mounts it under a new key: either way a new controller of the same document.
+        c.dispose(); if (generation) w.open(opened(), generation);
+        const d = w.make(); await d.refresh();
+        expect(d.snapshot()).toMatchObject({ problem: { reason: "command_refused", code: "VALIDATION_FAILED" }, canRetry: false, canEdit: false });
+        await d.retry(); expect(w.posts).toHaveLength(1);
+        w.statusAnswers.push("network"); d.dispose(); const e = w.make(); await e.refresh();
+        expect(e.snapshot()).toMatchObject({ problem: { reason: "command_refused" }, canRetry: false });
+        await e.retry(); expect(w.posts).toHaveLength(1);
+        // The earlier attempt found applied still settles it, and the next intent starts with no hold.
+        w.statusAnswers.push({ status: 200, body: "applied" }); await e.refresh();
+        expect(e.snapshot()).toMatchObject({ phase: "ready", pending: null, resetPending: null, canEdit: true });
+        e.dispose(); const f = w.make(); await f.refresh();
+        w.postAnswers.push("network"); await send(f);
+        expect(f.snapshot()).toMatchObject({ problem: { reason: "network" }, canRetry: true });
+      });
+
+    it.each([1, 2])("CLIENT_INCOMPATIBLE outlives a remount on the same handle and is lifted only by a newer one (generation %i)", async generation => {
+      const w = world(); const c = w.make(); await c.refresh();
+      w.postAnswers.push(incompatible); await send(c); c.dispose();
+      const d = w.make(); await d.refresh();
+      expect(d.snapshot()).toMatchObject({ problem: { reason: "incompatible" }, canRetry: false });
+      await d.retry(); expect(w.posts).toHaveLength(1);
+      d.dispose(); w.open(opened(), generation); const e = w.make(); await e.refresh();
+      expect(e.snapshot()).toMatchObject({ problem: { reason: "not_found" }, canRetry: true });
+    });
+
+    it("a reload is a new document: it gets exactly one attempt, and a second 422 holds again", async () => {
+      const storage = memory(); const w = world(storage); const c = w.make(); await c.refresh();
+      w.postAnswers.push(refused); await send(c); c.dispose();
+      // Entry gives a reloaded page a new document ID (app/entryController.ts); the stored intent is the same.
+      w.open(opened(id(2), id(4)), 2); const d = w.make(); await d.refresh();
+      expect(d.snapshot()).toMatchObject({ problem: { reason: "not_found" }, canRetry: true });
+      w.postAnswers.push(refused); await d.retry();
+      expect(w.posts).toHaveLength(2); expect(w.posts[1].command_id).toBe(w.posts[0].command_id);
+      expect(d.snapshot()).toMatchObject({ problem: { reason: "command_refused" }, canRetry: false });
+      await d.refresh(); await d.retry(); expect(w.posts).toHaveLength(2);
     });
 
     it("another installation or another profile keeps every restriction", async () => {
@@ -138,7 +198,7 @@ describe("known refusals of settings commands are not lost replies (C082)", () =
     it("a status reply naming another profile is not trusted and does not reopen the repeat", async () => {
       const w = world(); const c = w.make(); await c.refresh();
       w.postAnswers.push(incompatible); await send(c);
-      w.statusAnswers.push({ status: 200, body: { command: { id: id(100), status: "not_found" }, current: profile(id(8)), state_version: "1" } });
+      w.statusAnswers.push({ status: 200, body: { command: { id: w.posts[0].command_id, status: "not_found" }, current: profile(id(8)), state_version: "1" } });
       await c.refresh();
       expect(c.snapshot()).toMatchObject({ canRetry: false, canEdit: false });
       await c.retry(); expect(w.posts).toHaveLength(1);

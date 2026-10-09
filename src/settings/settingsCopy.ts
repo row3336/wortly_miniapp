@@ -22,7 +22,12 @@ type Copy = {
   /** Returning the initial settings: the button, its confirmation window (Q08) and the states after confirming. */
   reset: { button: string; title: string; resets: string; kept: string; confirm: string; cancel: string;
     sending: string; done: string; failed: string; unknown: string };
-  /** Known refusals (incompatible, command_refused) are worded by the screen from existing texts. */
+  /**
+   * A known 422 of this attempt (command_refused): the server refused this sending, while whether an earlier one was
+   * applied is not confirmed. No repeat is promised. Working text, pending owner (M-SETTINGS-KNOWN-REFUSAL-2).
+   */
+  refusedAttempt: { save: string; reset: string };
+  /** Known refusals (incompatible, command_refused) are worded by the screen. */
   problems: Record<Exclude<NonNullable<SettingsSnapshot["problem"]>["reason"], KnownRefusal["refusal"]>, string>;
 };
 
@@ -78,6 +83,10 @@ export const settingsCopy: Record<Language, Copy> = {
       confirm: "Вернуть", cancel: "Отмена", sending: "Возвращаем исходные настройки", done: "Исходные настройки возвращены.",
       failed: "Не удалось вернуть исходные настройки. Ничего не изменилось. Попробуй ещё раз.",
       unknown: "Пока не удалось подтвердить возврат исходных настроек. Проверь состояние или повтори отправку.",
+    },
+    refusedAttempt: {
+      save: "Сервер не принял эту отправку изменения. Принято ли оно раньше, пока не подтверждено. Проверь состояние.",
+      reset: "Сервер не принял эту отправку возврата исходных настроек. Выполнен ли возврат раньше, пока не подтверждено. Проверь состояние.",
     },
     problems: {
       network: "Не удалось обновить настройки. Попробуй ещё раз.", storage: "Не удалось завершить сохранение на этом устройстве. Обнови настройки.",
@@ -140,6 +149,10 @@ export const settingsCopy: Record<Language, Copy> = {
       failed: "Не вдалося повернути початкові налаштування. Нічого не змінилося. Спробуй ще раз.",
       unknown: "Поки не вдалося підтвердити повернення початкових налаштувань. Перевір стан або повтори надсилання.",
     },
+    refusedAttempt: {
+      save: "Сервер не прийняв це надсилання зміни. Чи прийнято її раніше, поки не підтверджено. Перевір стан.",
+      reset: "Сервер не прийняв це надсилання повернення початкових налаштувань. Чи виконано повернення раніше, поки не підтверджено. Перевір стан.",
+    },
     problems: {
       network: "Не вдалося оновити налаштування. Спробуй ще раз.", storage: "Не вдалося завершити збереження на цьому пристрої. Онови налаштування.",
       invalid_pending: "Не вдалося відновити незавершене збереження. Нові зміни поки недоступні.",
@@ -200,6 +213,10 @@ export const settingsCopy: Record<Language, Copy> = {
       confirm: "Restore", cancel: "Cancel", sending: "Restoring default settings", done: "Default settings restored.",
       failed: "Could not restore default settings. Nothing has changed. Please try again.",
       unknown: "Restoring default settings has not been confirmed yet. Check its status or retry sending.",
+    },
+    refusedAttempt: {
+      save: "The server did not accept this sending of the change. Whether it was accepted earlier is not confirmed yet. Check its status.",
+      reset: "The server did not accept this request to restore default settings. Whether they were restored earlier is not confirmed yet. Check its status.",
     },
     problems: {
       network: "Could not refresh settings. Try again.", storage: "Could not finish saving on this device. Refresh settings.",

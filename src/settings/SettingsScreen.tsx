@@ -155,19 +155,25 @@ function SettingField({ setting, ...props }: SettingsScreenProps & { setting: Se
     <div className="settings-actions">
       {!draft?.conflict && <button type="button" className="settings-primary"
         disabled={!draft?.canSave || !allowedCatalog} onClick={() => { void actions.save(setting); }}>{t.save}</button>}
-      {snapshot.pending?.intent.payload.key === setting && <span role="status">{snapshot.phase === "sending" ? t.saving : t.unknown}</span>}
+      {/* After a known refusal the top line explains it; t.unknown would promise a repeat that is not offered. */}
+      {snapshot.pending?.intent.payload.key === setting && !knownRefusal(snapshot)
+        && <span role="status">{snapshot.phase === "sending" ? t.saving : t.unknown}</span>}
       {outcome?.status === "accepted" && <span className="settings-saved" role="status">{t.saved}</span>}
     </div>
   </section>;
 }
 
-/** The top line's wording for the current problem; only existing texts, no new phrases. */
+function knownRefusal(snapshot: SettingsSnapshot): boolean {
+  return snapshot.problem?.reason === "incompatible" || snapshot.problem?.reason === "command_refused";
+}
+
+/** The top line's wording for the current problem. */
 function problemText(snapshot: SettingsSnapshot, language: Language): string {
   const t = settingsCopy[language], reason = snapshot.problem!.reason;
-  // Exactly CLIENT_INCOMPATIBLE: the app's existing update text for it (i18n/messages.ts, M-COMPAT-HDR working copy).
-  if (reason === "incompatible") return appText(language).incompatibleDetail;
-  // text pending owner: a known 422 of the last attempt keeps the earlier unknown-outcome wording, without its retry.
-  if (reason === "command_refused") return snapshot.resetPending ? t.reset.unknown : t.unknown;
+  // Exactly CLIENT_INCOMPATIBLE of a command: the app's text for that refusal (CommandRecovery). Working text, G05 open.
+  if (reason === "incompatible") return appText(language).commandIncompatible;
+  // A known 422 of this attempt, the outcome of earlier ones still unconfirmed. Working text, pending owner.
+  if (reason === "command_refused") return snapshot.resetPending ? t.refusedAttempt.reset : t.refusedAttempt.save;
   if (snapshot.resetPending && (reason === "network" || reason === "not_found")) return t.reset.unknown;
   return snapshot.pending && reason === "network" ? t.unknown : t.problems[reason];
 }

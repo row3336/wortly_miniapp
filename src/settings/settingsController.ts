@@ -57,12 +57,33 @@ function draftValue(data: SettingsProjection, key: SettingKey, input: unknown): 
   return input;
 }
 
+/** `handle` names the access handle that got the refusal (handleNumber); a 422 does not depend on it. */
+type Refusal = { commandId: string; reason: KnownRefusal["refusal"]; code?: string; handle: number };
+/**
+ * Known refusals by document (profile, installation, document ID), kept in page memory only. A remount of the same
+ * document (Entry leaving `opened` and coming back, or a new generation under a new key) creates a new controller,
+ * and the hold must not end with it (QA M-SETTINGS-KNOWN-REFUSAL delta 2, finding 1). A reload starts a new page and
+ * a new document ID, so it starts without a hold, as before. Nothing here is persisted.
+ */
+const documentRefusals = new Map<string, Refusal>();
+/**
+ * A number per access handle, so a record can tell a newer handle apart without keeping the old one (and its token
+ * and proof) alive: the WeakMap does not hold its keys.
+ */
+const handleNumbers = new WeakMap<OpenedAccess, number>();
+let lastHandleNumber = 0;
+function handleNumber(access: OpenedAccess): number {
+  let number = handleNumbers.get(access);
+  if (number === undefined) handleNumbers.set(access, number = ++lastHandleNumber);
+  return number;
+}
+
 /**
  * A document's editors and one sent intent, a field save or a reset (D-SET-RESET 4.3.1). Foreground updates access,
  * never recreates drafts.
  */
 export class SettingsController {
-  private readonly scope: { key: string; profileId: string; clientId: string; documentId: string };
+  private readonly scope: { key: string; profileId: string; clientId: string; documentId: string; document: string };
   private readonly lifetime = new AbortController();
   private phase: SettingsSnapshot["phase"] = "loading";
   private data: SettingsResponse | null = null;
@@ -78,11 +99,21 @@ export class SettingsController {
   private resetOutcome: ResetOutcome | null = null;
   /**
    * The last attempt of the sent intent got a known refusal (KnownRefusal). It is a fact about that attempt only:
-   * the intent stays unresolved and checkable, since an earlier attempt may still have been applied. Repeating it
-   * is useless until a newer client/open: Entry creates an access handle only for a compatible open, so another
-   * live handle is that sign (app/entryController.ts). A timeout or a status read never lifts it.
+   * the intent stays unresolved and checkable, since an earlier attempt may still have been applied. A timeout or a
+   * status read never lifts it. CLIENT_INCOMPATIBLE is lifted by a newer client/open: Entry creates an access handle
+   * only for a compatible open (app/entryController.ts), so another live handle is that verifiable sign. A 422 has
+   * no such sign (a compatible client does not prove the core now accepts the payload; the core exposes no build or
+   * capability), so it stands for this document's lifetime until an explicit manual step (pending owner). It is
+   * kept per document, not per controller (documentRefusals), and only for the intent it was given to.
    */
-  private refusal: { reason: KnownRefusal["refusal"]; code?: string; access: OpenedAccess } | null = null;
+  private get refusal(): Refusal | null {
+    const refusal = documentRefusals.get(this.scope.document);
+    return refusal && refusal.commandId === this.sent()?.intent.command_id ? refusal : null;
+  }
+  private set refusal(refusal: Refusal | null) {
+    if (refusal) documentRefusals.set(this.scope.document, refusal);
+    else documentRefusals.delete(this.scope.document);
+  }
   private problem: Problem | null = null;
   private writeBlocked: "expired" | "forbidden" | "profile_changed" | null = null;
   private running: Promise<void> | null = null;
@@ -93,7 +124,8 @@ export class SettingsController {
     if (!access?.isLive() || !validId(access.profile.profile_id) || !validId(access.document.clientInstanceId)
       || !validId(access.document.documentId)) throw new Error("invalid settings access");
     this.scope = { key: access.key, profileId: access.profile.profile_id,
-      clientId: access.document.clientInstanceId, documentId: access.document.documentId };
+      clientId: access.document.clientInstanceId, documentId: access.document.documentId,
+      document: JSON.stringify([access.profile.profile_id, access.document.clientInstanceId, access.document.documentId]) };
   }
 
   private live(): boolean { return !this.lifetime.signal.aborted; }
@@ -129,7 +161,8 @@ export class SettingsController {
   }
   private refused(): KnownRefusal["refusal"] | null {
     const access = this.currentAccess();
-    return this.refusal && access && this.refusal.access === access ? this.refusal.reason : null;
+    if (!this.refusal || !access) return null;
+    return this.refusal.reason === "command_refused" || this.refusal.handle === handleNumber(access) ? this.refusal.reason : null;
   }
   private retryAllowed(): boolean {
     const sent = this.sent();
@@ -175,7 +208,8 @@ export class SettingsController {
         this.data = null;
         this.problem = { reason: this.writeBlocked, code: error.code };
       } else if (error instanceof KnownRefusal && this.sent() && this.currentAccess()) {
-        this.refusal = { reason: error.refusal, code: error.code, access: this.currentAccess()! };
+        this.refusal = { commandId: this.sent()!.intent.command_id, reason: error.refusal, code: error.code,
+          handle: handleNumber(this.currentAccess()!) };
         this.problem = { reason: error.refusal, code: error.code };
       } else if (error instanceof ClosedAccessError) {
         this.problem = { reason: this.currentAccess() ? "context_refreshed" : "context_closed" };
@@ -415,6 +449,8 @@ export class SettingsController {
       this.outcome = null;
       this.resetOutcome = null;
       this.submittedRevision = draft.revision;
+      // A new intent starts with no known refusal; a record left for a settled one is stale.
+      this.refusal = null;
       this.pending = { schemaVersion: 1, profileId: this.scope.profileId, clientInstanceId: this.scope.clientId,
         intent: { command_id: this.options.newId(), kind: "setting.save", expected_field_version: draft.fieldVersion,
           payload: { key, value: value as SettingsPending["intent"]["payload"]["value"] } } };
@@ -429,6 +465,7 @@ export class SettingsController {
       if (this.access() !== source) throw new ClosedAccessError();
       this.outcome = null;
       this.resetOutcome = null;
+      this.refusal = null;
       this.resetPending = { schemaVersion: 1, profileId: this.scope.profileId, clientInstanceId: this.scope.clientId,
         intent: { command_id: this.options.newId(), kind: "settings.reset", payload: {} } };
       await this.sendPending(source);
