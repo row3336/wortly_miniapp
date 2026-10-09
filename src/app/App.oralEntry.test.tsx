@@ -195,6 +195,9 @@ describe("M-ORAL-ENTRY: the oral quiz from Today and the card in М18 through th
     fireEvent.click(button("Раскрыть"));
     await waitFor(() => expect(button("Правильно").disabled).toBe(false));
     fireEvent.click(button("Уточнить поля"));
+    // The action button shows before context.open is confirmed; the pencils wait for the open context (M-EDIT Р12).
+    const pencil = await screen.findByRole("button", { name: "Изменить личный перевод" }) as HTMLButtonElement;
+    await waitFor(() => expect(pencil.disabled).toBe(false));
     fireEvent.click(await screen.findByRole("button", { name: "Не повторять" }));
     await screen.findByRole("button", { name: "Вернуть в повторы" });
     // Still the card: no exit into the quiz and no oral command.
@@ -219,6 +222,9 @@ describe("M-ORAL-ENTRY: the oral quiz from Today and the card in М18 through th
     const a = app(); render(<App />);
     await startFromToday(/Слова: перевод с немецкого/);
     fireEvent.click(button("Уточнить поля"));
+    // The action button shows before context.open is confirmed; the pencils wait for the open context (M-EDIT Р12).
+    const pencil = await screen.findByRole("button", { name: "Изменить личный перевод" }) as HTMLButtonElement;
+    await waitFor(() => expect(pencil.disabled).toBe(false));
     fireEvent.click(await screen.findByRole("button", { name: "Не повторять" }));
     await screen.findByRole("button", { name: "Вернуть в повторы" });
     await waitFor(() => expect(a.card.posts.map(post => post.kind)).toEqual(["context.open", "card.exclude"]));
