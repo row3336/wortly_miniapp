@@ -508,6 +508,21 @@ describe("OralScreen: summary of the own Stop", () => {
     expect(stop).toHaveBeenCalledWith("summary_home"); expect(onToday).not.toHaveBeenCalled(); f.controller.dispose();
   });
 
+  // M-TEXT-DEFECTS-2 (D-TEXT-DEFECTS §2): the own session closed on another dictionary pair is a closure, not a failed refresh.
+  it("V1-7 a closure whose projection names another pair shows the closed line, no false refresh failure and no loader", async () => {
+    const f = fixture("revealed"); f.set({ ...projection("closed", 1, 1), pair: "en-de", close_reason: "pair_changed" }, "9");
+    await f.controller.refresh();
+    const state = f.controller.snapshot();
+    expect(state).toMatchObject({ phase: "closed", problem: null, closed: { reason: "pair_changed", summary: null, progress: null } });
+    const refresh = vi.spyOn(f.actions, "refresh"), onToday = vi.fn();
+    render(<OralScreen state={state} actions={f.actions} language="ru" active onToday={onToday} />);
+    await act(async () => {});
+    expect(screen.getByText("Занятие завершено.")).toBeTruthy();
+    expect(screen.queryByText(/Не удалось обновить занятие/)).toBeNull();
+    expect(document.querySelector(".wortly-loader")).toBeNull(); expect(document.querySelector("[aria-busy]")).toBeNull();
+    expect(refresh).not.toHaveBeenCalled(); f.controller.dispose();
+  });
+
   it("V1-6 inactive screens and closures without facts keep their rendering and never read", async () => {
     const { f, base } = await detached(), refresh = vi.spyOn(f.actions, "refresh");
     const ui = render(<OralScreen state={{ ...base, phase: "closed", current: null, closed: facts("stop", "pending") }} actions={f.actions} language="ru" active={false} onToday={() => {}} />);

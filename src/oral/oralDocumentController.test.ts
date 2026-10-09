@@ -538,13 +538,37 @@ describe("oral document: own closed projection (L1)", () => {
     expect(f.controller.snapshot().closed).toEqual({ sessionId: id(3), reason: "stop", summary: facts.summary, progress: partial,
       summaryRead: "known" });
   });
-  it("L1-4b an own closed projection of another dictionary pair is never kept", async () => {
+  // M-TEXT-DEFECTS-2 (D-TEXT-DEFECTS §2): the reason of an own closure is a server fact whatever pair its projection names;
+  // only the numbers need this owner's pair. A closure is no failed refresh.
+  it("L1-4b an own closed projection of another dictionary pair gives its reason, never its numbers, and no problem", async () => {
     const f = fixture(), other = closed(partial, "pair_changed", id(3), "en-de");
     route(f, url => url.includes(`/sessions/${id(3)}?`) ? response({ current: other, state_version: "9" }) : null);
     await f.controller.refresh();
-    expect(f.controller.snapshot()).toMatchObject({ phase: "closed", problem: "pair_changed",
-      closed: { sessionId: id(3), summary: null, progress: null, summaryRead: "failed" } });
+    expect(f.controller.snapshot()).toMatchObject({ phase: "closed", problem: null,
+      closed: { sessionId: id(3), reason: "pair_changed", summary: null, progress: null, summaryRead: "failed" } });
     expect(sessionGets(f)).toBe(2);
+  });
+  it("L1-4c a boundary's reason stays when a closed projection of another pair follows", async () => {
+    const f = fixture({ step: "revealed" }), other = closed(partial, "pair_changed", id(3), "en-de");
+    let closedNow = false;
+    route(f, (url, init) => {
+      if (init?.method === "POST") throw new TypeError("network");
+      if (url.includes("/commands/")) return closedNow ? response({ command: { id: new URL(url, "https://model.invalid").pathname.split("/").at(-1),
+        status: "not_found" }, current: profile("10"), state_version: "10",
+        closed_session: { session_id: id(3), status: "closed", close_reason: "midnight" } }) : null;
+      if (url.includes(`/sessions/${id(3)}?`)) return closedNow ? response({ current: other, state_version: "11" })
+        : response({ current: projection("revealed"), state_version: "9" });
+      return null;
+    });
+    await f.controller.refresh(); await f.controller.stop("stop"); closedNow = true; await f.controller.refresh(); await f.controller.refresh();
+    expect(f.controller.snapshot()).toMatchObject({ phase: "closed", current: null, problem: null,
+      closed: { sessionId: id(3), reason: "midnight", summary: null, progress: null, summaryRead: "failed" } });
+  });
+  it("L1-4d an active projection of the own session on another pair is still a changed pair", async () => {
+    const f = fixture({ step: "revealed" }), other = { ...projection("revealed"), pair: "en-de" as const };
+    route(f, url => url.includes(`/sessions/${id(3)}?`) ? response({ current: other, state_version: "9" }) : null);
+    await f.controller.refresh();
+    expect(f.controller.snapshot()).toMatchObject({ phase: "stale", current: null, problem: "pair_changed", closed: null });
   });
   it("L1-5 a replaced owner of a retained terminal session reads its facts once and never raises stateVersion", async () => {
     const f = fixture(); f.set("closed", "77"); const next = retained(f);

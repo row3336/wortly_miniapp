@@ -1,5 +1,5 @@
 import type { LearningSessionProjection, PublicAssignment } from "../api/generated";
-import { sameId } from "../api/wireValidation";
+import { CLOSE_REASONS, sameId } from "../api/wireValidation";
 import type { ResultTimerView } from "../commands/resultTimer";
 import { StudyView, type StudyLanes, type StudyPhase } from "../commands/studyView";
 import type { LearningCommandSnapshot, LearningTransition } from "./learningCommandController";
@@ -16,6 +16,9 @@ type Options = Omit<OwnerOptions, "onUpdate"> & {
   onLearningComplete?(): void;
   onUpdate(snapshot: LearningViewSnapshot): void;
 };
+type CloseReason = LearningSessionProjection["close_reason"];
+/** The reason a closure is known by; null while it is unknown. Learning has no summary numbers of its own. */
+export type LearningClosed = { sessionId: string; reason: CloseReason };
 export type LearningViewSnapshot = {
   phase: StudyPhase;
   sessionId: string | null;
@@ -26,6 +29,8 @@ export type LearningViewSnapshot = {
   submittedText: string | null;
   problem: string | null;
   commands: LearningDocumentSnapshot;
+  /** The closure of this view's own session once known (its reason, when the server named one); null otherwise. */
+  closed: LearningClosed | null;
   timer: ResultTimerView | null;
   canSubmit: boolean;
   canEditDraft: boolean;
@@ -41,23 +46,33 @@ export type LearningViewSnapshot = {
   canRetryPrimary: boolean;
 };
 
+const closeReason = (value: string | null | undefined): CloseReason =>
+  value && CLOSE_REASONS.includes(value) ? value as CloseReason : null;
+
 /** Presentation is local; only document commands can establish a saved answer or presentation. */
 export class LearningViewController extends StudyView<LearningDocumentCommands, LearningSessionProjection, Answer, LearningViewSnapshot> {
   private readonly onLearningComplete: (() => void) | undefined;
+  private closedFacts: LearningClosed | null = null;
   constructor(options: Options) {
     super(options, { ignoreUnboundUnavailable: false, keepClosedAfterRead: false },
       onUpdate => new LearningDocumentCommands({ ...options, onUpdate }));
     this.onLearningComplete = options.onLearningComplete;
   }
-  /** Learning keeps no closure facts: a closed session clears its answer and shows no summary of its own. */
-  protected close(): void {
+  /** Learning keeps only the closure reason: no summary numbers exist for it (learning_service projection), so none are invented. */
+  protected close(sessionId: string, reason: string | null): void {
     this.cancelTimer(); this.phase = "closed"; this.question = null; this.draft = ""; this.draftAssignmentId = null;
     this.answer = null; this.answerVersion = null; this.pendingGradeAdvance = null;
+    if (!this.closedFacts || !sameId(this.closedFacts.sessionId, sessionId)) this.closedFacts = { sessionId, reason: null };
+    // The first known reason wins; a later observation only fills an unknown one.
+    this.closedFacts.reason ??= closeReason(reason);
   }
   protected closure(state: StudyLanes): { reason: string | null } | null {
-    const closed = state.stop.outcome === "accepted" && state.stop.resolved?.kind === "session.stop"
-      ? state.stop.resolved.sessionId : state.primary.closedSession?.session_id ?? state.stop.closedSession?.session_id;
-    return closed && this.sessionId && sameId(closed, this.sessionId) ? { reason: null } : null;
+    if (!this.sessionId) return null;
+    // An accepted own Stop proves the closure but names no reason: runStop or the projection supplies it.
+    if (state.stop.outcome === "accepted" && state.stop.resolved?.kind === "session.stop"
+      && sameId(state.stop.resolved.sessionId, this.sessionId)) return { reason: null };
+    const boundary = state.primary.closedSession ?? state.stop.closedSession;
+    return boundary && sameId(boundary.session_id, this.sessionId) ? { reason: boundary.close_reason } : null;
   }
   protected recoveredSession(state: StudyLanes): string | null {
     return state.primary.pendingIntent?.session_id ?? state.primary.resolved?.sessionId ?? null;
@@ -88,13 +103,15 @@ export class LearningViewController extends StudyView<LearningDocumentCommands, 
   }
   snapshot(): LearningViewSnapshot {
     const { fields, live, ready } = this.view(), commands = fields.commands;
+    const closed = this.closedFacts;
     return { phase: live ? this.phase : "disposed", ...fields,
+      closed: live && this.phase === "closed" && closed && this.sessionId && sameId(closed.sessionId, this.sessionId) ? { ...closed } : null,
       canAdvancePreview: ready && this.phase === "preview" && !!this.current?.preview,
       canStop: live && commands.canStop && this.sessionId !== null && !this.is("closed", "idle") };
   }
   start(): Promise<void> {
     if (!this.live() || !this.interactive() || !this.commands.snapshot().canBegin || !this.is("idle", "closed")) return Promise.resolve();
-    this.sessionId = this.options.newId(); this.current = null; this.currentVersion = null;
+    this.sessionId = this.options.newId(); this.closedFacts = null; this.current = null; this.currentVersion = null;
     this.question = null; this.answer = null; this.answerVersion = null; this.draft = ""; this.draftAssignmentId = null; this.previous = false; this.pendingGradeAdvance = null; this.waitNext = false;
     return this.run(async () => {
       this.phase = "loading"; this.problem = null;
@@ -128,16 +145,19 @@ export class LearningViewController extends StudyView<LearningDocumentCommands, 
   stop(reason: "stop" | "summary_home" = "stop"): Promise<void> {
     if (!this.snapshot().canStop || !this.sessionId) return this.stopping ?? Promise.resolve();
     const sessionId = this.sessionId;
-    return this.runStop(() => this.commands.begin({ kind: "session.stop", session_id: sessionId, payload: { reason } }));
+    return this.runStop(() => this.commands.begin({ kind: "session.stop", session_id: sessionId, payload: { reason } }), reason);
   }
   /** Stop and its exact retry must never queue behind a stalled answer request. */
-  protected runStop(send: () => Promise<void>): Promise<void> {
+  protected runStop(send: () => Promise<void>, reason?: "stop" | "summary_home"): Promise<void> {
     if (this.stopping) return this.stopping;
     this.cancelTimer(); this.pendingGradeAdvance = null; this.draft = ""; this.draftAssignmentId = null; this.phase = "stopping";
+    const sessionId = this.sessionId;
     const task = send().then(() => {
-      if (!this.live()) return;
+      if (!this.live() || !sessionId) return;
       const state = this.commands.snapshot().stop;
-      if (state.outcome === "accepted" || state.outcome === "not_applied") this.close();
+      // A retried Stop (from the base) carries no reason: the closed projection or the boundary names it.
+      if (state.outcome === "accepted") this.close(sessionId, reason ?? (this.current?.status === "closed" ? this.current.close_reason : null));
+      else if (state.outcome === "not_applied") this.close(sessionId, state.closedSession?.close_reason ?? null);
       else if (state.outcome === "rejected") { this.phase = "stale"; this.problem = state.rejectionCode ?? "stop_rejected"; }
     }).finally(() => { if (this.stopping === task) this.stopping = null; this.emit(); });
     this.stopping = task; this.emit(); return task;

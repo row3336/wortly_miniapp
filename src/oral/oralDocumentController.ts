@@ -157,8 +157,8 @@ export class OralDocumentController {
       this.current = null; this.ticket = null; this.shownPending = false; this.stopRight = null;
     }
   }
-  /** Facts of this owner's own terminal session: only from a server closed projection of that id and pair,
-   * or a boundary's reason; never from an active projection. The first known value wins. Grants nothing.
+  /** Facts of this owner's own terminal session: the reason from a closed projection of that id or a boundary, the numbers
+   * only from a closed projection of that id and this owner's pair; never from an active projection. The first known value wins. Grants nothing.
    * Returns whether the projection supplied the facts. */
   private recordClosed(sessionId: string, reason: OralClosed["reason"], projection: OralSessionProjection | null): boolean {
     if (!this.sessionId || !sameId(sessionId, this.sessionId) || !this.terminal.has(sessionId.toLowerCase())) return false;
@@ -166,9 +166,10 @@ export class OralDocumentController {
       this.closedFacts = { sessionId: this.sessionId, reason: null, summary: null, progress: null, summaryRead: "pending" };
     }
     const facts = this.closedFacts;
-    if (projection && (projection.status !== "closed" || !sameId(projection.session_id, sessionId)
-      || projection.pair !== `${this.options.access.profile.dictionary_language}-de`)) return false;
+    if (projection && (projection.status !== "closed" || !sameId(projection.session_id, sessionId))) return false;
     facts.reason ??= reason;
+    // The reason of an own closure is a server fact whatever pair its projection names; only its numbers need this owner's pair.
+    if (projection && projection.pair !== `${this.options.access.profile.dictionary_language}-de`) return false;
     if (!projection || facts.summaryRead === "known") return false;
     facts.summary = structuredClone(projection.summary); facts.progress = structuredClone(projection.progress);
     facts.summaryRead = "known";
@@ -183,11 +184,12 @@ export class OralDocumentController {
     if (current.status === "closed") this.recordClosed(current.session_id, current.close_reason, current);
     if (!this.sessionId || !sameId(current.session_id, this.sessionId)) return;
     this.ticket = null; this.shownPending = false;
+    // A closure of the own session is no failed refresh, whatever pair its projection names; an unavailable one still is.
+    if ('pair' in current && this.terminal.has(current.session_id.toLowerCase())) return;
     if (!('pair' in current) || current.pair !== `${this.options.access.profile.dictionary_language}-de`) {
       this.current = null; this.currentVersion = null; this.stopRight = null;
       this.problem = 'pair' in current ? "pair_changed" : current.status; return;
     }
-    if (this.terminal.has(current.session_id.toLowerCase())) return;
     this.current = structuredClone(current); this.currentVersion = read.state_version; this.problem = null;
     this.stopRight = { sessionId: current.session_id, version: read.state_version,
       stop: current.capabilities.stop, home: current.capabilities.summary_home };
