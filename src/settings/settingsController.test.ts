@@ -19,19 +19,22 @@ function current(state = big): SettingsResponse {
     time_zone: { value: "UTC", version: "1" }, retry_gap: { value: null, version: "1" },
     retry_count: { value: 3, version: big }, learning_group_size: { value: null, version: "1" },
     learning_intervals_seconds: { value: [120, 30, 120], version: "1" },
-    learning_reminder_pause_seconds: { value: null, version: "1" }, learning_mix: { value: null, version: "1" },
+    learning_mix: { value: null, version: "1" },
     strict_case: { value: true, version: "1" }, include_preterite: { value: false, version: "1" },
     include_comparative: { value: null, version: "1" }, transition_mode: { value: null, version: "1" },
     review_error_mode: { value: "strict", version: "1" },
     learning_content: { value: "words", version: "1" },
     material: { value: null, version: "1" },
-  }, constraints: {
+    notify_learning: { value: true, version: "1" }, notify_weekly: { value: true, version: "1" },
+    notify_daily: { value: true, version: "1" }, notify_evening: { value: true, version: "1" },
+    weekly_report_hour: { value: 7, version: "1" }, daily_report_hour: { value: 7, version: "1" },
+    evening_reminder_hour: { value: 18, version: "1" },
+  }, notifications: { telegram_opened: true }, constraints: {
     ui_language: { type: "enum", values: ["ru", "uk", "en"] },
     dictionary_language: { type: "enum", values: ["ru", "uk", "en"] },
     retry_gap: { type: "integer", minimum: 1, maximum: 2147483647 },
     retry_count: { type: "integer", minimum: 1, maximum: 2147483647 },
     learning_group_size: { type: "integer", minimum: 1, maximum: 2147483647 },
-    learning_reminder_pause_seconds: { type: "integer", minimum: 60, maximum: 2147483647 },
     learning_intervals_seconds: { type: "ordered_integer_list", nonempty: true, item_minimum: 1, item_maximum: 2147483647 },
     learning_mix: { type: "boolean" }, strict_case: { type: "boolean" }, include_preterite: { type: "boolean" },
     include_comparative: { type: "boolean" }, transition_mode: { type: "enum", values: ["normal", "accelerated"] },
@@ -39,6 +42,9 @@ function current(state = big): SettingsResponse {
     learning_content: { type: "enum", values: ["words", "phrases", "mixed"] },
     material: { type: "exclusive_choice", modes: { level: { selected_level: ["A1", "A2", "B1", "B2", "C1", "C2"] },
       topics: { topic_ids: "nonempty_existing_uuid_list" } } },
+    notify_learning: { type: "boolean" }, notify_weekly: { type: "boolean" }, notify_daily: { type: "boolean" },
+    notify_evening: { type: "boolean" }, weekly_report_hour: { type: "integer", minimum: 0, maximum: 23 },
+    daily_report_hour: { type: "integer", minimum: 0, maximum: 23 }, evening_reminder_hour: { type: "integer", minimum: 0, maximum: 23 },
   } };
 }
 const profile = (): Profile => ({ profile_id: id(1), access: { status: "admitted", version: "1", reason: null },
@@ -851,12 +857,12 @@ describe("settings reset (M-SET-RESET, D-SET-RESET 4.2, owner answers R11/R12)",
   it("R12: a confirmed reset discards only the drafts of the reset fields and shows the initial values", async () => {
     const f = await editing();
     f.controller.edit("learning_group_size", "7"); f.controller.edit("review_error_mode", "strict");
-    f.controller.edit("ui_language", "en"); f.controller.edit("learning_reminder_pause_seconds", "900");
+    f.controller.edit("ui_language", "en"); f.controller.edit("evening_reminder_hour", "21");
     f.controller.edit("material", { mode: "level", selected_level: "B1" });
     await f.controller.reset();
     const state = f.controller.snapshot();
-    expect(Object.keys(state.drafts).sort()).toEqual(["learning_reminder_pause_seconds", "material", "ui_language"]);
-    expect(state.drafts).toMatchObject({ ui_language: { input: "en", conflict: false }, learning_reminder_pause_seconds: { input: "900" } });
+    expect(Object.keys(state.drafts).sort()).toEqual(["evening_reminder_hour", "material", "ui_language"]);
+    expect(state.drafts).toMatchObject({ ui_language: { input: "en", conflict: false }, evening_reminder_hour: { input: "21" } });
     expect(state.data?.settings).toMatchObject({ retry_count: { value: 4 }, learning_group_size: { value: 5 },
       review_error_mode: { value: "soft" } });
   });
@@ -865,7 +871,7 @@ describe("settings reset (M-SET-RESET, D-SET-RESET 4.2, owner answers R11/R12)",
   const resetDrafts: Record<string, unknown> = { learning_group_size: "7", learning_content: "phrases", learning_mix: true,
     review_error_mode: "soft", transition_mode: "accelerated", strict_case: false, include_preterite: true, include_comparative: true,
     learning_intervals_seconds: ["40", "50"], retry_gap: "9", retry_count: "9" };
-  const outsideDrafts: Record<string, unknown> = { ui_language: "en", dictionary_language: "ru", learning_reminder_pause_seconds: "1200",
+  const outsideDrafts: Record<string, unknown> = { ui_language: "en", dictionary_language: "ru", evening_reminder_hour: "20",
     material: { mode: "level", selected_level: "B1" } };
   async function withAllDrafts() {
     const f = await ready();

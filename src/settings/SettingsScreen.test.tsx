@@ -17,19 +17,22 @@ function current(state = big): SettingsResponse {
     time_zone: { value: "UTC", version: "1" }, retry_gap: { value: null, version: "1" },
     retry_count: { value: 3, version: big }, learning_group_size: { value: null, version: "1" },
     learning_intervals_seconds: { value: [120, 30, 120], version: "1" },
-    learning_reminder_pause_seconds: { value: null, version: "1" }, learning_mix: { value: null, version: "1" },
+    learning_mix: { value: null, version: "1" },
     strict_case: { value: true, version: "1" }, include_preterite: { value: false, version: "1" },
     include_comparative: { value: null, version: "1" }, transition_mode: { value: null, version: "1" },
     review_error_mode: { value: "strict", version: "1" },
     learning_content: { value: "words", version: "1" },
     material: { value: null, version: "1" },
-  }, constraints: {
+    notify_learning: { value: true, version: "1" }, notify_weekly: { value: true, version: "1" },
+    notify_daily: { value: true, version: "1" }, notify_evening: { value: true, version: "1" },
+    weekly_report_hour: { value: 7, version: "1" }, daily_report_hour: { value: 7, version: "1" },
+    evening_reminder_hour: { value: 18, version: "1" },
+  }, notifications: { telegram_opened: true }, constraints: {
     ui_language: { type: "enum", values: ["ru", "uk", "en"] },
     dictionary_language: { type: "enum", values: ["ru", "uk", "en"] },
     retry_gap: { type: "integer", minimum: 1, maximum: 2147483647 },
     retry_count: { type: "integer", minimum: 1, maximum: 2147483647 },
     learning_group_size: { type: "integer", minimum: 1, maximum: 2147483647 },
-    learning_reminder_pause_seconds: { type: "integer", minimum: 60, maximum: 2147483647 },
     learning_intervals_seconds: { type: "ordered_integer_list", nonempty: true, item_minimum: 1, item_maximum: 2147483647 },
     learning_mix: { type: "boolean" }, strict_case: { type: "boolean" }, include_preterite: { type: "boolean" },
     include_comparative: { type: "boolean" }, transition_mode: { type: "enum", values: ["normal", "accelerated"] },
@@ -37,6 +40,9 @@ function current(state = big): SettingsResponse {
     learning_content: { type: "enum", values: ["words", "phrases", "mixed"] },
     material: { type: "exclusive_choice", modes: { level: { selected_level: ["A1", "A2", "B1", "B2", "C1", "C2"] },
       topics: { topic_ids: "nonempty_existing_uuid_list" } } },
+    notify_learning: { type: "boolean" }, notify_weekly: { type: "boolean" }, notify_daily: { type: "boolean" },
+    notify_evening: { type: "boolean" }, weekly_report_hour: { type: "integer", minimum: 0, maximum: 23 },
+    daily_report_hour: { type: "integer", minimum: 0, maximum: 23 }, evening_reminder_hour: { type: "integer", minimum: 0, maximum: 23 },
   } };
 }
 
@@ -78,11 +84,11 @@ describe("settings screen fields", () => {
     const f = fixture(), { container } = render(<SettingsScreen {...f} />);
     expect(screen.getByRole("heading", { level: 1, name: "Настройки" })).toBeDefined();
     expect(container.querySelector("details")?.open).toBe(false);
-    expect(container.querySelectorAll(".settings-field")).toHaveLength(15);
-    // P12/P14: the readiness fields are gone from the screen, the reminder pause stays.
+    expect(container.querySelectorAll(".settings-field")).toHaveLength(14);
+    // P12/P14: the readiness fields are gone from the screen; R14-02: so is the reminder pause (no setting any more).
     expect(screen.queryByText(/Проверять готовность/)).toBeNull();
     expect(screen.queryByText(/Готовность Learning/)).toBeNull();
-    expect(screen.getByRole("group", { name: "Пауза между напоминаниями, секунды", hidden: true })).toBeDefined();
+    expect(screen.queryByText(/Пауза/)).toBeNull();
     expect((field("Язык интерфейса").getByRole("combobox") as HTMLSelectElement).value).toBe("ru");
     expect((field("Язык словаря").getByRole("combobox") as HTMLSelectElement).value).toBe("uk");
     expect([...container.querySelectorAll<HTMLButtonElement>(".settings-field button")].filter(button => button.textContent === "Сохранить")

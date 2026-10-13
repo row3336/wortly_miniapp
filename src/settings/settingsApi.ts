@@ -10,12 +10,28 @@ import { ApiError, createJsonTransport, errorCode, httpError, type HttpOptions, 
 export const retiredKeys = ["learning_poll_seconds", "learning_ready_percent"] as const;
 // Every other key of the wire command is editable here, including review_error_mode and learning_content.
 export type SettingKey = Exclude<SettingCommand["payload"]["key"], (typeof retiredKeys)[number]>;
-/** As the wire carries it, possibly naming a retired key. */
-export type SettingIntent = Pick<SettingCommand, "command_id" | "kind" | "expected_field_version" | "payload">;
-/** An intent this build may create, keep as the pending slot and send. */
-export type EditableSettingIntent = Omit<SettingIntent, "payload"> & {
-  payload: Omit<SettingCommand["payload"], "key"> & { key: SettingKey };
+/**
+ * R14-02: the Learning reminder pause is no setting any more, but an earlier build may have left an unfinished save of it
+ * in the device's pending slot. Such a stored intent takes the ordinary recovery of every unfinished save (the pending
+ * slot, then the status read by its command ID, as for retry_count), so neither its ID nor its outcome is dropped
+ * silently. It is not a retired key: the projection never carries it (a projection with it is refused), this build never
+ * edits it and never creates such an intent; only a stored one is checked and, on the user's explicit retry, sent again.
+ */
+export const storedOnlyKeys = ["learning_reminder_pause_seconds"] as const;
+export type StoredOnlyKey = (typeof storedOnlyKeys)[number];
+/** The key of a stored or sent intent: an editable key, or a stored-only key of an earlier build. */
+export type IntentKey = SettingKey | StoredOnlyKey;
+export function storedOnly(key: IntentKey): key is StoredOnlyKey { return (storedOnlyKeys as readonly string[]).includes(key); }
+/** As the wire carries it, possibly naming a retired or a stored-only key. */
+export type SettingIntent = Pick<SettingCommand, "command_id" | "kind" | "expected_field_version"> & {
+  payload: Omit<SettingCommand["payload"], "key"> & { key: SettingCommand["payload"]["key"] | StoredOnlyKey };
 };
+/** An intent this build may keep as the pending slot and send: one it created, or a stored one of a stored-only key. */
+export type EditableSettingIntent = Omit<SettingIntent, "payload"> & {
+  payload: Omit<SettingCommand["payload"], "key"> & { key: IntentKey };
+};
+/** The command as it is sent: the stored intent with this window's client and document. */
+export type SettingSaveCommand = Omit<SettingCommand, "payload"> & Pick<SettingIntent, "payload">;
 /** The confirmed reset to the initial values (CT 6.2, TC 13.1); its payload is always empty. */
 export type SettingsResetIntent = Pick<SettingsResetCommand, "command_id" | "kind" | "payload">;
 /**
@@ -38,14 +54,27 @@ export type SettingStatusReply = { state_version: string } & (
 
 export interface SettingsApi {
   get(token: string): Promise<SettingsResponse>;
-  save(token: string, proof: string, profileId: string, command: SettingCommand): Promise<SettingSaveReply>;
+  save(token: string, proof: string, profileId: string, command: SettingSaveCommand): Promise<SettingSaveReply>;
   status(token: string, profileId: string, intent: SettingIntent): Promise<SettingStatusReply>;
   reset(token: string, proof: string, profileId: string, command: SettingsResetCommand): Promise<SettingSaveReply>;
   resetStatus(token: string, profileId: string, intent: SettingsResetIntent): Promise<SettingStatusReply>;
 }
 
-const integers = ["retry_gap", "retry_count", "learning_group_size", "learning_reminder_pause_seconds"] as const;
-const booleans = ["learning_mix", "strict_case", "include_preterite", "include_comparative"] as const;
+/**
+ * Notifications (project_notifications §3, §5): four switches and three whole local hours 0–23, each with its own field
+ * version, never null. The Learning reminder pause is not a setting any more (R14-02): the projection has no such key and
+ * a projection that carries one is refused as any unknown key. There is no weekday of the weekly report (R12-02).
+ */
+export const notificationFlags = ["notify_learning", "notify_weekly", "notify_daily", "notify_evening"] as const satisfies readonly SettingKey[];
+export const notificationHours = ["weekly_report_hour", "daily_report_hour", "evening_reminder_hour"] as const satisfies readonly SettingKey[];
+export type NotificationFlag = (typeof notificationFlags)[number];
+export type NotificationHour = (typeof notificationHours)[number];
+/** The keys the main settings screen edits; the notification keys belong to the submenu «Уведомления». */
+export type MainSettingKey = Exclude<SettingKey, NotificationFlag | NotificationHour>;
+const integers = ["retry_gap", "retry_count", "learning_group_size", ...notificationHours] as const;
+const booleans = ["learning_mix", "strict_case", "include_preterite", "include_comparative", ...notificationFlags] as const;
+/** Always present with a value, never null: the languages, the required choices and the notification keys. */
+const neverNull: readonly string[] = ["ui_language", "dictionary_language", ...notificationFlags, ...notificationHours];
 const languages = ["ru", "uk", "en"];
 const levels = ["A1", "A2", "B1", "B2", "C1", "C2"];
 const transitions = ["normal", "accelerated"];
@@ -119,6 +148,8 @@ function valueShape(key: string, value: unknown): boolean {
   if (key === "transition_mode") return oneOf(value, transitions);
   if (requiredChoice(key)) return oneOf(value, requiredChoices[key]);
   if (key === "learning_intervals_seconds") return listOf(value, integer);
+  // A stored-only key keeps the shape it had as a setting (a whole number of seconds); it has no constraint any more.
+  if (oneOf(key, storedOnlyKeys)) return integer(value);
   return key === "material" && material(value);
 }
 
@@ -154,12 +185,15 @@ export function validSettingsCurrent(value: unknown): value is SettingsProjectio
     const setting = value.settings[key];
     if (!record(setting) || !version(setting.version) || !Object.hasOwn(setting, "value")
       || !constraint(key, value.constraints[key])) return false;
-    // Language and required-choice settings are never null; every other setting may be unset.
-    if (setting.value === null && key !== "ui_language" && key !== "dictionary_language" && !requiredChoice(key)) continue;
+    // Language, required-choice and notification settings are never null; every other setting may be unset.
+    if (setting.value === null && !neverNull.includes(key) && !requiredChoice(key)) continue;
     if (!valueShape(key, setting.value)) return false;
   }
   const zone = value.settings.time_zone;
-  return record(zone) && version(zone.version) && (zone.value === null || typeof zone.value === "string");
+  // Read only (§5.5): whether the person opened the bot; until then the switches stay closed (R12-15).
+  const notifications = value.notifications;
+  return record(zone) && version(zone.version) && (zone.value === null || typeof zone.value === "string")
+    && record(notifications) && exact(notifications, ["telegram_opened"]) && typeof notifications.telegram_opened === "boolean";
 }
 
 /** Validate a NEW choice using the server's current bounds; never clamp or replace it. */
@@ -182,7 +216,7 @@ export function validSettingIntent(value: unknown): value is EditableSettingInte
   return record(value) && exact(value, ["command_id", "kind", "expected_field_version", "payload"])
     && uuid(value.command_id) && value.kind === "setting.save" && version(value.expected_field_version)
     && BigInt(value.expected_field_version) < 9223372036854775807n && record(value.payload)
-    && exact(value.payload, ["key", "value"]) && oneOf(value.payload.key, keys)
+    && exact(value.payload, ["key", "value"]) && (oneOf(value.payload.key, keys) || oneOf(value.payload.key, storedOnlyKeys))
     && valueShape(value.payload.key, value.payload.value);
 }
 

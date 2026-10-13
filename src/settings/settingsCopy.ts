@@ -1,5 +1,5 @@
 import type { Language } from "../i18n/language";
-import type { KnownRefusal, SettingKey } from "./settingsApi";
+import type { KnownRefusal, MainSettingKey, SettingKey } from "./settingsApi";
 import type { SettingsSnapshot } from "./settingsController";
 
 type Copy = {
@@ -24,7 +24,8 @@ type Copy = {
   hints: Partial<Record<SettingKey, string>>;
   /** Why Mix is muted while the material is chosen by CEFR level (2.21г): locked, or still active because a value is required. */
   mixByLevel: { locked: string };
-  fields: Record<SettingKey, string>;
+  /** The main screen's fields; the notification keys are titled by notificationsCopy.ts. */
+  fields: Record<MainSettingKey, string>;
   /** Returning the initial settings: the button, its confirmation window (Q08) and the states after confirming. */
   reset: { button: string; title: string; resets: string; kept: string; confirm: string; cancel: string;
     sending: string; done: string; failed: string; unknown: string };
@@ -33,6 +34,11 @@ type Copy = {
    * applied is not confirmed. No repeat is promised. Working text, pending owner (M-SETTINGS-KNOWN-REFUSAL-2).
    */
   refusedAttempt: { save: string; reset: string };
+  /**
+   * A refused earlier change of a key that is no setting any more (R14-02, the reminder pause of an earlier build): its
+   * explicit cancel (R2-09 / K19-024 / P5-013). WORKING TEXT, to be shown to the owner.
+   */
+  storedOnly: { note: string; cancel: string };
   /** Known refusals (incompatible, command_refused) are worded by the screen. */
   problems: Record<Exclude<NonNullable<SettingsSnapshot["problem"]>["reason"], KnownRefusal["refusal"]>, string>;
 };
@@ -84,7 +90,6 @@ export const settingsCopy: Record<Language, Copy> = {
       include_comparative: "Проверять степени сравнения", learning_mix: "Перемешивать темы",
       learning_intervals_seconds: "Интервалы Learning, секунды", retry_gap: "Карточек между повторами ошибки",
       retry_count: "Повторов после ошибки",
-      learning_reminder_pause_seconds: "Пауза между напоминаниями, секунды",
       review_error_mode: "Строгий режим повторов", learning_content: "Состав Learning",
     },
     reset: {
@@ -98,6 +103,10 @@ export const settingsCopy: Record<Language, Copy> = {
     refusedAttempt: {
       save: "Сервер не принял эту отправку изменения. Принято ли оно раньше, пока не подтверждено. Проверь состояние.",
       reset: "Сервер не принял эту отправку возврата исходных настроек. Выполнен ли возврат раньше, пока не подтверждено. Проверь состояние.",
+    },
+    storedOnly: {
+      note: "Это изменение из прежней версии приложения: такой настройки больше нет. Его можно отменить, тогда настройки снова откроются для правки.",
+      cancel: "Отменить это прежнее изменение",
     },
     problems: {
       network: "Не удалось обновить настройки. Попробуй ещё раз.", storage: "Не удалось завершить сохранение на этом устройстве. Обнови настройки.",
@@ -154,7 +163,6 @@ export const settingsCopy: Record<Language, Copy> = {
       include_comparative: "Перевіряти ступені порівняння", learning_mix: "Перемішувати теми",
       learning_intervals_seconds: "Інтервали Learning, секунди", retry_gap: "Карток між повтореннями помилки",
       retry_count: "Повторень після помилки",
-      learning_reminder_pause_seconds: "Пауза між нагадуваннями, секунди",
       review_error_mode: "Суворий режим повторень", learning_content: "Склад Learning",
     },
     reset: {
@@ -168,6 +176,10 @@ export const settingsCopy: Record<Language, Copy> = {
     refusedAttempt: {
       save: "Сервер не прийняв це надсилання зміни. Чи прийнято її раніше, поки не підтверджено. Перевір стан.",
       reset: "Сервер не прийняв це надсилання повернення початкових налаштувань. Чи виконано повернення раніше, поки не підтверджено. Перевір стан.",
+    },
+    storedOnly: {
+      note: "Це зміна з попередньої версії застосунку: такого налаштування більше немає. Її можна скасувати, тоді налаштування знову відкриються для редагування.",
+      cancel: "Скасувати цю попередню зміну",
     },
     problems: {
       network: "Не вдалося оновити налаштування. Спробуй ще раз.", storage: "Не вдалося завершити збереження на цьому пристрої. Онови налаштування.",
@@ -224,7 +236,6 @@ export const settingsCopy: Record<Language, Copy> = {
       include_comparative: "Check comparison forms", learning_mix: "Mix topics",
       learning_intervals_seconds: "Learning intervals, seconds", retry_gap: "Cards between error retries",
       retry_count: "Retries after an error",
-      learning_reminder_pause_seconds: "Pause between reminders, seconds",
       review_error_mode: "Strict review mode", learning_content: "Learning content",
     },
     reset: {
@@ -238,6 +249,10 @@ export const settingsCopy: Record<Language, Copy> = {
     refusedAttempt: {
       save: "The server did not accept this sending of the change. Whether it was accepted earlier is not confirmed yet. Check its status.",
       reset: "The server did not accept this request to restore default settings. Whether they were restored earlier is not confirmed yet. Check its status.",
+    },
+    storedOnly: {
+      note: "This change comes from an earlier version of the app: that setting no longer exists. You can cancel it, and settings will open for editing again.",
+      cancel: "Cancel this earlier change",
     },
     problems: {
       network: "Could not refresh settings. Try again.", storage: "Could not finish saving on this device. Refresh settings.",

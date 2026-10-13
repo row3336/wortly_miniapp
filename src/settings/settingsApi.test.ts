@@ -4,7 +4,7 @@ import { clientContractVersion } from "../api/http";
 import type { Profile, SavedCommandFact, SettingCommand, SettingsResetCommand, SettingsResponse } from "../api/generated";
 import {
   allowedSettingValue, createSettingsApi, resetKeys, validSettingIntent, validSettingsResetIntent,
-  type EditableSettingIntent, type SettingIntent, type SettingsResetIntent,
+  type EditableSettingIntent, type SettingIntent, type SettingKey, type SettingSaveCommand, type SettingsResetIntent,
 } from "./settingsApi";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -16,7 +16,7 @@ function intent(): SettingIntent {
   return { command_id: id(1), kind: "setting.save", expected_field_version: big,
     payload: { key: "strict_case", value: true } };
 }
-function command(original = intent()): SettingCommand {
+function command(original = intent()): SettingSaveCommand {
   return { ...original, client_instance_id: id(2), document_id: id(3) };
 }
 function fact(): SavedCommandFact {
@@ -66,10 +66,35 @@ describe("Settings current and constraints", () => {
     }
   });
 
-  // Recorded 2026-10-06 from the core application (GET /api/v1/settings, a new profile with the time zone
-  // opened as UTC), with keys sorted alphabetically when it was written down. The core itself serves settings,
-  // needs_setup, constraints, state_version; the JSON content is identical. Not a hand-made shape.
-  const coreNewProfile = '{"constraints":{"dictionary_language":{"type":"enum","values":["ru","uk","en"]},'
+  // Produced 2026-10-13 by the core's own settings_projection (core bb95f3a + notifications N1+N2, project_notifications §5)
+  // for a new admitted profile with the time zone UTC and the bot not opened yet, checked by the core's SettingsResponse
+  // model and printed with sorted keys (no database: the row is NEW_PROFILE_SETTINGS). Not a hand-made shape.
+  const coreNewProfile = '{"constraints":{"daily_report_hour":{"maximum":23,"minimum":0,"type":"integer"},"dictionary_language":{"type":"enum",'
+    + '"values":["ru","uk","en"]},"evening_reminder_hour":{"maximum":23,"minimum":0,"type":"integer"},"include_comparative":{"type":"boolean"},'
+    + '"include_preterite":{"type":"boolean"},"learning_content":{"type":"enum","values":["words","phrases",'
+    + '"mixed"]},"learning_group_size":{"maximum":2147483647,"minimum":1,"type":"integer"},"learning_intervals_seconds":{"item_maximum":2147483647,'
+    + '"item_minimum":1,"nonempty":true,"type":"ordered_integer_list"},"learning_mix":{"type":"boolean"},'
+    + '"material":{"modes":{"level":{"selected_level":["A1","A2","B1","B2","C1","C2"]},"topics":{"topic_ids":"nonempty_existing_uuid_list"}},'
+    + '"type":"exclusive_choice"},"notify_daily":{"type":"boolean"},"notify_evening":{"type":"boolean"},'
+    + '"notify_learning":{"type":"boolean"},"notify_weekly":{"type":"boolean"},"retry_count":{"maximum":2147483647,'
+    + '"minimum":1,"type":"integer"},"retry_gap":{"maximum":2147483647,"minimum":1,"type":"integer"},"review_error_mode":{"type":"enum",'
+    + '"values":["strict","soft"]},"strict_case":{"type":"boolean"},"transition_mode":{"type":"enum","values":["normal",'
+    + '"accelerated"]},"ui_language":{"type":"enum","values":["ru","uk","en"]},"weekly_report_hour":{"maximum":23,'
+    + '"minimum":0,"type":"integer"}},"needs_setup":true,"notifications":{"telegram_opened":false},"settings":{"daily_report_hour":{"value":7,'
+    + '"version":"1"},"dictionary_language":{"value":"ru","version":"1"},"evening_reminder_hour":{"value":18,'
+    + '"version":"1"},"include_comparative":{"value":false,"version":"1"},"include_preterite":{"value":false,'
+    + '"version":"1"},"learning_content":{"value":"words","version":"1"},"learning_group_size":{"value":5,'
+    + '"version":"1"},"learning_intervals_seconds":{"value":[30,120,600,3600,10800,18000],"version":"1"},'
+    + '"learning_mix":{"value":false,"version":"1"},"material":{"value":null,"version":"1"},"notify_daily":{"value":false,'
+    + '"version":"1"},"notify_evening":{"value":false,"version":"1"},"notify_learning":{"value":false,"version":"1"},'
+    + '"notify_weekly":{"value":false,"version":"1"},"retry_count":{"value":4,"version":"1"},"retry_gap":{"value":3,'
+    + '"version":"1"},"review_error_mode":{"value":"soft","version":"1"},"strict_case":{"value":true,"version":"1"},'
+    + '"time_zone":{"value":"UTC","version":"1"},"transition_mode":{"value":"normal","version":"1"},"ui_language":{"value":"ru",'
+    + '"version":"1"},"weekly_report_hour":{"value":7,"version":"1"}},"state_version":"3"}';
+
+  // Recorded 2026-10-06 from the core application before the notification settings (GET /api/v1/settings, a new profile
+  // with the time zone opened as UTC), keys sorted. It still carries the Learning reminder pause and no notification keys.
+  const coreBeforeNotifications = '{"constraints":{"dictionary_language":{"type":"enum","values":["ru","uk","en"]},'
     + '"include_comparative":{"type":"boolean"},"include_preterite":{"type":"boolean"},'
     + '"learning_content":{"type":"enum","values":["words","phrases","mixed"]},'
     + '"learning_group_size":{"maximum":2147483647,"minimum":1,"type":"integer"},'
@@ -94,7 +119,13 @@ describe("Settings current and constraints", () => {
     + '"strict_case":{"value":true,"version":"1"},"time_zone":{"value":"UTC","version":"1"},'
     + '"transition_mode":{"value":null,"version":"1"},"ui_language":{"value":"ru","version":"1"}},"state_version":"3"}';
 
-  it("opens the recorded core reply of a new profile with learning content words and its version", async () => {
+  it("refuses the earlier core reply with the reminder pause and without the notification keys (R14-02, §5.7)", async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(coreBeforeNotifications, { status: 200 }));
+    await expect(createSettingsApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 20000 }).get("synthetic"))
+      .rejects.toMatchObject({ kind: "invalid_response" });
+  });
+
+  it("opens the core reply of a new profile: learning content words, notifications off until the bot is opened", async () => {
     const recorded = JSON.parse(coreNewProfile) as SettingsResponse;
     // The recorded text is served as a string (not a re-serialized object); its key order is the sorted one.
     const fetcher = vi.fn<typeof fetch>(async () => new Response(coreNewProfile, { status: 200 }));
@@ -103,6 +134,12 @@ describe("Settings current and constraints", () => {
     expect(read).toEqual(withoutRetired(recorded));
     expect(read.settings.learning_content).toEqual({ value: "words", version: "1" });
     expect(read.constraints.learning_content).toEqual({ type: "enum", values: ["words", "phrases", "mixed"] });
+    expect(read.notifications).toEqual({ telegram_opened: false });
+    expect(read.settings).toMatchObject({ notify_learning: { value: false }, notify_weekly: { value: false },
+      notify_daily: { value: false }, notify_evening: { value: false }, weekly_report_hour: { value: 7 },
+      daily_report_hour: { value: 7 }, evening_reminder_hour: { value: 18 } });
+    expect(read.constraints.weekly_report_hour).toEqual({ type: "integer", minimum: 0, maximum: 23 });
+    expect(Object.keys(read.settings)).not.toContain("learning_reminder_pause_seconds");
     // The same reply carried by a saved command and by a command status.
     const saved = await setup({ command: fact(), current: recorded, state_version: big })
       .api.save("synthetic", "proof", subject, command());
@@ -211,7 +248,7 @@ describe("Settings current and constraints", () => {
     ["wrong constraint type", x => { x.constraints.strict_case.type = "integer"; }],
     ["missing maximum", x => { Reflect.deleteProperty(x.constraints.retry_count, "maximum"); }],
     ["fractional bound", x => { x.constraints.retry_count.minimum = 1.5; }],
-    ["reversed bounds", x => { x.constraints.learning_reminder_pause_seconds.minimum = 2147483648; }],
+    ["reversed bounds", x => { x.constraints.weekly_report_hour.minimum = 24; }],
     ["missing list maximum", x => { Reflect.deleteProperty(x.constraints.learning_intervals_seconds, "item_maximum"); }],
     ["nonboolean list rule", x => { Object.assign(x.constraints.learning_intervals_seconds, { nonempty: 1 }); }],
     ["empty enum", x => { x.constraints.ui_language.values = []; }],
@@ -259,10 +296,13 @@ describe("Settings current and constraints", () => {
 });
 
 describe("Settings command exchange", () => {
-  const values: EditableSettingIntent["payload"][] = [
+  const values: Array<EditableSettingIntent["payload"] & { key: SettingKey }> = [
     { key: "ui_language", value: "ru" }, { key: "dictionary_language", value: "uk" },
     { key: "retry_gap", value: 1 }, { key: "retry_count", value: 2 }, { key: "learning_group_size", value: 10 },
-    { key: "learning_reminder_pause_seconds", value: 60 }, { key: "learning_intervals_seconds", value: [120, 30, 120] },
+    { key: "learning_intervals_seconds", value: [120, 30, 120] },
+    { key: "notify_learning", value: false }, { key: "notify_weekly", value: true }, { key: "notify_daily", value: false },
+    { key: "notify_evening", value: true }, { key: "weekly_report_hour", value: 0 }, { key: "daily_report_hour", value: 23 },
+    { key: "evening_reminder_hour", value: 18 },
     { key: "strict_case", value: false }, { key: "learning_mix", value: true },
     { key: "include_preterite", value: true }, { key: "include_comparative", value: false },
     { key: "transition_mode", value: "accelerated" }, { key: "material", value: { mode: "level", selected_level: "A1" } },

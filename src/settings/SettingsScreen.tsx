@@ -3,8 +3,8 @@ import type { SettingConstraint, Topic } from "../api/generated";
 import { BottomNav } from "../app/BottomNav";
 import type { FeedbackDocument } from "../feedback/useFeedbackDocument";
 import type { Language } from "../i18n/language";
-import { t as appText } from "../i18n/messages";
-import type { SettingKey } from "./settingsApi";
+import { t as appText, navigationText } from "../i18n/messages";
+import type { MainSettingKey, SettingKey } from "./settingsApi";
 import type { SettingsController, SettingsSnapshot } from "./settingsController";
 import { catalogAllows, MaterialEditor, materialParts, type CatalogState } from "./MaterialEditor";
 import { SettingsFeedback } from "./SettingsFeedback";
@@ -12,9 +12,12 @@ import { SettingsResetDialog } from "./SettingsResetDialog";
 import { languageChosen } from "./dictionaryChoice";
 import { dictionaryChoiceCopy } from "./dictionaryChoiceCopy";
 import { languageNames, settingsCopy } from "./settingsCopy";
+import { NotificationsPanel } from "./NotificationsPanel";
+import { notificationsCopy } from "./notificationsCopy";
 import "./settings.css";
 
-type Actions = Pick<SettingsController, "edit" | "save" | "acceptCurrent" | "keepMine" | "refresh" | "retry" | "reset" | "continueWithServer">;
+type Actions = Pick<SettingsController, "edit" | "save" | "acceptCurrent" | "keepMine" | "refresh" | "retry" | "reset" | "continueWithServer">
+  & Partial<Pick<SettingsController, "cancelStored">>;
 export type SettingsScreenProps = {
   snapshot: SettingsSnapshot;
   catalog: CatalogState;
@@ -28,13 +31,22 @@ export type SettingsScreenProps = {
   feedback?: FeedbackDocument;
   /** False while the panel is hidden (another section is shown); a focus move waits until it is shown. Default: shown. */
   active?: boolean;
+  /**
+   * The inner view of Settings (project_notifications §8.1): the main screen M10 or the submenu «Уведомления». The host owns
+   * it; without `onView` the row to the submenu is not shown. Default: main.
+   */
+  view?: SettingsView;
+  onView?(view: SettingsView): void;
+  /** «Открыть бота» in the submenu before the bot is opened (R12-15). */
+  onOpenBot?(): void;
 };
-const groups: Array<{ name: "languages" | "learning" | "checking" | "additional"; fields: SettingKey[] }> = [
+export type SettingsView = "main" | "notifications";
+const groups: Array<{ name: "languages" | "learning" | "checking" | "additional"; fields: MainSettingKey[] }> = [
   { name: "languages", fields: ["ui_language", "dictionary_language"] },
   { name: "learning", fields: ["material", "learning_group_size", "learning_content", "review_error_mode", "transition_mode"] },
   { name: "checking", fields: ["strict_case", "include_preterite", "include_comparative"] },
-  { name: "additional", fields: ["learning_intervals_seconds", "learning_mix", "retry_gap", "retry_count",
-    "learning_reminder_pause_seconds"] },
+  // R14-02: the Learning reminder pause is no setting any more; its group is gone and the row «Уведомления» follows here.
+  { name: "additional", fields: ["learning_intervals_seconds", "learning_mix", "retry_gap", "retry_count"] },
 ];
 
 function displayValue(value: unknown, key: SettingKey, language: Language, topics: readonly Topic[] | null = null): string {
@@ -91,7 +103,7 @@ function LockedLanguage({ snapshot, language }: Pick<SettingsScreenProps, "snaps
   </section>;
 }
 
-function SettingField({ setting, ...props }: SettingsScreenProps & { setting: SettingKey }) {
+function SettingField({ setting, ...props }: SettingsScreenProps & { setting: MainSettingKey }) {
   const { snapshot, language, actions, catalog, onReloadTopics } = props;
   const id = useId(), t = settingsCopy[language];
   const data = snapshot.data!;
@@ -304,8 +316,19 @@ export function SettingsScreen(props: SettingsScreenProps) {
     setLeaving("running");
     void actions.continueWithServer().finally(() => setLeaving(state => state === "running" ? "settled" : state));
   };
+  const { view = "main", onView, onOpenBot } = props;
+  const notifications = view === "notifications", n = notificationsCopy[language];
+  // A changed view moves focus to its start: the submenu's title, or back to the row that opened it.
+  const title = useRef<HTMLHeadingElement>(null), row = useRef<HTMLButtonElement>(null), viewShown = useRef(view);
+  useEffect(() => {
+    if (viewShown.current === view) return;
+    viewShown.current = view;
+    if (active !== false) (view === "notifications" ? title : row).current?.focus();
+  }, [view, active]);
   return <main className="settings-screen" lang={language}>
-    <header className="settings-header"><h1>{t.title}</h1>
+    <header className="settings-header">
+      {notifications && <button type="button" className="settings-secondary" onClick={() => onView?.("main")}>{navigationText(language).back}</button>}
+      <h1 ref={title} tabIndex={-1}>{notifications ? n.title : t.title}</h1>
       <button type="button" className="settings-secondary" disabled={busy} ref={refreshButton}
         onClick={() => { setLeaving(null); void actions.refresh(); }}>{t.refresh}</button>
     </header>
@@ -316,16 +339,30 @@ export function SettingsScreen(props: SettingsScreenProps) {
         : leaving === "failed" ? <span className="settings-error" role="status">{t.continueFailed}</span>
         : <span role="status">{t.refreshing}</span>}
     </div>}
-    {snapshot.problem && line !== "unknown" && <div className="settings-error" role="alert">
+    {/* The reset's own line sits beside its button on the main view; the submenu has no such button, so it shows the problem here. */}
+    {snapshot.problem && (line !== "unknown" || notifications) && <div className="settings-error" role="alert">
       <p>{problemText(snapshot, language)}</p>
       {snapshot.canRetry && <button className="settings-secondary" type="button" onClick={() => { void actions.retry(); }}>{t.retry}</button>}
+      {/* R2-09 / P5-013: the explicit cancel of a refused earlier change that has no field (stored-only key, R14-02). */}
+      {snapshot.canCancelStored && actions.cancelStored && <>
+        <p>{t.storedOnly.note}</p>
+        <button className="settings-secondary" type="button" onClick={() => { void actions.cancelStored?.(); }}>{t.storedOnly.cancel}</button>
+      </>}
       {snapshot.canContinueWithServer && <button className="settings-secondary" type="button" ref={continueButton}
         onClick={leave}>{t.continueWithServer}</button>}
     </div>}
     {!snapshot.data && !busy && !snapshot.problem && <p role="alert">{t.unavailable}</p>}
+    {snapshot.data && notifications && <section className="settings-group" aria-label={n.title}>
+      <NotificationsPanel snapshot={snapshot} language={language} actions={fieldProps.actions} onOpenBot={onOpenBot} />
+    </section>}
+    {/* The main view stays mounted while the submenu is shown, so its unsent editor text and topic query survive. */}
+    <div className="settings-view" hidden={notifications}>
     {snapshot.data && groups.map(group => group.name === "additional"
       ? <details className="settings-group" key={group.name}><summary>{t.additional}</summary>
-        <div className="settings-group-body">{group.fields.map(setting => <SettingField key={setting} setting={setting} {...fieldProps} />)}</div>
+        <div className="settings-group-body">{group.fields.map(setting => <SettingField key={setting} setting={setting} {...fieldProps} />)}
+          {/* project_notifications §8.1: the row to the submenu, where the pause group was (R14-02). */}
+          {onView && <button type="button" className="settings-secondary settings-row" ref={row}
+            onClick={() => onView("notifications")}>{n.title}</button>}</div>
       </details>
       : <section className="settings-group" key={group.name} aria-labelledby={`settings-${group.name}`}>
         <h2 id={`settings-${group.name}`}>{t[group.name]}</h2>
@@ -338,5 +375,6 @@ export function SettingsScreen(props: SettingsScreenProps) {
     {feedback && <SettingsFeedback feedback={feedback} language={language} />}
     <BottomNav current="settings" language={language} enabled={onDictionary ? ["today", "dictionary"] : ["today"]}
       onNavigate={tab => { if (tab === "today") onToday(); else if (tab === "dictionary") onDictionary?.(); }} />
+    </div>
   </main>;
 }

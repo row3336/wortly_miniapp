@@ -8,11 +8,15 @@ export type ActionUndoCommand = { "command_id": string; "kind": "action.undo"; "
 
 export type AnswerSubmitCommand = { "command_id": string; "client_instance_id": string; "document_id": string; "session_id": string; "kind": "answer.submit"; "assignment_id": string; "payload": (TextAnswerPayload | ForgotAnswerPayload); };
 
+export type AppOpenEvent = { "cts": string; "ev": "c.app.open"; "kind": "open" | "foreground"; "doc"?: (string | null); "idb_ok"?: (boolean | null); };
+
 export type AuthRequest = { "client_version": string; "contract_version": string; "init_data": string; "saved_language"?: ("uk" | "en" | "ru" | null); "browser_language"?: (string | null); };
 
 export type AuthResponse = { "access_token": string; "expires_at": string; "profile": Profile; "compatibility": Compatibility; };
 
 export type BaseCounts = { "total": number; "words": number; "phrases": number; };
+
+export type BudgetEvent = { "cts": string; "ev": "c.budget"; "cmd": string; "n": number; "outcome": "failed" | "cancel_sent"; };
 
 export type BusyClient = { "status": "SESSION_BUSY"; "profile": Profile; "session": BusySession; "compatibility": Compatibility; };
 
@@ -44,11 +48,21 @@ export type CardStatusResponse = { "command": StoredCommandFact; "current": (Car
 
 export type CardTranslations = { "common": Array<string>; "personal": (PersonalCardText | null); };
 
+export type ClientErrorEvent = { "cts": string; "ev": "c.error"; "err": "Error" | "AggregateError" | "EvalError" | "RangeError" | "ReferenceError" | "SyntaxError" | "TypeError" | "URIError" | "DOMException" | "AbortError" | "ConstraintError" | "DataError" | "InvalidStateError" | "NetworkError" | "NotAllowedError" | "NotFoundError" | "QuotaExceededError" | "ReadOnlyError" | "SecurityError" | "TimeoutError" | "TransactionInactiveError" | "UnknownError" | "VersionError" | "ApiError" | "ClosedAccessError" | "DatabaseOpenError" | "PendingStoreError" | "SendBudgetError"; };
+
+export type ClientEventBatch = { "client_instance_id": string; "client_version": string; "dropped"?: number; "events": Array<(AppOpenEvent | CommandSendEvent | CommandReplyEvent | RecoveryEvent | ScreenEvent | BudgetEvent | StorageEvent | ClientErrorEvent)>; };
+
+export type ClientEventsAccepted = { "accepted": number; };
+
 export type ClosedDictionaryContext = { "status": "closed"; "context": DictionaryContextReference; };
 
 export type ClosedSessionBoundary = { "session_id": string; "status": "closed"; "close_reason": "midnight" | "pair_changed" | "timezone_date_changed" | "stop" | "remote_stop" | "summary_home" | "save_failed"; };
 
 export type CommandFact = { "id": string; "status": "applied" | "already_applied"; "applied_at": string; "target_id": (string | null); "object_version": string; };
+
+export type CommandReplyEvent = { "cts": string; "ev": "c.cmd.reply"; "cmd"?: (string | null); "trace": string; "status"?: (number | null); "code"?: ("ACCESS_PENDING" | "ACCESS_REJECTED" | "ANSWER_SPEC_UNAVAILABLE" | "ASSIGNMENT_STALE" | "AUTH_EXPIRED" | "AUTH_INVALID" | "CAPABILITY_EXPIRED" | "CLIENT_INCOMPATIBLE" | "CLIENT_OPEN_REQUIRED" | "CLIENT_REGISTRATION_CONFLICT" | "COMMAND_PAYLOAD_MISMATCH" | "DICTIONARY_LANGUAGE_LOCKED" | "DOCUMENT_STALE" | "FORBIDDEN" | "INTERNAL_ERROR" | "LEASE_HELD" | "LEASE_LOST" | "MAINTENANCE" | "METHOD_NOT_ALLOWED" | "NOTIFICATIONS_NOT_OPENED" | "NOT_FOUND" | "NO_MATERIAL" | "PRECEDENCE_ANOMALY" | "PROFILE_DELETED" | "RATE_LIMITED" | "REQUEST_REFUSED" | "SEARCH_CURSOR_STALE" | "SESSION_BUSY" | "SESSION_CLOSED" | "SETUP_REQUIRED" | "VALIDATION_FAILED" | "VERSION_CONFLICT" | "WRITE_UNAVAILABLE" | null); "outcome": "applied" | "already_applied" | "refused" | "unknown" | "network" | "timeout"; "ms"?: (number | null); };
+
+export type CommandSendEvent = { "cts": string; "ev": "c.cmd.send"; "cmd": string; "trace": string; "kind": "access.decide" | "access.mode" | "access.reapply" | "action.undo" | "action.undo_offer.close" | "action.undo_offer.open" | "answer.submit" | "assignment.present" | "card.exclude" | "card.relearn" | "card.return" | "conjugation.schedule" | "context.close" | "context.open" | "feedback.send" | "field.save" | "field.undo" | "interval.increase" | "learning.known" | "learning.preview_next" | "learning.select" | "learning.unselect" | "onboarding.advance" | "onboarding.complete" | "onboarding.dismiss" | "oral.grade" | "oral.reveal" | "result.correct" | "result.grade" | "result.undo" | "session.cancel_start" | "session.start" | "session.stop" | "session.stop_remote" | "setting.save" | "settings.reset"; "attempt": number; };
 
 export type CommandStatusResponse = { "command": (StoredCommandFact | MissingCommandFact | RefusedStartFact); "current": (Profile | ModeState | UnavailableCurrent | SettingsProjection | SessionProjection | LearningSessionProjection | OralSessionProjection | ConjugationSessionProjection | UnavailableSession | RemoteSessionProjection | SessionStartCancelProjection | LearningCurrentProjection | ConjugationCatalog | FeedbackCurrent | OnboardingProjection); "state_version": string; "closed_session"?: (ClosedSessionBoundary | null); "verified_intent_hash"?: (string | null); "error"?: (ErrorDetail | null); };
 
@@ -290,6 +304,8 @@ export type ModePayload = { "mode": "manual" | "automatic"; "expected_version": 
 
 export type ModeState = { "mode": "manual" | "automatic"; "version": string; };
 
+export type NotificationsState = { "telegram_opened": boolean; };
+
 export type OnboardingAdvanceCommand = { "command_id": string; "kind": "onboarding.advance"; "client_instance_id": string; "document_id": string; "payload": OnboardingAdvancePayload; };
 
 export type OnboardingAdvancePayload = { "mode": "written" | "oral" | "learning" | "conjugation"; "side": "l1-de" | "de-l1" | "none"; "position": number; };
@@ -372,6 +388,8 @@ export type ReadyCount = { "ready": number; "next_due_date": (string | null); };
 
 export type ReapplyRequest = { "command_id": string; "expected_access_version": string; };
 
+export type RecoveryEvent = { "cts": string; "ev": "c.recovery"; "cmd": string; "from": "checking" | "checks_only" | "conflict" | "counter_unknown" | "disposed" | "exhausted" | "idle" | "lost" | "maintenance" | "origin_elsewhere" | "pre_send_check" | "refused" | "retry_wait" | "sending" | "settled" | "suspended" | "terminated" | "unreachable" | "window_check"; "to": "checking" | "checks_only" | "conflict" | "counter_unknown" | "disposed" | "exhausted" | "idle" | "lost" | "maintenance" | "origin_elsewhere" | "pre_send_check" | "refused" | "retry_wait" | "sending" | "settled" | "suspended" | "terminated" | "unreachable" | "window_check"; "reason"?: ("access_lost" | "client_incompatible" | "session_closed" | "step_stale" | "window_replaced" | null); };
+
 export type ReferenceAdjective = { "positive": (string | null); "positive_status": "applicable" | "not_applicable" | "unknown"; "comparative": (string | null); "comparative_status": "applicable" | "not_applicable" | "unknown"; "superlative": (string | null); "superlative_status": "applicable" | "not_applicable" | "unknown"; };
 
 export type ReferenceCard = { "id": string; "revision": string; "lemma": string; "type": "noun" | "verb" | "phrase" | "adjective" | "pronoun" | "adverb" | "preposition" | "conjunction" | "particle"; "cefr": ("A1" | "A2" | "B1" | "B2" | "C1" | "C2" | null); };
@@ -412,6 +430,8 @@ export type RevealedOralAssignment = { "id": string; "card_id": string; "status"
 
 export type SavedCommandFact = { "id": string; "kind": string; "status": "applied" | "already_applied"; "applied_at": string; "target_id": (string | null); "action_id": (string | null); "result_id": (string | null); "context_id": (string | null); "object_version": (string | null); };
 
+export type ScreenEvent = { "cts": string; "ev": "c.screen"; "cmd"?: (string | null); "kind": "result_shown" | "already_recorded" | "lost" | "unsaved_shown" | "refusal_shown" | "update_required"; "code"?: ("ACCESS_PENDING" | "ACCESS_REJECTED" | "ANSWER_SPEC_UNAVAILABLE" | "ASSIGNMENT_STALE" | "AUTH_EXPIRED" | "AUTH_INVALID" | "CAPABILITY_EXPIRED" | "CLIENT_INCOMPATIBLE" | "CLIENT_OPEN_REQUIRED" | "CLIENT_REGISTRATION_CONFLICT" | "COMMAND_PAYLOAD_MISMATCH" | "DICTIONARY_LANGUAGE_LOCKED" | "DOCUMENT_STALE" | "FORBIDDEN" | "INTERNAL_ERROR" | "LEASE_HELD" | "LEASE_LOST" | "MAINTENANCE" | "METHOD_NOT_ALLOWED" | "NOTIFICATIONS_NOT_OPENED" | "NOT_FOUND" | "NO_MATERIAL" | "PRECEDENCE_ANOMALY" | "PROFILE_DELETED" | "RATE_LIMITED" | "REQUEST_REFUSED" | "SEARCH_CURSOR_STALE" | "SESSION_BUSY" | "SESSION_CLOSED" | "SETUP_REQUIRED" | "VALIDATION_FAILED" | "VERSION_CONFLICT" | "WRITE_UNAVAILABLE" | null); "grade"?: ("correct" | "wrong" | "partial" | null); };
+
 export type SessionCancelStartCommand = { "command_id": string; "client_instance_id": string; "document_id": string; "session_id": string; "kind": "session.cancel_start"; "payload": EmptyPayload; };
 
 export type SessionCancelStartResponse = { "command": (SavedCommandFact | RejectedCommandFact); "current": (SessionStartCancelProjection | UnavailableSession); "state_version": string; "error"?: (ErrorDetail | null); };
@@ -442,7 +462,11 @@ export type SettingCommand = { "command_id": string; "kind": "setting.save"; "cl
 
 export type SettingConstraint = { "type": "enum" | "integer" | "boolean" | "ordered_integer_list" | "exclusive_choice"; "values"?: (Array<string> | null); "minimum"?: (number | null); "maximum"?: (number | null); "nonempty"?: (boolean | null); "item_minimum"?: (number | null); "item_maximum"?: (number | null); "modes"?: ({ [key: string]: { [key: string]: (Array<string> | string); }; } | null); };
 
-export type SettingPayload = { "key": ("ui_language" | "dictionary_language" | "retry_gap" | "retry_count" | "learning_group_size" | "learning_intervals_seconds" | "learning_reminder_pause_seconds" | "learning_mix" | "strict_case" | "include_preterite" | "include_comparative" | "transition_mode" | "review_error_mode" | "learning_content" | "material" | "learning_poll_seconds" | "learning_ready_percent"); "value": (string | number | boolean | Array<number> | (LevelMaterial | TopicsMaterial)); };
+export type SettingPayload = { "key": ("ui_language" | "dictionary_language" | "retry_gap" | "retry_count" | "learning_group_size" | "learning_intervals_seconds" | "learning_mix" | "strict_case" | "include_preterite" | "include_comparative" | "transition_mode" | "review_error_mode" | "learning_content" | "material" | "notify_learning" | "notify_weekly" | "notify_daily" | "notify_evening" | "weekly_report_hour" | "daily_report_hour" | "evening_reminder_hour" | "learning_poll_seconds" | "learning_ready_percent"); "value": (string | number | boolean | Array<number> | (LevelMaterial | TopicsMaterial)); };
+
+export type SettingValue_Annotated_bool__Strict_strict_True___ = { "value": boolean; "version": string; };
+
+export type SettingValue_Annotated_int__Strict_strict_True___ = { "value": number; "version": string; };
 
 export type SettingValue_Literal__strict____soft___ = { "value": "strict" | "soft"; "version": string; };
 
@@ -464,13 +488,13 @@ export type SettingValue_Union_list_Annotated_int__Strict_strict_True_____NoneTy
 
 export type SettingsCommandResponse = { "command": (SavedCommandFact | RejectedCommandFact); "current": SettingsProjection; "state_version": string; "error"?: (ErrorDetail | null); };
 
-export type SettingsProjection = { "settings": SettingsValues; "needs_setup": boolean; "constraints": { [key: string]: SettingConstraint; }; };
+export type SettingsProjection = { "settings": SettingsValues; "needs_setup": boolean; "constraints": { [key: string]: SettingConstraint; }; "notifications": NotificationsState; };
 
 export type SettingsResetCommand = { "command_id": string; "kind": "settings.reset"; "client_instance_id": string; "document_id": string; "payload": EmptyPayload; };
 
-export type SettingsResponse = { "settings": SettingsValues; "needs_setup": boolean; "constraints": { [key: string]: SettingConstraint; }; "state_version": string; };
+export type SettingsResponse = { "settings": SettingsValues; "needs_setup": boolean; "constraints": { [key: string]: SettingConstraint; }; "notifications": NotificationsState; "state_version": string; };
 
-export type SettingsValues = { "ui_language": SettingValue_Literal__uk____en____ru___; "dictionary_language": SettingValue_Literal__uk____en____ru___; "time_zone": SettingValue_Union_Annotated_str__Strict_strict_True____NoneType__; "retry_gap": SettingValue_Union_Annotated_int__Strict_strict_True____NoneType__; "retry_count": SettingValue_Union_Annotated_int__Strict_strict_True____NoneType__; "learning_group_size": SettingValue_Union_Annotated_int__Strict_strict_True____NoneType__; "learning_intervals_seconds": SettingValue_Union_list_Annotated_int__Strict_strict_True_____NoneType__; "learning_reminder_pause_seconds": SettingValue_Union_Annotated_int__Strict_strict_True____NoneType__; "learning_mix": SettingValue_Union_Annotated_bool__Strict_strict_True____NoneType__; "strict_case": SettingValue_Union_Annotated_bool__Strict_strict_True____NoneType__; "include_preterite": SettingValue_Union_Annotated_bool__Strict_strict_True____NoneType__; "include_comparative": SettingValue_Union_Annotated_bool__Strict_strict_True____NoneType__; "transition_mode": SettingValue_Union_Literal__normal____accelerated____NoneType__; "review_error_mode": SettingValue_Literal__strict____soft___; "learning_content": SettingValue_Literal__words____phrases____mixed___; "material": SettingValue_Union_Annotated_Union_LevelMaterial__TopicsMaterial___FieldInfo_annotation_NoneType__required_True__discriminator__mode_____NoneType__; };
+export type SettingsValues = { "ui_language": SettingValue_Literal__uk____en____ru___; "dictionary_language": SettingValue_Literal__uk____en____ru___; "time_zone": SettingValue_Union_Annotated_str__Strict_strict_True____NoneType__; "retry_gap": SettingValue_Union_Annotated_int__Strict_strict_True____NoneType__; "retry_count": SettingValue_Union_Annotated_int__Strict_strict_True____NoneType__; "learning_group_size": SettingValue_Union_Annotated_int__Strict_strict_True____NoneType__; "learning_intervals_seconds": SettingValue_Union_list_Annotated_int__Strict_strict_True_____NoneType__; "learning_mix": SettingValue_Union_Annotated_bool__Strict_strict_True____NoneType__; "strict_case": SettingValue_Union_Annotated_bool__Strict_strict_True____NoneType__; "include_preterite": SettingValue_Union_Annotated_bool__Strict_strict_True____NoneType__; "include_comparative": SettingValue_Union_Annotated_bool__Strict_strict_True____NoneType__; "transition_mode": SettingValue_Union_Literal__normal____accelerated____NoneType__; "review_error_mode": SettingValue_Literal__strict____soft___; "learning_content": SettingValue_Literal__words____phrases____mixed___; "material": SettingValue_Union_Annotated_Union_LevelMaterial__TopicsMaterial___FieldInfo_annotation_NoneType__required_True__discriminator__mode_____NoneType__; "notify_learning": SettingValue_Annotated_bool__Strict_strict_True___; "notify_weekly": SettingValue_Annotated_bool__Strict_strict_True___; "notify_daily": SettingValue_Annotated_bool__Strict_strict_True___; "notify_evening": SettingValue_Annotated_bool__Strict_strict_True___; "weekly_report_hour": SettingValue_Annotated_int__Strict_strict_True___; "daily_report_hour": SettingValue_Annotated_int__Strict_strict_True___; "evening_reminder_hour": SettingValue_Annotated_int__Strict_strict_True___; };
 
 export type StatisticsBase = { "total": number; "words": number; "phrases": number; "by_type": StatisticsTypeCounts; };
 
@@ -485,6 +509,8 @@ export type StatisticsStreaks = { "one": number; "two": number; "three": number;
 export type StatisticsTypeCounts = { "noun": number; "verb": number; "phrase": number; "adjective": number; "pronoun": number; "adverb": number; "preposition": number; "conjunction": number; "particle": number; };
 
 export type StatisticsWordResults = { "last_wrong": number; "streaks": StatisticsStreaks; };
+
+export type StorageEvent = { "cts": string; "ev": "c.storage"; "kind": "storage_read" | "storage_write" | "idb_unavailable"; };
 
 export type StoredCommandFact = { "id": string; "kind": string; "status": "already_applied"; "applied_at": string; "target_id": (string | null); "action_id": (string | null); "result_id": (string | null); "context_id": (string | null); "object_version": (string | null); };
 

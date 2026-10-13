@@ -120,6 +120,7 @@ export function useSettingsDocument(options: Options): SettingsDocument {
       acceptCurrent: key => recovered()?.controller.acceptCurrent(key),
       retry: () => { const bound = recovered(); return bound?.run(() => bound.controller.retry()) ?? Promise.resolve(); },
       continueWithServer: () => { const bound = recovered(); return bound?.run(() => bound.controller.continueWithServer()) ?? Promise.resolve(); },
+      cancelStored: () => { const bound = recovered(); return bound?.run(() => bound.controller.cancelStored()) ?? Promise.resolve(); },
       reset: () => { const bound = recovered(); return bound?.run(() => bound.controller.reset()) ?? Promise.resolve(); },
       refresh: () => currentOwner.current()?.refresh() ?? Promise.resolve(),
     };
@@ -127,6 +128,7 @@ export function useSettingsDocument(options: Options): SettingsDocument {
   const bound = lookup();
   let state = bound?.controller.snapshot() ?? initial;
   if (bound?.source !== options.access) state = { ...state, canEdit: false, canReset: false, canRetry: false, canContinueWithServer: false,
+    canCancelStored: false,
     drafts: Object.fromEntries(Object.entries(state.drafts).map(([key, draft]) => [key, { ...draft, canSave: false, canKeepMine: false }])) };
   const confirmed = bound?.source === options.access && state.phase === "ready" && state.dataCurrent && !state.pending
     && !state.resetPending ? state.data : null;

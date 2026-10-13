@@ -3,7 +3,8 @@ import { ApiError } from "../api/http";
 import { version as validVersion } from "../api/wireValidation";
 import { ClosedAccessError, type OpenedAccess } from "../app/openedAccess";
 import { PendingStoreError, validId } from "../commands/pendingSlot";
-import { allowedSettingValue, KnownRefusal, resetKeys, type SettingKey, type SettingSaveReply, type SettingsApi } from "./settingsApi";
+import { allowedSettingValue, KnownRefusal, resetKeys, storedOnly, type IntentKey, type SettingKey, type SettingSaveReply,
+  type SettingsApi } from "./settingsApi";
 import { SettingsPendingStore, type SettingsPending } from "./settingsPending";
 import type { SettingsResetPending, SettingsResetPendingStore } from "./settingsResetPending";
 
@@ -18,7 +19,8 @@ export type SettingsDraft = Omit<Draft, "revision"> & {
 type Problem = { reason: "network" | "storage" | "invalid_pending" | "pending_changed" | "expired" | "forbidden"
   | "context_closed" | "context_refreshed" | "client_changed" | "profile_changed" | "mismatch" | "not_found" | "stale_response"
   | KnownRefusal["refusal"]; code?: string };
-type Outcome = { commandId: string; key: SettingKey; status: "accepted" | "rejected"; code?: string };
+/** `key` may name a stored-only key (R14-02): a stored intent of an earlier build, checked like any other. */
+type Outcome = { commandId: string; key: IntentKey; status: "accepted" | "rejected"; code?: string };
 /** The server's answer to a reset; shown only once the server reported it (TA 12.4). */
 type ResetOutcome = Omit<Outcome, "key">;
 export type SettingsSnapshot = {
@@ -41,6 +43,11 @@ export type SettingsSnapshot = {
    * and the user may continue with the current server settings. Offered only after a fresh server readback of this refresh.
    */
   canContinueWithServer: boolean;
+  /**
+   * R2-09 / K19-024 / P5-013: a stored save of a stored-only key (R14-02) that the server refused (422) has no field on any
+   * screen, so the user's explicit cancel of that earlier change is offered here. Absent means false.
+   */
+  canCancelStored?: boolean;
 };
 type Options = {
   api: SettingsApi;
@@ -184,6 +191,15 @@ export class SettingsController {
       && !!this.pending?.mismatch && !this.resetPending && this.problem?.reason === "mismatch" && this.dataIsCurrent();
   }
 
+  private cancelStoredAllowed(): boolean {
+    const pending = this.pending;
+    // Offered after the 422 (kept between openings), or for a record of another launch of the app, which is never
+    // repeated from here (retryAllowed): without this cancel it would close Settings for good (R2-09: explicit cancel).
+    return !!this.currentAccess() && !this.running && !this.writeBlocked && !this.settled && !!pending && !this.resetPending
+      && storedOnly(pending.intent.payload.key) && !pending.mismatch && this.loaded
+      && (this.refused() === "command_refused" || pending.clientInstanceId !== this.scope.clientId);
+  }
+
   snapshot(): SettingsSnapshot {
     const available = !!this.currentAccess();
     const dataCurrent = available && !this.writeBlocked && this.dataIsCurrent();
@@ -205,7 +221,7 @@ export class SettingsController {
       outcome: available ? this.outcome : null, resetOutcome: available ? this.resetOutcome : null,
       problem: available ? this.problem : { reason: "context_closed" }, canEdit: this.editable(),
       canReset: this.editable() && !this.running, canRetry: this.retryAllowed(),
-      canContinueWithServer: this.continueAllowed() });
+      canContinueWithServer: this.continueAllowed(), canCancelStored: this.cancelStoredAllowed() });
   }
   private emit(): void { if (this.live()) this.options.onUpdate(this.snapshot()); }
 
@@ -299,6 +315,8 @@ export class SettingsController {
     const pending = this.pending;
     if (!pending) return;
     const key = pending.intent.payload.key;
+    // A stored-only key (R14-02) has no field and no editor: its intent is only checked by ID, no draft is restored.
+    if (storedOnly(key)) { this.submittedRevision = null; return; }
     if (!this.drafts[key]) this.drafts[key] = { input: structuredClone(pending.intent.payload.value),
       fieldVersion: pending.intent.expected_field_version, revision: ++this.revision };
     this.submittedRevision = this.drafts[key]!.revision;
@@ -331,14 +349,15 @@ export class SettingsController {
     const intent = this.pending.intent;
     this.outcome = { commandId: intent.command_id, key: intent.payload.key, status, ...(code ? { code } : {}) };
     this.settled = true;
-    const draft = this.drafts[intent.payload.key];
-    if (status === "accepted" && draft) {
-      if (draft.revision === this.submittedRevision) delete this.drafts[intent.payload.key];
+    const key = intent.payload.key;
+    const draft = storedOnly(key) ? undefined : this.drafts[key];
+    if (status === "accepted" && draft && !storedOnly(key)) {
+      if (draft.revision === this.submittedRevision) delete this.drafts[key];
       else if (draft.fieldVersion === intent.expected_field_version && this.data
-        && BigInt(this.data.settings[intent.payload.key].version) === BigInt(intent.expected_field_version) + 1n) {
+        && BigInt(this.data.settings[key].version) === BigInt(intent.expected_field_version) + 1n) {
         // Only our own accepted change advances the base for a newer unsent edit.
-        draft.original = structuredClone(this.data.settings[intent.payload.key].value);
-        draft.fieldVersion = this.data.settings[intent.payload.key].version;
+        draft.original = structuredClone(this.data.settings[key].value);
+        draft.fieldVersion = this.data.settings[key].version;
       }
     }
     await this.clearSettled();
@@ -401,6 +420,10 @@ export class SettingsController {
         // One sent intent per document: both slots filled means the recorded state cannot be trusted.
         if (save && reset) throw new PendingStoreError("invalid");
         this.pending = save;
+        // R2-09 / K19-024: a stored-only intent refused with 422 in an earlier opening keeps that refusal now (its record
+        // carries it); the status read below may still prove a changed server state, and only the user's cancel clears it.
+        if (save?.refused) this.refusal = { commandId: save.intent.command_id, reason: "command_refused",
+          code: "VALIDATION_FAILED", handle: handleNumber(this.access()) };
         this.resetPending = reset;
         this.loaded = true;
         this.restoreDraft();
@@ -450,6 +473,14 @@ export class SettingsController {
       this.phase = "checking";
       this.emit();
       await this.readbackAfterMismatch();
+    } else if (reply.outcome === "rejected" && reply.error.code === "NOTIFICATIONS_NOT_OPENED" && this.pending) {
+      // project_notifications §8.2: a switch refused before the bot is opened is not kept as the user's draft (the switch
+      // shows the server's off), and the settings are read afresh, so the switches stay closed by the server's own fact.
+      const key = this.pending.intent.payload.key;
+      await this.resolve("rejected", reply.error.code);
+      if (!this.live()) return;
+      if (!storedOnly(key)) delete this.drafts[key];
+      if (!this.sent()) { await this.readCurrent(); if (this.live()) this.idle(); }
     } else await this.resolve(reply.outcome, reply.outcome === "rejected" ? reply.error.code : undefined);
   }
   /** The intent is stored before it is sent; a retry sends the stored envelope again, never a new ID (TA 9). */
@@ -470,7 +501,18 @@ export class SettingsController {
       ? this.options.api.save(token, proof, this.scope.profileId,
         { ...structuredClone(save.intent), client_instance_id: save.clientInstanceId, document_id: documentId })
       : this.options.api.reset(token, proof, this.scope.profileId,
-        { ...structuredClone(reset!.intent), client_instance_id: reset!.clientInstanceId, document_id: documentId }));
+        { ...structuredClone(reset!.intent), client_instance_id: reset!.clientInstanceId, document_id: documentId }))
+      .catch(async (error: unknown) => {
+        // R2-09 / K19-024: the 422 of a stored-only intent (R14-02) is kept with its record, so it stands between openings.
+        // A failed write of the mark leaves the record as it was; the refusal is then held in page memory as for any key.
+        if (error instanceof KnownRefusal && error.refusal === "command_refused" && save && !save.refused
+          && storedOnly(save.intent.payload.key) && this.live() && this.pending === save) {
+          const marked: SettingsPending = { ...save, refused: true };
+          try { await this.options.pendingStore.markRefused(save, this.lifetime.signal); if (this.pending === save) this.pending = marked; }
+          catch { /* the record stays unmarked; nothing is lost */ }
+        }
+        throw error;
+      });
     if (!this.live()) return;
     if (this.access() !== source) throw new ClosedAccessError();
     await this.applyReply(reply);
@@ -533,7 +575,8 @@ export class SettingsController {
       if (!this.live()) return;
       if (this.access() !== source) throw new ClosedAccessError();
       // The unsent editor text of this field is not written back: the server value is shown.
-      delete this.drafts[marked.intent.payload.key];
+      const key = marked.intent.payload.key;
+      if (!storedOnly(key)) delete this.drafts[key];
       this.pending = null;
       this.refusal = null;
       this.outcome = null;
@@ -541,6 +584,41 @@ export class SettingsController {
       this.submittedRevision = null;
       this.problem = null;
       this.idle();
+    });
+  }
+  /**
+   * R2-09 / K19-024 / P5-013: the user's explicit cancel of an earlier stored save of a stored-only key (R14-02) that the
+   * server refused with 422. Only this press does anything: the old ID is first read once more (never sent again); if
+   * the server applied it after all, that outcome is taken; if it is not found, the stored record is cleared and fresh
+   * settings are read, so Settings open for editing. A failed read, a changed access or a storage error clears nothing.
+   */
+  cancelStored(): Promise<void> {
+    if (!this.cancelStoredAllowed()) return this.running ?? Promise.resolve();
+    const source = this.access();
+    const stored = this.pending!;
+    return this.run(async () => {
+      this.phase = "checking";
+      this.emit();
+      const reply = await source.run(({ token }) => this.options.api.status(token, this.scope.profileId, stored.intent));
+      if (!this.live()) return;
+      if (this.access() !== source) throw new ClosedAccessError();
+      if (reply.outcome === "accepted") {
+        if ("settings" in reply.current) this.accept(reply.current, reply.state_version);
+        else { this.writeBlocked = "forbidden"; this.data = null; }
+        await this.resolve("accepted");
+        return;
+      }
+      await this.options.pendingStore.clear(stored, this.lifetime.signal);
+      if (!this.live()) return;
+      if (this.access() !== source) throw new ClosedAccessError();
+      this.pending = null;
+      this.refusal = null;
+      this.outcome = null;
+      this.settled = false;
+      this.submittedRevision = null;
+      this.problem = null;
+      await this.readCurrent();
+      if (this.live()) this.idle();
     });
   }
   dispose(): void {

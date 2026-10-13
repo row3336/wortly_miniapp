@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import type { HttpOptions } from "../api/http";
+import { useBackLayer } from "../app/navigationBack";
 import type { OpenedAccess } from "../app/openedAccess";
+import { closeMiniApp } from "../platform/telegram";
 import type { Language } from "../i18n/language";
 import type { CatalogState } from "./MaterialEditor";
-import { SettingsScreen } from "./SettingsScreen";
+import { SettingsScreen, type SettingsView } from "./SettingsScreen";
 import { createTopicCatalogApi } from "./topicCatalogApi";
 import type { SettingsDocument } from "./useSettingsDocument";
 
@@ -20,6 +22,10 @@ export function SettingsHost(props: Props) {
   const [catalog, setCatalog] = useState<CatalogState>({ phase: "loading", topics: null });
   const load = useRef<(() => Promise<void>) | null>(null);
   const lastRead = useRef<{ access: OpenedAccess; active: boolean; current: boolean } | null>(null);
+  // project_notifications §8.1: the submenu «Уведомления» is an inner view of Settings on the same controller, document and
+  // pending slot. Back (the button and Telegram's BackButton) returns to the settings while Settings are shown.
+  const [view, setView] = useState<SettingsView>("main");
+  useBackLayer("screen", props.active && view === "notifications" ? () => setView("main") : null);
 
   useEffect(() => {
     let live = true, request = 0;
@@ -52,6 +58,10 @@ export function SettingsHost(props: Props) {
   }, [props.access, props.active, props.document.state.dataCurrent]);
 
   return <SettingsScreen active={props.active} snapshot={props.document.state} catalog={catalog} language={props.language} onToday={props.onToday} onDictionary={props.onDictionary} feedback={props.document.feedback}
+    view={view} onView={setView}
+    // «Открыть бота» (R12-15, working text): closing the Mini App returns to the bot's chat it was opened from. Technical
+    // choice of the worker, pending owner (a direct link would need the bot's name in the build).
+    onOpenBot={() => closeMiniApp(window)}
     onReloadTopics={() => { void load.current?.(); }} actions={{ ...props.document.actions,
       refresh: async () => { await Promise.all([props.document.actions.refresh(), load.current?.()]); },
     }} />;

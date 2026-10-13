@@ -120,6 +120,22 @@ export class PendingSlot<T extends { profileId: string; mismatch?: true }> {
     });
   }
 
+  /**
+   * One write that replaces the stored `expected` record by `next` (the same intent with a further mark). A record that is
+   * neither of them fails as "changed"; an absent record is not recreated; `next` already stored is left as it is.
+   */
+  async replace(expected: T, next: T, signal: AbortSignal): Promise<void> {
+    const before = this.copy(expected), after = this.copy(next);
+    return this.run(async () => {
+      const current = await this.read(signal);
+      active(signal);
+      if (!current || this.same(current, after)) return;
+      if (!this.same(current, before)) throw new PendingStoreError("changed");
+      await this.storage.set(this.key, JSON.stringify(after));
+      active(signal);
+    });
+  }
+
   async markMismatch(value: T, signal: AbortSignal): Promise<void> {
     const marked = this.copy({ ...value, mismatch: true });
     return this.run(async () => {

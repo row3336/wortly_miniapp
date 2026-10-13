@@ -19,19 +19,22 @@ function current(state = "10"): SettingsResponse {
     time_zone: { value: "UTC", version: "1" }, retry_gap: { value: null, version: "1" },
     retry_count: { value: 3, version: "1" }, learning_group_size: { value: null, version: "1" },
     learning_intervals_seconds: { value: [120, 30, 120], version: "1" },
-    learning_reminder_pause_seconds: { value: null, version: "1" }, learning_mix: { value: null, version: "1" },
+    learning_mix: { value: null, version: "1" },
     strict_case: { value: true, version: "1" }, include_preterite: { value: false, version: "1" },
     include_comparative: { value: null, version: "1" }, transition_mode: { value: null, version: "1" },
     review_error_mode: { value: "strict", version: "1" },
     learning_content: { value: "words", version: "1" },
     material: { value: null, version: "1" },
-  }, constraints: {
+    notify_learning: { value: true, version: "1" }, notify_weekly: { value: true, version: "1" },
+    notify_daily: { value: true, version: "1" }, notify_evening: { value: true, version: "1" },
+    weekly_report_hour: { value: 7, version: "1" }, daily_report_hour: { value: 7, version: "1" },
+    evening_reminder_hour: { value: 18, version: "1" },
+  }, notifications: { telegram_opened: true }, constraints: {
     ui_language: { type: "enum", values: ["ru", "uk", "en"] },
     dictionary_language: { type: "enum", values: ["ru", "uk", "en"] },
     retry_gap: { type: "integer", minimum: 1, maximum: 2147483647 },
     retry_count: { type: "integer", minimum: 1, maximum: 2147483647 },
     learning_group_size: { type: "integer", minimum: 1, maximum: 2147483647 },
-    learning_reminder_pause_seconds: { type: "integer", minimum: 60, maximum: 2147483647 },
     learning_intervals_seconds: { type: "ordered_integer_list", nonempty: true, item_minimum: 1, item_maximum: 2147483647 },
     learning_mix: { type: "boolean" }, strict_case: { type: "boolean" }, include_preterite: { type: "boolean" },
     include_comparative: { type: "boolean" }, transition_mode: { type: "enum", values: ["normal", "accelerated"] },
@@ -39,6 +42,9 @@ function current(state = "10"): SettingsResponse {
     learning_content: { type: "enum", values: ["words", "phrases", "mixed"] },
     material: { type: "exclusive_choice", modes: { level: { selected_level: ["A1", "A2", "B1", "B2", "C1", "C2"] },
       topics: { topic_ids: "nonempty_existing_uuid_list" } } },
+    notify_learning: { type: "boolean" }, notify_weekly: { type: "boolean" }, notify_daily: { type: "boolean" },
+    notify_evening: { type: "boolean" }, weekly_report_hour: { type: "integer", minimum: 0, maximum: 23 },
+    daily_report_hour: { type: "integer", minimum: 0, maximum: 23 }, evening_reminder_hour: { type: "integer", minimum: 0, maximum: 23 },
   } };
 }
 
@@ -647,5 +653,103 @@ describe("Settings in the real App document", () => {
     expect(document.body.textContent).toContain("Загружаем занятие…");
     gate.resolve();
     await screen.findByRole("region", { name: "Итог занятия" }, { timeout: 4000 });
+  });
+});
+
+// QA P3-1 (C278, R14-02): an unfinished save of the retired Learning reminder pause, left on the device by an earlier build,
+// takes the same recovery as any stored save (as retry_count): Today opens, the save is checked by its own command ID, and
+// its record is neither dropped silently nor blocks the application.
+describe("a stored unfinished save of the retired reminder pause", () => {
+  const record = (clientInstanceId: string) => JSON.stringify({ schemaVersion: 1, profileId, clientInstanceId,
+    intent: { command_id: id(78), kind: "setting.save", expected_field_version: "1",
+      payload: { key: "learning_reminder_pause_seconds", value: 900 } } });
+  it("not found: Today opens, the status is read by its ID, Settings say where it was sent from, the record stays", async () => {
+    const f = fixture(); localStorage.setItem(settingSlot, record(id(77)));
+    render(<App />);
+    fireEvent.click(await waitFor(() => todayNav().getByRole("button", { name: "Настройки" }), { timeout: 5000 }));
+    expect(f.statusReply).toHaveBeenCalledExactlyOnceWith(id(78));
+    await screen.findByText("Изменение отправлено из другого запуска приложения. Проверь его состояние.");
+    expect(f.commandReply).not.toHaveBeenCalled();
+    expect(JSON.parse(localStorage.getItem(settingSlot)!).intent.command_id).toBe(id(78));
+  });
+  it("applied earlier: its outcome is confirmed by its ID, the record is cleared and the settings open for editing", async () => {
+    const f = fixture(); localStorage.setItem(settingSlot, record(id(77)));
+    f.statusReply.mockImplementationOnce(async (commandId: string) => {
+      const { state_version, ...current } = structuredClone(f.data);
+      return json({ command: { id: commandId, kind: "setting.save", status: "already_applied", applied_at: "2026-09-30T00:00:00Z",
+        target_id: profileId, action_id: null, result_id: null, context_id: null, object_version: "2" }, current, state_version });
+    });
+    render(<App />);
+    fireEvent.click(await waitFor(() => todayNav().getByRole("button", { name: "Настройки" }), { timeout: 5000 }));
+    await waitFor(() => expect(localStorage.getItem(settingSlot)).toBeNull());
+    expect(f.statusReply).toHaveBeenCalledExactlyOnceWith(id(78));
+    await waitFor(() => expect(within(screen.getByRole("group", { name: "Новых карточек в группе", hidden: true }))
+      .getByRole("textbox", { hidden: true }).hasAttribute("disabled")).toBe(false));
+    expect(f.commandReply).not.toHaveBeenCalled();
+  });
+  it("R2-09 / P5-013: a repeat refused with 422 stays until «Отменить это прежнее изменение»; only that press clears it", async () => {
+    const f = fixture();
+    f.commandReply.mockImplementation(async () => json({ error: { code: "VALIDATION_FAILED" } }, 422));
+    render(<App />);
+    await waitFor(() => expect(f.openReply).toHaveBeenCalled());
+    const client = (f.openReply.mock.calls[0][0] as { client_instance_id: string }).client_instance_id;
+    cleanup(); localStorage.setItem(settingSlot, record(client));
+    render(<App />);
+    fireEvent.click(await waitFor(() => todayNav().getByRole("button", { name: "Настройки" }), { timeout: 5000 }));
+    fireEvent.click(await screen.findByRole("button", { name: "Повторить отправку" }));
+    const cancel = await screen.findByRole("button", { name: "Отменить это прежнее изменение" });
+    expect(screen.getByRole("alert").textContent).toContain("Сервер не принял эту отправку изменения.");
+    expect(f.commandReply).toHaveBeenCalledOnce();
+    expect(JSON.parse(localStorage.getItem(settingSlot)!).intent.command_id).toBe(id(78));
+    const groupSizeBox = () => within(screen.getByRole("group", { name: "Новых карточек в группе", hidden: true })).getByRole("textbox", { hidden: true });
+    expect(groupSizeBox().hasAttribute("disabled")).toBe(true);
+    // Before the press Today still works and nothing is cleared on the way.
+    fireEvent.click(within(screen.getByRole("navigation", { name: "Основная навигация" })).getByRole("button", { name: "Сегодня" }));
+    fireEvent.click(await waitFor(() => todayNav().getByRole("button", { name: "Настройки" })));
+    expect(localStorage.getItem(settingSlot)).not.toBeNull();
+    fireEvent.click(await screen.findByRole("button", { name: "Отменить это прежнее изменение" }));
+    await waitFor(() => expect(localStorage.getItem(settingSlot)).toBeNull());
+    await waitFor(() => expect(groupSizeBox().hasAttribute("disabled")).toBe(false));
+    expect(f.statusReply).toHaveBeenLastCalledWith(id(78));
+    expect(f.commandReply).toHaveBeenCalledOnce();
+    expect(cancel.isConnected).toBe(false);
+  });
+  it("K19-024: the 422 stays between openings: the next opening shows the refusal and the cancel at once, sends nothing", async () => {
+    const f = fixture();
+    f.commandReply.mockImplementation(async () => json({ error: { code: "VALIDATION_FAILED" } }, 422));
+    render(<App />);
+    await waitFor(() => expect(f.openReply).toHaveBeenCalled());
+    const client = (f.openReply.mock.calls[0][0] as { client_instance_id: string }).client_instance_id;
+    cleanup(); localStorage.setItem(settingSlot, record(client));
+    render(<App />);
+    fireEvent.click(await waitFor(() => todayNav().getByRole("button", { name: "Настройки" }), { timeout: 5000 }));
+    fireEvent.click(await screen.findByRole("button", { name: "Повторить отправку" }));
+    await screen.findByRole("button", { name: "Отменить это прежнее изменение" });
+    await waitFor(() => expect(JSON.parse(localStorage.getItem(settingSlot)!).refused).toBe(true));
+    cleanup();
+    render(<App />);
+    fireEvent.click(await waitFor(() => todayNav().getByRole("button", { name: "Настройки" }), { timeout: 5000 }));
+    await screen.findByRole("button", { name: "Отменить это прежнее изменение" });
+    expect(screen.getByRole("alert").textContent).toContain("Сервер не принял эту отправку изменения.");
+    expect(screen.queryByRole("button", { name: "Повторить отправку" })).toBeNull();
+    expect(f.commandReply).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole("button", { name: "Отменить это прежнее изменение" }));
+    await waitFor(() => expect(localStorage.getItem(settingSlot)).toBeNull());
+    expect(f.commandReply).toHaveBeenCalledOnce();
+  });
+  it("R2-09: a record of another launch offers the cancel beside its message; only the press clears it", async () => {
+    const f = fixture(); localStorage.setItem(settingSlot, record(id(77)));
+    render(<App />);
+    fireEvent.click(await waitFor(() => todayNav().getByRole("button", { name: "Настройки" }), { timeout: 5000 }));
+    await screen.findByText("Изменение отправлено из другого запуска приложения. Проверь его состояние.");
+    const cancel = await screen.findByRole("button", { name: "Отменить это прежнее изменение" });
+    expect(localStorage.getItem(settingSlot)).not.toBeNull();
+    fireEvent.click(cancel);
+    await waitFor(() => expect(localStorage.getItem(settingSlot)).toBeNull());
+    expect(f.statusReply).toHaveBeenCalledTimes(2);
+    expect(f.statusReply).toHaveBeenLastCalledWith(id(78));
+    expect(f.commandReply).not.toHaveBeenCalled();
+    await waitFor(() => expect(within(screen.getByRole("group", { name: "Новых карточек в группе", hidden: true }))
+      .getByRole("textbox", { hidden: true }).hasAttribute("disabled")).toBe(false));
   });
 });
