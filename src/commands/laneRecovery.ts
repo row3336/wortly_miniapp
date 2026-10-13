@@ -1,6 +1,7 @@
 import type { AsyncStorage } from "../platform/storage";
+import { refusedUnsent } from "./pendingSlot";
 import type { RecoveryClock } from "./recoveryClock";
-import { FINAL_RECOVERY_STATES, RecoveryMachine, type RecoverySnapshot } from "./recoveryMachine";
+import { FINAL_RECOVERY_STATES, RecoveryMachine, type KnownLoss, type RecoverySnapshot } from "./recoveryMachine";
 import { checkFailure, sendFailure, type CheckResult, type SendResult } from "./recoveryReplies";
 import { MemorySendCounter, type SendCounter } from "./sendCounter";
 
@@ -43,6 +44,10 @@ export type LaneRecoveryHost = {
   release(commandId: string): Promise<void>;
   isLive(): boolean;
   onUpdate(): void;
+  /** 2.3 А: whether this window created the intent of commandId and may therefore send it at all. */
+  maySend?(commandId: string): boolean;
+  /** 14.8.8.1 А: the new action was dropped over another record in the slot and its machine is gone; check that record. */
+  blocked?(): void;
 };
 
 /** A send class the lane proved for commandId; started says whether its request began (transmitted was told). */
@@ -90,6 +95,19 @@ export function pageSendCounter(storage: AsyncStorage): SendCounter {
   return counter;
 }
 
+type PageLoss = KnownLoss & { scope: string };
+const losses = new WeakMap<SendCounter, Map<string, PageLoss>>();
+/**
+ * The earliest next send of each command_id, next to the page count and in the same memory (CT §6.1 п. 4): an owner
+ * re-created inside the same document (a failed foreground, a reseed) waits only the rest of the pause. Bound to the
+ * document (scope): another document gets nothing from here. A reload starts without it, like the count.
+ */
+function pageLosses(counter: SendCounter): Map<string, PageLoss> {
+  let map = losses.get(counter);
+  if (!map) { map = new Map(); losses.set(counter, map); }
+  return map;
+}
+
 /**
  * The adapter between one document's primary lane and the recovery machine (M-RECOV-AUTO CP2). It decides nothing of
  * its own: the machine owns order, pauses and the budget; the lane owns the intent, its storage and its checks.
@@ -106,7 +124,9 @@ export class LaneRecovery {
   private unreleased: string | null = null;
   private releasing: Promise<void> | null = null;
 
-  constructor(private readonly host: LaneRecoveryHost, private readonly counter: SendCounter, private readonly clock: RecoveryClock) {}
+  /** scope: the document this owner belongs to (profile, installation, document and epoch); none keeps no loss. */
+  constructor(private readonly host: LaneRecoveryHost, private readonly counter: SendCounter, private readonly clock: RecoveryClock,
+    private readonly scope?: string) {}
 
   /** A machine that still checks or sends owns the primary lane: no new action, no other check of it. */
   busy(): boolean {
@@ -138,6 +158,7 @@ export class LaneRecovery {
     const state = this.host.primary(), intent = state.pendingIntent;
     if (this.machine && this.busy() && !this.exchanging() && state.outcome !== null && state.resolved?.commandId === this.commandId) {
       this.machine.dispose(); this.machine = null;
+      pageLosses(this.counter).delete(this.commandId.toLowerCase());
       void this.counter.clear(this.commandId).catch(() => undefined);
       return;
     }
@@ -165,8 +186,22 @@ export class LaneRecovery {
     if (this.commandId === null || this.commandId.toLowerCase() !== commandId.toLowerCase()) return;
     this.machine?.dispose(); this.machine = null;
     this.settleFirst();
+    pageLosses(this.counter).delete(commandId.toLowerCase());
     void this.counter.clear(commandId).catch(() => undefined);
     this.host.onUpdate();
+  }
+  /**
+   * The first send of this intent was refused locally over another record in the shared slot, before any request: the lane
+   * dropped the intent (never stored, never sent). Unlike forget, which follows a cleared record, this discards the machine
+   * and its count in order, so nothing of this ID is written after it.
+   */
+  private dropUnsent(commandId: string): void {
+    if (this.commandId === null || this.commandId.toLowerCase() !== commandId.toLowerCase()) return;
+    this.machine?.discard(); this.machine = null;
+    this.settleFirst();
+    this.host.onUpdate();
+    // 14.8.8.1 А: only now, with the machine of the dropped action gone, may the record of the other window be checked.
+    this.host.blocked?.();
   }
   /**
    * Н3 (D-CP4 3.1.2): clear the record of a refused or outdated intent again after a failed cleanup. Called by events
@@ -193,7 +228,15 @@ export class LaneRecovery {
     this.machine?.dispose();
     this.settleFirst();
     this.commandId = intent.command_id; this.afterLoss = resumed;
+    const key = intent.command_id.toLowerCase(), scope = this.scope, known = scope ? pageLosses(this.counter).get(key) : undefined;
     const machine: RecoveryMachine<RecoveryIntent> = new RecoveryMachine({ intent, counter: this.counter, clock: this.clock, active: this.active,
+      knownLoss: resumed && known && known.scope === scope ? { next: known.next, dueAt: known.dueAt, holdUntil: known.holdUntil } : null,
+      onLoss: loss => {
+        // Only the machine that drives the intent now: a replaced or disposed one never writes over its successor.
+        if (!scope || this.machine !== machine) return;
+        if (loss) pageLosses(this.counter).set(key, { ...loss, scope });
+        else pageLosses(this.counter).delete(key);
+      },
       ports: {
         send: async (copy, transmitted) => {
           let started = false;
@@ -201,6 +244,15 @@ export class LaneRecovery {
           this.sending = true;
           try { await this.host.send(copy, first, () => { started = true; transmitted(); }); }
           finally { this.sending = false; }
+          // Proof of an unsent intent: its first send (never handed to the lane before), no request began (started), the
+          // lane holds no intent any more, and the last failure is the refusal of its save over another record. Nothing is
+          // unknown here, so no machine waits for it. A retained intent (a resend) and an outcome that became unknown after
+          // a request began (started) never take this branch.
+          const failure = this.host.failure();
+          if (first && !started && !this.host.primary().pending && refusedUnsent(failure)) {
+            this.dropUnsent(copy.command_id);
+            return { kind: "not_sent" };
+          }
           const result = laneSendResult(this.host.primary(), this.host.failure(), started, copy.command_id);
           // A machine that stopped meanwhile (background) never answers this send; the caller of begin still waits
           // for it. Otherwise the machine's next state settles begin, so the caller sees the machine already moved on.
@@ -218,6 +270,7 @@ export class LaneRecovery {
         // checks, and the fact check itself shows whether the server answers.
         probe: () => Promise.resolve(true),
         isLive: () => this.host.isLive(),
+        maySend: () => this.host.maySend?.(intent.command_id) ?? true,
         windowCheck: () => new Promise<boolean>(resolve => {
           if (!this.host.isLive()) { resolve(false); return; }
           this.clock.schedule(() => resolve(this.host.isLive()), WINDOW_CHECK_MS);
@@ -259,6 +312,7 @@ export class LaneRecovery {
     if (this.commandId && (state.name === "refused" || state.name === "terminated" && state.reason === "step_stale")) {
       const commandId = this.commandId;
       void this.release(commandId);
+      pageLosses(this.counter).delete(commandId.toLowerCase());
       void this.counter.clear(commandId).catch(() => undefined);
     }
     const firstSend = state.name === "idle" || state.name === "sending" && state.attempt === 1 && !this.afterLoss;

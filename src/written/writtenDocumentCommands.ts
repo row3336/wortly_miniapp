@@ -24,18 +24,23 @@ export class WrittenDocumentCommands extends DocumentLanes<WrittenCommandSnapsho
         { session_id: sessionId, ...origin(credentials) }),
       readResult: (credentials, address, origin) => api.readResult(credentials.token, credentials.proof,
         { session_id: address.session_id, assignment_id: address.assignment_id, result_id: address.result_id, ...origin(credentials) }),
-      controller: (wiring, reads) => new WrittenCommandController({
-        profileId: wiring.profileId, clientInstanceId: wiring.clientInstanceId, pair: wiring.pair, lane: wiring.lane,
-        pendingStore: stores[wiring.lane], stateVersion: wiring.stateVersion, minimumStateVersion: wiring.minimumStateVersion,
-        isLive: wiring.isLive, newId: wiring.newId,
-        // transmitted is told inside the open handle, right before the request: a refusal before it sent nothing.
-        send: (intent, transmitted) => wiring.send(credentials => {
-          transmitted?.();
-          return api.send(credentials.token, credentials.proof, { ...intent, ...wiring.origin(credentials) });
-        }),
-        check: intent => wiring.run(credentials => api.status(credentials.token, credentials.proof, { ...intent, ...wiring.origin(credentials) })),
-        read: reads.read, readResult: intent => reads.readResult(intent), onUpdate: wiring.onUpdate,
-      }),
+      controller: (wiring, reads) => {
+        const controller: WrittenCommandController = new WrittenCommandController({
+          profileId: wiring.profileId, clientInstanceId: wiring.clientInstanceId, pair: wiring.pair, lane: wiring.lane,
+          pendingStore: stores[wiring.lane], stateVersion: wiring.stateVersion, minimumStateVersion: wiring.minimumStateVersion,
+          isLive: wiring.isLive, newId: wiring.newId,
+          // transmitted is told inside the open handle, right before the request: a refusal before it sent nothing.
+          // sendStarted is told by the transport once the request is built, right before fetch.
+          send: (intent, transmitted) => wiring.send(credentials => {
+            transmitted?.();
+            return api.send(credentials.token, credentials.proof, { ...intent, ...wiring.origin(credentials) }, () => controller.sendStarted());
+          }),
+          check: intent => wiring.run(credentials => api.status(credentials.token, credentials.proof, { ...intent, ...wiring.origin(credentials) })),
+          read: reads.read, readResult: intent => reads.readResult(intent), onUpdate: wiring.onUpdate,
+          slotConflict: wiring.slotConflict,
+        });
+        return controller;
+      },
     });
   }
   isClosed(sessionId: string): boolean { return this.closed.has(sessionId.toLowerCase()); }

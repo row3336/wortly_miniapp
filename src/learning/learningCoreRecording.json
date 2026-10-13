@@ -102,7 +102,9 @@
    "query": {
     "client_instance_id": "00000000-0000-4000-8000-000000000001",
     "document_id": "00000000-0000-4000-8000-000000000002",
-    "session_id": "00000000-0000-4000-8000-000000000004"
+    "session_id": "00000000-0000-4000-8000-000000000004",
+    "include_refusal": "true",
+    "expected_intent_hash": "60c728296f4ca99bdf77fdfdfb16fa4785637d8beb8f38c1fb4d949ca029253e"
    },
    "body": null,
    "status": 200,
@@ -178,7 +180,8 @@
      },
      "assignment": null
     },
-    "state_version": "4"
+    "state_version": "4",
+    "verified_intent_hash": "60c728296f4ca99bdf77fdfdfb16fa4785637d8beb8f38c1fb4d949ca029253e"
    },
    "schema": [
     "CommandStatusResponse"

@@ -11,6 +11,8 @@ type Options = StudyDocumentOptions & { initialSessionId: string | null };
 /** A recording controller: the hook only drives its lifecycle and forwards actions. */
 class FakeController {
   calls: string[] = [];
+  /** The session this owner leads (the mode's own fact, e.g. a written receipt it restored). */
+  leads: string | null = null;
   constructor(readonly seed: string | null, readonly settings: StudyViewSettings<string>) {}
   snapshot(): string { return `view:${this.seed}`; }
   suspend(reason: "background" | "disabled" = "background"): void { this.calls.push(reason === "background" ? "suspend" : "suspend:disabled"); }
@@ -32,9 +34,9 @@ class FakeController {
 }
 const profile: Profile = { profile_id: id(1), role: "user", ui_language: "ru", dictionary_language: "ru", time_zone: "UTC",
   state_version: "5", access: { status: "admitted", version: "1", reason: null } };
-function open(): OpenedAccess {
-  const opened: OpenedClient = { status: "opened", client_instance_id: id(2), document_id: id(4), document_epoch: "1", proof_version: "1",
-    profile, session: null, compatibility: { compatible: true, contract_version: "1" } };
+function open(document = id(4), pair = profile.dictionary_language): OpenedAccess {
+  const opened: OpenedClient = { status: "opened", client_instance_id: id(2), document_id: document, document_epoch: "1", proof_version: "1",
+    profile: { ...profile, dictionary_language: pair }, session: null, compatibility: { compatible: true, contract_version: "1" } };
   return createOpenedAccess({ opened, token: "t", proof: "p", generation: 1, isLive: () => true, onDenied: () => {} });
 }
 const storage: AsyncStorage = { get: vi.fn(), set: vi.fn(), remove: vi.fn() };
@@ -65,6 +67,31 @@ describe("shared study document owner", () => {
     const learning = setup(false);
     learning.rerender({ ...learning.options, initialSessionId: id(5) });
     expect(learning.created.map(controller => controller.seed)).toEqual([id(3)]);
+  });
+  it("a new seed naming the session the owner leads keeps it; any other seed, document or pair re-creates it", () => {
+    visibility();
+    const created: FakeController[] = [];
+    const options: Options = { access: open(), storage, transport, newId: () => id(9), transitionMode: "normal", initialSessionId: null };
+    const ui = renderHook((props: Options) => useStudyDocument<Options, FakeController, string>(props, props.initialSessionId,
+      (_current, seed, settings) => { const controller = new FakeController(seed, settings); created.push(controller); return controller; },
+      (controller, seed) => controller.leads === seed), { initialProps: options });
+    created[0].leads = id(3);
+    ui.rerender({ ...options, initialSessionId: id(3) });
+    expect(created).toHaveLength(1); expect(created[0].calls).not.toContain("dispose");
+    expect(ui.result.current.state).toBe("view:null");
+    // A seed going back to none, and another session, re-create the owner as before.
+    ui.rerender({ ...options, initialSessionId: null });
+    expect(created.map(controller => controller.seed)).toEqual([null, null]); expect(created[0].calls).toContain("dispose");
+    ui.rerender({ ...options, initialSessionId: id(5) });
+    expect(created.map(controller => controller.seed)).toEqual([null, null, id(5)]);
+    // A led session never crosses into another document or pair: what the owner holds stays with it.
+    created[2].leads = id(7);
+    ui.rerender({ ...options, access: open(id(6)), initialSessionId: id(7) });
+    expect(created.map(controller => controller.seed)).toEqual([null, null, id(5), id(7)]);
+    created[3].leads = id(8);
+    ui.rerender({ ...options, access: open(id(6), "uk"), initialSessionId: id(8) });
+    expect(created.map(controller => controller.seed)).toEqual([null, null, id(5), id(7), id(8)]);
+    expect(ui.result.current.state).toBe(`view:${id(8)}`);
   });
   it("forwards actions to the current owner and refreshes it once on mount", async () => {
     visibility();

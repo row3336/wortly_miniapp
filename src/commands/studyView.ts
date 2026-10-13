@@ -1,6 +1,7 @@
 import type { PublicAssignment } from "../api/generated";
 import { sameId } from "../api/wireValidation";
 import type { OpenedAccess } from "../app/openedAccess";
+import { onlyCheckedAbsent } from "./commandLane";
 import type { DocumentLane, DocumentLanesSnapshot, ResultAddress } from "./documentLanes";
 import type { RevisionTarget } from "./resultRevision";
 import { ResultTimer, type ResultTimerView } from "./resultTimer";
@@ -27,7 +28,7 @@ type LaneView = {
   kind: string | null;
   pendingIntent: Intent | null;
   outcome: "accepted" | "rejected" | "not_applied" | null;
-  resolved: { commandId: string; kind: string; sessionId: string; assignmentId?: string; resultId?: string } | null;
+  resolved: { commandId: string; kind: string; sessionId: string; assignmentId?: string; resultId?: string; restored?: true } | null;
   rejectionCode: string | null;
   problem: string | null;
   canRetry: boolean;
@@ -102,6 +103,11 @@ export type StudyViewFields<C, A, D> = {
   answer: A | null;
   submittedText: string | null;
   problem: string | null;
+  /**
+   * `problem` is only a successful lane check that found its command absent on the same open step ("not_found"): nothing
+   * failed. True only when every current cause agrees (no read failure, no refusal, no other lane problem).
+   */
+  checkedAbsent: boolean;
   commands: D;
   timer: ResultTimerView | null;
   canSubmit: boolean;
@@ -117,6 +123,11 @@ export type StudyViewFields<C, A, D> = {
   canRetryPrimary: boolean;
   /** The last Stop of the current session that sent nothing (internal facts, see EmptyStop); null otherwise. */
   emptyStop: EmptyStop | null;
+  /**
+   * The session the server proved open in another pair (an observation not below the lanes' floor): a fact about the
+   * session, not a failed update, so it is never the shown problem (C149, C151). null when nothing proves it.
+   */
+  pairMismatch: string | null;
 };
 /** Mode rules that differ on purpose; each keeps the mode's established behavior. */
 export type StudyViewRules = {
@@ -127,6 +138,11 @@ export type StudyViewRules = {
   ignoreUnboundUnavailable: boolean;
   /** The written quiz never lets a session read reopen a view that became closed meanwhile; Learning re-chooses its step. */
   keepClosedAfterRead: boolean;
+  /**
+   * An old correction (result.correct) restored by its ID waits for «Далее»: the written quiz after a full restart (owner
+   * decision 32.1-А). Learning has no such decision yet and keeps its timer.
+   */
+  waitRestoredCorrection: boolean;
 };
 
 /**
@@ -149,8 +165,17 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
   protected problem: string | null = null;
   private lastResolved: string | null = null;
   protected previous = false;
-  /** After background or an explicit return the result waits for «Далее» (К05-152, DC 2.19). */
+  /**
+   * After background or an explicit return the result waits for «Далее» (К05-152, DC 2.19), and so does an old answer
+   * result shown for the first time after a reload or a re-entry (decisions 20.1-А, 22.1-А).
+   */
   protected waitNext = false;
+  /**
+   * The wait of one reason only: an action on the result screen (a revision, an undo, the present of «Далее») that the
+   * shared slot refused before it left. It is kept apart from waitNext so that the next accepted result of this view is
+   * judged by its own rule again, while every other reason to wait (background, a refusal) stays as it was.
+   */
+  private slotWait = false;
   private readonly timer = new ResultTimer();
   protected operation: Promise<void> | null = null;
   /** The read in flight; it resolves to the outcome of its own session GET. */
@@ -169,8 +194,30 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
   protected pendingGradeAdvance: string | null = null;
   /** Where «Шаг назад» was tapped: a refusal returns there (the result or the summary). */
   private undoFrom: StudyPhase | null = null;
+  /** The view has been usable on screen (active and enabled) at least once; before that a deactivation leaves nothing. */
+  private engaged = false;
+  /**
+   * A real leave since the last activation: a background, or a deactivation of a view that had been usable. Only it
+   * makes a result waiting on the return; the deactivation inside resume() itself is no leave (6.1.8, F5).
+   */
+  private away = false;
   /** The last action whose automatic recovery this view has shown; each is shown once. */
   private recoveredCommand: string | null = null;
+  /**
+   * This view's session as the server showed it open in another pair before any projection of this pair (R1: the pair
+   * changed elsewhere and the server started the session there). Nothing of it is shown; a projection of this pair ends it.
+   */
+  private foreignSession: string | null = null;
+  /** The session of the last projection of this pair this view took. */
+  private ownPairSession: string | null = null;
+  /**
+   * The session the server proved open in another pair (an observation not below the lanes' floor: a read, an accepted
+   * reply, a result step). A known mismatch, not a failed update: it is kept here and never named as the view's problem,
+   * so no failure text is shown for it (C149). A projection of this pair of that session ends it.
+   */
+  private mismatch: string | null = null;
+  /** The session whose session.start the server confirmed accepted to this view's lanes (this owner's own start). */
+  private startedSession: string | null = null;
 
   constructor(protected readonly options: StudyViewOptions & { onUpdate(snapshot: S): void }, private readonly rules: StudyViewRules,
     commands: (onUpdate: (state: StudyLanes) => void) => K) {
@@ -192,6 +239,8 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
   protected refused(_kind: string): boolean { return false; }
   /** A step before the question (e.g. a Learning preview); true when chosen. */
   protected chooseOther(_current: C): boolean { return false; }
+  /** This view itself began the start of that session (another owner of the view did not). */
+  protected beganStart(_sessionId: string): boolean { return false; }
   /** Work after a session read settled, before the view continues. */
   protected afterRead(): Promise<void> { return Promise.resolve(); }
   /** Stop and its exact retry; they never queue behind a stalled answer request. */
@@ -234,7 +283,11 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
   protected enabled(): boolean { return this.options.enabled?.() !== false && this.options.transitionMode() !== null; }
   protected interactive(): boolean { return this.active && this.enabled(); }
   abstract snapshot(): S;
-  protected emit(): void { if (this.live()) this.options.onUpdate(this.snapshot()); }
+  protected emit(): void {
+    if (!this.live()) return;
+    if (this.interactive()) this.engaged = true;
+    this.options.onUpdate(this.snapshot());
+  }
   protected cancelTimer(): void { this.timer.cancel(); }
   /** Every action this view creates is one of its mode's transitions. */
   protected begin(action: object): Promise<void> { return this.commands.begin(action as never); }
@@ -256,12 +309,68 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
     const own = this.sessionId !== null && sameId(projection.session_id, this.sessionId);
     // A closed projection of this view's own session is its closure whatever pair it names: the pair changed elsewhere
     // and the server closed the session (pair_changed). Open steps of another pair stay ignored; nothing of them is shown.
-    if (projection.pair !== this.pair && !(own && projection.status === "closed")) return false;
+    if (projection.pair !== this.pair && !(own && projection.status === "closed")) {
+      if (own) { this.mismatch = projection.session_id; this.markForeign(); }
+      return false;
+    }
     if (this.sessionId !== null && !own) return false;
+    if (projection.pair === this.pair) {
+      this.ownPairSession = projection.session_id; this.foreignSession = null;
+      if (this.mismatch !== null && sameId(this.mismatch, projection.session_id)) this.mismatch = null;
+    }
     this.sessionId = projection.session_id; this.current = structuredClone(projection); this.currentVersion = version;
     this.captured(projection, version);
     if (projection.status === "closed") this.close(projection.session_id, projection.close_reason);
     return true;
+  }
+  /** The server showed this view's session open in another pair before this view took it in its own pair (R1). */
+  private markForeign(): void {
+    // A session this view already took in this pair keeps its own facts and rights (an older own step stays as it was).
+    if (!this.sessionId || this.ownPairSession !== null && sameId(this.ownPairSession, this.sessionId)) return;
+    this.foreignSession = this.sessionId;
+  }
+  /** The server proved this view's session open in another pair (internal fact: see mismatch). */
+  protected knownMismatch(): boolean {
+    return this.mismatch !== null && this.sessionId !== null && sameId(this.mismatch, this.sessionId);
+  }
+  /** The lanes confirmed this view's own start of its session as accepted (a direct reply or the check by its ID). */
+  private trackStart(state: StudyLanes): void {
+    const primary = state.primary;
+    if (primary.outcome === "accepted" && primary.resolved?.kind === "session.start" && this.sessionId
+      && sameId(primary.resolved.sessionId, this.sessionId)) this.startedSession = this.sessionId;
+  }
+  /**
+   * R1 (owner answer 888·17.2-А): the server confirmed this owner's start and showed the created session open in
+   * another pair, and this window has not got that pair yet (this view never took the session in its own pair). Only
+   * this one case withholds Stop; a window that got the new pair owns a new view whose rights are the usual ones.
+   */
+  protected foreignStart(): boolean {
+    return this.foreign() && this.startedSession !== null && sameId(this.startedSession, this.sessionId!);
+  }
+  /** The accepted reply of this view's session named it open in another pair (the lane's reason, commandLane settle). */
+  private laneForeign(state: StudyLanes): void {
+    const primary = state.primary;
+    if (primary.outcome === "accepted" && primary.problem === "pair_changed" && primary.resolved && this.sessionId
+      && sameId(primary.resolved.sessionId, this.sessionId)) { this.mismatch = this.sessionId; this.markForeign(); }
+  }
+  /** A step of that session open in another pair, at any version: nothing of its result may be shown. */
+  private otherPairStep(step: object | null, sessionId: string): boolean {
+    return step !== null && "pair" in step && step.pair !== this.pair && "status" in step && step.status !== "closed"
+      && "session_id" in step && typeof step.session_id === "string" && sameId(step.session_id, sessionId);
+  }
+  /**
+   * A step of that session naming another pair, open or closed, below the lanes' floor (QA F3, C158): it proves neither
+   * the closure nor a pair change, and a result it carries is no result of this pair to take.
+   */
+  private olderOtherPairStep(step: object | null, version: string, sessionId: string): boolean {
+    return step !== null && "pair" in step && step.pair !== this.pair && !this.notOlder(version)
+      && "session_id" in step && typeof step.session_id === "string" && sameId(step.session_id, sessionId);
+  }
+  /** A version not below the lanes' floor: only such an observation proves a current fact. */
+  private notOlder(version: string): boolean { return BigInt(version) >= BigInt(this.commands.snapshot().stateVersion); }
+  /** The server showed this view's session open in another pair, and this view never took it in this pair. */
+  protected foreign(): boolean {
+    return this.foreignSession !== null && this.sessionId !== null && sameId(this.foreignSession, this.sessionId);
   }
   private observe(state: StudyLanes): void {
     if (this.disposed || !state.live) return;
@@ -275,9 +384,11 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
     }
     this.capture(state.primary.current, state.primary.stateVersion);
     this.capture(state.stop.current, state.stop.stateVersion);
+    this.trackStart(state);
     const closure = this.closure(state);
     if (closure) this.close(this.sessionId!, closure.reason);
     else if (!this.is("closed")) {
+      this.laneForeign(state);
       if (!state.canBegin) this.cancelTimer();
       if (state.stop.pending && state.stop.outcome === null) this.phase = "stopping";
       else if (this.is("stopping") && state.stop.outcome === "rejected") {
@@ -310,15 +421,18 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
       && sameId(pending.assignment_id, this.question.id) && sameId(pending.session_id, this.sessionId ?? "");
     const visibleQuestion = this.is("question", "visible_unconfirmed", "submitting") || this.is("unknown") && pending?.kind === "answer.submit";
     const payload = pending?.payload;
+    // A pair change the lanes proved for an applied command is a known mismatch, not a failed update (C149).
+    const problem = this.problem ?? (["refused", "terminated"].includes(endedRecovery(commands) ?? "") ? null
+      : commands.primary.rejectionCode ?? (commands.primary.outcome === "accepted" && commands.primary.problem === "pair_changed"
+        ? null : commands.primary.problem)) ?? commands.stop.rejectionCode ?? commands.stop.problem;
+    const checkedAbsent = problem === "not_found" && onlyCheckedAbsent([commands.primary, commands.stop], this.problem);
     return { live, interactive, ready, fields: { sessionId: this.sessionId,
       current: live && fresh ? structuredClone(this.current) : null,
       question: live && visibleQuestion ? structuredClone(this.question) : null, draft: live ? this.draft : "",
       answer: live ? structuredClone(this.answer) : null,
       submittedText: live && pending?.kind === "answer.submit" && payload && "text" in payload ? payload.text as string : null,
       // After an ended recovery the lane's reason is no instruction to the user; only a conflict names itself (Я17).
-      problem: this.problem ?? (["refused", "terminated"].includes(endedRecovery(commands) ?? "") ? null
-        : commands.primary.rejectionCode ?? commands.primary.problem) ?? commands.stop.rejectionCode ?? commands.stop.problem,
-      commands, timer: live && ready ? this.timer.view() : null,
+      problem, checkedAbsent, commands, timer: live && ready ? this.timer.view() : null,
       canSubmit: ready && activeQuestion && this.draft.trim().length > 0,
       canEditDraft: live && interactive && !this.reading && this.is("question", "visible_unconfirmed") && !!this.question,
       canForget: ready && activeQuestion,
@@ -329,14 +443,15 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
       canUndo: ready && answerFresh && (resultView || this.is("summary")) && !!this.answer?.capabilities.undo_target,
       canRetryPrimary: live && interactive && !this.operation && !this.reading && !this.stopping
         && commands.primary.canRetry && !commands.stop.pending,
-      emptyStop: live && this.emptyStop && this.sessionId && sameId(this.emptyStop.sessionId, this.sessionId) ? { ...this.emptyStop } : null } };
+      emptyStop: live && this.emptyStop && this.sessionId && sameId(this.emptyStop.sessionId, this.sessionId) ? { ...this.emptyStop } : null,
+      pairMismatch: live && this.knownMismatch() ? this.mismatch : null } };
   }
   private canNext(): boolean { return this.view().fields.canNext; }
   private armTimer(): void {
     // A read in flight has paused the countdown and arms it again when it ends: do not wipe the pause meanwhile.
     if (this.reading) return;
     const result = this.answer?.result, mode = this.options.transitionMode();
-    if (this.waitNext || !this.is("result_correct", "result_wrong") || !result || !this.canNext()
+    if (this.waitNext || this.slotWait || !this.is("result_correct", "result_wrong") || !result || !this.canNext()
       || mode === null || mode === "normal" && result.grade === 2) { this.cancelTimer(); return; }
     // The timer itself decides between a full duration and the paused remainder of this very result (П02).
     this.timer.start(`${this.sessionId}:${result.result_id}:${result.version}`, mode === "accelerated" ? 2000 : 3000,
@@ -348,11 +463,17 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
     this.answerVersion = read.state_version;
   }
   private resultPhase(grade: number): StudyPhase { return this.previous ? "previous_result" : grade === 2 ? "result_wrong" : "result_correct"; }
-  private acceptResult(read: Pick<ResultRead, "action" | "result" | "capabilities" | "state_version">, kind: string): void {
+  /** restored: the lanes proved the outcome an old one this owner never sent (LaneResolved.restored). */
+  private acceptResult(read: Pick<ResultRead, "action" | "result" | "capabilities" | "state_version">, kind: string,
+    restored: boolean): void {
     if (!read.result) return;
     if (kind === "result.undo") { this.undone(); return; }
-    this.setAnswer(read);
-    if (kind === "answer.submit") { this.draft = ""; this.previous = false; this.waitNext = false; }
+    // An accepted result is a new fact of this view: a refused action before it no longer decides how it advances.
+    this.setAnswer(read); this.slotWait = false;
+    // A correct answer this window confirmed live advances by its timer; an old correct one restored by its ID waits for
+    // «Далее» (20.1-А, 22.1-А). An error keeps the rule of its transition mode.
+    if (kind === "answer.submit") { this.draft = ""; this.previous = false; this.waitNext = restored && read.result.grade !== 2; }
+    if (kind === "result.correct" && restored && this.rules.waitRestoredCorrection) this.waitNext = true;
     this.phase = this.resultPhase(read.result.grade);
     if (kind === "result.grade" && !this.previous) this.pendingGradeAdvance = `${read.result.result_id}:${read.result.version}`;
   }
@@ -362,7 +483,7 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
    */
   private undone(): void {
     this.answer = null; this.answerVersion = null; this.question = null; this.draft = ""; this.draftAssignmentId = null;
-    this.previous = false; this.waitNext = false; this.pendingGradeAdvance = null;
+    this.previous = false; this.waitNext = false; this.slotWait = false; this.pendingGradeAdvance = null;
     this.chooseCurrent();
   }
   /**
@@ -378,10 +499,29 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
     this.setAnswer({ ...answer, state_version: stateVersion });
     this.phase = this.undoFrom === "summary" && this.current?.status === "summary" ? "summary" : this.resultPhase(result.grade);
   }
+  /**
+   * The lane dropped the new action over another record in the shared slot: it was neither stored nor sent and nothing
+   * waits for it, so the view returns to where it was. The block stays named by the lane (pending_changed, or invalid_pending
+   * when the record in the slot is unreadable).
+   */
+  protected unsentSlot(): boolean {
+    const primary = this.commands.snapshot().primary;
+    return !primary.pending && primary.outcome === null && (primary.problem === "pending_changed" || primary.problem === "invalid_pending");
+  }
+  /**
+   * A change of the result on screen (grade, correction, undo) that never left: the result stays as it was and, like a
+   * dropped present, waits for an explicit «Далее». Its old timer was cancelled by the tap; no later refresh arms a timer
+   * that would advance past the choice the person made instead of it. A later accepted result follows its own rule again.
+   */
+  private unsentRevision(from: StudyPhase): void {
+    this.phase = from; this.slotWait = true;
+  }
   protected consume(): boolean {
     const state = this.commands.snapshot(), primary = state.primary;
     if (!state.live || this.is("closed") || state.stop.pending) return false;
     this.capture(primary.current, primary.stateVersion);
+    this.trackStart(state);
+    this.laneForeign(state);
     if (this.is("closed")) return false;
     if (primary.outcome === null || !primary.resolved || primary.resolved.commandId === this.lastResolved) return false;
     if (primary.outcome === "accepted" && primary.resolved.resultId && !primary.answer?.result) {
@@ -405,7 +545,7 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
       return false;
     }
     if (primary.answer?.result && primary.stateVersion) {
-      this.acceptResult({ ...primary.answer, state_version: primary.stateVersion }, primary.resolved.kind);
+      this.acceptResult({ ...primary.answer, state_version: primary.stateVersion }, primary.resolved.kind, primary.resolved.restored === true);
       return true;
     }
     if (!this.current || this.currentVersion === null || BigInt(this.currentVersion) < BigInt(state.stateVersion)) this.phase = "stale";
@@ -414,13 +554,27 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
   private async recoverAcceptedResult(): Promise<boolean> {
     const primary = this.commands.snapshot().primary, resolved = primary.resolved;
     if (primary.outcome !== "accepted" || !resolved?.assignmentId || !resolved.resultId || resolved.commandId === this.lastResolved) return false;
+    // A result of a session open in another pair is not this pair's to show (capture ignores its step too). Showing it
+    // and proving the reason are separate: a session known so, or a result step at or above the lanes' floor, proves
+    // the pair change and settles this result for the view; an older step naming another pair only withholds the
+    // result: it proves nothing current, so the result stays to be recovered by a later read.
+    const settleForeign = (): true => {
+      this.lastResolved = resolved.commandId; this.phase = "stale"; this.mismatch = resolved.sessionId;
+      return true;
+    };
+    if (this.foreign() && sameId(this.sessionId!, resolved.sessionId)) return settleForeign();
     const read = await this.commands.readResult({ session_id: resolved.sessionId,
       assignment_id: resolved.assignmentId, result_id: resolved.resultId });
     if (!this.live() || this.is("closed", "stopping") || this.commands.snapshot().primary.resolved?.commandId !== resolved.commandId) return true;
     this.capture(read.step, read.state_version);
     if (this.is("closed")) return true;
+    // An open step of another pair at or above the floor proves the change; any older step of another pair (open or
+    // closed) only withholds the result: no lastResolved, no reason, so a fresher read can still recover it.
+    if (this.otherPairStep(read.step, resolved.sessionId) && this.notOlder(read.state_version)) return settleForeign();
+    if (this.otherPairStep(read.step, resolved.sessionId)
+      || this.olderOtherPairStep(read.step, read.state_version, resolved.sessionId)) { this.phase = "stale"; return true; }
     if (!read.result) { this.phase = "stale"; this.problem = "load"; return true; }
-    this.acceptResult(read, resolved.kind); this.lastResolved = resolved.commandId;
+    this.acceptResult(read, resolved.kind, resolved.restored === true); this.lastResolved = resolved.commandId;
     return true;
   }
   protected run(action: () => Promise<void>): Promise<void> {
@@ -441,12 +595,22 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
    * with a live document, whatever its route (Я15.7, RESULTS_VP 9.1.5).
    */
   suspend(reason: "background" | "disabled" = "background"): void {
-    // pendingGradeAdvance is kept: an explicit grade acknowledged around the background still advances once on return (К05-047).
-    // A revision with an unknown outcome keeps the old result on screen: it waits too. A lost answer.submit does not (no result seen yet).
+    if (this.interactive()) this.engaged = true;
+    if (reason === "background" || this.engaged) { this.away = true; this.waitOnReturn(); }
+    this.deactivate(reason);
+  }
+  /**
+   * The result on screen waits for «Далее» after the return (К05-152, DC 2.19).
+   * pendingGradeAdvance is kept: an explicit grade acknowledged around the background still advances once on return (К05-047).
+   * A revision with an unknown outcome keeps the old result on screen: it waits too. A lost answer.submit does not (no result seen yet).
+   */
+  private waitOnReturn(): void {
     const kind = this.commands.snapshot().primary.pendingIntent?.kind;
     // A stale view that still holds the shown result (a failed read) keeps waiting for «Далее» after the return too.
     if (this.is("result_correct", "result_wrong", "changing_result") || this.is("stale") && !!this.answer?.result
       || this.is("unknown") && (kind === "result.correct" || kind === "result.grade")) this.waitNext = true;
+  }
+  private deactivate(reason: "background" | "disabled"): void {
     this.active = false; this.activationGeneration++; this.cancelTimer();
     if (reason === "background") this.commands.setRecoveryActive(false);
     this.emit();
@@ -455,14 +619,16 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
   resumeRecovery(): void { if (this.live()) this.commands.setRecoveryActive(true); }
   /** Foreground callers must first supply a fresh open handle; route/config callers retain that boundary. */
   async resume(): Promise<void> {
-    // A background has already stopped recovery; a return from another route must not interrupt it.
-    this.suspend("disabled");
+    // A background has already stopped recovery; a return from another route must not interrupt it. A result that came
+    // while the view was away waits like one shown before the leave; this deactivation itself is no leave.
+    if (this.away) this.waitOnReturn();
+    this.deactivate("disabled");
     const generation = this.activationGeneration;
     await this.refresh();
     if (!this.live() || generation !== this.activationGeneration) return;
     this.resumeRecovery();
     if (!this.enabled()) return;
-    this.active = true;
+    this.active = true; this.away = false;
     await this.continueView(); this.emit();
   }
   private async continueView(): Promise<void> {
@@ -588,12 +754,16 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
       result_id: this.answer.result.result_id });
     if (!this.live() || this.is("closed", "stopping")) return;
     this.capture(read.step, read.state_version);
-    if (!this.is("closed")) this.setAnswer(read);
+    // A step of another pair grants no rights over the shown answer (an open one at any version, a closed one below the
+    // floor; a closed one at the floor has closed the view): the answer stays as it was confirmed.
+    if (!this.is("closed") && !this.otherPairStep(read.step, this.sessionId)
+      && !this.olderOtherPairStep(read.step, read.state_version, this.sessionId)) this.setAnswer(read);
   }
   protected async showQuestion(): Promise<void> {
     const assignment = this.activeAssignment();
     if (!this.live() || !this.interactive() || !assignment || !this.sessionId) return;
-    this.cancelTimer(); this.previous = false; this.pendingGradeAdvance = null; this.waitNext = false;
+    const was = { phase: this.phase, previous: this.previous, waitNext: this.waitNext };
+    this.cancelTimer(); this.previous = false; this.pendingGradeAdvance = null; this.waitNext = false; this.slotWait = false;
     const state = this.commands.snapshot();
     const pending = state.primary.pendingIntent;
     const ownPresent = pending?.kind === "assignment.present" && sameId(pending.assignment_id, assignment.id);
@@ -614,7 +784,17 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
       this.question = structuredClone(shown);
       if (!this.is("previous_result")) this.phase = "question";
       if (this.answer?.result) await this.refreshAnswer();
-    } else if (!after.primary.pending) { this.phase = "stale"; this.problem = after.primary.rejectionCode ?? "presentation"; }
+    } else if (!after.primary.pending) {
+      if (this.unsentSlot() && ["result_correct", "result_wrong", "previous_result"].includes(was.phase)) {
+        // The present met another record in the slot and never left: the result the person saw stays, and it waits for an
+        // explicit «Далее» (no timer asks again). The block is named by the lane; nothing was sent.
+        this.phase = was.phase; this.previous = was.previous; this.waitNext = was.waitNext; this.slotWait = true; this.problem = after.primary.problem;
+      } else {
+        this.phase = "stale";
+        this.problem = after.primary.rejectionCode
+          ?? (after.primary.problem === "pending_changed" || after.primary.problem === "invalid_pending" ? after.primary.problem : "presentation");
+      }
+    }
     this.emit();
   }
   setDraft(text: string): void {
@@ -629,8 +809,9 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
     const action = { kind: "answer.submit", session_id: this.sessionId, assignment_id: this.question.id,
       payload: options.forgot ? { forgot: true } : { text: this.draft } };
     return this.run(async () => {
+      const from = this.phase;
       this.cancelTimer(); this.phase = "submitting"; this.problem = null;
-      await this.begin(action); if (this.live()) this.consume();
+      await this.begin(action); if (this.live()) { this.consume(); if (this.unsentSlot()) this.phase = from; }
     }).then(() => { if (this.live()) this.armTimer(); });
   }
   previousResult(): void {
@@ -662,8 +843,9 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
     const previous = this.is("previous_result");
     return this.run(async () => {
       // A pending change stops the old timer: it can neither confirm 4 nor show the next card (TA:111, CT:111).
+      const from = this.phase;
       this.cancelTimer(); this.previous = previous; this.phase = "changing_result"; this.problem = null;
-      await this.begin(action); if (this.live()) this.consume();
+      await this.begin(action); if (this.live()) { this.consume(); if (this.unsentSlot()) this.unsentRevision(from); }
     }).then(async () => {
       if (!this.live() || this.commands.snapshot().primary.outcome !== "accepted") return;
       if (!previous) await this.continueView();
@@ -676,7 +858,7 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
     return this.run(async () => {
       // A pending undo stops the old timer: it can neither advance nor confirm the result it removes (TA:111).
       this.cancelTimer(); this.pendingGradeAdvance = null; this.undoFrom = from; this.phase = "undoing"; this.problem = null;
-      await this.begin(action); if (this.live()) this.consume();
+      await this.begin(action); if (this.live()) { this.consume(); if (this.unsentSlot()) this.unsentRevision(from); }
     }).then(async () => {
       if (!this.live()) return;
       const outcome = this.commands.snapshot().primary.outcome;
@@ -709,10 +891,31 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
       return this.runStop(() => this.commands.retry("stop"));
     }
     if (!this.view().fields.canRetryPrimary) return Promise.resolve();
+    const retried = this.commands.snapshot().primary.pendingIntent?.command_id ?? null;
     return this.run(async () => {
       await this.commands.retry("primary"); if (this.live()) this.consume();
       if (this.is("visible_unconfirmed") && !this.commands.snapshot().primary.pending) await this.showQuestion();
+      else if (this.retriedOwnStart(retried)) {
+        // As the first reply of that start would have: its step by the usual rules, a question by one present.
+        this.chooseCurrent(); if (this.activeAssignment()) await this.showQuestion();
+      }
     }).then(async () => { if (this.live()) await this.continueView(); });
+  }
+  /**
+   * The manual retry of this view's own start, lost before its reply, was accepted for this very session (C246).
+   * consume() takes an accepted start without choosing a step, so a view still waiting on the outcome would stay
+   * "unknown"; only that view takes the step now. consume() itself has already settled the other cases: it takes
+   * nothing while Stop is pending, and it leaves a missing step or one below the lanes' floor stale. A session the server
+   * showed in another pair (R1) shows nothing before this window gets that pair. Only the view that began the start is
+   * covered: another owner of the view (a new view in the same document included) keeps its existing path. That is the
+   * limit of this fix, not a rule about other owners.
+   */
+  private retriedOwnStart(commandId: string | null): boolean {
+    const primary = this.commands.snapshot().primary, resolved = primary.resolved;
+    return commandId !== null && this.is("unknown") && this.lastResolved === commandId
+      && primary.outcome === "accepted" && resolved?.kind === "session.start" && resolved.commandId === commandId
+      && this.sessionId !== null && sameId(resolved.sessionId, this.sessionId) && this.beganStart(this.sessionId)
+      && this.startedSession !== null && sameId(this.startedSession, this.sessionId) && !this.foreign() && !this.knownMismatch();
   }
   dispose(): void {
     this.cancelTimer(); this.pendingGradeAdvance = null; this.disposed = true; this.commands.dispose(); this.question = null; this.answer = null;

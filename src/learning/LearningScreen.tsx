@@ -6,6 +6,7 @@ import { ClosedCheckStatus, RecoveryOverlay, recoveryConflict, recoveryScreen } 
 import { StepBackButton, stepBackCopy } from "../commands/StepBackButton";
 import { useEnterNext } from "../commands/useEnterNext";
 import type { Language } from "../i18n/language";
+import { sameId } from "../api/wireValidation";
 import { answerExampleSource } from "../study/answerExample";
 import { WrittenAnswerInput } from "../study/WrittenAnswerInput";
 import { WrittenAnswerResult } from "../study/WrittenAnswerResult";
@@ -22,6 +23,11 @@ export type LearningScreenProps = {
   actions: LearningActions;
   /** The card renderer owns the approved example presentation policy; this screen does not choose one. */
   renderPreview(preview: LearningPreviewAddress): ReactNode;
+  /**
+   * The host has taken a start tap that the owner has not begun yet (it first checks its recovery). The session is being
+   * started, not «not started»: the idle document shows the loading status the start itself shows next.
+   */
+  starting?: boolean;
 };
 const copy = {
   ru: { title: "Изучение слов", exit: "Выйти", loading: "Загружаем занятие…", idle: "Занятие ещё не началось.",
@@ -53,11 +59,23 @@ const copy = {
 // TA and D-CP4 table 2.7.5. It lives here because commandCopy is not part of this package.
 
 /**
+ * The core refuses Stop with SESSION_CLOSED also for a session it never had (current not_found): that refusal proves no
+ * closure. Only a closed projection of this very session in the refusal says «Занятие завершено.» (C229; C151: no false
+ * published state); otherwise the screen keeps the existing neutral text of a step it could not refresh.
+ */
+export function unconfirmedStopRefusal(state: Pick<LearningViewSnapshot, "commands">): boolean {
+  const stop = state.commands.stop, current = stop.current;
+  if (stop.outcome !== "rejected" || stop.rejectionCode !== "SESSION_CLOSED" || stop.resolved?.kind !== "session.stop") return false;
+  return !(current && "session_id" in current && typeof current.session_id === "string" && current.status === "closed"
+    && sameId(current.session_id, stop.resolved.sessionId));
+}
+
+/**
  * Connect local display to the owner's exact capabilities; no command identity or outcome is invented here.
  * The Learning answer is the shared written input (М08): its result shows one example of the answered card by the same
  * rule as the written quiz (К05-126, К05-127; selectAnswerExample). root decision, pending owner (M-LEARN-FIN Р6).
  */
-export function LearningScreen({ state, language, submitOnEnter, actions, renderPreview }: LearningScreenProps) {
+export function LearningScreen({ state, language, submitOnEnter, actions, renderPreview, starting = false }: LearningScreenProps) {
   const t = copy[language], composing = useRef(false), root = useRef<HTMLElement>(null);
   const primary = state.commands.primary, stop = state.commands.stop;
   const pendingKind = primary.pendingIntent?.kind;
@@ -82,7 +100,7 @@ export function LearningScreen({ state, language, submitOnEnter, actions, render
     : state.problem === "SESSION_BUSY" ? t.busy
     : state.problem === "ASSIGNMENT_STALE" ? t.changed
     : state.problem === "RESULT_STALE" ? t.resultChanged
-    : state.problem === "SESSION_CLOSED" ? t.closed
+    : state.problem === "SESSION_CLOSED" ? unconfirmedStopRefusal(state) ? t.stale : t.closed
     : state.problem === "storage" ? localOnly ? t.savedLocal : t.local
     : state.problem ? t.stale : null;
   // A study result recovers by itself: no check or retry button for it (Я15, CT §6.1 п. 2); Stop keeps its own.
@@ -138,7 +156,7 @@ export function LearningScreen({ state, language, submitOnEnter, actions, render
     {closedAction?.state === "checking"
       ? <ClosedCheckStatus className="learning-closed-check" screen={recoveryScreen(state.commands)} language={language} />
       : ["loading", "idle", "stopping", "closed", "disposed", "undoing"].includes(state.phase) && <p role="status">
-      {state.phase === "loading" ? t.loading : state.phase === "idle" ? t.idle : state.phase === "stopping" ? t.stop
+      {state.phase === "loading" || state.phase === "idle" && starting ? t.loading : state.phase === "idle" ? t.idle : state.phase === "stopping" ? t.stop
         : state.phase === "undoing" ? stepBackCopy[language].pending
         : state.phase === "disposed" ? t.unavailable : closedAction?.state === "saved" ? t.closedSaved
         // pending owner: D-CP4 5.1.1 — the text after a confirmed own Stop when the last action proved not saved.

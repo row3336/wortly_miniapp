@@ -52,10 +52,17 @@ describe("Written session resume after a relaunch (В02)", () => {
     const mark = a.fetcher.mock.calls.length;
     render(<App />);
     await waitFor(() => expect(requests(a, mark)).toContain(`GET /api/v1/commands/${lost.command_id}`));
-    await screen.findByText("слово 7"); await waitFor(() => expect(field().readOnly).toBe(false));
+    // The committed error is restored, never skipped: it waits for an action (tz_app §4, §9 «восстановить его без повтора»).
+    await screen.findByText("Есть ошибка", undefined, exchange);
+    expect(screen.queryByText("слово 7")).toBeNull();
     const later = requests(a, mark);
     const firstPost = later.indexOf("POST /api/v1/commands");
     expect(later.indexOf(`GET /api/v1/commands/${lost.command_id}`)).toBeLessThan(firstPost === -1 ? Infinity : firstPost);
+    expect(a.kinds().filter(kind => kind === "assignment.present")).toHaveLength(1);
+    // «Далее» is enabled once the restoring read has ended.
+    await waitFor(() => expect((screen.getByRole("button", { name: "Далее" }) as HTMLButtonElement).disabled).toBe(false), exchange);
+    fireEvent.click(screen.getByRole("button", { name: "Далее" }));
+    await screen.findByText("слово 7", undefined, exchange); await waitFor(() => expect(field().readOnly).toBe(false));
     expect(a.kinds().filter(kind => kind === "answer.submit")).toHaveLength(1);
     expect(a.kinds().filter(kind => kind === "assignment.present")).toHaveLength(2);
   });

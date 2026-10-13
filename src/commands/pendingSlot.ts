@@ -1,7 +1,18 @@
 import type { AsyncStorage } from "../platform/storage";
+import { createdHere, noteCreatedHere } from "./pageOrigin";
 
 export class PendingStoreError extends Error {
   constructor(public readonly kind: "unavailable" | "invalid" | "changed" | "cancelled") { super(kind); }
+}
+
+/**
+ * The slot refused to store a NEW intent before anything was written: another window's record is there ("changed"), or
+ * the record there, or the intent itself, cannot be read ("invalid"). Nothing was stored, so nothing was or can be sent:
+ * the one proof every lane uses to drop such an intent instead of keeping it as an unknown outcome. "unavailable" and
+ * "cancelled" carry no such proof (the write itself may have happened), so they never drop anything.
+ */
+export function refusedUnsent(error: unknown): error is PendingStoreError {
+  return error instanceof PendingStoreError && (error.kind === "changed" || error.kind === "invalid");
 }
 
 export function validId(value: unknown): value is string {
@@ -45,6 +56,10 @@ export class PendingSlot<T extends { profileId: string; mismatch?: true }> {
     try { value = JSON.parse(raw); } catch { throw new PendingStoreError("invalid"); }
     return this.copy(value);
   }
+
+  /** This page created the intent of commandId (decision 2.3 А): only such a record may be retried by hand. */
+  noteCreated(commandId: string): void { noteCreatedHere(this.storage, commandId); }
+  created(commandId: string | null | undefined): boolean { return createdHere(this.storage, commandId); }
 
   load(profileId: string, signal: AbortSignal): Promise<T | null> {
     return this.run(async () => {

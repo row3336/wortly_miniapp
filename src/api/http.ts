@@ -37,6 +37,11 @@ type Request = {
   token?: string;
   proof?: string;
   body?: object;
+  /**
+   * Told once the request is fully built (headers, serialized body), right before fetch is called: the last point at
+   * which nothing of it has left. It proves no delivery; it only ends «not started» (Learning 21.1-А, 33.1-А).
+   */
+  started?: () => void;
 };
 
 /** retryAfter: whole seconds of a numeric Retry-After header, when the reply carried one. */
@@ -129,9 +134,10 @@ export function createJsonTransport(options: HttpOptions) {
       // Every write names the contract it was built for: reads stay open to an outdated client (CT §1), writes do not.
       if (request.method === "POST") headers[CONTRACT_VERSION_HEADER] = contractVersion;
       if (request.body !== undefined) headers["Content-Type"] = "application/json";
-      const response = await fetcher(`${base}/api/v1${path}`, {
-        method: request.method, headers,
-        body: request.body === undefined ? undefined : JSON.stringify(request.body),
+      const url = `${base}/api/v1${path}`, body = request.body === undefined ? undefined : JSON.stringify(request.body);
+      request.started?.();
+      const response = await fetcher(url, {
+        method: request.method, headers, body,
         signal: controller.signal, cache: "no-store", credentials: "same-origin",
       });
       if (controller.signal.aborted) {

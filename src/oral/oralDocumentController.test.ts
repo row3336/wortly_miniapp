@@ -118,15 +118,29 @@ describe("oral document: recovery and explicit start", () => {
     expect(f.controller.snapshot()).toMatchObject({ sessionId: null, current: null, canStart: false,
       commands: { study: { pending: true }, stop: { pending: true } } }); expect(f.posted).toEqual([]);
   });
-  it("manual retry of a retained unposted start confirms its exact session without creating IDs", async () => {
+  // Decision 26.1 А (owner, C171): a start stored before this owner (a reload, another window) is never sent again from here.
+  // Its outcome is only checked; a single not_found is no final refusal (the record stays), and no new ID appears.
+  it("a retained start left by a reload is only checked: no retry is offered or sent, no new IDs, the record stays (26.1 А)", async () => {
     const f = fixture({ seed: null, saved: [intents[0]] }); f.accepted.clear();
     const original = f.handler;
     f.fetcher.mockImplementation(async (url, init) => String(url).includes(`/sessions/${id(3)}?`) && !f.posted.length
       ? response({ current: { session_id: id(3), status: "not_found" }, state_version: "8" }) : original(url, init));
-    await f.controller.refresh(); expect(f.controller.snapshot()).toMatchObject({ sessionId: null, canStart: false, canRetry: { study: true } });
+    await f.controller.refresh(); expect(f.controller.snapshot()).toMatchObject({ sessionId: null, canStart: false, canRetry: { study: false } });
+    expect(f.gets.some(url => url.includes(`/commands/${id(4)}`))).toBe(true);
     await f.controller.retry("study");
-    expect(f.posted).toHaveLength(1); expect(f.posted[0]).toMatchObject(intents[0]); expect(f.newId).not.toHaveBeenCalled();
-    expect(f.controller.snapshot()).toMatchObject({ sessionId: id(3), phase: "prefetched" });
+    expect(f.posted).toEqual([]); expect(f.newId).not.toHaveBeenCalled();
+    expect(f.controller.snapshot()).toMatchObject({ sessionId: null, canStart: false, commands: { study: { pending: true } } });
+    await f.controller.recheck();
+    expect(f.posted).toEqual([]); expect(f.newId).not.toHaveBeenCalled();
+    expect(f.controller.snapshot()).toMatchObject({ canRetry: { study: false }, commands: { study: { pending: true } } });
+  });
+  it("a retained start left by a reload that the core created is confirmed by its check, never sent again (26.1 А, R04 А)", async () => {
+    const f = fixture({ seed: null, saved: [intents[0]], step: "prefetched" });
+    await f.controller.refresh();
+    expect(f.posted).toEqual([]); expect(f.newId).not.toHaveBeenCalled();
+    expect(f.gets.some(url => url.includes(`/commands/${id(4)}?`))).toBe(true);
+    expect(f.controller.snapshot()).toMatchObject({ canRetry: { study: false },
+      commands: { study: { pending: false, outcome: "accepted", resolved: { commandId: id(4), sessionId: id(3) } } } });
   });
   it("requires a bucket and an explicit tap after both durable lanes become ready", async () => {
     const f = fixture({ seed: null }); await f.controller.refresh(); expect(f.controller.snapshot().canStart).toBe(true);
@@ -419,12 +433,14 @@ describe("oral document: explicit check during an in-flight refresh", () => {
   it("repeated checks queue one later status GET; lifecycle refresh still joins", async () => {
     const f = unknownStudy(), held = hold(f, 2);
     const lifecycle = f.controller.refresh(); await vi.waitFor(() => expect(held.reads()).toBe(2));
-    expect(f.controller.snapshot().canRetry.study).toBe(true); expect(checks(f)).toBe(1);
+    // 23.1 А (owner, C165): oral.reveal stored before this owner (a reload, another window) is only checked, never retried here.
+    expect(f.controller.snapshot().canRetry.study).toBe(false); expect(checks(f)).toBe(1);
     const first = f.controller.recheck(), second = f.controller.recheck();
     expect(second).toBe(first); expect(f.controller.refresh()).toBe(lifecycle); expect(checks(f)).toBe(1);
     held.release(2); await lifecycle; await first;
     expect(checks(f)).toBe(2); expect(f.posted).toEqual([]);
-    expect(f.controller.snapshot()).toMatchObject({ commands: { study: { pending: true, canRetry: true } } });
+    // The lane still holds its verified intent; only the page that created it may offer it again.
+    expect(f.controller.snapshot()).toMatchObject({ commands: { study: { pending: true, canRetry: true } }, canRetry: { study: false } });
   });
 
   it("a check during the queued follow-up read starts a second episode with its own later status GET", async () => {
@@ -564,11 +580,49 @@ describe("oral document: own closed projection (L1)", () => {
     expect(f.controller.snapshot()).toMatchObject({ phase: "closed", current: null, problem: null,
       closed: { sessionId: id(3), reason: "midnight", summary: null, progress: null, summaryRead: "failed" } });
   });
+  // C178: the pair change is kept as a fact about the own session, never as the shown problem; it grants no Stop.
   it("L1-4d an active projection of the own session on another pair is still a changed pair", async () => {
     const f = fixture({ step: "revealed" }), other = { ...projection("revealed"), pair: "en-de" as const };
     route(f, url => url.includes(`/sessions/${id(3)}?`) ? response({ current: other, state_version: "9" }) : null);
     await f.controller.refresh();
-    expect(f.controller.snapshot()).toMatchObject({ phase: "stale", current: null, problem: "pair_changed", closed: null });
+    expect(f.controller.snapshot()).toMatchObject({ phase: "stale", current: null, problem: null, pairMismatch: id(3), closed: null,
+      canStop: false });
+  });
+  it("L1-4e a failed read after the proved pair change names its own problem; the fact stays", async () => {
+    const f = fixture({ step: "revealed" }), other = { ...projection("revealed"), pair: "en-de" as const };
+    let fail = false;
+    route(f, url => url.includes(`/sessions/${id(3)}?`) ? fail ? Promise.reject(new TypeError("network"))
+      : response({ current: other, state_version: "9" }) : null);
+    await f.controller.refresh(); fail = true; await f.controller.refresh();
+    expect(f.controller.snapshot()).toMatchObject({ phase: "stale", problem: "network", pairMismatch: id(3), canStop: false });
+  });
+  it("L1-4f a reply of another pair below the floor proves nothing: no fact, a stale reply", async () => {
+    const f = fixture({ step: "revealed" }), other = { ...projection("revealed"), pair: "en-de" as const };
+    let low = false;
+    route(f, url => url.includes(`/sessions/${id(3)}?`) ? low ? response({ current: other, state_version: "1" }) : null : null);
+    await f.controller.refresh(); low = true; await f.controller.refresh();
+    expect(f.controller.snapshot()).toMatchObject({ problem: "stale_response", pairMismatch: null });
+  });
+  // QA-R1-V3 F2: a closed own session is no session open in another pair; its fact is never published (no R1 for it).
+  it("L1-4h after the closure of the own session the fact is not published", async () => {
+    const f = fixture({ step: "revealed" }), other = { ...projection("revealed"), pair: "en-de" as const };
+    let closedNow = false;
+    route(f, url => url.includes(`/sessions/${id(3)}?`) ? closedNow ? response({ current: closed(partial, "pair_changed", id(3), "en-de"), state_version: "12" })
+      : response({ current: other, state_version: "11" }) : null);
+    await f.controller.refresh();
+    expect(f.controller.snapshot().pairMismatch).toBe(id(3));
+    closedNow = true; await f.controller.refresh();
+    expect(f.controller.snapshot()).toMatchObject({ phase: "closed", pairMismatch: null, canStop: false });
+  });
+  it("L1-4g a projection of this pair of the same session ends the fact", async () => {
+    const f = fixture({ step: "revealed" }), other = { ...projection("revealed"), pair: "en-de" as const };
+    let own = false;
+    route(f, url => url.includes(`/sessions/${id(3)}?`) ? own ? response({ current: projection("revealed"), state_version: "12" })
+      : response({ current: other, state_version: "11" }) : null);
+    await f.controller.refresh();
+    expect(f.controller.snapshot().pairMismatch).toBe(id(3));
+    own = true; await f.controller.refresh();
+    expect(f.controller.snapshot()).toMatchObject({ pairMismatch: null, problem: null, phase: "revealed" });
   });
   it("L1-5 a replaced owner of a retained terminal session reads its facts once and never raises stateVersion", async () => {
     const f = fixture(); f.set("closed", "77"); const next = retained(f);
@@ -638,5 +692,44 @@ describe("oral document: own closed projection (L1)", () => {
     expect(sessionGets(f)).toBe(before);
     f.set("closed", "21"); await f.controller.refresh(); expect(sessionGets(f)).toBe(before + 1);
     expect(f.controller.snapshot()).toMatchObject({ closed: { reason: "stop", summaryRead: "known", summary: { completed: 1 } } });
+  });
+});
+
+// D-FALSE-TEXTS part A: the owner vouches for the source of the current cause. A lane's «not_found» hides the refresh-failure
+// line only when it is the one current cause; a foreign unresolved receipt keeps it even if every lane holds a not_found.
+describe("oral document: checkedAbsent", () => {
+  const ownStop: OralIntent = { session_id: id(3), command_id: id(9), kind: "session.stop", payload: { reason: "stop" } };
+  const foreignStop: OralIntent = { session_id: id(90), command_id: id(9), kind: "session.stop", payload: { reason: "stop" } };
+  /** Both saved records are absent on the server (the status answers not_found) while the open step still allows them. */
+  async function checked(saved: OralIntent[]) {
+    const f = fixture({ saved, step: "presented" }); f.accepted.clear(); f.set("presented", "13");
+    await f.controller.refresh();
+    return f.controller.snapshot();
+  }
+  it("a single honest not_found (own reveal absent on the open step) is vouched for", async () => {
+    const snapshot = await checked([intents[2]]);
+    expect(snapshot).toMatchObject({ phase: "unknown", problem: "not_found", checkedAbsent: true });
+    expect(snapshot.commands.study).toMatchObject({ problem: "not_found", canRetry: true });
+  });
+  it("two own lanes that both found their record absent are vouched for", async () => {
+    expect(await checked([intents[2], ownStop])).toMatchObject({ problem: "not_found", checkedAbsent: true });
+  });
+  it("a foreign unresolved receipt of another session beside an own not_found is not vouched for", async () => {
+    const snapshot = await checked([intents[2], foreignStop]);
+    expect(snapshot.commands.study.problem).toBe("not_found");
+    expect(snapshot.commands.stop.problem).toBe("not_found");
+    expect(snapshot.checkedAbsent).toBeUndefined();
+  });
+  it("a failed read of the session beside an own not_found is not vouched for", async () => {
+    const f = fixture({ saved: [intents[2]], step: "presented" }); f.accepted.clear(); f.set("presented", "13");
+    const base = f.handler;
+    // The lane's own verification read (the first session GET) passes; the owner's follow-up read of the current step fails.
+    let reads = 0;
+    f.fetcher.mockImplementation(async (url, init) => String(url).includes("/sessions/") && init?.method !== "POST" && reads++ >= 1
+      ? response({ error: { code: "UNEXPECTED" } }, 500) : base(url, init));
+    await f.controller.refresh();
+    const snapshot = f.controller.snapshot();
+    expect(snapshot.commands.study.problem).toBe("not_found");
+    expect(snapshot.checkedAbsent).toBeUndefined();
   });
 });

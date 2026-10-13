@@ -5,6 +5,7 @@ import { isLearningResultIntent, type LearningAnswerIntent, type LearningCommand
 import { createLearningResultApi, type LearningResultRead } from "./learningAnswerApi";
 import { createLearningSessionApi, type LearningSessionRead } from "./learningSessionApi";
 import { LearningSessionPendingStore, LearningStopPendingStore } from "./learningSessionPending";
+import type { LearningPageStarts } from "./learningPageStarts";
 
 export type LearningDocumentSnapshot = DocumentLanesSnapshot<LearningCommandSnapshot>;
 /**
@@ -22,37 +23,47 @@ function resultCommand(intent: LearningCommandIntent): intent is LearningAnswerI
 
 /** Own both durable command lanes for one opened document, without owning its views or drafts. */
 export class LearningDocumentCommands extends DocumentLanes<LearningCommandSnapshot, LearningTransition, LearningSessionRead, LearningResultRead> {
-  constructor(options: DocumentLanesOptions<LearningCommandSnapshot>) {
+  constructor(options: DocumentLanesOptions<LearningCommandSnapshot> & { page?: LearningPageStarts }) {
     const sessions = createLearningSessionApi(options.transport), results = createLearningResultApi(options.transport);
     super(options, {
       label: "Learning",
       automatic: learningAutomaticKinds,
+      // 35.1-А (C243): the page of a start is the one LearningPageStarts names, for the controller and for the document.
+      lanePage: ["session.start"],
       readSession: (credentials, sessionId, origin) => sessions.read(credentials.token, credentials.proof,
         { session_id: sessionId, ...origin(credentials) }),
       readResult: (credentials, address, origin) => results.read(credentials.token, credentials.proof,
         { session_id: address.session_id, assignment_id: address.assignment_id, result_id: address.result_id, ...origin(credentials) }),
-      controller: (wiring, reads) => new LearningCommandController({
-        profileId: wiring.profileId, clientInstanceId: wiring.clientInstanceId, pair: wiring.pair,
-        stateVersion: wiring.stateVersion, minimumStateVersion: wiring.minimumStateVersion,
-        isLive: wiring.isLive, newId: wiring.newId,
-        pendingStore: wiring.lane === "primary" ? new LearningSessionPendingStore(options.storage) : new LearningStopPendingStore(options.storage),
-        // Answers, their revisions and their undo go to the result endpoint; every other transition is a session command.
-        // transmitted is told inside the open handle, right before the request: a refusal before it sent nothing.
-        send: (intent, transmitted) => wiring.send(async credentials => {
-          const address = wiring.origin(credentials);
-          transmitted?.();
-          return resultCommand(intent)
-            ? results.send(credentials.token, credentials.proof, { ...intent, ...address })
-            : sessions.send(credentials.token, credentials.proof, { ...intent, ...address });
-        }),
-        check: intent => wiring.run(async credentials => {
-          const address = wiring.origin(credentials);
-          return resultCommand(intent)
-            ? results.status(credentials.token, credentials.proof, { ...intent, ...address })
-            : sessions.status(credentials.token, credentials.proof, { ...intent, ...address });
-        }),
-        read: reads.read, readResult: intent => reads.readResult(intent), onUpdate: wiring.onUpdate,
-      }),
+      controller: (wiring, reads) => {
+        const controller: LearningCommandController = new LearningCommandController({
+          profileId: wiring.profileId, clientInstanceId: wiring.clientInstanceId, pair: wiring.pair,
+          stateVersion: wiring.stateVersion, minimumStateVersion: wiring.minimumStateVersion,
+          isLive: wiring.isLive, newId: wiring.newId,
+          pendingStore: wiring.lane === "primary" ? new LearningSessionPendingStore(options.storage) : new LearningStopPendingStore(options.storage),
+          // Answers, their revisions and their undo go to the result endpoint; every other transition is a session command.
+          // transmitted is told inside the open handle, right before the request: a refusal before it sent nothing.
+          // sendStarted is told by the transport once the request is built, right before fetch.
+          send: (intent, transmitted) => wiring.send(async credentials => {
+            const address = wiring.origin(credentials), sendStarted = () => controller.sendStarted();
+            transmitted?.();
+            // The live open handle was checked by wiring.send (access.run) right before this; started is told by the
+            // transport once the request is built, right before fetch (21.1-А, 33.1-А boundary). A start is always a
+            // session command. The same moment ends an inherited intent for the timer (sendStarted, 20.1-А/22.1-А).
+            return resultCommand(intent)
+              ? results.send(credentials.token, credentials.proof, { ...intent, ...address }, sendStarted)
+              : sessions.send(credentials.token, credentials.proof, { ...intent, ...address },
+                () => { controller.requestStarted(); sendStarted(); });
+          }),
+          check: intent => wiring.run(async credentials => {
+            const address = wiring.origin(credentials);
+            return resultCommand(intent)
+              ? results.status(credentials.token, credentials.proof, { ...intent, ...address })
+              : sessions.status(credentials.token, credentials.proof, { ...intent, ...address });
+          }),
+          read: reads.read, readResult: intent => reads.readResult(intent), onUpdate: wiring.onUpdate, page: options.page,
+        });
+        return controller;
+      },
     });
   }
 }

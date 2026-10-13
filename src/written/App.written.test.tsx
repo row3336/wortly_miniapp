@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenRequest } from "../api/generated";
 import { App } from "../app/App";
 import { staleCommand, staleRefusal } from "../app/openRules.test-support";
+import { gate, replaceDocument, watchFlash } from "../app/flashWatch.test-support";
 import { app, answer, settingsRefusalText, compatibility, exchange, field, loseReply, offlineStudy, pairText, requests, row, startWords,
   useWrittenAppEnvironment } from "./writtenApp.test-support";
 import { deferred, id, profile, response } from "./writtenFixtures.test-support";
@@ -361,7 +362,13 @@ describe("Written quiz through the actual App document", () => {
     const mark = a.fetcher.mock.calls.length, posts = a.posts().length;
     render(<App />);
     await waitFor(() => expect(requests(a, mark)).toContain(`GET /api/v1/commands/${lost.command_id}`));
-    await screen.findByText("слово 7");
+    // The committed correction is restored as the current result, never skipped (tz_app §9 «восстановить его без повтора»).
+    await screen.findByText("Ответ исправлен", undefined, exchange);
+    expect(screen.queryByText("слово 7")).toBeNull();
+    expect(a.posts()).toHaveLength(posts);
+    await waitFor(() => expect((screen.getByRole("button", { name: "Далее" }) as HTMLButtonElement).disabled).toBe(false), exchange);
+    fireEvent.click(screen.getByRole("button", { name: "Далее" }));
+    await screen.findByText("слово 7", undefined, exchange);
     await waitFor(() => expect(field().readOnly).toBe(false));
     const later = requests(a, mark);
     expect(later.indexOf(`GET /api/v1/commands/${lost.command_id}`)).toBeLessThan(later.indexOf("POST /api/v1/commands"));
@@ -433,7 +440,7 @@ describe("Written quiz through the actual App document", () => {
     expect(a.openReply.mock.calls.map(([body]) => [body.document_id, (body as OpenRequest).event])).toEqual([[own, "open"], [own, "foreground"]]);
   });
 
-  it("В02 two windows of one installation: B continues at once without A's typed answer; A's check is refused and A closes", async () => {
+  it("В02 two windows of one installation: B continues at once without A's typed answer; A's check is refused, A closes, its record stays", async () => {
     const a = app({ cards: [6, 7] }), close = telegramClose(), live = { document: null as string | null };
     const base = a.fetcher.getMockImplementation()!;
     // The core after C-REOPEN-2: an open makes its document live; a foreground or a write of another one is DOCUMENT_STALE.
@@ -468,7 +475,12 @@ describe("Written quiz through the actual App document", () => {
     expect(input.value).toBe("");
     expect(within(second.container).queryByText("Есть ошибка")).toBeNull();
     expect(within(second.container).queryByText("Учебное действие ещё не подтверждено.")).toBeNull();
-    expect(localStorage.getItem("wortly.pending.written_session")).toBeNull();
+    // Р2 (CL131): DOCUMENT_STALE refuses A's attempt, not the answer, also when it was its only send. The record stays
+    // as A sent it; B, which loaded the slot before, sends nothing of it (CT §6.1 п. 5, Codex C093 п. 5).
+    const answer = a.posts().find(post => post.document_id === old && post.kind === "answer.submit")!;
+    const { client_instance_id: _client, document_id: _document, ...intent } = answer;
+    expect(JSON.parse(localStorage.getItem("wortly.pending.written_session")!).intent).toEqual(intent);
+    expect(a.posts().filter(post => post.document_id !== old)).toHaveLength(0);
   });
 
   it("a prefetched question that waits for an unset transition mode keeps the refusal with its buttons, not an endless loading", async () => {
@@ -489,5 +501,27 @@ describe("Written quiz through the actual App document", () => {
     expect(screen.getByRole("button", { name: "Обновить настройки" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "На Сегодня" })).toBeTruthy();
     expect(screen.queryByText("Загружаем занятие…")).toBeNull();
+  });
+});
+
+// D-STALE-WINDOW 3.1.14 (2.33): an answer of a replaced window refused with the core's envelope shows no refusal.
+describe("Written while the window checks its document", () => {
+  it("replaced window: an answer refused as DOCUMENT_STALE keeps its record and never shows a refusal on any screen update", async () => {
+    const a = app({ cards: [6, 7] });
+    telegramClose();
+    render(<App />);
+    await startWords();
+    fireEvent.change(field(), { target: { value: "Haus" } });
+    const hold = gate(), r = replaceDocument(a.fetcher, hold.promise), watch = watchFlash(document.body);
+    fireEvent.click(screen.getByRole("button", { name: "Проверить" }));
+    await waitFor(() => expect(r.foregrounds()).toBe(1));
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 50)); });
+    expect(watch.seen).toEqual([]);
+    expect(JSON.parse(localStorage.getItem("wortly.pending.written_session")!).intent).toMatchObject({ kind: "answer.submit" });
+    await act(async () => { hold.open(); });
+    await screen.findByRole("heading", { name: "Wortly уже открыт" });
+    watch.stop();
+    expect(watch.seen).toEqual([]);
+    expect(a.kinds().filter(kind => kind === "answer.submit")).toHaveLength(1);
   });
 });

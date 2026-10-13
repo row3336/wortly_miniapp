@@ -1,0 +1,9 @@
+.choice-screen { gap: 20px; }
+.choice-pairs { display: grid; gap: 12px; min-width: 0; }
+.choice-pair { display: flex; align-items: center; gap: 12px; min-height: 56px; padding: 12px 16px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); cursor: pointer; }
+.choice-pair:has(input:checked) { border: 2px solid var(--text); font-weight: 700; }
+.choice-pair:has(input:disabled) { cursor: default; }
+.choice-pair input { order: 1; margin-left: auto; width: 20px; height: 20px; accent-color: var(--text); }
+.choice-flag { flex: none; width: 28px; height: 18px; }
+.choice-status:empty { display: none; }
+.choice-proceed { margin-top: auto; width: 100%; }

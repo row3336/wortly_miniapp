@@ -37,6 +37,12 @@ export type RecoveryState =
    * schedule; a recorded fact still settles it. check is the place in that series; code names a refusal.
    */
   | { name: "checks_only"; check: number; cause: ChecksOnlyCause; code: string | null }
+  /**
+   * Decision 2.3 А (owner, C109): the action was created by another window or by the page before a reload. Its fact is
+   * checked on the probe schedule and a recorded fact still settles it, but it is never sent from here, whatever the
+   * count says. Not an exhaustion, not a lost connection, not an unknown count: the count and the record stay as they are.
+   */
+  | { name: "origin_elsewhere"; check: number }
   /** Я17: the same command_id carries another payload; nothing is sent any more. */
   | { name: "conflict" }
   | { name: "terminated"; reason: TerminationReason }
@@ -78,7 +84,21 @@ export interface RecoveryPorts<I> {
    * replaced. isLive() is read again afterwards and must agree.
    */
   windowCheck(): Promise<boolean>;
+  /**
+   * Decision 2.3 А: whether this window may send this intent at all. Asked right before every send, synchronously and
+   * before the reservation, so a refusal reserves, releases and writes nothing (C081 Н2). Absent = allowed (start cancel).
+   */
+  maySend?(): boolean;
 }
+
+/**
+ * What an earlier owner of the same document knew about the next send (CT §6.1 п. 4): next is the number of that send,
+ * dueAt the end of its pause counted from the loss it found (null: no loss was found, e.g. it only met a planned pause),
+ * holdUntil the end of a planned pause the server announced (null: none). Times are on the clock of this page: the
+ * memory of one page only, the monotonic clock does not survive a reload. A candidate to shorten the wait, never a right
+ * to send: a send still needs a known count and a check that confirmed absence right before it.
+ */
+export type KnownLoss = { next: number; dueAt: number | null; holdUntil: number | null };
 
 export type RecoveryOptions<I extends { command_id: string }> = {
   intent: I;
@@ -98,6 +118,13 @@ export type RecoveryOptions<I extends { command_id: string }> = {
    * stops there (CP4 closes its session after the exhaustion, Я17 shows the conflict).
    */
   keepChecking?: boolean;
+  /**
+   * resume only: the loss an earlier owner of this command_id found in the same document. It shortens nothing below
+   * the pause of that loss and gives no send of its own: it applies only to the same send number of the loaded count.
+   */
+  knownLoss?: KnownLoss | null;
+  /** The earliest moment of the next send changed (null: nothing is due any more, the action settled). */
+  onLoss?(loss: KnownLoss | null): void;
   onUpdate?(snapshot: RecoverySnapshot): void;
 };
 
@@ -128,6 +155,8 @@ export class RecoveryMachine<I extends { command_id: string }> {
   private readonly clock: RecoveryClock;
   private readonly onUpdate: ((snapshot: RecoverySnapshot) => void) | undefined;
   private readonly keepChecking: boolean;
+  private readonly knownLoss: KnownLoss | null;
+  private readonly onLoss: ((loss: KnownLoss | null) => void) | undefined;
   private state: RecoveryState = { name: "idle" };
   private marks: SendMarks | null = null;
   private active: boolean;
@@ -157,6 +186,8 @@ export class RecoveryMachine<I extends { command_id: string }> {
     this.clock = options.clock;
     this.onUpdate = options.onUpdate;
     this.keepChecking = options.keepChecking ?? false;
+    this.knownLoss = options.knownLoss ?? null;
+    this.onLoss = options.onLoss;
     this.active = options.active;
   }
 
@@ -183,6 +214,13 @@ export class RecoveryMachine<I extends { command_id: string }> {
       this.marks = validMarks(marks) ? copyMarks({ ...marks, lastMaintenance: marks.lastMaintenance || undefined }) : null;
       // A ban stored with the count (another owner, a durable count after a reload): only checks from now on.
       if (this.marks?.forbidden && !this.sendsClosed) this.sendsClosed = { cause: "forbidden", code: null };
+      // What an earlier owner of this document knew: only for the very send it was waiting for. An announced planned
+      // pause only ever grows; the loss time only replaces the full pause a resumed machine would otherwise wait.
+      const known = this.knownLoss;
+      if (known && this.marks && known.next === this.marks.reserved + 1) {
+        if (known.dueAt !== null && this.retryDueAt === null) this.retryDueAt = known.dueAt;
+        if (known.holdUntil !== null && (this.holdUntil === null || known.holdUntil > this.holdUntil)) this.holdUntil = known.holdUntil;
+      }
     });
     if (this.active) void this.check("checking");
     else this.enter({ name: "suspended" });
@@ -213,6 +251,18 @@ export class RecoveryMachine<I extends { command_id: string }> {
   dispose(): void {
     this.stop();
     this.state = { name: "disposed" };
+  }
+
+  /**
+   * The intent never existed beyond this window: its first send was refused locally before any request started. Drop the
+   * machine and its count. The count is cleared after every write already queued, and marks null keeps the in-flight
+   * send from giving its reservation back (release) or writing it again, so no record of this ID is left behind.
+   */
+  discard(): void {
+    this.marks = null;
+    const id = this.intent.command_id;
+    this.writes = this.writes.then(() => this.counter.clear(id)).catch(() => undefined);
+    this.dispose();
   }
 
   private emit(): void {
@@ -259,6 +309,8 @@ export class RecoveryMachine<I extends { command_id: string }> {
     const before = this.marks!;
     const attempt = before.reserved + 1;
     if (!this.liveOrTerminate()) return;
+    // 2.3 А: the last gate before the reservation and the network; no await between it and the reservation below.
+    if (!this.mayResend()) { this.originElsewhere(); return; }
     this.enter({ name: "sending", attempt });
     const generation = this.generation;
     const reserved = copyMarks({ ...before, reserved: attempt });
@@ -350,6 +402,7 @@ export class RecoveryMachine<I extends { command_id: string }> {
     if (waitSeconds === null || waitSeconds === undefined) return;
     const until = this.clock.now() + waitSeconds * 1_000;
     if (this.holdUntil === null || until > this.holdUntil) this.holdUntil = until;
+    this.remember();
   }
   private held(at: number): number {
     return this.holdUntil === null ? at : Math.max(at, this.holdUntil);
@@ -357,6 +410,12 @@ export class RecoveryMachine<I extends { command_id: string }> {
 
   private lose(): void {
     this.retryDueAt = this.marks !== null ? this.clock.now() + pauseBefore(this.marks.reserved + 1) : null;
+    this.remember();
+  }
+  /** Hand the earliest next send to the owner, so a later owner of the same document does not wait the pause again. */
+  private remember(): void {
+    if (this.state.name === "disposed" || this.marks === null || this.retryDueAt === null && this.holdUntil === null) return;
+    this.onLoss?.({ next: this.marks.reserved + 1, dueAt: this.retryDueAt, holdUntil: this.holdUntil });
   }
 
   private retryWait(dueAt: number): void {
@@ -418,6 +477,8 @@ export class RecoveryMachine<I extends { command_id: string }> {
     if (this.sendsClosed) { this.checksOnly(); return; }
     const marks = this.marks;
     if (marks === null) { this.counterUnknown(); return; }
+    // 2.3 А: a known count never lets another window send this action (C119): checks only, nothing written.
+    if (!this.mayResend()) { this.originElsewhere(); return; }
     if (marks.reserved >= MAX_SENDS) {
       // A planned pause must not close the quiz: the last send met it, so wait in the pause instead (TC §11).
       if (marks.lastMaintenance) this.pause(this.pauseSeconds, true);
@@ -427,8 +488,8 @@ export class RecoveryMachine<I extends { command_id: string }> {
       return;
     }
     const now = this.clock.now();
-    // No known loss time (a resumed action): the full pause from now.
-    if (this.retryDueAt === null) this.retryDueAt = now + pauseBefore(marks.reserved + 1);
+    // No known loss time (a resumed action without one): the full pause from now.
+    if (this.retryDueAt === null) { this.retryDueAt = now + pauseBefore(marks.reserved + 1); this.remember(); }
     const due = this.held(this.retryDueAt);
     if (now >= due) void this.send();
     else this.retryWait(this.retryDueAt);
@@ -479,6 +540,10 @@ export class RecoveryMachine<I extends { command_id: string }> {
     void this.check("checking", true);
   }
 
+  private mayResend(): boolean { return this.ports.maySend?.() ?? true; }
+  /** 2.3 А: only checks on the probe schedule; the count, the ban and the record are left untouched. */
+  private originElsewhere(): void { this.quiet(check => ({ name: "origin_elsewhere", check })); }
+
   /** Absence confirmed but no send allowed: only checks on the probe schedule, never a send or an exhaustion. */
   private counterUnknown(): void {
     const cause = this.marks === null ? "unknown" : "unconfirmed";
@@ -522,6 +587,7 @@ export class RecoveryMachine<I extends { command_id: string }> {
 
   private settle(outcome: "accepted" | "rejected"): void {
     this.enter({ name: "settled", outcome });
+    this.onLoss?.(null);
     // A stale count of a settled command_id is harmless; its failure must not undo the confirmed result.
     this.writes = this.writes.then(() => this.counter.clear(this.intent.command_id)).catch(() => undefined);
   }

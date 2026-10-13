@@ -44,6 +44,11 @@ export type ConjugationDocumentSnapshot = {
   acceptedAddress: ConjugationAcceptedAddress | null;
   commands: Record<ConjugationLane, ConjugationCommandSnapshot>;
   problem: string | null;
+  /**
+   * The selected session the server proved open in another pair (a step not below the floor): a fact about the session,
+   * not a failed update, so it is never the shown problem (C149, C178; as StudyViewFields). null when nothing proves it.
+   */
+  pairMismatch: string | null;
   currentStep: { stateVersion: string; step: ConjugationSessionProjection } | null;
   resultA: ConjugationResultSnapshot | null;
   display: ConjugationDisplay;
@@ -130,6 +135,8 @@ export class ConjugationDocumentController implements ConjugationDocumentActions
   private closedFacts: ConjugationClosed | null = null;
   private stopRight: { sessionId: string; version: string; stop: boolean; home: boolean } | null = null;
   private problem: string | null = null;
+  /** The selected session as the server showed it open in another pair; a step of this pair of it ends it (pairMismatch). */
+  private mismatch: string | null = null;
   private stepTicket: { key: string; target: ConjugationDisplay; ticket: ConjugationStepTicket } | null = null;
   private presentationTicket: { key: string; assignmentId: string; ticket: ConjugationPresentationTicket } | null = null;
 
@@ -254,9 +261,12 @@ export class ConjugationDocumentController implements ConjugationDocumentActions
   private setStep(step: ConjugationSessionProjection, stateVersion: string): void {
     if (step.status === "closed") { this.markClosed(step.session_id); this.recordClosed(step.session_id, step.close_reason, step.summary); return; }
     if (!this.selected(step.session_id) || this.terminal.has(step.session_id.toLowerCase())) return;
+    // An open step of another pair is no failed read: the pair changed elsewhere and the session lives there (R1). It is
+    // kept as a fact; nothing of it is shown and it grants no right here (no Stop before the window's refresh).
     if (step.pair !== this.pair) {
-      this.step = null; this.stopRight = null; this.problem = "pair_changed"; return;
+      this.step = null; this.stopRight = null; this.mismatch = step.session_id; this.problem = null; return;
     }
+    this.mismatch = null;
     this.step = { stateVersion, step: structuredClone(step) };
     this.problem = null;
     this.stopRight = { sessionId: step.session_id, version: stateVersion, stop: step.capabilities.stop, home: step.capabilities.summary_home };
@@ -448,6 +458,7 @@ export class ConjugationDocumentController implements ConjugationDocumentActions
       // A known server refusal of a lane reaches the screen as its code (CT табл. 2.2), as in Learning and written.
       problem: live ? commands.study.problem ?? commands.study.rejectionCode ?? commands.stop.problem ?? commands.stop.rejectionCode
         ?? this.problem ?? (foreignReceipt ? "unconfirmed_session" : null) : null,
+      pairMismatch: live && !closed && this.mismatch !== null && this.selected(this.mismatch) ? this.mismatch.toLowerCase() : null,
       currentStep: step ? structuredClone(step) : null,
       resultA: resultA ? structuredClone(resultA) : null,
       display: live ? { ...display } : { kind: "none" },
@@ -605,12 +616,27 @@ export class ConjugationDocumentController implements ConjugationDocumentActions
     if (!this.snapshot().canStart) return Promise.resolve();
     const sessionId = this.options.newId();
     if (!uuid(sessionId)) return Promise.reject(new Error("invalid conjugation session ID"));
+    // Only what this document itself showed before the tap (its idle screen or the closure it knew), never server rights:
+    // the step, the result A and its address and the Stop right stay cleared.
+    const before = { sessionId: this.sessionId, closedFacts: this.closedFacts, problem: this.problem, display: this.display };
     this.sessionId = sessionId.toLowerCase();
     this.step = null; this.resultA = null; this.acceptedA = null; this.stopRight = null; this.shownAssignment = null; this.problem = null;
-    this.closedFacts = null;
+    this.closedFacts = null; this.mismatch = null;
     this.setDisplay({ kind: "none" });
     const task = this.begin("study", { kind: "session.start", session_id: this.sessionId, payload: { mode: "conjugation" } }, this.floor);
-    if (this.tasks.study === task) this.startJoin = task; // before emit: a synchronous onUpdate repeat joins too
+    if (this.tasks.study === task) {
+      this.startJoin = task; // before emit: a synchronous onUpdate repeat joins too
+      // The start met another record in the shared slot and was neither stored nor sent: no session of its ID exists to
+      // read or check. The document goes back to what it showed; the lane's block names the reason.
+      const started = this.sessionId;
+      void task.then(() => {
+        // A disposed owner (a repeated mount) or a newer selection keeps its own state. While the start runs nothing else
+        // can begin: the Stop right and the step were cleared above, and a second start joins this one.
+        if (!this.live() || this.sessionId !== started || !unsentSlot(this.commands.study.snapshot())) return;
+        this.sessionId = before.sessionId; this.closedFacts = before.closedFacts; this.problem = before.problem;
+        this.setDisplay(before.display); this.emit();
+      }, () => undefined);
+    }
     this.emit();
     return task;
   }
@@ -699,4 +725,9 @@ export class ConjugationDocumentController implements ConjugationDocumentActions
     this.step = null; this.resultA = null; this.stopRight = null; this.stepTicket = null; this.presentationTicket = null;
     this.commands.study.dispose(); this.commands.stop.dispose();
   }
+}
+
+/** The shared slot refused a new intent of the lane (another record, or one it cannot read): dropped, neither stored nor sent. */
+function unsentSlot(command: ConjugationCommandSnapshot): boolean {
+  return !command.pending && command.outcome === null && (command.problem === "pending_changed" || command.problem === "invalid_pending");
 }

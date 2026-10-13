@@ -10,6 +10,7 @@ import { LearningSessionPendingStore, LearningStopPendingStore, type LearningSes
 import type { LearningAnswerIntent, LearningCommandIntent } from "./learningCommandIntent";
 import { createLearningResultApi, type LearningAnswerReply, type LearningAnswerStatus } from "./learningAnswerApi";
 import { staleCommand } from "../app/openRules.test-support";
+import { LearningPageStarts } from "./learningPageStarts";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const slot = "wortly.pending.learning_session", stopSlot = "wortly.pending.learning_stop";
@@ -106,17 +107,58 @@ describe("Learning command durability and reconciliation", () => {
     expect(f.send).toHaveBeenCalledOnce(); expect(next.snapshot()).toMatchObject({ outcome: "accepted", pending: false });
   });
 
+  it("marks an outcome restored only when this owner's first check finds an inherited intent on the server", async () => {
+    // Inherited from the durable slot (a reload or a re-entry) and found by its ID: an old outcome (20.1-А, 22.1-А).
+    const inherited = fixture(pending()); await inherited.controller.refresh();
+    expect(inherited.controller.snapshot().resolved).toEqual({ commandId: id(4), kind: "learning.preview_next", sessionId: id(3), restored: true });
+    // Sent by this owner, its reply lost, then found by the same ID: a live confirmation.
+    const own = fixture(); await own.controller.refresh(); own.send.mockRejectedValueOnce(new ApiError("network"));
+    await own.controller.begin(action()); await own.controller.refresh();
+    expect(own.controller.snapshot()).toMatchObject({ outcome: "accepted" });
+    expect(own.controller.snapshot().resolved).toEqual({ commandId: id(4), kind: "learning.preview_next", sessionId: id(3) });
+  });
+
+  it("an inherited intent whose request this owner started is a live confirmation, also when the reply is lost", async () => {
+    for (const lost of [false, true]) {
+      const f = fixture(pending()); f.check.mockResolvedValueOnce(notFound()); await f.controller.refresh();
+      expect(f.controller.snapshot().canRetry).toBe(true);
+      // The transport tells the start of the request (sendStarted), as the document wiring does.
+      f.send.mockImplementationOnce(async intent => {
+        f.controller.sendStarted(); if (lost) throw new ApiError("network"); return accepted(intent);
+      });
+      await f.controller.retry(); if (lost) await f.controller.refresh();
+      expect(f.send).toHaveBeenCalledOnce();
+      expect(f.controller.snapshot()).toMatchObject({ outcome: "accepted", pending: false });
+      expect(f.controller.snapshot().resolved?.restored).toBeUndefined();
+    }
+  });
+
+  it("a resend stopped before its request (the save failed) keeps the outcome found later an old one", async () => {
+    const f = fixture(pending()); f.check.mockResolvedValueOnce(notFound()); await f.controller.refresh();
+    expect(f.controller.snapshot().canRetry).toBe(true);
+    f.storage.get = vi.fn(async () => { throw new Error("storage unavailable"); });
+    f.storage.set = vi.fn(async () => { throw new Error("quota"); });
+    await f.controller.retry();
+    expect(f.send).not.toHaveBeenCalled();
+    expect(f.controller.snapshot()).toMatchObject({ pending: true, outcome: null });
+    await f.controller.refresh();
+    expect(f.controller.snapshot().resolved).toEqual({ commandId: id(4), kind: "learning.preview_next", sessionId: id(3), restored: true });
+  });
+
   const retriable: [LearningSessionIntent, LearningSessionRead["current"]][] = [
     [intents[0], { session_id: id(3), status: "not_found" }], [intents[1], preview()], [intents[2], preview()],
     [intents[3], question()], [intents[4], preview()], [intents[4], summary()], [intents[5], summary()],
   ];
   it.each(retriable)("not-found for %j permits explicit retry only after checking its current target", async (intent, current) => {
-    const f = fixture(pending(intent)); f.check.mockResolvedValue(notFound()); f.read.mockResolvedValue({ current, state_version: "9" });
-    await f.controller.refresh(); expect(f.send).not.toHaveBeenCalled();
+    // A start record of this very page (35.1-А): the page that stored it is the one that reads it back.
+    const page = new LearningPageStarts(); page.mark(pending(intent));
+    const f = fixture(pending(intent)), controller = f.make({ page });
+    f.check.mockResolvedValue(notFound()); f.read.mockResolvedValue({ current, state_version: "9" });
+    await controller.refresh(); expect(f.send).not.toHaveBeenCalled();
     expect(f.read).toHaveBeenCalledExactlyOnceWith(id(3));
-    expect(f.controller.snapshot()).toMatchObject({ problem: "not_found", canRetry: true, stateVersion: "9", outcome: null });
-    await f.controller.begin(action(intents[0])); expect(f.newId).not.toHaveBeenCalled();
-    await f.controller.retry(); expect(f.send).toHaveBeenCalledExactlyOnceWith(intent);
+    expect(controller.snapshot()).toMatchObject({ problem: "not_found", canRetry: true, stateVersion: "9", outcome: null });
+    await controller.begin(action(intents[0])); expect(f.newId).not.toHaveBeenCalled();
+    await controller.retry(); expect(f.send).toHaveBeenCalledExactlyOnceWith(intent);
   });
 
   const blocked: [string, LearningSessionIntent, LearningSessionRead["current"], string][] = [
@@ -631,7 +673,7 @@ describe("Authoritative closure of a missing Learning command", () => {
   });
 });
 
-describe("D-STALE-WINDOW 3.1.4 guard: the core's business refusal envelope settles the Learning record", () => {
+describe("D-STALE-WINDOW 3.1.4: the core's DOCUMENT_STALE envelope keeps the Learning record", () => {
   const result = { assignment_id: id(6), result_id: id(7), expected_result_version: "1" };
   const answers = [
     { command_id: id(4), session_id: id(3), kind: "answer.submit", assignment_id: id(6), payload: { text: "Haus" } },
@@ -650,10 +692,127 @@ describe("D-STALE-WINDOW 3.1.4 guard: the core's business refusal envelope settl
     return { controller: f.make({ send: send as never }), send };
   }
   const envelope = (code: string) => (intent: LearningCommandIntent) => staleCommand(intent.command_id, intent.session_id, 8, intent.kind, code);
+  it.each([...intents.slice(0, 5), ...answers])("$kind: the same raw record stays, unresolved as window_stale, lastFailure is the refusal", async intent => {
+    const f = fixture(), { controller, send } = wired(f, envelope("DOCUMENT_STALE"), 409);
+    await controller.refresh();
+    let saved: string | undefined;
+    send.mockImplementationOnce(async value => { saved = f.values.get(slot); return send.getMockImplementation()!(value); });
+    await controller.begin(action(intent as LearningSessionIntent));
+    expect(saved).toBeDefined();
+    expect(f.values.get(slot)).toBe(saved);
+    expect(f.storage.remove).not.toHaveBeenCalled();
+    expect(controller.snapshot()).toMatchObject({ phase: "unresolved", pending: true, outcome: null, problem: "window_stale" });
+    expect(controller.lastFailure()).toMatchObject({ kind: "http", status: 409, code: "DOCUMENT_STALE" });
+  });
   it.each([...intents.slice(0, 5), ...answers])("$kind: a business refusal (SESSION_CLOSED) still settles and clears", async intent => {
     const f = fixture(), { controller } = wired(f, envelope("SESSION_CLOSED"), 409);
     await controller.refresh(); await controller.begin(action(intent as LearningSessionIntent));
     expect(f.values.has(slot)).toBe(false);
     expect(controller.snapshot()).toMatchObject({ outcome: "rejected", pending: false, rejectionCode: "SESSION_CLOSED" });
+  });
+  it.each([["not_found", false], ["closed", true]] as const)(
+    "C229: a Stop refused as SESSION_CLOSED keeps the refusal's own projection (%s) for the screen to tell", async (status, isClosed) => {
+      const stopIntent = intents[4];
+      const f = fixture(), { controller } = wired(f, intent => ({ command: { id: intent.command_id, status: "rejected" },
+        current: isClosed ? { ...closed(), session_id: intent.session_id } : { session_id: intent.session_id, status },
+        state_version: "8", error: { code: "SESSION_CLOSED" } }), 409);
+      await controller.refresh(); await controller.begin(action(stopIntent));
+      expect(controller.snapshot()).toMatchObject({ outcome: "rejected", rejectionCode: "SESSION_CLOSED", pending: false,
+        resolved: { kind: "session.stop", sessionId: id(3) }, current: { session_id: id(3), status } });
+    });
+});
+
+// M-SLOT-INVALID: a NEW action whose save the slot refuses over an unreadable record was neither stored nor sent: it is no
+// unknown outcome, so it is never checked or retried. The unreadable record itself stays untouched.
+describe("Learning: an unreadable record in the shared slot meets a new action", () => {
+  it.each([["not JSON", "{not json"], ["JSON of another shape", "{\"a\":1}"]])("%s: the action is dropped, nothing is checked or sent", async (_name, raw) => {
+    const f = fixture(); await f.controller.refresh();
+    f.values.set(slot, raw);
+    await f.controller.begin(action());
+    expect(f.controller.snapshot()).toMatchObject({ phase: "blocked", problem: "invalid_pending", pending: false, pendingIntent: null, canRetry: false });
+    expect(f.send).not.toHaveBeenCalled(); expect(f.check).not.toHaveBeenCalled(); expect(f.read).not.toHaveBeenCalled();
+    expect(f.values.get(slot)).toBe(raw);
+    await f.controller.refresh(); await f.controller.retry();
+    expect(f.check).not.toHaveBeenCalled(); expect(f.read).not.toHaveBeenCalled(); expect(f.send).not.toHaveBeenCalled();
+    expect(f.controller.snapshot()).toMatchObject({ phase: "idle", pending: false });
+    expect(f.values.get(slot)).toBe(raw);
+  });
+  it("the automatic path (prepare, start) is dropped the same way, without telling the transport hook", async () => {
+    const f = fixture(); await f.controller.refresh();
+    f.values.set(slot, "{not json");
+    const intent = f.controller.prepare(action()) as LearningCommandIntent, transmitted = vi.fn();
+    await f.controller.start(intent, transmitted);
+    expect(f.controller.snapshot()).toMatchObject({ phase: "blocked", problem: "invalid_pending", pending: false });
+    expect(transmitted).not.toHaveBeenCalled(); expect(f.send).not.toHaveBeenCalled();
+    await f.controller.resend(transmitted); expect(f.send).not.toHaveBeenCalled(); expect(f.check).not.toHaveBeenCalled();
+  });
+  it("a retained intent keeps its record and stays pending when the slot turns unreadable under its retry", async () => {
+    const f = fixture(pending());
+    f.check.mockResolvedValue(notFound()); await f.controller.refresh();
+    expect(f.controller.snapshot()).toMatchObject({ pending: true, canRetry: true });
+    f.values.set(slot, "{not json");
+    await f.controller.retry();
+    expect(f.send).not.toHaveBeenCalled();
+    expect(f.controller.snapshot()).toMatchObject({ pending: true, problem: "invalid_pending", canRetry: false });
+    expect(f.values.get(slot)).toBe("{not json");
+  });
+  it("once the record is gone, a new action goes out once with a new ID", async () => {
+    const f = fixture(); await f.controller.refresh();
+    f.values.set(slot, "{not json"); await f.controller.begin(action());
+    f.values.delete(slot); await f.controller.refresh();
+    f.newId.mockReturnValueOnce(id(77));
+    await f.controller.begin(action());
+    expect(f.send).toHaveBeenCalledOnce(); expect(f.send.mock.calls[0][0]).toMatchObject({ command_id: id(77) });
+    expect(f.check).not.toHaveBeenCalled();
+  });
+});
+
+describe("M-LANE-PAIR-GUARD 4.1 (Learning): an accepted reply whose session is open in another pair", () => {
+  const other = (current: LearningSessionProjection): LearningSessionProjection => ({ ...current, pair: "uk-de" });
+  it("LP1: a direct start reply keeps the applied fact, cleans its record and names the pair", async () => {
+    const f = fixture(); await f.controller.refresh();
+    f.send.mockImplementationOnce(async intent => ({ ...accepted(intent), current: other(question()) }));
+    await f.controller.begin(action(intents[0]));
+    expect(f.controller.snapshot()).toMatchObject({ phase: "settled", outcome: "accepted", pending: false, canRetry: false,
+      problem: "pair_changed", current: null, answer: null, resolved: { commandId: id(4), kind: "session.start", sessionId: id(3) } });
+    expect(f.values.size).toBe(0); expect(f.send).toHaveBeenCalledOnce();
+  });
+  it("LP2: the check by ID (already applied) keeps that fact the same way and sends nothing", async () => {
+    const f = fixture(pending(intents[0]));
+    f.check.mockImplementationOnce(async intent => ({ ...recovered(intent), current: other(preview()) }));
+    await f.controller.refresh();
+    expect(f.controller.snapshot()).toMatchObject({ phase: "settled", outcome: "accepted", problem: "pair_changed", current: null });
+    expect(f.send).not.toHaveBeenCalled(); expect(f.read).not.toHaveBeenCalled();
+  });
+  it("LP3: an accepted answer whose step is of another pair carries no answer, only the reason", async () => {
+    const f = answerFixture(); await f.controller.refresh();
+    f.send.mockImplementationOnce(async intent => ({ ...answerReply(intent as LearningAnswerIntent), step: other(answerReply().step as LearningSessionProjection) }));
+    await f.controller.begin(answerAction());
+    expect(f.controller.snapshot()).toMatchObject({ outcome: "accepted", problem: "pair_changed", current: null, answer: null,
+      resolved: { assignmentId: id(6), resultId: id(21) } });
+  });
+  it("LP4: a closed projection of another pair, a stale reply and this pair give no reason", async () => {
+    const closedOther = fixture(); await closedOther.controller.refresh();
+    closedOther.send.mockImplementationOnce(async intent => ({ ...accepted(intent), current: other(closed()) }));
+    await closedOther.controller.begin(action(intents[0]));
+    expect(closedOther.controller.snapshot()).toMatchObject({ outcome: "accepted", problem: null, current: null });
+    const stale = fixture(); const owner = stale.make({ minimumStateVersion: () => "12" }); await owner.refresh();
+    stale.send.mockImplementationOnce(async intent => ({ ...accepted(intent), current: other(question()) }));
+    await owner.begin(action(intents[0]));
+    expect(owner.snapshot()).toMatchObject({ outcome: "accepted", problem: null, current: null });
+    const own = fixture(); await own.controller.refresh();
+    await own.controller.begin(action(intents[0]));
+    expect(own.controller.snapshot()).toMatchObject({ outcome: "accepted", problem: null, current: { pair: "ru-de" } });
+  });
+  it("LP5: a reply delivered after the owner died changes nothing; the record stays for the next owner", async () => {
+    const f = fixture(); await f.controller.refresh(); const gate = deferred<LearningSessionReply>();
+    f.send.mockImplementationOnce(() => gate.promise);
+    const sending = f.controller.begin(action(intents[0]));
+    await vi.waitFor(() => expect(f.send).toHaveBeenCalledOnce());
+    f.controller.dispose(); const updates = f.updates.length;
+    gate.resolve(accepted(intents[0])); await sending;
+    expect(f.updates.length).toBe(updates);
+    expect(f.controller.snapshot()).toMatchObject({ phase: "disposed", outcome: null, problem: null });
+    expect(JSON.parse(f.values.get(slot)!).intent.command_id).toBe(id(4));
   });
 });

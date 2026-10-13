@@ -4,11 +4,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SettingsResponse, TodayResponse } from "../api/generated";
 import { learningViewFixture } from "../learning/learningView.test-support";
 import { accepted, current, deferred, id, original, pending, primaryKey, profile, response, missing, stop, stopKey } from "../learning/learningFixtures.test-support";
-import { SettingsPendingStore } from "../settings/settingsPending";
+import { SettingsPendingStore, settingsSlotOf } from "../settings/settingsPending";
 import { settingsResponse } from "../settings/settingsRead.test-support";
+import { settingsResetSlotOf } from "../settings/settingsResetPending";
 import { SettingsHost } from "../settings/SettingsHost";
 import { useSettingsDocument } from "../settings/useSettingsDocument";
 import type { LearningCommandIntent } from "../learning/learningCommandIntent";
+import { watchCommits } from "./flashWatch.test-support";
 import { LearningHost, type LearningHostProps } from "./LearningHost";
 
 const fixtures: ReturnType<typeof learningViewFixture>[] = [];
@@ -34,11 +36,20 @@ function today(status: TodayResponse["learning"]["status"] = "new_group"): Today
 }
 type Route = LearningHostProps["route"];
 function setup(options: { initialSessionId?: string | null; route?: Route; confirmed?: boolean; status?: TodayResponse["learning"]["status"];
-  deferredNavigation?: boolean; fixture?: ReturnType<typeof learningViewFixture>; saved?: { primary?: LearningCommandIntent; stop?: LearningCommandIntent } } = {}) {
+  deferredNavigation?: boolean; pendingSave?: boolean; language?: "ru" | "uk" | "en";
+  /** A sent settings reset of this client whose status check waits for the promise, then fails (the outcome stays unknown). */
+  pendingReset?: Promise<void>; fixture?: ReturnType<typeof learningViewFixture>; saved?: { primary?: LearningCommandIntent; stop?: LearningCommandIntent } } = {}) {
   const seed = options.initialSessionId === undefined ? null : options.initialSessionId;
   const f = options.fixture ?? learningViewFixture("normal", seed); fixtures.push(f); f.view.dispose(); f.owner.dispose();
   if (options.saved?.primary) f.values.set(primaryKey, JSON.stringify(pending(options.saved.primary)));
   if (options.saved?.stop) f.values.set(stopKey, JSON.stringify(pending(options.saved.stop)));
+  // A setting save sent earlier whose outcome is unknown: its status read fails, so it stays unresolved. Both records sit
+  // in this profile's own slots (R3-02, MA-09).
+  if (options.pendingSave) f.values.set(settingsSlotOf(f.access().profile.profile_id), JSON.stringify({ schemaVersion: 1, profileId: f.access().profile.profile_id,
+    clientInstanceId: f.access().document.clientInstanceId, intent: { command_id: id(60), kind: "setting.save",
+      expected_field_version: "1", payload: { key: "transition_mode", value: "normal" } } }));
+  if (options.pendingReset) f.values.set(settingsResetSlotOf(f.access().profile.profile_id), JSON.stringify({ schemaVersion: 1, profileId: f.access().profile.profile_id,
+    clientInstanceId: f.access().document.clientInstanceId, intent: { command_id: id(61), kind: "settings.reset", payload: {} } }));
   const data = settingsData(); if (options.confirmed === false) data.settings.transition_mode.value = null;
   const transport = { fetcher: f.fetcher, timeoutMs: 30000, maxResponseBytes: 100000 };
   const store = new SettingsPendingStore(f.storage), settingsRead = vi.fn(async () => response(data));
@@ -46,6 +57,8 @@ function setup(options: { initialSessionId?: string | null; route?: Route; confi
     <p data-testid="approved-preview">{preview.content.card.lemma}</p>);
   f.fetcher.mockImplementation(async (...call) => {
     const path = new URL(String(call[0]), "http://localhost").pathname;
+    if (options.pendingSave && path.includes("/commands/")) throw new TypeError("network");
+    if (options.pendingReset && path.endsWith(`/commands/${id(61)}`)) { await options.pendingReset; throw new TypeError("network"); }
     const saved = [options.saved?.primary, options.saved?.stop].find(command => command && path.endsWith(`/commands/${command.command_id}`));
     if (saved) return response(saved.kind === "session.start"
       ? accepted(saved, "1", current(saved.session_id), "already_applied") : missing(saved, "1"));
@@ -60,7 +73,7 @@ function setup(options: { initialSessionId?: string | null; route?: Route; confi
     const access = f.access();
     const settings = useSettingsDocument({ access, transport, pendingStore: store, minimumStateVersion: floor, onCurrent() {} });
     return <>
-      <LearningHost access={access} transport={transport} storage={f.storage} newId={f.newId} language="ru"
+      <LearningHost access={access} transport={transport} storage={f.storage} newId={f.newId} language={options.language ?? "ru"}
         initialSessionId={seed} route={route} settings={settings} minimumStateVersion={floor} submitOnEnter
         renderPreview={renderPreview} onLearning={() => { onLearning(); if (!options.deferredNavigation) updateRoute("learning"); }}
         onToday={() => { onToday(); updateRoute("today"); }} onSettings={() => updateRoute("settings")} />
@@ -161,7 +174,10 @@ describe("LearningHost with real document owners and synthetic HTTP", () => {
   it("blocks a newer floor until fresh matching Settings and open, retaining the current assignment draft", async () => {
     const h = setup({ initialSessionId: id(3) }); const input = await screen.findByRole("textbox");
     await waitFor(() => expect((input as HTMLInputElement).readOnly).toBe(false)); fireEvent.change(input, { target: { value: "keep" } });
-    h.update("2"); await screen.findByText("Для занятия нужно подтвердить настройки и текущую словарную пару.");
+    // Settings still answer version 1: the re-read is refused as stale. The screen is the failed one, never the text asking
+    // to confirm settings (C159).
+    h.update("2"); await screen.findByText("Не удалось подтвердить настройки занятия.");
+    expect(screen.queryByText("Для занятия нужно подтвердить настройки и текущую словарную пару.")).toBeNull();
     expect(screen.queryByRole("button", { name: "Проверить" })?.hasAttribute("disabled") ?? true).toBe(true); expect(h.f.posts()).toEqual([]);
     h.data.state_version = "2"; h.f.replace({ profile: profile("2") });
     const router = h.f.fetcher.getMockImplementation()!;
@@ -173,6 +189,63 @@ describe("LearningHost with real document owners and synthetic HTTP", () => {
     h.update("2"); await waitFor(() => expect((screen.getByRole("textbox") as HTMLInputElement).readOnly).toBe(false));
     expect((screen.getByRole("textbox") as HTMLInputElement).value).toBe("keep"); expect(h.f.posts()).toEqual([]);
   });
+  // C159 (no false published state): while the owner reads Settings again for a raised floor, the gate is closed and the
+  // screen says that settings are loading; it never asks the user to confirm them.
+  it("a raised floor under a held Settings re-read: loading text in every commit, gate closed until the read is current", async () => {
+    const h = setup({ initialSessionId: id(3), route: "learning" }); const input = await screen.findByRole("textbox");
+    await waitFor(() => expect((input as HTMLInputElement).readOnly).toBe(false));
+    h.data.state_version = "2"; h.f.replace({ profile: profile("2") });
+    const router = h.f.fetcher.getMockImplementation()!;
+    h.f.fetcher.mockImplementation(async (...call) => {
+      const reply = await router(...call); const body = await reply.json();
+      if (body.current?.mode === "learning") body.state_version = "2";
+      return response(body);
+    });
+    const reread = deferred<Response>(); h.settingsRead.mockReturnValueOnce(reread.promise);
+    const flash = watchCommits(["нужно подтвердить настройки", "Не удалось подтвердить настройки"]);
+    try {
+      h.update("2");
+      await screen.findByText("Загружаем настройки занятия.");
+      expect((screen.getByRole("textbox") as HTMLInputElement).readOnly).toBe(true); expect(h.f.posts()).toEqual([]);
+      await act(async () => { reread.resolve(response(h.data)); });
+      await waitFor(() => expect((screen.getByRole("textbox") as HTMLInputElement).readOnly).toBe(false));
+    } finally { flash.stop(); }
+    expect(flash.seen).toEqual([]);
+    expect(screen.queryByText("Загружаем настройки занятия.")).toBeNull(); expect(h.f.posts()).toEqual([]);
+  });
+  it("an unresolved setting save keeps its own text and the gate closed; Settings stay unread", async () => {
+    const h = setup({ initialSessionId: id(3), route: "learning", pendingSave: true });
+    const flash = watchCommits(["нужно подтвердить настройки", "Не удалось подтвердить настройки"]);
+    try {
+      await screen.findByText("Проверяем сохранение настроек. Начать занятие пока нельзя.");
+      await act(async () => { await new Promise(resolve => setTimeout(resolve, 200)); });
+    } finally { flash.stop(); }
+    expect(flash.seen).toEqual([]);
+    expect((screen.getByRole("textbox") as HTMLInputElement).readOnly).toBe(true);
+    expect(screen.getByRole("button", { name: "Настройки" })).toBeDefined();
+    expect(h.settingsRead).not.toHaveBeenCalled(); expect(h.f.posts()).toEqual([]);
+  });
+  // C185 (owner answer 31.1-А): the send or the check of a settings reset shows the same loading text as a Settings read.
+  it.each([["ru", "Загружаем настройки занятия.", "Не удалось подтвердить настройки занятия.", "нужно подтвердить настройки"],
+    ["uk", "Завантажуємо налаштування заняття.", "Не вдалося підтвердити налаштування заняття.", "потрібно підтвердити налаштування"],
+    ["en", "Loading session settings.", "Could not confirm session settings.", "Confirm session settings"]] as const)(
+    "%s: a stored reset whose status check is under way shows the loading text; its failure stays the failed text", async (language, loading, failed, confirm) => {
+      let release!: () => void; const held = new Promise<void>(resolve => { release = resolve; });
+      const flash = watchCommits([confirm]);
+      const h = setup({ initialSessionId: id(3), route: "learning", pendingReset: held, language });
+      try {
+        // The status read is out: the owner is checking, not loading for the first time.
+        await waitFor(() => expect(h.f.fetcher.mock.calls.some(([url]) => String(url).endsWith(`/commands/${id(61)}`))).toBe(true));
+        await act(async () => {});
+        expect(screen.getByText(loading)).toBeDefined();
+        expect((screen.getByRole("textbox") as HTMLInputElement).readOnly).toBe(true);
+        await act(async () => { release(); });
+        await screen.findByText(failed);
+        expect((screen.getByRole("textbox") as HTMLInputElement).readOnly).toBe(true);
+        expect(screen.queryByText(loading)).toBeNull(); expect(h.f.posts()).toEqual([]);
+      } finally { flash.stop(); }
+      expect(flash.seen).toEqual([]);
+    });
   it("accepts newer confirmed Settings from the same source without requiring another open", async () => {
     const h = setup({ initialSessionId: id(3), route: "learning" }); const access = h.f.access();
     const input = await screen.findByRole("textbox");
@@ -329,6 +402,8 @@ describe("LearningHost with real document owners and synthetic HTTP", () => {
   it("a revoked access hides Learning without treating disposal as closed", async () => {
     const h = setup({ initialSessionId: id(3) }); await screen.findByRole("textbox");
     h.f.revoke(); h.update(); await screen.findByText("Занятие недоступно в этом окне.");
+    // The Settings owner of a closed access reports a standing problem, not a read under way (C159).
+    expect(screen.getByText("Не удалось подтвердить настройки занятия.")).toBeDefined(); expect(screen.queryByText("Загружаем настройки занятия.")).toBeNull();
     expect(h.onToday).not.toHaveBeenCalled(); expect(h.f.posts()).toEqual([]);
   });
 });

@@ -128,7 +128,7 @@ export function ConjugationTestScreen({ view, flow, language, submitOnEnter }: C
     {view.screen === "loading" && <p role="status">{t.loading}</p>}
     {view.screen === "recovery" && <><p role="status">{t.recovery}</p>{problem && <p>{problem}</p>}</>}
     {view.screen === "stale" && <>
-      <p role="status">{problem ?? t.stale}</p>
+      <p role="status">{problem ?? (view.known ? null : t.stale)}</p>
       <div className="learning-recovery"><button type="button" onClick={() => flow.refresh()}>{t.refresh}</button></div>
     </>}
     {view.screen === "question" && <>

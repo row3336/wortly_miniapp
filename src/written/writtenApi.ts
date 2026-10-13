@@ -3,6 +3,7 @@ import type { ClosedSessionBoundary, ErrorDetail, MissingCommandFact, Profile, R
   WrittenCapabilities, WrittenResult, WrittenStep } from "../api/generated";
 import { validProfile } from "../api/entryApi";
 import { ApiError, createJsonTransport, errorCode, httpError, type HttpOptions } from "../api/http";
+import { attemptRefusal } from "../commands/commandRefusal";
 import { count, date, eventTime, exactKeys, oneOf, record, sameId, uuid, validClosedSessionBoundary, version } from "../api/wireValidation";
 import { validAnswerCapabilities, validAnswerFact, validSavedAnswer } from "../learning/learningAnswerApi";
 import { validWrittenSessionCurrent } from "../study/sessionProjection";
@@ -29,7 +30,8 @@ export type WrittenStatus = { state_version: string } & (
 export interface WrittenApi {
   read(token: string, proof: string, address: WrittenSessionAddress): Promise<WrittenSessionRead>;
   readResult(token: string, proof: string, address: WrittenResultAddress): Promise<WrittenResultRead>;
-  send(token: string, proof: string, command: WrittenCommand): Promise<WrittenReply>;
+  /** started, when given, is told right before the built request goes to fetch (after every local check). */
+  send(token: string, proof: string, command: WrittenCommand, started?: () => void): Promise<WrittenReply>;
   status(token: string, proof: string, command: WrittenCommand): Promise<WrittenStatus>;
 }
 
@@ -121,9 +123,11 @@ export function createWrittenApi(options: HttpOptions): WrittenApi {
       }
       throw new ApiError("invalid_response");
     },
-    async send(token, proof, original) {
+    async send(token, proof, original, started) {
       const command = prepare(token, proof, original, "send");
-      const reply = await request("/commands", { method: "POST", token, proof, body: command });
+      const reply = await request("/commands", { method: "POST", token, proof, body: command, ...(started ? { started } : {}) });
+      // A refusal of this attempt only (window) never reads as a refused intent (commandRefusal.ts).
+      if (!reply.ok && attemptRefusal(reply.status, errorCode(reply.value))) throw httpError(reply);
       const value = reply.value;
       const extra = record(value) && Object.hasOwn(value, "error") ? ["error"] : [];
       if (record(value) && version(value.state_version)) {

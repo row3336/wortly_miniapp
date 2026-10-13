@@ -173,7 +173,7 @@ function fixture(config: { seed?: string | null; saved?: ConjugationIntent[]; se
     server.hold = { match, gate: gate.promise, entered: () => entered.resolve() };
     return { release: () => gate.resolve(), entered: entered.promise };
   };
-  return { controller, options, values, storage, sessions, server, posted, gets, newId, updates, denied, activity, hold,
+  return { controller, options, values, storage, sessions, server, posted, gets, newId, updates, denied, activity, hold, fetcher,
     endOwner: () => { ownerLive = false; }, revoke: () => { live = false; } };
 }
 const s = (c: ConjugationDocumentController) => c.snapshot();
@@ -539,6 +539,49 @@ describe("9. BigInt floor and stale views", () => {
     f.server.version = "9007199254742000";
     await f.controller.refresh();
     expect(s(f.controller)).toMatchObject({ phase: "question", stateVersion: "9007199254742000" });
+  });
+});
+
+describe("9a. the selected session open in another pair (R1, C178)", () => {
+  /** The server's replies, rewritten while `rewrite` names a change (the pair changed on another device, a lost read). */
+  const wrap = (f: ReturnType<typeof fixture>, rewrite: () => ((raw: string) => string) | null) => {
+    const base = f.fetcher.getMockImplementation()!;
+    f.fetcher.mockImplementation(async (url, init) => {
+      const reply = await base(url, init), change = rewrite();
+      return change ? new Response(change(await reply.text()), { status: reply.status }) : reply;
+    });
+  };
+  const otherPair = (raw: string) => raw.split('"ru-de"').join('"uk-de"').split('"language":"ru"').join('"language":"uk"');
+  it("a step of the selected session in another pair is a kept fact, never the shown problem; it grants no Stop", async () => {
+    const f = fixture(); let move = false; wrap(f, () => move ? otherPair : null);
+    await f.controller.refresh(); move = true; await f.controller.refresh();
+    expect(s(f.controller)).toMatchObject({ phase: "stale", problem: null, pairMismatch: S1, currentStep: null, canStop: false });
+  });
+  it("a failed read after it names its own problem; the fact stays", async () => {
+    const f = fixture(); let mode: "own" | "moved" | "fail" = "own";
+    wrap(f, () => mode === "moved" ? otherPair : mode === "fail" ? () => { throw new TypeError("network"); } : null);
+    await f.controller.refresh(); mode = "moved"; await f.controller.refresh(); mode = "fail"; await f.controller.refresh();
+    expect(s(f.controller)).toMatchObject({ phase: "stale", pairMismatch: S1, canStop: false });
+    expect(s(f.controller).problem).not.toBeNull();
+  });
+  // QA-R1-V3 F2: a closed selected session is no session open in another pair; its fact is never published.
+  it("after the closure of the selected session the fact is not published", async () => {
+    const f = fixture(); let move = false; wrap(f, () => move ? otherPair : null);
+    await f.controller.refresh(); move = true; await f.controller.refresh();
+    expect(s(f.controller).pairMismatch).toBe(S1);
+    f.sessions.get(S1)!.status = "closed"; f.sessions.get(S1)!.assignment = null; f.server.bump();
+    await f.controller.refresh();
+    expect(s(f.controller)).toMatchObject({ phase: "closed", pairMismatch: null, canStop: false });
+  });
+  it("a step below the floor proves nothing; a step of this pair ends the fact", async () => {
+    const f = fixture(); let move = false; wrap(f, () => move ? otherPair : null);
+    await f.controller.refresh();
+    move = true; f.server.staleNext = "9007199254740900"; await f.controller.refresh();
+    expect(s(f.controller)).toMatchObject({ problem: "stale_response", pairMismatch: null });
+    await f.controller.refresh();
+    expect(s(f.controller).pairMismatch).toBe(S1);
+    move = false; f.server.bump(); await f.controller.refresh();
+    expect(s(f.controller)).toMatchObject({ phase: "question", problem: null, pairMismatch: null });
   });
 });
 
@@ -1433,3 +1476,103 @@ describe("V-1 (C083): «На Сегодня» waits for a ready study lane and a
     expect(f.posted.map(c => c.kind)).toEqual(["answer.submit", "result.correct"]);
   });
 });
+
+// M-SLOT-CONFLICT-LC: a new intent Y meets another window's record X in the shared slot (written between the new owner's
+// load and its save). Y is neither stored nor sent: no unknown outcome of it is shown, checked, read or retried (C116).
+describe("a new conjugation intent meets another window's record in the shared slot", () => {
+  const other = pendingRecord({ command_id: id(777), kind: "answer.submit", session_id: S1, assignment_id: B1, payload: { text: "alt" } });
+  /** The owner's own load sees the slot empty; X lands right before its save reads the slot again. */
+  const race = (f: ReturnType<typeof fixture>) => {
+    let reads = 0;
+    const base = vi.mocked(f.storage.get).getMockImplementation()!;
+    vi.mocked(f.storage.get).mockImplementation(async key => {
+      if (key === studyKey && ++reads === 2) f.values.set(studyKey, other);
+      return base(key);
+    });
+  };
+  it("an answer sends nothing, reads nothing of Y and leaves X exactly as it was", async () => {
+    const f = fixture(); await f.controller.refresh();
+    const gets = f.gets.length; race(f);
+    await f.controller.submit({ text: "kommst" }, B1);
+    expect(f.posted).toEqual([]); expect(f.gets.slice(gets)).toEqual([]);
+    expect(s(f.controller).commands.study).toMatchObject({ pending: false, outcome: null, problem: "pending_changed", canRetry: false });
+    await f.controller.refresh();
+    expect(f.posted).toEqual([]); expect(f.gets.slice(gets).some(url => url.includes("/commands/"))).toBe(false);
+    expect(f.values.get(studyKey)).toBe(other);
+  });
+  it("a start leaves the document as it was: no session of Y's ID is selected, read or checked", async () => {
+    const f = fixture({ seed: null, sessions: [] }); await f.controller.refresh();
+    expect(s(f.controller)).toMatchObject({ phase: "idle", sessionId: null });
+    const gets = f.gets.length; race(f);
+    await f.controller.start();
+    expect(f.posted).toEqual([]);
+    expect(s(f.controller)).toMatchObject({ phase: "idle", sessionId: null, commands: { study: { pending: false, problem: "pending_changed" } } });
+    await f.controller.refresh();
+    expect(f.posted).toEqual([]); expect(f.gets.slice(gets)).toEqual([]);
+    expect(f.values.get(studyKey)).toBe(other);
+  });
+});
+
+// C135 п. 4: the document after a start dropped over another window's record is what it itself showed before the tap,
+// never the rights of an old copy, and only while nothing newer replaced the start.
+describe("the conjugation document after a dropped start", () => {
+  const other = pendingRecord({ command_id: id(777), kind: "answer.submit", session_id: S1, assignment_id: B1, payload: { text: "alt" } });
+  /** X lands right before the save reads the slot; the read is held until release. */
+  const held = (f: ReturnType<typeof fixture>) => {
+    let reads = -1;
+    let open!: () => void; const gate = new Promise<void>(done => { open = done; });
+    const base = vi.mocked(f.storage.get).getMockImplementation()!;
+    vi.mocked(f.storage.get).mockImplementation(async key => {
+      if (key === studyKey && reads >= 0 && ++reads === 2) { f.values.set(studyKey, other); await gate; }
+      return base(key);
+    });
+    return { arm: () => { reads = 0; }, release: () => open() };
+  };
+  it("after a closed session: closed again with its own facts; its step, result A and Stop right are not revived", async () => {
+    const f = fixture(); await f.controller.refresh();
+    await f.controller.submit({ text: "kommst" }, B1); await f.controller.stop("stop"); await macrotasks();
+    const closed = s(f.controller);
+    expect(closed).toMatchObject({ phase: "closed", sessionId: S1, canStart: true });
+    const gets = f.gets.length, h = held(f); h.arm();
+    const starting = f.controller.start(); await macrotasks();
+    const y = s(f.controller).sessionId; expect(y).not.toBe(S1);
+    h.release(); await starting; await macrotasks();
+    expect(s(f.controller).commands.study).toMatchObject({ pending: false, problem: "pending_changed" });
+    expect(s(f.controller)).toMatchObject({ phase: "closed", sessionId: S1, closed: closed.closed, canStop: false, canSummaryHome: false,
+      acceptedAddress: null, resultA: null, currentStep: null, canSubmit: false, canUndo: false, canCorrect: false });
+    await f.controller.refresh();
+    expect(f.gets.slice(gets).some(url => y !== null && url.includes(y))).toBe(false);
+    expect(f.posted.filter(post => post.kind === "session.start")).toEqual([]);
+  });
+  it("a version floor raised during the await changes nothing it restores: idle, no session, no read of Y", async () => {
+    let floor: string | null = null;
+    const f = fixture({ seed: null, sessions: [], minimum: () => floor }); await f.controller.refresh();
+    const gets = f.gets.length, h = held(f); h.arm();
+    const starting = f.controller.start(); await macrotasks();
+    const y = s(f.controller).sessionId; floor = "9007199254740999";
+    h.release(); await starting; await macrotasks();
+    expect(s(f.controller)).toMatchObject({ phase: "idle", sessionId: null, currentStep: null });
+    await f.controller.refresh();
+    expect(f.gets.slice(gets).some(url => y !== null && url.includes(y))).toBe(false);
+    expect(f.posted).toEqual([]);
+  });
+  it("an owner that ended during the await (a repeated mount) gets no late update", async () => {
+    const f = fixture({ seed: null, sessions: [] }); await f.controller.refresh();
+    const h = held(f); h.arm();
+    const starting = f.controller.start(); await macrotasks();
+    const y = s(f.controller).sessionId;
+    f.controller.dispose(); const updates = f.updates.mock.calls.length;
+    h.release(); await starting; await macrotasks();
+    expect(f.updates.mock.calls.length).toBe(updates);
+    expect(f.posted).toEqual([]); expect(f.values.get(studyKey)).toBe(other); expect(y).not.toBeNull();
+  });
+  it("an unreadable record in the slot: the start sends nothing, the document is idle again and reads no session of Y", async () => {
+    const f = fixture({ seed: null, sessions: [] }); await f.controller.refresh();
+    f.values.set(studyKey, "{not json"); const gets = f.gets.length;
+    await f.controller.start(); await macrotasks();
+    expect(s(f.controller)).toMatchObject({ phase: "idle", sessionId: null, commands: { study: { pending: false, problem: "invalid_pending" } } });
+    await f.controller.refresh();
+    expect(f.posted).toEqual([]); expect(f.gets.slice(gets)).toEqual([]); expect(f.values.get(studyKey)).toBe("{not json");
+  });
+});
+

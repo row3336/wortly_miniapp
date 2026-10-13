@@ -1,4 +1,5 @@
 import { previewContent } from "./learningPreview.test-support";
+import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type { LearningSessionProjection, Profile } from "../api/generated";
 import { createLearningSessionApi, type LearningSessionCommand } from "./learningSessionApi";
@@ -214,4 +215,77 @@ describe("Learning session missing-command closure", () => {
       const f = fixture(missing(closed));
       await expect(f.api.status("token", "proof", commands[1])).rejects.toMatchObject({ kind: "invalid_response" });
     });
+});
+
+/** core identity.intent_hash of the start of commands[0], computed here apart from the client's own canonical JSON. */
+const startHash = createHash("sha256").update(`{"kind":"session.start","payload":{"mode":"learning","session_id":"${id(3)}"}}`).digest("hex");
+/** command_status._refused_start with expected_intent_hash: a stored final refusal of the start of commands[0]. */
+const refusal = (code = "SETUP_REQUIRED", current: unknown = { session_id: id(3), status: "not_found" }): Record<string, unknown> => ({
+  command: { id: id(4), kind: "session.start", status: "rejected", refused_at: "2026-09-30T12:00:00Z" },
+  error: { code }, current, state_version: "3", verified_intent_hash: startHash });
+describe("Learning start status with its stored final refusal (C197)", () => {
+  it("asks only a start for its refusal, with the core's intent hash of that start", async () => {
+    const f = fixture(missing(undefined));
+    await f.api.status("token", "proof", commands[0]);
+    const query = Object.fromEntries(new URL(String(f.fetcher.mock.calls[0][0]), "http://localhost").searchParams);
+    expect(query).toEqual({ client_instance_id: id(1), document_id: id(2), session_id: id(3), include_refusal: "true",
+      expected_intent_hash: startHash });
+  });
+  it.each(commands.slice(1))("sends no refusal request for $kind and reads a rejected status as invalid", async command => {
+    const f = fixture(refusal());
+    await expect(f.api.status("token", "proof", command)).rejects.toMatchObject({ kind: "invalid_response" });
+    const query = Object.fromEntries(new URL(String(f.fetcher.mock.calls[0][0]), "http://localhost").searchParams);
+    expect(query).toEqual({ client_instance_id: id(1), document_id: id(2), session_id: id(3) });
+  });
+  it("a core that does not read include_refusal keeps answering not_found, as before", async () => {
+    const f = fixture(missing(undefined));
+    expect(await f.api.status("token", "proof", commands[0])).toMatchObject({ outcome: "not_found" });
+  });
+  it.each([["SETUP_REQUIRED", { session_id: id(3), status: "not_found" }], ["NO_MATERIAL", { session_id: id(3), status: "unavailable" }],
+    ["SESSION_BUSY", { status: "unavailable" }]] as const)("reads a stored %s refusal of this start (current %j)", async (code, current) => {
+    const f = fixture(refusal(code, current));
+    expect(await f.api.status("token", "proof", commands[0])).toEqual({ outcome: "rejected",
+      command: { id: id(4), kind: "session.start", status: "rejected", refused_at: "2026-09-30T12:00:00Z" },
+      error: { code }, current, state_version: "3" });
+  });
+  const broken: [string, (value: Record<string, unknown>) => void][] = [
+    ["another command id", value => { (value.command as Record<string, unknown>).id = id(99); }],
+    ["another kind", value => { (value.command as Record<string, unknown>).kind = "session.stop"; }],
+    ["no refused_at", value => { delete (value.command as Record<string, unknown>).refused_at; }],
+    ["a malformed refused_at", value => { (value.command as Record<string, unknown>).refused_at = "yesterday"; }],
+    ["an extra fact field", value => { (value.command as Record<string, unknown>).target_id = id(3); }],
+    ["no verified hash", value => { delete value.verified_intent_hash; }],
+    ["another intent hash", value => { value.verified_intent_hash = "0".repeat(64); }],
+    ["a stored code the core never keeps", value => { value.error = { code: "ASSIGNMENT_STALE" }; }],
+    ["an unknown code", value => { value.error = { code: "MAINTENANCE" }; }],
+    ["no error", value => { delete value.error; }],
+    ["an extra error field", value => { value.error = { code: "SETUP_REQUIRED", message: "x" }; }],
+    ["a real session of another number as current", value => { value.current = { ...preview(), session_id: id(99) }; }],
+    ["another number as current", value => { value.current = { session_id: id(99), status: "not_found" }; }],
+    ["a profile as current", value => { value.current = profile; }],
+    ["an extra envelope field", value => { value.closed_session = null; }],
+    ["a bad state version", value => { value.state_version = "0"; }],
+  ];
+  it.each([["SESSION_CLOSED", { session_id: id(3), status: "not_found" }],
+    ["SESSION_CLOSED", { ...preview(), status: "closed", close_reason: "stop", preview: null }],
+    ["SETUP_REQUIRED", preview()]] as const)("reads every final code the core stores, with this number's real current too: %s %j",
+    async (code, current) => {
+      const f = fixture(refusal(code, current));
+      expect(await f.api.status("token", "proof", commands[0])).toMatchObject({ outcome: "rejected", error: { code }, current });
+    });
+  it.each(broken)("proves no refusal with %s", async (_name, mutate) => {
+    const value = refusal(); mutate(value);
+    const f = fixture(value);
+    await expect(f.api.status("token", "proof", commands[0])).rejects.toThrow();
+  });
+  it("a refusal with an error status stays a transport refusal", async () => {
+    const f = fixture(refusal(), 409);
+    await expect(f.api.status("token", "proof", commands[0])).rejects.toMatchObject({ kind: "http", status: 409 });
+  });
+  it("a fact of the start keeps its precedence; its echoed hash must be this start's", async () => {
+    const fact = { ...response(commands[0], preview(), "already_applied"), verified_intent_hash: startHash };
+    expect(await fixture(fact).api.status("token", "proof", commands[0])).toMatchObject({ outcome: "accepted" });
+    await expect(fixture({ ...fact, verified_intent_hash: "0".repeat(64) }).api.status("token", "proof", commands[0]))
+      .rejects.toMatchObject({ kind: "invalid_response" });
+  });
 });

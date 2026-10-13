@@ -24,6 +24,18 @@ export function watchFlash(root: HTMLElement, texts: string[] = refusalTexts) {
   return { seen, stop: () => observer.disconnect(), check };
 }
 
+/** Every text a DOM mutation publishes (a commit): added nodes, and both values of an overwritten text node. */
+export function watchCommits(texts: string[]) {
+  const seen: string[] = [];
+  const note = (value: string | null) => { if (value && texts.some(text => value.includes(text))) seen.push(value.trim()); };
+  const observer = new MutationObserver(records => records.forEach(record => {
+    if (record.type === "characterData") { note(record.oldValue); note(record.target.textContent); }
+    record.addedNodes.forEach(node => note(node.textContent));
+  }));
+  observer.observe(document.body, { subtree: true, childList: true, characterData: true, characterDataOldValue: true });
+  return { seen, stop: () => observer.disconnect() };
+}
+
 type Fetch = (url: string | URL | Request, init?: RequestInit) => Promise<Response>;
 const reply = (value: unknown, status: number) => new Response(JSON.stringify(value), { status });
 

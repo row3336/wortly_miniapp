@@ -26,10 +26,11 @@ function fakeBack() {
 }
 
 /** The real App over one synthetic server: entry, Settings, Today and the written study endpoints. */
-export function app(options: ServerOptions = {}) {
+export function app(options: ServerOptions & { transitionMode?: "normal" | "accelerated" } = {}) {
   const server = writtenServer(options);
   const stored = settingsResponse(); stored.needs_setup = false;
-  stored.settings.ui_language.value = "ru"; stored.settings.dictionary_language.value = "ru"; stored.settings.transition_mode.value = "normal";
+  stored.settings.ui_language.value = "ru"; stored.settings.dictionary_language.value = "ru";
+  stored.settings.transition_mode.value = options.transitionMode ?? "normal";
   const account = (): Profile => ({ profile_id: id(50), role: "user", ui_language: "ru", dictionary_language: "ru", time_zone: "UTC",
     state_version: String(server.state.version), access: { status: "admitted", version: "1", reason: null } });
   const openReply = vi.fn(async (body: { client_instance_id: string; document_id: string }) => response({ status: "opened", profile: account(),

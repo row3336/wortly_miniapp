@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useReducer, useRef } from "react";
+import { useEffect, useLayoutEffect, useMemo, useReducer, useRef } from "react";
 import type { HttpOptions } from "../api/http";
 import type { OpenedAccess } from "../app/openedAccess";
 import type { AsyncStorage } from "../platform/storage";
@@ -59,10 +59,13 @@ type Owner<V> = {
 /**
  * One owner per opened document, dictionary pair and owner seed. It stays mounted across routes so a durable receipt
  * is recovered by its ID. ownerSeed re-creates the owner when it changes (the written resume seed); a mode whose seed
- * is read only once at creation (Learning) passes null and reads it in create.
+ * is read only once at creation (Learning) passes null and reads it in create. A new seed naming the session the
+ * owner already leads (the mode's `leads`) only addresses that owner: re-creating it would drop what it settled in
+ * memory, such as a confirmed result restored by its receipt after a reload.
  */
 export function useStudyDocument<O extends StudyDocumentOptions, V extends StudyController<S>, S>(options: O, ownerSeed: string | null,
-  create: (current: O, seed: string | null, settings: StudyViewSettings<S>) => V): {
+  create: (current: O, seed: string | null, settings: StudyViewSettings<S>) => V,
+  leads?: (controller: V, seed: string) => boolean): {
   state: S | null;
   actions: StudyActions;
   perform(run: (controller: V) => Promise<void>): Promise<void>;
@@ -70,16 +73,30 @@ export function useStudyDocument<O extends StudyDocumentOptions, V extends Study
   start(run: (controller: V) => Promise<void>): Promise<void>;
 } {
   const latest = useRef(options); latest.current = options;
-  const ownerSeedOf = useRef(ownerSeed); ownerSeedOf.current = ownerSeed;
   const owner = useRef<Owner<V> | null>(null);
   const [, repaint] = useReducer((value: number) => value + 1, 0);
+  const sameIdentity = (bound: Owner<V>, current: O) => bound.key === current.access.key
+    && bound.dictionaryLanguage === current.access.profile.dictionary_language
+    && bound.storage === current.storage && bound.transport === current.transport;
+  // The committed owner seed and owner generation. They are written only in the commit phase: a render React discards
+  // (an interrupted transition, the second render of StrictMode) neither addresses nor re-creates the owner.
+  const seeds = useRef({ seed: ownerSeed, generation: 0 });
   const currentOwner = () => {
-    const bound = owner.current, current = latest.current;
-    return bound?.key === current.access.key && bound.dictionaryLanguage === current.access.profile.dictionary_language
-      && bound.storage === current.storage && bound.transport === current.transport && bound.seed === ownerSeedOf.current ? bound : null;
+    const bound = owner.current;
+    return bound && sameIdentity(bound, latest.current) && bound.seed === seeds.current.seed ? bound : null;
   };
   const lookup = useRef(currentOwner); lookup.current = currentOwner;
   const seed = ownerSeed;
+  // Any other seed change re-creates the owner, as before: its generation is the effect's identity, not the seed.
+  // A new document, pair, storage or transport re-creates it through the effect's own dependencies in any case.
+  const committed = seeds.current, held = owner.current;
+  const adopted = committed.seed !== ownerSeed && ownerSeed !== null && held !== null && held.seed === committed.seed
+    && sameIdentity(held, options) && !!leads?.(held.controller, ownerSeed) ? held : null;
+  const generation = committed.seed === ownerSeed || adopted ? committed.generation : committed.generation + 1;
+  useLayoutEffect(() => {
+    if (adopted && owner.current === adopted) adopted.seed = ownerSeed;
+    seeds.current = { seed: ownerSeed, generation };
+  }, [adopted, ownerSeed, generation]);
 
   useEffect(() => {
     if (!latest.current.access.isLive() || latest.current.access.profile.access.status !== "admitted") return;
@@ -116,7 +133,7 @@ export function useStudyDocument<O extends StudyDocumentOptions, V extends Study
       if (owner.current === bound) owner.current = null;
     };
     // create belongs to the mode, not to this owner's identity.
-  }, [options.access.key, options.access.profile.dictionary_language, options.storage, options.transport, seed]);
+  }, [options.access.key, options.access.profile.dictionary_language, options.storage, options.transport, generation]);
 
   useEffect(() => {
     const bound = lookup.current();
@@ -183,7 +200,8 @@ export function useStudyDocument<O extends StudyDocumentOptions, V extends Study
     return { actions, perform, start };
   }, []);
 
-  const bound = currentOwner();
+  // This render's owner: its own seed, or the owner this render addresses with it (committed with this render).
+  const bound = owner.current && sameIdentity(owner.current, options) && owner.current.seed === ownerSeed ? owner.current : adopted;
   // Re-evaluate liveness and the version floor on a props change, before its refresh effect.
   return { state: bound ? bound.controller.snapshot() : null, ...methods };
 }

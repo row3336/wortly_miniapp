@@ -1,7 +1,8 @@
-// D-STALE-WINDOW 3.1.3, 3.1.13: every study adapter meets the core's own refusal envelopes. Every business code keeps
-// its envelope outcome, so no refusal turns into an unknown outcome wholesale.
+// D-STALE-WINDOW 3.1.1, 3.1.3, 3.1.13: every study adapter meets the core's own refusal envelopes. A refusal of this
+// attempt (DOCUMENT_STALE) is thrown as a plain HTTP refusal before the envelope is parsed;
+// every business code keeps its envelope outcome, so no refusal turns into an unknown outcome wholesale.
 import { describe, expect, it, vi } from "vitest";
-import type { HttpOptions } from "../api/http";
+import { ApiError, type HttpOptions } from "../api/http";
 import { recordedConjugationStart, recordedLearningStart, recordedOralStart, recordedWrittenStart } from "../api/realCoreStartRecordings.test-support";
 import { answerKinds, staleCommand } from "../app/openRules.test-support";
 import { createConjugationApi } from "../conjugation/conjugationApi";
@@ -9,6 +10,7 @@ import { createLearningResultApi } from "../learning/learningAnswerApi";
 import { createLearningSessionApi } from "../learning/learningSessionApi";
 import { createOralApi } from "../oral/oralApi";
 import { createWrittenApi } from "../written/writtenApi";
+import { attemptRefusal } from "./commandRefusal";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const origin = { client_instance_id: id(1), document_id: id(2) };
@@ -70,6 +72,32 @@ function send(mode: Mode, command: Record<string, unknown>, body: unknown, statu
   const reply = apis[mode]({ fetcher, timeoutMs: 500, maxResponseBytes: 100000, onDocumentStale }).send("t", "p", command as never);
   return { reply, onDocumentStale, fetcher };
 }
+const refusal = (status: number, code: string) => ({ kind: "http", status, code });
+
+describe("attemptRefusal: the closed list of attempt refusals", () => {
+  it.each([
+    [409, "DOCUMENT_STALE", true], [403, "FORBIDDEN", false],
+    [403, "DOCUMENT_STALE", false], [409, "FORBIDDEN", false], [409, "COMMAND_PAYLOAD_MISMATCH", false],
+    [409, "SESSION_BUSY", false], [409, "SESSION_CLOSED", false], [409, "ASSIGNMENT_STALE", false], [409, "NO_MATERIAL", false],
+    [409, "SETUP_REQUIRED", false], [409, "VERSION_CONFLICT", false], [422, "VALIDATION_FAILED", false],
+    [409, "CAPABILITY_EXPIRED", false], [409, "CLIENT_INCOMPATIBLE", false], [503, "MAINTENANCE", false], [409, undefined, false],
+  ] as const)("%i %s → %s", (status, code, expected) => {
+    expect(attemptRefusal(status, code)).toBe(expected);
+  });
+});
+
+describe("3.1.1 the core's DOCUMENT_STALE envelope is thrown, never read as a refused intent", () => {
+  it.each(named)("%s", async (_name, mode, command) => {
+    const { reply, onDocumentStale, fetcher } = send(mode, command, envelope(command, "DOCUMENT_STALE"), 409);
+    const error = await reply.catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject(refusal(409, "DOCUMENT_STALE"));
+    // The one transport hook still asks the window check, exactly once (api/http.ts).
+    expect(onDocumentStale).toHaveBeenCalledOnce();
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+});
+
 describe("3.1.3 business refusals keep their envelope outcome (no mass move to an unknown outcome)", () => {
   const codes: Array<[number, string]> = [[409, "SESSION_CLOSED"], [409, "ASSIGNMENT_STALE"], [409, "SESSION_BUSY"],
     [409, "NO_MATERIAL"], [409, "SETUP_REQUIRED"], [409, "VERSION_CONFLICT"], [422, "VALIDATION_FAILED"], [409, "CAPABILITY_EXPIRED"]];

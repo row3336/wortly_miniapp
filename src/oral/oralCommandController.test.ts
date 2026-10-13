@@ -299,8 +299,44 @@ describe("oral proof and durable cleanup", () => {
     const f = fixture(); await f.controller.refresh();
     const other = pending(); other.intent.command_id = id(99);
     await f.study.save(other, new AbortController().signal); await f.controller.begin(action());
-    expect(f.controller.snapshot()).toMatchObject({ problem: "pending_changed", canRetry: false, pending: true });
+    // The new intent was neither stored nor sent: it is no unknown outcome, so nothing is left to check or retry.
+    expect(f.controller.snapshot()).toMatchObject({ problem: "pending_changed", canRetry: false, pending: false, outcome: null,
+      kind: null, pendingIntent: null, phase: "blocked" });
     expect(JSON.parse(f.values.get(studyKey)!).intent.command_id).toBe(id(99)); expect(f.send).not.toHaveBeenCalled();
+    await f.controller.refresh(); await f.controller.retry();
+    expect(f.check).not.toHaveBeenCalled(); expect(f.send).not.toHaveBeenCalled();
+    expect(JSON.parse(f.values.get(studyKey)!).intent.command_id).toBe(id(99));
+  });
+  it("tells the seam once about a new intent dropped over another record; X and its slot stay untouched", async () => {
+    const slotConflict = vi.fn(), f = fixture(), controller = f.make({ slotConflict });
+    await controller.refresh();
+    const other = pending(); other.intent.command_id = id(99);
+    await f.study.save(other, new AbortController().signal); await controller.begin(action());
+    expect(slotConflict).toHaveBeenCalledTimes(1);
+    expect(f.send).not.toHaveBeenCalled(); expect(f.check).not.toHaveBeenCalled(); expect(f.read).not.toHaveBeenCalled();
+    await controller.refresh(); await controller.retry();
+    expect(slotConflict).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(f.values.get(studyKey)!)).toEqual(other);
+  });
+  it("a new action Z after the slot was freed passes with a new ID and sends once", async () => {
+    const f = fixture(); await f.controller.refresh();
+    const other = pending(); other.intent.command_id = id(99);
+    await f.study.save(other, new AbortController().signal); await f.controller.begin(action());
+    f.values.delete(studyKey); await f.controller.refresh();
+    f.newId.mockReturnValue(id(5)); await f.controller.begin(action());
+    expect(f.send).toHaveBeenCalledOnce(); expect(f.send.mock.calls[0][0].command_id).toBe(id(5));
+    expect(f.controller.snapshot()).toMatchObject({ outcome: "accepted", pending: false });
+  });
+  it("a retained intent keeps its record and does not call the seam when the slot changed under its retry", async () => {
+    const slotConflict = vi.fn(), f = fixture(pending()), controller = f.make({ slotConflict });
+    f.check.mockResolvedValue(missing()); f.read.mockResolvedValue({ current: current("revealed"), state_version: "8" });
+    await controller.refresh(); expect(controller.snapshot()).toMatchObject({ pending: true, canRetry: true });
+    const other = pending(); other.intent.command_id = id(99); f.values.set(studyKey, JSON.stringify(other));
+    await controller.retry();
+    // It was stored and may have been sent before: its outcome stays unknown, the foreign record stays untouched.
+    expect(controller.snapshot()).toMatchObject({ problem: "pending_changed", pending: true, outcome: null, canRetry: false });
+    expect(f.send).not.toHaveBeenCalled(); expect(slotConflict).not.toHaveBeenCalled();
+    expect(JSON.parse(f.values.get(studyKey)!).intent.command_id).toBe(id(99));
   });
   it.each(["load", "mismatch"])("storage failure during %s blocks any POST", async stage => {
     const f = fixture(stage === "mismatch" ? { ...pending(), mismatch: true } : undefined);

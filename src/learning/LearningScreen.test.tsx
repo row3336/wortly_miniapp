@@ -28,6 +28,13 @@ const click = (name: string) => fireEvent.click(screen.getByRole("button", { nam
 async function answer(f: Fixture, value = "Haus") {
   fireEvent.change(input(), { target: { value } }); click("Проверить");
   await waitFor(() => expect(f.view.snapshot().phase).toMatch(/^result_/));
+  // The controller is ahead of the screen: Enter (useEnterNext) listens only once the rendered result offers «Далее» as
+  // the controller allows it. Wait for that render, not for the snapshot alone, then flush its effects.
+  await waitFor(() => {
+    const next = screen.getByRole("button", { name: "Далее" }) as HTMLButtonElement;
+    expect(next.disabled).toBe(!f.view.snapshot().canNext);
+  });
+  await act(async () => {});
 }
 function lastPost(f: Fixture) { return f.fetcher.mock.calls.filter(call => call[1]?.method === "POST").at(-1)!; }
 

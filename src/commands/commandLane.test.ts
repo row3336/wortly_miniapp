@@ -33,7 +33,9 @@ class TestLane extends CommandLane<Spec> {
   protected settledCurrent(reply: LaneSettled<Spec>): object { return reply.current; }
   /** Projections a mode view (an answer, a result) was built on, as the written mode builds one on a visible step. */
   readonly views: object[] = [];
-  protected settledView(): void { if (this.current !== null) this.views.push(structuredClone(this.current)); }
+  /** Every call of settledView, whatever projection it got (M-LANE-PAIR-GUARD). */
+  viewCalls = 0;
+  protected settledView(): void { this.viewCalls++; if (this.current !== null) this.views.push(structuredClone(this.current)); }
   protected verify(pending: LanePending<Intent>): Promise<boolean> {
     return this.verifySession(pending, current => {
       const step = retryStep(current, pending.intent, pending.pair);
@@ -53,7 +55,7 @@ const mark: WithoutId<Intent> = { kind: "item.mark", session_id: id(3) };
 
 type RecordFields = Partial<Pick<LanePending<Intent>, "profileId" | "clientInstanceId" | "pair">>;
 function fixture(options: { lane?: "study" | "stop"; minimum?: () => string | null; saved?: Intent; mismatch?: boolean;
-  pair?: Pair; record?: RecordFields } = {}) {
+  pair?: Pair; record?: RecordFields; conflict?: () => void } = {}) {
   const values = new Map<string, string>();
   const storage: AsyncStorage = { get: vi.fn(async key => values.get(key) ?? null),
     set: vi.fn(async (key, value) => { values.set(key, value); }), remove: vi.fn(async key => { values.delete(key); }) };
@@ -70,8 +72,8 @@ function fixture(options: { lane?: "study" | "stop"; minimum?: () => string | nu
   const read = vi.fn<(sessionId: string) => Promise<{ state_version: string; current: Current }>>();
   const onUpdate = vi.fn<(snapshot: Snapshot) => void>(), newId = vi.fn(() => id(next++));
   const controller = new TestLane({ profileId: id(1), clientInstanceId: id(2), pair: options.pair ?? "ru-de", lane, pendingStore: store,
-    isLive: () => true, newId, send, check, read, onUpdate, stateVersion: "5", minimumStateVersion: options.minimum });
-  return { controller, values, send, check, read, newId, onUpdate };
+    isLive: () => true, newId, send, check, read, onUpdate, stateVersion: "5", minimumStateVersion: options.minimum, slotConflict: options.conflict });
+  return { controller, values, storage, send, check, read, newId, onUpdate };
 }
 
 describe("shared command lane", () => {
@@ -227,7 +229,8 @@ describe("planned pause and outdated client (M-COMPAT-HDR)", () => {
     [new ApiError("http", 409, "CLIENT_INCOMPATIBLE"), "incompatible"],
     [new ApiError("http", 503, "WRITE_UNAVAILABLE"), "network"],
     [new ApiError("http", 503), "network"],
-    [new ApiError("http", 409, "DOCUMENT_STALE"), "network"],
+    // The thrown form every study adapter gives the core's DOCUMENT_STALE envelope (commandRefusal.ts, Р3).
+    [new ApiError("http", 409, "DOCUMENT_STALE"), "window_stale"],
     [new ApiError("http", 409, "SESSION_CLOSED"), "network"],
     [new ApiError("http", 500, "MAINTENANCE"), "network"],
     [new ApiError("network"), "network"],
@@ -363,5 +366,271 @@ describe("M-ORAL-STUCK-A: the receipt of an own session closed in another pair",
     await f.controller.refresh();
     expect(f.controller.snapshot()).toMatchObject({ outcome: "accepted", current: closed() });
     expect(f.controller.views).toHaveLength(1);
+  });
+});
+
+describe("M-LANE-PAIR-GUARD 4.1: an accepted reply whose session is open in another pair", () => {
+  const saved: Intent = { command_id: id(50), kind: "session.start", session_id: id(3) };
+  const start: WithoutId<Intent> = { kind: "session.start", session_id: id(3) };
+  const project = (overrides: Partial<Extract<Current, { pair: string }>> = {}): Current =>
+    ({ session_id: id(3), status: "active", pair: "uk-de", marked: false, ...overrides });
+  const reply = (current: Current, version = "6"): Reply => ({ outcome: "accepted", command: { result_id: null }, state_version: version, current });
+  const receipt = (current: Current, version = "6"): Status => ({ outcome: "accepted", state_version: version, current, command: { result_id: null } });
+
+  it("P1: a direct reply keeps the applied fact, cleans its record and names the pair; no view, no second send", async () => {
+    for (const status of ["active", "summary"] as const) {
+      const f = fixture(); await f.controller.refresh();
+      f.send.mockResolvedValueOnce(reply(project({ status })));
+      await f.controller.begin(start);
+      expect(f.controller.snapshot()).toMatchObject({ phase: "settled", outcome: "accepted", pending: false, canRetry: false,
+        problem: "pair_changed", current: null, rejectionCode: null,
+        resolved: { commandId: id(100), kind: "session.start", sessionId: id(3) } });
+      expect(f.controller.views).toEqual([]); expect(f.controller.viewCalls).toBe(0);
+      expect(f.values.has("test.pending")).toBe(false);
+      expect(f.send).toHaveBeenCalledOnce(); expect(f.newId).toHaveBeenCalledOnce();
+    }
+  });
+  it("P2: the check by ID (already applied) keeps that fact the same way; it never sends", async () => {
+    const f = fixture({ saved });
+    f.check.mockResolvedValueOnce(receipt(project()));
+    await f.controller.refresh();
+    expect(f.controller.snapshot()).toMatchObject({ phase: "settled", outcome: "accepted", pending: false, problem: "pair_changed",
+      current: null, resolved: { commandId: id(50) } });
+    expect(f.controller.views).toEqual([]); expect(f.controller.viewCalls).toBe(0);
+    expect(f.send).not.toHaveBeenCalled(); expect(f.read).not.toHaveBeenCalled();
+  });
+  it("P3: the own closure in another pair stays its closed fact, never this reason", async () => {
+    const f = fixture({ saved, pair: "uk-de" });
+    f.check.mockResolvedValueOnce(receipt(project({ status: "closed", pair: "ru-de" })));
+    await f.controller.refresh();
+    expect(f.controller.snapshot()).toMatchObject({ outcome: "accepted", problem: null,
+      current: { session_id: id(3), status: "closed", pair: "ru-de" } });
+    expect(f.controller.views).toEqual([]); expect(f.controller.viewCalls).toBe(0);
+  });
+  it("P4: a closed projection of another pair that is no own closure is no fact and no reason, and builds no view", async () => {
+    for (const current of [project({ status: "closed" }), project({ status: "closed", session_id: id(4) })]) {
+      const f = fixture({ saved });
+      f.check.mockResolvedValueOnce(receipt(current));
+      await f.controller.refresh();
+      expect(f.controller.snapshot()).toMatchObject({ outcome: "accepted", problem: null, current: null });
+      expect(f.controller.views).toEqual([]); expect(f.controller.viewCalls).toBe(0);
+    }
+  });
+  it("P5: a reply below the shared floor is a stale view, not another pair: the fact stays, no reason, no view", async () => {
+    const f = fixture({ minimum: () => "9" }); await f.controller.refresh();
+    f.send.mockResolvedValueOnce(reply(project(), "6"));
+    await f.controller.begin(start);
+    expect(f.controller.snapshot()).toMatchObject({ outcome: "accepted", pending: false, problem: null, current: null, stateVersion: "5" });
+    expect(f.controller.views).toEqual([]); expect(f.controller.viewCalls).toBe(0);
+  });
+  it("P6: a refused reply is unchanged: its code, no pair reason", async () => {
+    const f = fixture(); await f.controller.refresh();
+    f.send.mockResolvedValueOnce({ outcome: "rejected", error: { code: "SESSION_BUSY" }, state_version: "6", current: project() });
+    await f.controller.begin(start);
+    expect(f.controller.snapshot()).toMatchObject({ outcome: "rejected", rejectionCode: "SESSION_BUSY", problem: null, current: null });
+  });
+  it("P7: this pair is unchanged: no reason, its view is built", async () => {
+    const f = fixture(); await f.controller.refresh();
+    f.send.mockResolvedValueOnce(reply(project({ pair: "ru-de" })));
+    await f.controller.begin(start);
+    expect(f.controller.snapshot()).toMatchObject({ outcome: "accepted", problem: null, current: { pair: "ru-de", status: "active" } });
+    expect(f.controller.views).toHaveLength(1); expect(f.controller.viewCalls).toBe(1);
+  });
+  it("P8: the reason belongs to that reply: the next check keeps the fact and clears it", async () => {
+    const f = fixture(); await f.controller.refresh();
+    f.send.mockResolvedValueOnce(reply(project()));
+    await f.controller.begin(start);
+    await f.controller.refresh();
+    expect(f.controller.snapshot()).toMatchObject({ phase: "settled", outcome: "accepted", problem: null, current: null });
+    expect(f.check).not.toHaveBeenCalled();
+  });
+  it("P9: a reply formed before the change and delivered after the owner died changes nothing (lifetime guard)", async () => {
+    const f = fixture(); await f.controller.refresh();
+    let deliver: (value: Reply) => void = () => {};
+    f.send.mockImplementationOnce(() => new Promise<Reply>(done => { deliver = done; }));
+    const sending = f.controller.begin(start);
+    await vi.waitFor(() => expect(f.send).toHaveBeenCalledOnce());
+    f.controller.dispose(); const updates = f.onUpdate.mock.calls.length;
+    deliver(reply(project({ pair: "ru-de" }))); await sending;
+    expect(f.onUpdate.mock.calls.length).toBe(updates);
+    expect(f.controller.snapshot()).toMatchObject({ phase: "disposed", outcome: null, resolved: null, current: null, problem: null });
+    // The record stays for the next owner, which checks it by its ID.
+    expect(JSON.parse(f.values.get("test.pending")!).intent.command_id).toBe(id(100));
+  });
+});
+
+describe("D-STALE-WINDOW 3.1.12: a record kept after DOCUMENT_STALE and a change of profile", () => {
+  it("profile A keeps X after the refusal; the first load of profile B removes A's record (pendingSlot.load)", async () => {
+    const f = fixture(); await f.controller.refresh();
+    // The thrown form every study adapter gives the core's envelope (commandRefusal.ts).
+    f.send.mockRejectedValueOnce(new ApiError("http", 409, "DOCUMENT_STALE"));
+    await f.controller.begin(mark);
+    const sent = f.send.mock.calls[0][0];
+    expect(f.controller.snapshot()).toMatchObject({ phase: "unresolved", pending: true, outcome: null, problem: "window_stale" });
+    expect(f.controller.lastFailure()).toMatchObject({ kind: "http", status: 409, code: "DOCUMENT_STALE" });
+    expect(JSON.parse(f.values.get("test.pending")!)).toMatchObject({ profileId: id(1), intent: sent });
+    const storage: AsyncStorage = { get: async key => f.values.get(key) ?? null, set: async (key, value) => { f.values.set(key, value); },
+      remove: async key => { f.values.delete(key); } };
+    const store = new PendingSlot<LanePending<Intent>>(storage, "test.pending", value => value as LanePending<Intent>);
+    const other = new TestLane({ profileId: id(99), clientInstanceId: id(2), pair: "ru-de", lane: "study", pendingStore: store,
+      isLive: () => true, newId: () => id(200), send: vi.fn(), check: vi.fn(), read: vi.fn(), onUpdate: vi.fn(), stateVersion: "5" });
+    await other.refresh();
+    expect(f.values.has("test.pending")).toBe(false);
+    expect(other.snapshot()).toMatchObject({ phase: "idle", pending: false });
+  });
+});
+
+// M-SLOT-INVALID: a NEW intent whose save the slot refuses over an unreadable record was neither stored nor sent. It is no unknown
+// outcome: no check, no retry, no pending intent. The unreadable record itself is neither cleared nor overwritten here.
+describe("an unreadable record in the shared slot meets a new intent", () => {
+  const readable: Intent = { command_id: id(50), kind: "item.mark", session_id: id(3) };
+  it.each([["not JSON", "{not json"], ["JSON of another shape", "{\"a\":1}"], ["a number", "7"]])(
+    "begin over %s: the intent is dropped, nothing is sent or checked, the record stays byte for byte", async (_name, raw) => {
+      const f = fixture(); await f.controller.refresh();
+      f.values.set("test.pending", raw);
+      await f.controller.begin(mark);
+      expect(f.controller.snapshot()).toMatchObject({ phase: "blocked", problem: "invalid_pending", pending: false, pendingIntent: null,
+        kind: null, canRetry: false });
+      expect(f.send).not.toHaveBeenCalled(); expect(f.check).not.toHaveBeenCalled(); expect(f.read).not.toHaveBeenCalled();
+      expect(f.values.get("test.pending")).toBe(raw);
+      expect(f.controller.lastFailure()).toMatchObject({ kind: "invalid" });
+      // A later check has nothing of the dropped intent to ask for.
+      await f.controller.refresh();
+      expect(f.check).not.toHaveBeenCalled(); expect(f.read).not.toHaveBeenCalled(); expect(f.send).not.toHaveBeenCalled();
+      expect(f.controller.snapshot()).toMatchObject({ phase: "idle", pending: false });
+      expect(f.values.get("test.pending")).toBe(raw);
+    });
+  it("an unreadable record names no other action, so the seam that checks the record of another window is not called", async () => {
+    const conflict = vi.fn(), f = fixture({ conflict }); await f.controller.refresh();
+    f.values.set("test.pending", "{not json");
+    await f.controller.begin(mark);
+    expect(f.controller.snapshot()).toMatchObject({ pending: false, problem: "invalid_pending" });
+    expect(conflict).not.toHaveBeenCalled();
+    // A readable record of another window does call it (the case the seam is for).
+    const g = fixture({ conflict }); await g.controller.refresh();
+    g.values.set("test.pending", JSON.stringify({ schemaVersion: 1, profileId: id(1), clientInstanceId: id(2), pair: "ru-de",
+      intent: { command_id: id(60), kind: "item.mark", session_id: id(3) } }));
+    await g.controller.begin(mark);
+    expect(conflict).toHaveBeenCalledOnce();
+  });
+  it("the automatic path (prepare, start) is dropped the same way and never calls the transport hook", async () => {
+    const f = fixture(); await f.controller.refresh();
+    f.values.set("test.pending", "{not json");
+    const intent = f.controller.prepare(mark) as Intent, transmitted = vi.fn();
+    await f.controller.start(intent, transmitted);
+    expect(f.controller.snapshot()).toMatchObject({ phase: "blocked", problem: "invalid_pending", pending: false });
+    expect(transmitted).not.toHaveBeenCalled(); expect(f.send).not.toHaveBeenCalled(); expect(f.check).not.toHaveBeenCalled();
+    // Nothing waits for it: a resend has no intent to send.
+    await f.controller.resend(transmitted);
+    expect(f.send).not.toHaveBeenCalled();
+  });
+  it("once the record is gone, a new action is sent exactly once under a new ID", async () => {
+    const f = fixture(); await f.controller.refresh();
+    f.values.set("test.pending", "{not json");
+    await f.controller.begin(mark);
+    const dropped = f.newId.mock.results[0].value as string;
+    f.values.delete("test.pending");
+    await f.controller.refresh();
+    f.send.mockResolvedValueOnce(accepted("7"));
+    await f.controller.begin(mark);
+    expect(f.send).toHaveBeenCalledOnce();
+    expect(f.send.mock.calls[0][0].command_id).not.toBe(dropped);
+    expect(f.check).not.toHaveBeenCalled();
+  });
+  it("a retained intent keeps its record and stays pending when the slot turns unreadable under its retry", async () => {
+    const f = fixture({ saved: readable });
+    f.check.mockResolvedValue(missing()); f.read.mockResolvedValue({ state_version: "6", current: active() });
+    await f.controller.refresh();
+    expect(f.controller.snapshot()).toMatchObject({ canRetry: true, pending: true });
+    f.values.set("test.pending", "{not json");
+    await f.controller.retry();
+    expect(f.send).not.toHaveBeenCalled();
+    expect(f.controller.snapshot()).toMatchObject({ pending: true, problem: "invalid_pending", pendingIntent: readable, canRetry: false });
+    expect(f.values.get("test.pending")).toBe("{not json");
+  });
+  it("a record that was unreadable already when the owner loaded it is the load failure, not a dropped intent", async () => {
+    const f = fixture(); f.values.set("test.pending", "{not json");
+    await f.controller.refresh();
+    expect(f.controller.snapshot()).toMatchObject({ phase: "blocked", problem: "invalid_pending", pending: false });
+    await f.controller.begin(mark);
+    expect(f.newId).not.toHaveBeenCalled(); expect(f.send).not.toHaveBeenCalled(); expect(f.values.get("test.pending")).toBe("{not json");
+  });
+  it("another kind of store failure keeps the intent as before (unknown whether the write happened)", async () => {
+    const f = fixture(); await f.controller.refresh();
+    const original = f.values.get.bind(f.values);
+    vi.spyOn(f.values, "get").mockImplementation(key => { if (key === "test.pending") throw new Error("disk"); return original(key); });
+    await f.controller.begin(mark);
+    expect(f.controller.snapshot()).toMatchObject({ pending: true, problem: "storage", phase: "unresolved" });
+  });
+});
+
+// Decisions 20.1-А/22.1-А: an outcome is an old one (restored) only while no request of the inherited intent has started
+// in this owner. Adopted from QA-RESTORE-TIMER (Q2a–Q2g).
+describe("restored outcome of an inherited intent", () => {
+  const saved = { command_id: id(50), kind: "item.mark" as const, session_id: id(3) };
+  async function restoredOwner(options: { minimum?: () => string | null } = {}) {
+    const f = fixture({ saved, ...options });
+    f.check.mockResolvedValue(missing()); f.read.mockResolvedValue({ state_version: "6", current: active() });
+    await f.controller.refresh();
+    expect(f.controller.snapshot()).toMatchObject({ phase: "unresolved", problem: "not_found", canRetry: true });
+    return f;
+  }
+  const appliedLater = { outcome: "accepted", state_version: "7", current: active(true), command: { result_id: id(9) } } as Status;
+  /** The transport tells the start of the request (sendStarted), as the document wiring does. */
+  const startedThen = (f: ReturnType<typeof fixture>, reply: () => Promise<Reply>) =>
+    f.send.mockImplementationOnce(async () => { f.controller.sendStarted(); return reply(); });
+
+  it("a first check of a new owner that finds the inherited intent applied: restored", async () => {
+    const f = fixture({ saved }); f.check.mockResolvedValue(appliedLater);
+    await f.controller.refresh();
+    expect(f.controller.snapshot().resolved).toEqual({ commandId: id(50), kind: "item.mark", sessionId: id(3), resultId: id(9), restored: true });
+  });
+  it("a resend that died in the save (no request), then a check finds it applied: still restored", async () => {
+    const f = await restoredOwner();
+    f.storage.get = vi.fn(async () => { throw new Error("storage unavailable"); });
+    f.storage.set = vi.fn(async () => { throw new Error("quota"); });
+    await f.controller.retry();
+    expect(f.send).not.toHaveBeenCalled();
+    expect(f.controller.snapshot()).toMatchObject({ pending: true, outcome: null });
+    f.check.mockResolvedValue(appliedLater);
+    await f.controller.refresh();
+    expect(f.controller.snapshot().resolved).toMatchObject({ commandId: id(50), kind: "item.mark", restored: true });
+  });
+  it("a resend stopped by a stale floor before its save, then a check finds it applied: still restored", async () => {
+    let floor: string | null = null;
+    const f = await restoredOwner({ minimum: () => floor });
+    // The shared floor rises inside retry's own check, right before it would send.
+    f.check.mockImplementationOnce(async () => { floor = "9"; return missing(); });
+    await f.controller.retry();
+    expect(f.send).not.toHaveBeenCalled();
+    floor = null; f.check.mockResolvedValue(appliedLater);
+    await f.controller.refresh();
+    expect(f.controller.snapshot().resolved?.restored).toBe(true);
+  });
+  it("a resend whose request started and whose reply was lost, then found applied: live", async () => {
+    const f = await restoredOwner();
+    startedThen(f, async () => { throw new ApiError("network"); });
+    await f.controller.retry();
+    expect(f.send).toHaveBeenCalledOnce();
+    f.check.mockResolvedValue(appliedLater);
+    await f.controller.refresh();
+    expect(f.controller.snapshot()).toMatchObject({ outcome: "accepted" });
+    expect(f.controller.snapshot().resolved?.restored).toBeUndefined();
+  });
+  it("a resend that got its reply: live", async () => {
+    const f = await restoredOwner();
+    startedThen(f, async () => accepted("7"));
+    await f.controller.retry();
+    expect(f.controller.snapshot()).toMatchObject({ outcome: "accepted" });
+    expect(f.controller.snapshot().resolved?.restored).toBeUndefined();
+  });
+  it("an owner that began with an empty slot, sent X, lost the reply and found it applied: live", async () => {
+    const f = fixture(); await f.controller.refresh();
+    startedThen(f, async () => { throw new ApiError("network"); });
+    await f.controller.begin(mark);
+    f.check.mockResolvedValue(appliedLater);
+    await f.controller.refresh();
+    expect(f.controller.snapshot()).toMatchObject({ outcome: "accepted" });
+    expect(f.controller.snapshot().resolved?.restored).toBeUndefined();
   });
 });

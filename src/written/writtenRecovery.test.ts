@@ -4,9 +4,18 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WrittenIntent } from "./writtenIntent";
 import { WrittenDocumentCommands } from "./writtenDocumentCommands";
 import { WrittenViewController } from "./writtenViewController";
-import { deferred, id, response, tick, writtenFixture, type ServerOptions } from "./writtenFixtures.test-support";
+import { deferred, id, profile, response, tick, writtenFixture, type ServerOptions } from "./writtenFixtures.test-support";
+import { createOpenedAccess } from "../app/openedAccess";
+import { staleCommand } from "../app/openRules.test-support";
+import { writtenPrimaryKey } from "./writtenPending";
+import { cancelDue } from "../commands/startCancel";
+import { pageSendCounter } from "../commands/laneRecovery";
 
-type Request = { method: string; path: string; kind: string | null };
+/** The core's DOCUMENT_STALE envelope of this command (study/coordinator.py; an answer kind is flattened). */
+const stale = (request: Request) => response(staleCommand(request.body!.command_id, request.body!.session_id, 1, request.kind!), 409);
+
+type Request = { method: string; path: string; kind: string | null;
+  body: { command_id: string; session_id: string; document_id: string } | null };
 /** undefined passes the request to the server; "drop" fails it before the server, "lose" after its commit. */
 type Route = (request: Request) => undefined | "drop" | "lose" | Response;
 
@@ -32,10 +41,10 @@ function harness(options: ServerOptions & { saved?: Partial<Record<"primary" | "
   let route: Route = () => undefined;
   f.fetcher.mockImplementation(async (url, init) => {
     const method = init?.method ?? "GET", path = new URL(String(url), "http://localhost").pathname;
-    const kind = method === "POST" ? JSON.parse(String(init!.body)).kind as string : null;
+    const body = method === "POST" ? JSON.parse(String(init!.body)) : null, kind = body ? body.kind as string : null;
     if (kind === "answer.submit") sentAt.push(performance.now() - begun);
     log.push({ at: performance.now() - begun, method, path, kind });
-    const decision = route({ method, path, kind });
+    const decision = route({ method, path, kind, body });
     if (decision === "drop") throw new TypeError("network");
     if (decision === "lose") { await f.server.handle(url as RequestInfo, init); throw new TypeError("network"); }
     return decision ?? f.server.handle(url as RequestInfo, init);
@@ -281,7 +290,7 @@ describe("refusals during recovery (8.10–8.14)", () => {
   it("8.14 DOCUMENT_STALE on a retry: nothing is sent until the window check; a replaced window ends without a send", async () => {
     const h = harness(); await h.started();
     h.route(request => request.kind !== "answer.submit" ? undefined
-      : h.answers().length === 1 ? "drop" : response({ error: { code: "DOCUMENT_STALE" } }, 409));
+      : h.answers().length === 1 ? "drop" : stale(request));
     await h.view.submit(); await h.run(2000); await tick();
     expect(h.answers()).toHaveLength(2);
     expect(h.recovery()?.state.name).toBe("window_check");
@@ -303,6 +312,130 @@ describe("refusals during recovery (8.10–8.14)", () => {
     expect(other.view.snapshot()).toMatchObject({ problem: "mismatch", canRetryPrimary: false, canSubmit: false,
       commands: { canBegin: false, primary: { pending: true } } });
     expect(other.values.has("wortly.pending.written_session")).toBe(true);
+  });
+});
+
+describe("D-STALE-WINDOW: the core's DOCUMENT_STALE envelope on a send (C091 §1)", () => {
+  const intentOf = (post: Record<string, unknown>) => { const { client_instance_id: _c, document_id: _d, ...intent } = post; return intent; };
+  const kept = (h: ReturnType<typeof harness>) => h.values.has(writtenPrimaryKey) ? JSON.parse(h.values.get(writtenPrimaryKey)!).intent : null;
+  it("3.1.4 / 3.1.5 the first send refused, the window replaced: the record stays as sent, nothing more goes out", async () => {
+    const h = harness(); await h.started();
+    h.route(request => request.kind === "answer.submit" ? stale(request) : undefined);
+    vi.mocked(h.storage.remove).mockClear();
+    await h.view.submit(); await tick();
+    const raw = h.values.get(writtenPrimaryKey);
+    expect(kept(h)).toEqual(intentOf(h.answers()[0]));
+    expect(h.view.snapshot().commands.primary).toMatchObject({ phase: "unresolved", pending: true, outcome: null, problem: "window_stale" });
+    expect(h.recovery()).toMatchObject({ state: { name: "window_check" }, sends: 1, transmitted: 1 });
+    const recovery = h.view.snapshot().commands.recovery!;
+    h.revoke(); await h.run(10 * 60_000, 5000);
+    expect(h.answers()).toHaveLength(1);
+    expect(h.values.get(writtenPrimaryKey)).toBe(raw);
+    expect(h.storage.remove).not.toHaveBeenCalledWith(writtenPrimaryKey);
+    // The replaced window keeps the count of its send too (D-CP5 9.2.6: window_replaced keeps the budget).
+    expect(await pageSendCounter(h.storage).load(recovery.commandId!)).toMatchObject({ reserved: 1, transmitted: 1 });
+  });
+  it("3.1.11 a start refused as DOCUMENT_STALE never settles rejected: even the widest cancel policy sees nothing to cancel", async () => {
+    const h = harness();
+    h.route(request => request.kind === "session.start" ? stale(request) : undefined);
+    await h.view.refresh(); await h.view.start("words"); await tick();
+    // The lane keeps the start unresolved, never settled rejected: the cancel policy's «settled rejected» is not reached.
+    expect(h.view.snapshot().commands.primary).toMatchObject({ outcome: null, pending: true, kind: "session.start", problem: "window_stale" });
+    for (const state of [{ name: "window_check" }, { name: "terminated", reason: "window_replaced" }]) {
+      expect(cancelDue({ recovery: { state, sends: 1, transmitted: 1 } as never, rejectionCode: null }, () => true)).toBe(false);
+    }
+    h.revoke(); await h.run(60_000, 5000);
+    expect(h.kinds()).toEqual(["session.start"]);
+    expect(kept(h)).toMatchObject({ kind: "session.start" });
+  });
+  it("3.1.6 the window check keeps a live window: a check by ID, then the rest of the budget; the refused send stays counted", async () => {
+    const h = harness(); await h.started("falsch");
+    let refusals = 1;
+    h.route(request => request.kind === "answer.submit" && refusals-- > 0 ? stale(request) : undefined);
+    await h.view.submit(); await tick();
+    expect(h.recovery()).toMatchObject({ state: { name: "window_check" }, sends: 1 });
+    await h.run(20_000, 500);
+    const sent = h.answers();
+    expect(sent).toHaveLength(2);
+    expect(sent[1].command_id).toBe(sent[0].command_id);
+    expect(h.checks(sent[0].command_id)).toBeGreaterThanOrEqual(1);
+    expect(h.recovery()).toMatchObject({ state: { name: "settled" }, sends: 2, transmitted: 2 });
+    expect(h.values.has(writtenPrimaryKey)).toBe(false);
+  });
+  /** W2: another page (its own page memory over the same shared storage) with another live document of this installation. */
+  function otherPage(h: ReturnType<typeof harness>, documentId: string) {
+    const storage = { get: (key: string) => h.storage.get(key), set: (key: string, value: string) => h.storage.set(key, value),
+      remove: (key: string) => h.storage.remove(key) };
+    const handle = createOpenedAccess({ opened: { status: "opened", client_instance_id: id(1), document_id: documentId, document_epoch: "2",
+      proof_version: "1", profile: profile(), session: null, compatibility: { compatible: true, contract_version: "1" } },
+    token: "synthetic-token", proof: "synthetic-proof", generation: 2, isLive: () => true, onDenied: vi.fn() });
+    const view = new WrittenViewController({ access: () => handle, storage, transport: h.transport, newId: h.newId,
+      sessionId: id(3), transitionMode: () => "normal", onUpdate: vi.fn() });
+    owners.push(view);
+    return view;
+  }
+  /**
+   * W1's №1 is held until the client gives up on it; W1 checks (not found) and waits to retry. `applied` lets №1 reach
+   * the server before W2 takes the document; otherwise it never arrives (the core would refuse it as DOCUMENT_STALE
+   * now). From then on every request of W1's document meets the core's refusal, its retry №2 included.
+   */
+  async function replaced(applied: boolean) {
+    const h = harness(); await h.started();
+    const w1 = h.access().document.documentId;
+    let live = w1;
+    h.route(request => request.body?.document_id === w1 && live !== w1 ? stale(request) : undefined);
+    const gate = h.hold();
+    void h.view.submit(); await tick();
+    await h.run(31_000, 1000);
+    expect(h.recovery()?.state.name).toBe("retry_wait");
+    if (applied) { gate.resolve(); await tick(); }
+    live = id(77);
+    // Step until W1 either met the refusal (its window check starts) or settled by the fact its own check found.
+    for (let spent = 0; spent < 30_000 && !["window_check", "settled"].includes(h.recovery()?.state.name ?? ""); spent += 250) await h.run(250, 250);
+    const x = intentOf(h.answers()[0]);
+    if (!applied) {
+      // W1's retry №2 met the refusal: it keeps X and sends nothing more; its window check finds the document replaced.
+      expect(h.answers().filter(post => post.document_id === w1)).toHaveLength(2);
+      expect(h.recovery()?.state.name).toBe("window_check");
+      expect(kept(h)).toEqual(x);
+    }
+    h.revoke(); await h.run(10_000);
+    expect(h.answers().filter(post => post.document_id === w1)).toHaveLength(applied ? 1 : 2);
+    const w2 = otherPage(h, id(77)); await w2.refresh(); await h.run(60_000, 1000);
+    return { h, w1, w2, x };
+  }
+  it("3.1.7 i the early send applied before the replacement: a check finds the fact (core 1.4.1), nothing is sent again", async () => {
+    const { h, w2 } = await replaced(true);
+    expect(h.answers().filter(post => post.document_id === id(77))).toEqual([]);
+    expect(h.server.results.size).toBe(1);
+    // W1's own check by ID found the fact before any retry; the fact stays a fact and the record is settled.
+    expect(h.view.snapshot().phase).toBe("disposed");
+    expect(w2.snapshot().commands.primary).toMatchObject({ pending: false });
+    expect(h.values.has(writtenPrimaryKey)).toBe(false);
+  });
+  it("3.1.7 ii the early send never arrived: W2 loads X and only checks it; X is never sent with W2's document", async () => {
+    const { h, w2, x } = await replaced(false);
+    // CT §6.1 п. 5 asks for the same working document: until the owner answers В-2 (Codex C093 п. 5) no window sends X
+    // with another document_id; X and its count stay. Without the send count of CP5 W2 knows only counter_unknown.
+    expect(h.answers().filter(post => post.document_id === id(77))).toEqual([]);
+    expect(h.server.results.size).toBe(0);
+    expect(kept(h)).toEqual(x);
+    expect(w2.snapshot().commands.primary).toMatchObject({ pending: true, outcome: null });
+    expect(w2.snapshot().commands.recovery).toMatchObject({ state: { name: "counter_unknown" } });
+  });
+  it("3.1.8 a late copy applies after W1 was replaced: W2's check finds it once; the record was not cleared before", async () => {
+    const h = harness(); await h.started();
+    const w1 = h.access().document.documentId, gate = h.hold();
+    void h.view.submit(); await tick();
+    expect(kept(h)).toEqual(intentOf(h.answers()[0]));
+    h.revoke();
+    // Owner rule CT §6.4: an explicit action may return the work to W1; then its delayed №1 is applied by the core.
+    gate.resolve(); await h.run(5000);
+    expect(kept(h)).toEqual(intentOf(h.answers()[0]));
+    const w2 = otherPage(h, id(78)); await w2.refresh(); await h.run(30_000);
+    expect(h.answers().map(post => post.document_id)).toEqual([w1]);
+    expect(h.server.results.size).toBe(1);
+    expect(w2.snapshot().commands.primary).toMatchObject({ outcome: "accepted" });
   });
 });
 
@@ -378,9 +511,9 @@ describe("cases the independent QA found uncovered (QA CP2 QM05b, QM11, QM22)", 
   it("DOCUMENT_STALE on a retry of a live window: nothing for 5 s, then a check and the rest of the budget", async () => {
     // A wrong answer waits for «Далее»: no timer shows the next question, whose present would take over the recovery view.
     const h = harness(); await h.started("falsch");
-    let stale = 1;
+    let refusals = 1;
     h.route(request => request.kind !== "answer.submit" ? undefined : h.answers().length === 1 ? "drop"
-      : stale-- > 0 ? response({ error: { code: "DOCUMENT_STALE" } }, 409) : undefined);
+      : refusals-- > 0 ? stale(request) : undefined);
     await h.view.submit(); await h.run(2000); await tick();
     expect(h.answers()).toHaveLength(2);
     const staleAt = h.sentAt[1];

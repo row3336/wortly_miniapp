@@ -6,6 +6,7 @@ import type { ClosedSessionBoundary } from "../api/generated";
 import type { Pair } from "./commandLane";
 import { LaneRecovery, pageSendCounter, type RecoveryIntent, type RecoveryView } from "./laneRecovery";
 import { systemRecoveryClock } from "./recoveryClock";
+import { createdHere, noteCreatedHere } from "./pageOrigin";
 
 export type DocumentLane = "primary" | "stop";
 export type Credentials = Parameters<Parameters<OpenedAccess["run"]>[0]>[0];
@@ -23,6 +24,8 @@ type LaneState = {
   problem: string | null;
   canRetry: boolean;
   conflict?: boolean;
+  /** A stored start whose request never started in this window (Learning, 33.1-А); absent in other modes. */
+  startNotSent?: boolean;
   current: Step | null;
   closedSession: ClosedSessionBoundary | null;
   stateVersion: string | null;
@@ -37,6 +40,8 @@ type Lane<C, T> = {
   release(commandId: string): Promise<void>;
   /** Я17: clear a conflict's record once its own session is confirmed closed (Н2). */
   releaseClosed(sessionId: string): Promise<void>;
+  /** 14.8.8.1 А: read and check the record that blocked a new action. Learning has none: it is not extended (C119). */
+  adopt?(): Promise<void>;
 };
 /**
  * The automatic study action whose record outlived the confirmed closure of its session (D-CP4 3.1.4, Н6): checking
@@ -83,6 +88,8 @@ export type LaneWiring<C> = {
   run<R>(operation: (credentials: Credentials) => Promise<R>): Promise<R>;
   origin(credentials: Credentials): { client_instance_id: string; document_id: string };
   onUpdate(state: C): void;
+  /** The lane's slotConflict seam (fixB): a new intent was dropped over another record in the shared slot. */
+  slotConflict(): void;
 };
 /** One mode's API and controllers; the document owns everything else. */
 export type DocumentLanesMode<C, T, SR, RR> = {
@@ -95,6 +102,14 @@ export type DocumentLanesMode<C, T, SR, RR> = {
    * (CT §6.1 п. 1–2). Every other kind keeps its manual check and retry.
    */
   automatic: readonly string[];
+  /**
+   * The primary kinds whose page the mode's own lane decides, with the page descriptor it was given (Learning
+   * session.start: LearningPageStarts, answer 35.1-А, C243). That page lives as long as the JS document, so an App
+   * remount in it is no new page, while pageOrigin is keyed by the storage wrapper a remount replaces. For these kinds
+   * the lane's canRetry already holds the page check (with client, profile, pair and outcome) and is not filtered here
+   * again; every other kind keeps decision 2.3 А below.
+   */
+  lanePage?: readonly string[];
 };
 const ready = (state: LaneState) => !state.pending && ["idle", "settled"].includes(state.phase);
 
@@ -123,6 +138,7 @@ export class DocumentLanes<C extends LaneState, T extends { kind: string; sessio
   private disposed = false;
   private refreshing: Promise<void> | null = null;
   private readonly automatic: ReadonlySet<string>;
+  private readonly lanePage: ReadonlySet<string>;
   private readonly recovery: LaneRecovery;
 
   constructor(private readonly options: DocumentLanesOptions<C>, mode: DocumentLanesMode<C, T, SR, RR>) {
@@ -154,8 +170,10 @@ export class DocumentLanes<C extends LaneState, T extends { kind: string; sessio
         return source.run(operation);
       },
       onUpdate: state => this.observe(state),
+      slotConflict: () => { if (lane === "primary") this.slotBlocked = true; },
     }, reads);
     this.automatic = new Set(mode.automatic);
+    this.lanePage = new Set(mode.lanePage ?? []);
     // Created before the lanes: a lane update reads the snapshot, which includes the recovery view.
     this.recovery = new LaneRecovery({
       automatic: kind => this.automatic.has(kind),
@@ -166,7 +184,10 @@ export class DocumentLanes<C extends LaneState, T extends { kind: string; sessio
       release: commandId => this.live() ? this.track("primary", () => this.controllers.primary.release(commandId)) : Promise.resolve(),
       isLive: () => this.live(),
       onUpdate: () => this.emit(),
-    }, pageSendCounter(options.storage), systemRecoveryClock);
+      maySend: commandId => createdHere(options.storage, commandId),
+      blocked: () => { if (this.live()) this.adoptBlocked(); },
+    }, pageSendCounter(options.storage), systemRecoveryClock,
+    `${this.profileId}:${this.clientInstanceId}:${access.document.documentId}:${access.document.epoch}`);
     this.controllers = { primary: controller("primary"), stop: controller("stop") };
   }
 
@@ -230,7 +251,12 @@ export class DocumentLanes<C extends LaneState, T extends { kind: string; sessio
     // A study result has no manual retry (Я15): only the machine resends it. Once its outcome is known, a record kept only
     // by a failed local cleanup is no recovery any more: its manual check of the device data stays.
     const automaticPrimary = lane.pending && lane.outcome === null && this.automatic.has(lane.kind ?? "");
-    const primary = automaticPrimary ? { ...lane, canRetry: false } : lane;
+    // Decision 2.3 А: a manual primary action (session.start) of another window or of the page before a reload is only
+    // checked and its confirmed outcome shown; its retry is never offered here. Stop keeps its own rules. A kind whose
+    // page its lane decides (lanePage) is told apart there, by the same page for the lane and this document.
+    const foreign = lane.canRetry && !this.lanePage.has(lane.kind ?? "")
+      && !createdHere(this.options.storage, lane.pendingIntent?.command_id);
+    const primary = automaticPrimary || foreign ? { ...lane, canRetry: false } : lane;
     return { live, stateVersion, primary, stop,
       canBegin: live && !this.refreshing && !this.work.primary && !this.work.stop && ready(primary) && ready(stop) && !this.recovery.busy(),
       canStop: live && !this.work.stop && ready(stop), recovery: live ? this.recovery.view() : null, automaticPrimary,
@@ -296,6 +322,18 @@ export class DocumentLanes<C extends LaneState, T extends { kind: string; sessio
     }
     void this.track("primary", () => this.controllers.primary.refresh());
   }
+  /** Set by the lane's slotConflict, consumed once by the check of the record that blocked the action (14.8.8.1 А). */
+  private slotBlocked = false;
+  /**
+   * 14.8.8.1 А (C117): the machine of the dropped action is gone (laneRecovery dropUnsent → blocked); check the record of
+   * the other window once. A repeated conflict waits for the next explicit action: no loop.
+   */
+  private adoptBlocked(): void {
+    const primary = this.controllers.primary, state = primary.snapshot();
+    if (!this.slotBlocked || this.work.primary || !primary.adopt || state.pending || state.outcome !== null) return;
+    this.slotBlocked = false;
+    void this.track("primary", () => primary.adopt!());
+  }
   refresh(): Promise<void> {
     if (!this.live()) return Promise.resolve();
     if (this.refreshing) return this.refreshing;
@@ -308,6 +346,7 @@ export class DocumentLanes<C extends LaneState, T extends { kind: string; sessio
         // A foreground read may join a POST sent through an older handle; resolve that exact receipt once.
         await this.track(lane, () => this.controllers[lane].refresh());
       }
+      if (lane === "primary") await this.sendStoredStart();
     };
     // While the machine recovers the primary action, it alone checks it: a refresh only waits for its exchange in
     // flight (a reply may still settle it), and Stop keeps its own check. A record that will never apply and whose
@@ -322,6 +361,17 @@ export class DocumentLanes<C extends LaneState, T extends { kind: string; sessio
     this.refreshing = task;
     return task;
   }
+  /**
+   * Owner decision 33.1-А (C194): a start stored in this window whose request never started (its handle was replaced)
+   * is sent once, with its own command_id and session number, after the check that just ran under the current handle
+   * proved it absent (canRetry). A check that found its session settles it instead; nothing new is created. It goes the
+   * ordinary retry way (the current handle as its send source); a request in flight is joined, never repeated.
+   */
+  private sendStoredStart(): Promise<void> {
+    const state = this.controllers.primary.snapshot();
+    if (!this.live() || !state.startNotSent || !state.canRetry || state.kind !== "session.start") return Promise.resolve();
+    return this.retry("primary");
+  }
   begin(action: T): Promise<void> {
     if (!this.live()) return Promise.resolve();
     const lane: DocumentLane = action.kind === "session.stop" ? "stop" : "primary";
@@ -332,7 +382,11 @@ export class DocumentLanes<C extends LaneState, T extends { kind: string; sessio
     if (lane === "stop") this.ownStops.add(action.session_id.toLowerCase());
     if (lane === "primary" && this.automatic.has(action.kind)) {
       const intent = this.controllers.primary.prepare(action);
-      return intent instanceof Error ? Promise.reject(intent) : this.recovery.begin(intent);
+      if (intent instanceof Error) return Promise.reject(intent);
+      // The intent is created here (2.3 А): the machine's first send asks before the lane has seen it.
+      noteCreatedHere(this.options.storage, intent.command_id);
+      this.slotBlocked = false;
+      return this.recovery.begin(intent);
     }
     this.sendSources[lane] = this.options.access();
     return this.track(lane, () => this.controllers[lane].begin(action));
@@ -367,6 +421,7 @@ export class DocumentLanes<C extends LaneState, T extends { kind: string; sessio
     const state = this.snapshot(), sessionId = state[lane].sessionId?.toLowerCase();
     if (sessionId && this.closed.has(sessionId)) return Promise.resolve();
     if (lane === "primary" && this.automatic.has(state.primary.kind ?? "")) return Promise.resolve();
+    if (lane === "primary" && !state.primary.canRetry) return Promise.resolve();
     if (lane === "primary" && (this.work.stop || !ready(state.stop))) return Promise.resolve();
     this.sendSources[lane] = this.options.access();
     return this.track(lane, () => this.controllers[lane].retry());

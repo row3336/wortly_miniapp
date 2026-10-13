@@ -1,7 +1,7 @@
 import { ApiError } from "../api/http";
 import type { ClosedSessionBoundary, ConjugationCatalog, ConjugationSessionProjection, UnavailableCurrent } from "../api/generated";
 import { oneOf, sameId, uuid, version } from "../api/wireValidation";
-import { PendingStoreError, type PendingSlot } from "../commands/pendingSlot";
+import { PendingStoreError, refusedUnsent, type PendingSlot } from "../commands/pendingSlot";
 import type { ConjugationCatalogRead, ConjugationSessionRead, ConjugationResultRead, ConjugationReply, ConjugationStatus } from "./conjugationApi";
 import { validConjugationIntent, type ConjugationIntent } from "./conjugationIntent";
 import { canonicalConjugationIntent, conjugationLane, type ConjugationCommandLane, type ConjugationPending } from "./conjugationPending";
@@ -26,7 +26,7 @@ export type ConjugationCommandSnapshot = {
   rejectionCode: string | null;
   problem: "network" | "invalid_response" | "storage" | "invalid_pending" | "pending_changed" | "mismatch" | "not_found"
     | "expired" | "forbidden" | "profile_changed" | "client_changed" | "pair_changed" | "step_changed"
-    | "closed" | "stale_response" | null;
+    | "closed" | "stale_response" | "window_stale" | null;
   canRetry: boolean;
   stateVersion: string | null;
   closedSession: ClosedSessionBoundary | null;
@@ -124,6 +124,8 @@ export class ConjugationCommandController {
       } else if (error instanceof ApiError && [401, 403].includes(error.status ?? 0)) this.problem = error.status === 401 ? "expired" : "forbidden";
       // A reply that failed strict parsing leaves the outcome unknown like a lost one, but it is not a lost connection.
       else if (error instanceof ApiError && error.kind === "invalid_response") this.problem = "invalid_response";
+      // The same class as failureProblem (commandLane.ts): the record stays, a live window checks it.
+      else if (error instanceof ApiError && error.status === 409 && error.code === "DOCUMENT_STALE") this.problem = "window_stale";
       else this.problem = "network";
       this.phase = this.pending ? "unresolved" : "blocked";
     }).finally(() => { if (this.running === task) this.running = null; this.emit(); });
@@ -254,7 +256,14 @@ export class ConjugationCommandController {
     if (!pending || !this.live() || !this.freshForSend() || retry && !this.retryVerified) return;
     this.phase = "sending"; this.problem = null; this.retryVerified = false; this.clearView(); this.emit();
     if (!this.live() || !this.freshForSend()) return;
-    await this.options.pendingStore.save(pending, this.lifetime.signal);
+    try { await this.options.pendingStore.save(pending, this.lifetime.signal); }
+    catch (error: unknown) {
+      // A new intent the shared slot refused (another record, or one it cannot read) was neither stored nor sent: it is no
+      // unknown outcome to check or retry, and the record in the slot stays exactly as it is. A retained intent (retry) keeps its record.
+      // The slot stays marked changed, so this owner neither checks nor takes over the other record.
+      if (!retry && refusedUnsent(error)) this.pending = null;
+      throw error;
+    }
     if (!this.live() || !this.freshForSend()) return;
     let reply: ConjugationReply;
     try { reply = await this.options.send(canonicalConjugationIntent(pending.intent)); }

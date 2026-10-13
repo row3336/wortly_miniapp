@@ -24,6 +24,18 @@ describe("bounded JSON exchange", () => {
     });
   });
 
+  it("tells started once, after the request is built and right before fetch; a body that cannot be built tells nothing", async () => {
+    const order: string[] = [];
+    const fetcher = vi.fn(async () => { order.push("fetch"); return new Response('{"saved":true}'); });
+    const request = createJsonTransport({ fetcher, timeoutMs: 100, maxResponseBytes: 100 });
+    await request("/commands", { method: "POST", token: "t", proof: "p", body: { command_id: "x" }, started: () => order.push("started") });
+    expect(order).toEqual(["started", "fetch"]);
+    const cyclic: Record<string, unknown> = {}; cyclic.self = cyclic;
+    const started = vi.fn();
+    await expect(request("/commands", { method: "POST", token: "t", proof: "p", body: cyclic, started })).rejects.toBeTruthy();
+    expect(started).not.toHaveBeenCalled(); expect(fetcher).toHaveBeenCalledOnce();
+  });
+
   it.each([0, -1, Infinity, NaN])("requires an explicit positive timeout (%s)", timeoutMs => {
     expect(() => createJsonTransport({ fetcher: fetch, timeoutMs, maxResponseBytes: 100 })).toThrow();
   });

@@ -101,6 +101,8 @@ export function WrittenScreen({ state, language, submitOnEnter, actions, onToday
     : problemCode === "SETUP_REQUIRED" ? t.setup : problemCode === "ASSIGNMENT_STALE" ? t.changed
     : problemCode === "SESSION_CLOSED" ? t.closed : problemCode === "storage" ? t.local
     : problemCode === "mismatch" || problemCode === "invalid_pending" || problemCode === "pending_changed" ? t.blocked
+    // A lane check that found the command absent on the same open step succeeded; the view vouches for its source.
+    : state.checkedAbsent ? null
     : problemCode ? t.stale : null;
   const unresolved = primary.pending && primary.outcome === null || stop.pending && stop.outcome === null;
   // A study result recovers by itself: no check or retry button for it (Я15, CT §6.1 п. 2); Stop keeps its own.

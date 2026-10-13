@@ -1,8 +1,10 @@
 import { useEffect, useReducer, useRef } from "react";
 import type { HttpOptions } from "../api/http";
+import { acceptedForeignStart } from "../commands/foreignStart";
 import type { Language } from "../i18n/language";
 import { LearningScreen, type LearningScreenProps } from "../learning/LearningScreen";
 import { useLearningDocument } from "../learning/useLearningDocument";
+import type { LearningPageStarts } from "../learning/learningPageStarts";
 import type { AsyncStorage } from "../platform/storage";
 import type { SettingsDocument } from "../settings/useSettingsDocument";
 import type { TodayScreenProps } from "../today/TodayScreen";
@@ -32,6 +34,13 @@ export type LearningHostProps = {
   onNavigate?(destination: "dictionary" | "statistics"): void;
   /** Ordinary quiz rows and the conjugation test of the Today screen this host renders; their owners live elsewhere in the document. */
   quizzes?: Pick<TodayScreenProps, "onStartQuiz" | "canStartQuiz" | "onStartConjugation">;
+  /**
+   * Answer 17.1-А (R1): this owner's accepted start made a session the server holds open in another pair. The document
+   * refreshes its access once per such session and goes into it; the owner only reports it.
+   */
+  onForeignStart?(sessionId: string): void;
+  /** The starts of this page (35.1-А); the JS document's own unless a test models another page. */
+  page?: LearningPageStarts;
 };
 
 const copy = {
@@ -83,7 +92,7 @@ export function LearningHost(props: LearningHostProps) {
   const { state, actions } = useLearningDocument({ access: props.access, transport: props.transport,
     storage: props.storage, newId: props.newId, initialSessionId: props.initialSessionId,
     transitionMode: confirmed?.settings.transition_mode.value ?? null,
-    enabled, minimumStateVersion: bound.floor });
+    enabled, minimumStateVersion: bound.floor, page: props.page });
 
   // Foreground invalidates an unconsumed tap as well as the hook's command rights.
   useEffect(() => {
@@ -128,6 +137,9 @@ export function LearningHost(props: LearningHostProps) {
     }
   }, [bound, state?.sessionId, state?.phase, recoveredSession, props.route]);
 
+  const startedElsewhere = state && state.phase !== "disposed" ? acceptedForeignStart(state.commands.primary, state) : null;
+  useEffect(() => { if (startedElsewhere !== null) latest.current.onForeignStart?.(startedElsewhere); }, [startedElsewhere]);
+
   const requestStart = () => {
     if (bound.starting || bound.requested || !props.access.isLive()) return;
     if (configured && document.visibilityState === "visible") bound.requested = props.access;
@@ -135,6 +147,10 @@ export function LearningHost(props: LearningHostProps) {
     repaint();
   };
   const openSettings = () => { bound.requested = null; props.onSettings(); };
+  // The tap moves to the Learning route before the start runs: the effect below takes it, and the owner's start first
+  // waits for its recovery check (useStudyDocument.start) before the controller enters "loading". The idle document
+  // meanwhile is a start under way, not «not started».
+  const starting = enabled && (bound.requested !== null || bound.starting);
 
   // Native Back runs the visible Learning exit/return control (tz_app:86). While an already sent stop
   // is awaited it stays visible and does nothing: no second stop; waiting and retry stay on screen (К10-151).
@@ -153,6 +169,14 @@ export function LearningHost(props: LearningHostProps) {
     else if (awaitingStop) back = () => {};
   }
   useBackLayer("screen", back);
+
+  // A Settings read, or the send or check of a settings reset, is under way (or about to start: a floor or an access rose
+  // and the owner has not read yet). The gate above stays closed meanwhile, but the user is not asked to confirm
+  // anything: the read settles that by itself.
+  const settingsState = props.settings.state;
+  const readingSettings = settingsState.phase === "loading" || !settingsState.pending && settingsState.problem === null
+    && (settingsState.phase === "checking" || settingsState.resetPending !== null && settingsState.phase === "sending"
+      || settingsState.phase === "ready" && !(settingsState.dataCurrent && confirmed !== null));
 
   const t = copy[props.language];
   if (props.route === "settings") return null;
@@ -175,14 +199,13 @@ export function LearningHost(props: LearningHostProps) {
   return <>
     {configured && <button type="button" onClick={openSettings}>{t.settings}</button>}
     {!configured && <section aria-label={t.settings}>
-      <p role="status">{props.settings.state.pending ? t.pending
-        : props.settings.state.phase === "loading" ? t.loadingSettings
-        : props.settings.state.problem ? t.failed : t.incomplete}</p>
+      <p role="status">{settingsState.pending ? t.pending : readingSettings ? t.loadingSettings
+        : settingsState.problem ? t.failed : t.incomplete}</p>
       <button type="button" onClick={openSettings}>{t.settings}</button>
       <button type="button" onClick={() => { void props.settings.actions.refresh(); }}>{t.refresh}</button>
     </section>}
     {state ? <LearningScreen state={state} actions={actions} language={props.language}
-      submitOnEnter={props.submitOnEnter} renderPreview={props.renderPreview} /> : <p role="status">{t.loading}</p>}
+      submitOnEnter={props.submitOnEnter} renderPreview={props.renderPreview} starting={starting} /> : <p role="status">{t.loading}</p>}
     {/* A study result left after the closure is checked by its automatic recovery, never by hand (Я15, CT §6.1 п. 2). */}
     {state?.phase === "closed" && (state.commands.primary.pending && !state.commands.automaticPrimary || state.commands.stop.pending)
       && <button type="button" onClick={() => { void actions.refresh(); }}>{t.check}</button>}

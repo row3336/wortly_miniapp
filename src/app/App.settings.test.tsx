@@ -44,8 +44,14 @@ function current(state = "10"): SettingsResponse {
 
 const topics: Topic[] = [{ id: id(8), number: 7, german_name: "Küche", description: "Full stored description" },
   { id: id(9), number: 12, german_name: "Straße", description: "Another full description" }];
-function fixture() {
+/** The dictionary language follows the core: chosen (version 2, only the current value allowed) unless `firstChoice`. */
+function narrow(data: SettingsResponse) {
+  const field = data.settings.dictionary_language;
+  data.constraints.dictionary_language = { type: "enum", values: BigInt(field.version) > 1n ? [field.value] : ["ru", "uk", "en"] };
+}
+function fixture(options: { firstChoice?: boolean } = {}) {
   const data = current();
+  data.settings.dictionary_language.version = options.firstChoice ? "1" : "2"; narrow(data);
   const profile: Profile = { profile_id: profileId, access: { status: "admitted", version: "1", reason: null },
     role: "user", ui_language: "ru", dictionary_language: "uk", time_zone: "UTC", state_version: "10" };
   const facts = new Map<string, SavedCommandFact>();
@@ -67,6 +73,7 @@ function fixture() {
   const apply = (command: SettingCommand) => {
     const setting = data.settings[command.payload.key as keyof SettingsResponse["settings"]];
     Object.assign(setting, { value: structuredClone(command.payload.value), version: String(BigInt(setting.version) + 1n) });
+    narrow(data);
     data.state_version = String(BigInt(data.state_version) + 1n);
     Object.assign(profile, { state_version: data.state_version, ui_language: data.settings.ui_language.value,
       dictionary_language: data.settings.dictionary_language.value });
@@ -116,6 +123,16 @@ async function settings() {
   await screen.findByRole("group", { name: "Язык интерфейса" });
   await waitFor(() => expect(screen.getByRole("button", { name: "Обновить настройки" }).hasAttribute("disabled")).toBe(false));
 }
+/** The first choice of the dictionary language (screen М02), shown instead of Today until it is confirmed. */
+async function choose(pair: string) {
+  const heading = await screen.findByRole("heading", { level: 1, name: "Язык словаря" });
+  const page = within(heading.closest("main")!);
+  await waitFor(() => expect(page.getByRole("radio", { name: pair }).hasAttribute("disabled")).toBe(false));
+  fireEvent.click(page.getByRole("radio", { name: pair }));
+  fireEvent.click(page.getByRole("button", { name: "Продолжить" }));
+}
+const groupSize = "Новых карточек в группе";
+function type(name: string, value: string) { fireEvent.change(group(name).getByRole("textbox"), { target: { value } }); }
 function change(name: string, value: string) { fireEvent.change(group(name).getByRole("combobox"), { target: { value } }); }
 function save(name: string) { fireEvent.click(group(name).getByRole("button", { name: "Сохранить" })); }
 async function refresh() {
@@ -191,7 +208,9 @@ describe("Settings in the real App document", () => {
   it("a stale settings GET after foreground cannot restore old editing rights", async () => {
     const f = fixture(); f.data.settings.material.value = { mode: "topics", topic_ids: [id(8)] };
     render(<App />);
-    fireEvent.click(await waitFor(() => todayNav().getByRole("button", { name: "Настройки" })));
+    // Today now follows the Settings read that proves the language chosen; the first test of the file also pays the
+    // cold module start, so the wait is network-sized rather than the default 1 s.
+    fireEvent.click(await waitFor(() => todayNav().getByRole("button", { name: "Настройки" }), { timeout: 5000 }));
     await waitFor(() => settingsSection("Языки").getByRole("group", { name: "Язык интерфейса" }));
     await waitFor(() => expect(settingsHeader().getByRole("button", { name: "Обновить настройки" }).hasAttribute("disabled")).toBe(false));
     const learning = () => within(settingsSection("Обучение").getByRole("group", { name: "Новых карточек в группе" }));
@@ -248,64 +267,75 @@ describe("Settings in the real App document", () => {
     expect(localStorage.getItem(settingSlot)).toBeNull();
   });
   it("refreshes the profile before showing Today with the saved dictionary language", async () => {
-    const f = fixture(); render(<App />); await settings(); change("Язык словаря", "en"); save("Язык словаря");
-    await screen.findByText("Сохранено"); const pending = deferred<Response>();
+    // The first save of the dictionary language is its first choice (19.2-А): made on the choice screen, not in Settings.
+    const f = fixture({ firstChoice: true }); render(<App />);
+    await screen.findByRole("heading", { level: 1, name: "Язык словаря" }); const pending = deferred<Response>();
     f.openReply.mockImplementationOnce(() => pending.promise);
-    fireEvent.click(screen.getByRole("button", { name: "Сегодня" }));
+    await choose("Немецко-английский");
     await screen.findByText("Загружаем план на сегодня");
-    expect(f.todayReply).toHaveBeenCalledOnce(); expect(screen.queryByText("Активная пара: Украинский ↔ Немецкий")).toBeNull();
+    expect(f.commandReply).toHaveBeenCalledOnce(); expect(screen.queryByText("Активная пара: Украинский ↔ Немецкий")).toBeNull();
     await waitFor(() => expect(f.openReply).toHaveBeenCalledTimes(2));
     const body = f.openReply.mock.calls[1][0];
     expectDeadlineHeld(f, "/client/open", 1);
     pending.resolve(json({ status: "opened", profile: f.profile, compatibility: { compatible: true, contract_version: "1" },
       ...body, proof_version: "1", document_epoch: "1", session: null }));
     await screen.findByText("Активная пара: Английский ↔ Немецкий");
-    expect(f.todayReply).toHaveBeenCalledTimes(2); expect(document.documentElement.lang).toBe("ru");
+    // Today of the old pair was never read for display: every Today read carries the new pair.
+    expect(f.todayReply).toHaveBeenCalled(); expect(document.documentElement.lang).toBe("ru");
+    const paths = f.fetcher.mock.calls.map(([url]) => String(url));
+    expect(paths.filter(path => path === "/api/v1/client/open")).toHaveLength(2);
+    expect(paths.findIndex(path => path.endsWith("/today"))).toBeGreaterThan(paths.lastIndexOf("/api/v1/client/open"));
   });
   it("reconciles a lost reply with status without replaying the command", async () => {
-    const f = fixture(); f.commandReply.mockImplementationOnce(async command => { f.apply(command); throw new Error("lost reply"); });
-    render(<App />); await settings(); change("Язык словаря", "en"); save("Язык словаря");
+    const f = fixture({ firstChoice: true });
+    f.commandReply.mockImplementationOnce(async command => { f.apply(command); throw new Error("lost reply"); });
+    render(<App />); await choose("Немецко-английский");
     await screen.findAllByText(/Пока не удалось подтвердить сохранение/);
     expect(localStorage.getItem(settingSlot)).not.toBeNull();
-    await refresh(); await screen.findByText("Сохранено");
+    fireEvent.click(screen.getByRole("button", { name: "Обновить настройки" }));
+    await screen.findByText("Активная пара: Английский ↔ Немецкий");
     expect(f.statusReply).toHaveBeenCalledOnce(); expect(f.commandReply).toHaveBeenCalledOnce();
     expect(localStorage.getItem(settingSlot)).toBeNull();
   });
   it("recovers a sent intent after a full App remount using GET status only", async () => {
-    const f = fixture(); f.commandReply.mockImplementationOnce(async command => { f.apply(command); throw new Error("lost reply"); });
-    const mounted = render(<App />); await settings(); change("Язык словаря", "en"); save("Язык словаря");
+    const f = fixture({ firstChoice: true });
+    f.commandReply.mockImplementationOnce(async command => { f.apply(command); throw new Error("lost reply"); });
+    const mounted = render(<App />); await choose("Немецко-английский");
     await screen.findAllByText(/Пока не удалось подтвердить сохранение/);
     const pending = localStorage.getItem(settingSlot)!;
     expect(pending).not.toMatch(/synthetic-token|synthetic-proof|document_id|init_data/);
     mounted.unmount(); render(<App />);
     await waitFor(() => expect(localStorage.getItem(settingSlot)).toBeNull());
     expect(screen.queryByRole("heading", { name: "Настройки", level: 1 })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Язык словаря", level: 1 })).toBeNull();
     await settings(); await screen.findByText("Сохранено");
+    expect(group("Язык словаря").getByText("English")).toBeTruthy(); expect(group("Язык словаря").queryByRole("combobox")).toBeNull();
     expect(f.commandReply).toHaveBeenCalledOnce(); expect(f.statusReply).toHaveBeenCalledOnce();
     expect(localStorage.getItem(settingSlot)).toBeNull();
   });
+  // The dictionary language is fixed after its choice (19.2-А), so Q36 is shown on another editable field.
   it("Q36: a mismatch is left with the server's settings after a fresh readback, and the next save carries a new ID", async () => {
     const f = fixture(); let rejectedId = "";
     f.commandReply.mockImplementationOnce(async command => {
-      rejectedId = command.command_id; f.data.settings.dictionary_language = { value: "uk", version: "2" }; f.data.state_version = "11";
+      rejectedId = command.command_id; f.data.settings.learning_group_size = { value: 9, version: "2" }; f.data.state_version = "11";
       const { state_version: version, ...projection } = f.data;
       return json({ command: { id: command.command_id, status: "rejected" }, error: { code: "COMMAND_PAYLOAD_MISMATCH" },
         current: projection, state_version: version }, 409);
     });
-    render(<App />); await settings(); change("Язык словаря", "en"); save("Язык словаря");
+    render(<App />); await settings(); type(groupSize, "7"); save(groupSize);
     await screen.findByText(/Не удалось подтвердить именно это изменение/);
     expect(screen.queryByRole("button", { name: "Продолжить с текущими настройками" })).toBeNull();
     expect(localStorage.getItem(settingSlot)).toContain('"mismatch":true');
     await refresh();
     fireEvent.click(await screen.findByRole("button", { name: "Продолжить с текущими настройками" }));
     await waitFor(() => expect(localStorage.getItem(settingSlot)).toBeNull());
-    await waitFor(() => expect((group("Язык словаря").getByRole("combobox") as HTMLSelectElement).value).toBe("uk"));
+    await waitFor(() => expect((group(groupSize).getByRole("textbox") as HTMLInputElement).value).toBe("9"));
     const result = await screen.findByText("Показаны текущие настройки сервера. Можно вносить изменения.");
     expect(result.getAttribute("role")).toBe("status");
     await waitFor(() => expect(document.activeElement).toBe(result.parentElement));
     expect(screen.queryByText(/Не удалось подтвердить именно это изменение/)).toBeNull();
     expect(f.commandReply).toHaveBeenCalledOnce(); expect(f.statusReply).not.toHaveBeenCalled();
-    change("Язык словаря", "en"); save("Язык словаря");
+    type(groupSize, "7"); save(groupSize);
     await screen.findByText("Сохранено");
     expect(f.commandReply).toHaveBeenCalledTimes(2);
     expect(f.commandReply.mock.calls[1][0].command_id).not.toBe(rejectedId);
@@ -314,12 +344,12 @@ describe("Settings in the real App document", () => {
   it("Q36 keyboard and failure: a failed second readback keeps the block, says so once, leads to refresh; success line leaves with the next save", async () => {
     const f = fixture(); let rejectedId = "";
     f.commandReply.mockImplementationOnce(async command => {
-      rejectedId = command.command_id; f.data.settings.dictionary_language = { value: "uk", version: "2" }; f.data.state_version = "11";
+      rejectedId = command.command_id; f.data.settings.learning_group_size = { value: 9, version: "2" }; f.data.state_version = "11";
       const { state_version: version, ...projection } = f.data;
       return json({ command: { id: command.command_id, status: "rejected" }, error: { code: "COMMAND_PAYLOAD_MISMATCH" },
         current: projection, state_version: version }, 409);
     });
-    render(<App />); await settings(); change("Язык словаря", "en"); save("Язык словаря");
+    render(<App />); await settings(); type(groupSize, "7"); save(groupSize);
     await screen.findByText(/Не удалось подтвердить именно это изменение/); await refresh();
     const button = await screen.findByRole("button", { name: "Продолжить с текущими настройками" });
     f.settingsReply.mockRejectedValueOnce(new Error("offline"));
@@ -336,7 +366,7 @@ describe("Settings in the real App document", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Продолжить с текущими настройками" }));
     await screen.findByText("Показаны текущие настройки сервера. Можно вносить изменения.");
     expect(localStorage.getItem(settingSlot)).toBeNull();
-    change("Язык словаря", "en"); save("Язык словаря");
+    type(groupSize, "7"); save(groupSize);
     await screen.findByText("Сохранено");
     expect(screen.queryByText("Показаны текущие настройки сервера. Можно вносить изменения.")).toBeNull();
     expect(f.commandReply).toHaveBeenCalledTimes(2); expect(f.commandReply.mock.calls[1][0].command_id).not.toBe(rejectedId);
@@ -353,7 +383,7 @@ describe("Settings in the real App document", () => {
   });
   it("supports edits and saves inside React StrictMode", async () => {
     const f = fixture(); render(<StrictMode><App /></StrictMode>); await settings();
-    change("Язык словаря", "en"); save("Язык словаря"); await screen.findByText("Сохранено");
+    type(groupSize, "7"); save(groupSize); await screen.findByText("Сохранено");
     expect(f.commandReply).toHaveBeenCalledOnce(); expect(f.haptic).toHaveBeenCalledOnce();
   });
   it.each([401, 403])("revokes the document after a current settings refusal (%s)", async status => {
@@ -371,7 +401,7 @@ describe("Settings in the real App document", () => {
     expectDeadlineHeld(f, "/settings/topics", 0);
     await act(async () => { pending.resolve(json({ error: { code: "DENIED" } }, 401)); });
     expect(screen.getByRole("heading", { name: "Настройки", level: 1 })).toBeDefined();
-    change("Язык словаря", "en"); save("Язык словаря"); await screen.findByText("Сохранено");
+    type(groupSize, "7"); save(groupSize); await screen.findByText("Сохранено");
   });
   it("discards memory drafts on a new document epoch", async () => {
     const f = fixture(); render(<App />); await settings();
@@ -387,20 +417,21 @@ describe("Settings in the real App document", () => {
       if (key === settingSlot) throw new Error("full");
       return original.call(this, key, value);
     });
-    change("Язык словаря", "en"); save("Язык словаря");
+    type(groupSize, "7"); save(groupSize);
     await screen.findByText("Не удалось завершить сохранение на этом устройстве. Обнови настройки.");
     expect(f.commandReply).not.toHaveBeenCalled();
   });
   it("reconciles a pending save hidden behind Today after foreground replaces its access", async () => {
     const f = fixture(), pending = deferred<Response>();
     f.commandReply.mockImplementationOnce(() => pending.promise);
-    render(<App />); await settings(); change("Язык словаря", "en"); save("Язык словаря");
+    // The dictionary language cannot change after its choice (19.2-А); the interface language carries the same path.
+    render(<App />); await settings(); change("Язык интерфейса", "en"); save("Язык интерфейса");
     await waitFor(() => expect(f.commandReply).toHaveBeenCalledOnce());
     fireEvent.click(screen.getByRole("button", { name: "Сегодня" }));
     await screen.findByText("Активная пара: Украинский ↔ Немецкий");
     expectDeadlineHeld(f, "/commands", 0);
     await act(async () => { pending.resolve(json(f.apply(f.commandReply.mock.calls[0][0]))); });
-    await screen.findByText("Активная пара: Английский ↔ Немецкий");
+    await screen.findByText("Active pair: Ukrainian ↔ German");
     expect(f.statusReply).toHaveBeenCalledOnce(); expect(f.commandReply).toHaveBeenCalledOnce();
     expect(localStorage.getItem(settingSlot)).toBeNull();
   });
@@ -436,14 +467,14 @@ describe("Settings in the real App document", () => {
     expect(distinct(writes.mock.calls.filter(([key]) => key === "wortly.uiLanguage").map(([, value]) => value))).toEqual(["en"]);
   });
   it("stops after two stale foreground replies, hides the old pair and allows manual retry", async () => {
-    const f = fixture(); render(<App />); await settings(); const stale = structuredClone(f.profile);
-    change("Язык словаря", "en"); save("Язык словаря"); await screen.findByText("Сохранено");
+    const f = fixture({ firstChoice: true }); render(<App />);
+    await screen.findByRole("heading", { level: 1, name: "Язык словаря" }); const stale = structuredClone(f.profile);
     const oldReply = async (body: { client_instance_id: string; document_id: string }) => json({ status: "opened", profile: stale,
       compatibility: { compatible: true, contract_version: "1" }, ...body, proof_version: "1", document_epoch: "1", session: null });
     f.openReply.mockImplementationOnce(oldReply).mockImplementationOnce(oldReply);
-    fireEvent.click(screen.getByRole("button", { name: "Сегодня" }));
+    await choose("Немецко-английский");
     await screen.findByText("Не удалось загрузить план");
-    expect(f.openReply).toHaveBeenCalledTimes(3); expect(f.todayReply).toHaveBeenCalledOnce();
+    expect(f.openReply).toHaveBeenCalledTimes(3); expect(f.commandReply).toHaveBeenCalledOnce();
     expect(screen.queryByText(/Активная пара:/)).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Повторить" }));
     await screen.findByText("Активная пара: Английский ↔ Немецкий");
@@ -453,7 +484,7 @@ describe("Settings in the real App document", () => {
     const f = fixture(); f.data.settings.material.value = { mode: "topics", topic_ids: [id(8)] };
     f.topicsReply.mockImplementationOnce(async () => json({ error: { code: "UNAVAILABLE" } }, 503));
     render(<App />); await settings(); await screen.findByText("Не удалось загрузить актуальный список тем");
-    change("Язык словаря", "en"); save("Язык словаря"); await screen.findByText("Сохранено");
+    type(groupSize, "7"); save(groupSize); await screen.findByText("Сохранено");
     await refresh(); await screen.findByRole("searchbox");
     expect(f.settingsReply).toHaveBeenCalledTimes(2); expect(f.topicsReply).toHaveBeenCalledTimes(2);
     expect(f.commandReply).toHaveBeenCalledOnce();
@@ -478,7 +509,7 @@ describe("Settings in the real App document", () => {
     change("Язык интерфейса", "en"); save("Язык интерфейса"); await screen.findByText("Saved");
     expect(document.documentElement.lang).toBe("en");
     expect(localStorage.getItem(settingSlot)).not.toBeNull();
-    expect((group("Dictionary language").getByRole("combobox") as HTMLSelectElement).disabled).toBe(true);
+    expect((group("New cards per group").getByRole("textbox") as HTMLInputElement).disabled).toBe(true);
     remove.mockRestore(); fireEvent.click(screen.getByRole("button", { name: "Refresh settings" }));
     await waitFor(() => expect(localStorage.getItem(settingSlot)).toBeNull());
     expect(f.commandReply).toHaveBeenCalledOnce();
@@ -494,7 +525,7 @@ describe("Settings in the real App document", () => {
   });
   it("keeps an unknown outcome across tabs without silently resending", async () => {
     const f = fixture(); f.commandReply.mockRejectedValueOnce(new Error("request lost"));
-    render(<App />); await settings(); change("Язык словаря", "en"); save("Язык словаря");
+    render(<App />); await settings(); type(groupSize, "7"); save(groupSize);
     await screen.findAllByText(/Пока не удалось подтвердить сохранение/);
     const original = f.commandReply.mock.calls[0][0];
     fireEvent.click(screen.getByRole("button", { name: "Сегодня" }));
@@ -504,6 +535,16 @@ describe("Settings in the real App document", () => {
     fireEvent.click(screen.getByRole("button", { name: "Повторить отправку" })); await screen.findByText("Сохранено");
     expect(f.commandReply).toHaveBeenCalledTimes(2); expect(f.commandReply.mock.calls[1][0]).toEqual(original);
   });
+  it("after the choice the dictionary language is shown, not offered; the interface language stays editable", async () => {
+    const f = fixture(); render(<App />); await settings();
+    const field = group("Язык словаря");
+    expect(field.getByText("Українська")).toBeTruthy(); expect(field.getByText("Язык словаря пока нельзя изменить.")).toBeTruthy();
+    expect(field.queryByRole("combobox")).toBeNull(); expect(field.queryByRole("button")).toBeNull();
+    expect(group("Язык интерфейса").getByRole("combobox").hasAttribute("disabled")).toBe(false);
+    expect(screen.queryByRole("heading", { name: "Язык словаря", level: 1 })).toBeNull();
+    expect(f.commandReply).not.toHaveBeenCalled();
+  });
+
   it("preserves the server resume route when returning from settings", async () => {
     const f = fixture(); render(<App />); await settings();
     f.state.session = { id: id(30), phase: "active" };

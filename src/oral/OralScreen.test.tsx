@@ -206,21 +206,53 @@ describe("OralScreen: visible commit lifetime", () => {
 });
 
 describe("OralScreen: recovery stays separate from accepted results", () => {
-  it.each(["study", "stop"] as const)("unknown %s checks GET, retries only that lane and preserves exact intent", async lane => {
-    const f = fixture(lane === "study" ? "presented" : "revealed");
-    const intent: OralIntent = lane === "study" ? { command_id: id(4), session_id: id(3), assignment_id: id(6), kind: "oral.reveal", payload: {} }
-      : { command_id: id(5), session_id: id(3), kind: "session.stop", payload: { reason: "stop" } };
-    const receiptKey = lane === "study" ? studyKey : stopKey, retry = lane === "study" ? "Повторить действие" : "Повторить завершение";
-    f.values.set(receiptKey, JSON.stringify({ schemaVersion: 1, profileId: id(50), clientInstanceId: id(1), pair: "ru-de", intent }));
-    render(<f.Harness />); await waitFor(() => expect(button(retry)).toBeTruthy());
-    expect(screen.queryByRole("button", { name: lane === "study" ? "Повторить завершение" : "Повторить действие" })).toBeNull(); expect(f.posts).toEqual([]);
+  // Decision 23.1 А (owner, C165): a study action (oral.reveal here) whose record a reload or another window left behind is
+  // only checked and its confirmed outcome shown; it is never sent from this page, so no retry is offered. Stop keeps its rules.
+  it("unknown study left by a reload is checked by GET only: no retry is offered, nothing is sent, the record stays (23.1 А)", async () => {
+    const f = fixture("presented");
+    const intent: OralIntent = { command_id: id(4), session_id: id(3), assignment_id: id(6), kind: "oral.reveal", payload: {} };
+    f.values.set(studyKey, JSON.stringify({ schemaVersion: 1, profileId: id(50), clientInstanceId: id(1), pair: "ru-de", intent }));
+    render(<f.Harness />); await waitFor(() => expect(button("Проверить состояние").disabled).toBe(false));
+    expect(f.gets.filter(url => url.includes("/commands/")).length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByRole("button", { name: "Повторить действие" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Повторить завершение" })).toBeNull(); expect(f.posts).toEqual([]);
     fireEvent.click(button("Проверить состояние"));
     await waitFor(() => expect(f.gets.filter(url => url.includes("/commands/")).length).toBeGreaterThanOrEqual(2));
-    await waitFor(() => { expect(button("Проверить состояние").disabled).toBe(false); expect(button(retry)).toBeTruthy(); });
+    await waitFor(() => expect(button("Проверить состояние").disabled).toBe(false));
+    expect(screen.queryByRole("button", { name: "Повторить действие" })).toBeNull();
+    expect(f.posts).toEqual([]); expect(f.values.has(studyKey)).toBe(true);
+    expect(JSON.parse(f.values.get(studyKey)!).intent).toEqual(intent);
+  });
+
+  // 23.1 А covers every study kind of the oral quiz (oral.reveal above, oral.grade, assignment.present): the same rule.
+  it.each([
+    ["oral.grade", "revealed", { command_id: id(4), session_id: id(3), assignment_id: id(6), kind: "oral.grade", payload: { correct: true } }],
+    ["assignment.present", "prefetched", { command_id: id(4), session_id: id(3), assignment_id: id(6), kind: "assignment.present", payload: {} }],
+  ] as const)("unknown %s left by a reload is checked by GET only: no retry is offered, nothing is sent, the record stays (23.1 А)", async (_kind, step, intent) => {
+    const f = fixture(step);
+    f.values.set(studyKey, JSON.stringify({ schemaVersion: 1, profileId: id(50), clientInstanceId: id(1), pair: "ru-de", intent }));
+    render(<f.Harness />); await waitFor(() => expect(button("Проверить состояние").disabled).toBe(false));
+    expect(f.gets.filter(url => url.includes(`/commands/${id(4)}`)).length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByRole("button", { name: "Повторить действие" })).toBeNull(); expect(f.posts).toEqual([]);
+    fireEvent.click(button("Проверить состояние"));
+    await waitFor(() => expect(f.gets.filter(url => url.includes(`/commands/${id(4)}`)).length).toBeGreaterThanOrEqual(2));
+    await waitFor(() => expect(button("Проверить состояние").disabled).toBe(false));
+    expect(screen.queryByRole("button", { name: "Повторить действие" })).toBeNull();
+    expect(f.posts).toEqual([]); expect(JSON.parse(f.values.get(studyKey)!).intent).toEqual(intent);
+  });
+
+  it("unknown stop checks GET, retries only that lane and preserves exact intent", async () => {
+    const f = fixture("revealed");
+    const intent: OralIntent = { command_id: id(5), session_id: id(3), kind: "session.stop", payload: { reason: "stop" } };
+    f.values.set(stopKey, JSON.stringify({ schemaVersion: 1, profileId: id(50), clientInstanceId: id(1), pair: "ru-de", intent }));
+    render(<f.Harness />); await waitFor(() => expect(button("Повторить завершение")).toBeTruthy());
+    expect(screen.queryByRole("button", { name: "Повторить действие" })).toBeNull(); expect(f.posts).toEqual([]);
+    fireEvent.click(button("Проверить состояние"));
+    await waitFor(() => expect(f.gets.filter(url => url.includes("/commands/")).length).toBeGreaterThanOrEqual(2));
+    await waitFor(() => { expect(button("Проверить состояние").disabled).toBe(false); expect(button("Повторить завершение")).toBeTruthy(); });
     expect(f.posts).toEqual([]); expect(f.gets.filter(url => url.includes("/commands/")).length).toBeGreaterThanOrEqual(2);
-    fireEvent.click(button(retry)); await waitFor(() => lane === "study" ? expect(button("Правильно").disabled).toBe(false)
-      : expect(screen.getByText("Занятие завершено.")).toBeTruthy());
-    expect(f.posts).toHaveLength(1); expect(f.posts[0]).toMatchObject(intent); expect(f.values.has(receiptKey)).toBe(false);
+    fireEvent.click(button("Повторить завершение")); await waitFor(() => expect(screen.getByText("Занятие завершено.")).toBeTruthy());
+    expect(f.posts).toHaveLength(1); expect(f.posts[0]).toMatchObject(intent); expect(f.values.has(stopKey)).toBe(false);
   });
 
   it("closed retains a GET check for an unresolved study receipt without another POST or invented interrupted summary", async () => {
@@ -270,6 +302,8 @@ describe("OralScreen: recovery stays separate from accepted results", () => {
     const intent: OralIntent = lane === "study" ? { command_id: id(4), session_id: id(3), assignment_id: id(6), kind: "oral.reveal", payload: {} }
       : { command_id: id(5), session_id: id(3), kind: "session.stop", payload: { reason: "stop" } };
     const receiptKey = lane === "study" ? studyKey : stopKey, retry = lane === "study" ? "Повторить действие" : "Повторить завершение";
+    // 23.1 А (owner, C165): the study record left by a reload is only checked, never retried here; Stop keeps its retry.
+    const offered = lane === "stop";
     f.values.set(receiptKey, JSON.stringify({ schemaVersion: 1, profileId: id(50), clientInstanceId: id(1), pair: "ru-de", intent }));
     const original = f.handler, gate = deferred<void>(); let reads = 0;
     // Hold the document read that follows the mount lane check, so the check is clicked while it is in flight.
@@ -280,10 +314,12 @@ describe("OralScreen: recovery stays separate from accepted results", () => {
     });
     const checks = () => f.gets.filter(url => url.includes("/commands/")).length;
     try {
-      render(<f.Harness />); await waitFor(() => { expect(button(retry)).toBeTruthy(); expect(reads).toBe(2); });
+      render(<f.Harness />); await waitFor(() => { expect(button("Проверить состояние")).toBeTruthy(); expect(reads).toBe(2); });
+      if (offered) expect(button(retry)).toBeTruthy(); else expect(screen.queryByRole("button", { name: retry })).toBeNull();
       expect(button("Проверить состояние").disabled).toBe(false); expect(checks()).toBe(1);
       fireEvent.click(button("Проверить состояние")); await act(async () => { gate.resolve(); });
       await waitFor(() => expect(checks()).toBeGreaterThanOrEqual(2)); expect(f.posts).toEqual([]);
+      if (!offered) expect(screen.queryByRole("button", { name: retry })).toBeNull();
     } finally { gate.resolve(); }
   });
 });

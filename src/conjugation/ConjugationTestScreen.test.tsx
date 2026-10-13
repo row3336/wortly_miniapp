@@ -45,7 +45,7 @@ function command(over: Partial<ConjugationCommandSnapshot> = {}): ConjugationCom
 }
 function snap(over: Partial<ConjugationDocumentSnapshot> = {}): ConjugationDocumentSnapshot {
   return { phase: "question", sessionId: S1, stateVersion: "10", terminalSessionIds: [], closed: null, acceptedAddress: null,
-    commands: { study: command(), stop: command() }, problem: null,
+    commands: { study: command(), stop: command() }, problem: null, pairMismatch: null,
     currentStep: { stateVersion: "10", step: projection(assignment()) }, resultA: null,
     display: { kind: "step", assignmentId: B1 }, stepTicket: null, presentationTicket: null,
     canStart: false, canSubmit: true, canCorrect: false, canUndo: false, canStop: true, canSummaryHome: false, allowedGrades: [],

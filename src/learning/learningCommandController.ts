@@ -3,22 +3,38 @@ import { oneOf, sameId, uuid, version } from "../api/wireValidation";
 import { LaneCore, missingProblem, retryStep, type CommandProblem, type LaneResolved, type LaneSnapshot,
   type MissingStatus, type WithoutId } from "../commands/commandLane";
 import { sendableIntent } from "../commands/closeIntent";
-import type { PendingSlot } from "../commands/pendingSlot";
+import { refusedUnsent, type PendingSlot } from "../commands/pendingSlot";
 import { revisionRetryProblem } from "../commands/resultRevision";
 import type { LearningSessionRead, LearningSessionReply, LearningSessionStatus } from "./learningSessionApi";
 import { copyLearningCommandIntent, copyLearningResultIntent, isLearningResultIntent, validLearningCommandIntent,
   type LearningCommandIntent, type LearningResultIntent } from "./learningCommandIntent";
 import type { LearningAnswerReply, LearningAnswerStatus, LearningResultRead } from "./learningAnswerApi";
 import type { LearningSessionPending } from "./learningSessionPending";
+import { documentLearningStarts, type LearningPageStarts } from "./learningPageStarts";
 
 export type LearningTransition = WithoutId<LearningCommandIntent>;
 type Current = LearningSessionRead["current"] | UnavailableCurrent;
 type Answer = Pick<LearningAnswerResponse, "action" | "result" | "capabilities">;
 type Reply = LearningSessionReply | LearningAnswerReply;
 type Status = LearningSessionStatus | LearningAnswerStatus;
-type Settled = Reply | Extract<Status, { outcome: "accepted" }>;
+type Settled = Reply | Extract<Status, { outcome: "accepted" | "rejected" }>;
 type Resolved = LaneResolved<LearningCommandIntent["kind"]> & { assignmentId?: string; resultId?: string };
-export type LearningCommandSnapshot = LaneSnapshot<LearningCommandIntent, Current, Resolved> & { answer: Answer | null };
+export type LearningCommandSnapshot = LaneSnapshot<LearningCommandIntent, Current, Resolved> & {
+  answer: Answer | null;
+  /**
+   * A new session.start is being stored on this device and its request has not started yet (owner decision 21.1-А,
+   * C156): no session of its ID exists, so the view offers no Stop for it. The end of the save proves no server commit;
+   * only requestStarted() (or the end of this send) ends it.
+   */
+  preparingStart: boolean;
+  /**
+   * The retained session.start was stored by its first send in this window, but no request of it has started: a new open
+   * handle of the same document replaced the one it was tapped under (its send was refused before the transport). Its
+   * own outcome, never one of a transmitted start whose reply is unknown. Owner decision 33.1-А (C194): no Stop of it is
+   * offered; after the check under the current handle the same intent is sent once (DocumentLanes).
+   */
+  startNotSent: boolean;
+};
 type Options = {
   profileId: string;
   clientInstanceId: string;
@@ -34,6 +50,8 @@ type Options = {
   read(sessionId: string): Promise<LearningSessionRead>;
   readResult(intent: LearningResultIntent): Promise<LearningResultRead>;
   onUpdate(snapshot: LearningCommandSnapshot): void;
+  /** The starts this page created (35.1-А); the page of this JS document unless a test models another one. */
+  page?: LearningPageStarts;
 };
 
 /**
@@ -48,9 +66,14 @@ export class LearningCommandController extends LaneCore<LearningCommandIntent, L
   private answer: Answer | null = null;
   private closedSession: ClosedSessionBoundary | null = null;
   private floor: string | null;
+  private preparingStart = false;
+  /** command_id of a start stored by its first send whose request has not started yet (memory only: not after a reload). */
+  private storedUnsent: string | null = null;
+  private readonly page: LearningPageStarts;
 
   constructor(private readonly options: Options) {
     super(options);
+    this.page = options.page ?? documentLearningStarts;
     if (!uuid(options.profileId) || !uuid(options.clientInstanceId) || !oneOf(options.pair, ["ru-de", "uk-de", "en-de"])
       || options.stateVersion !== undefined && !version(options.stateVersion)) throw new Error("invalid Learning context");
     this.floor = options.stateVersion ?? null;
@@ -72,11 +95,15 @@ export class LearningCommandController extends LaneCore<LearningCommandIntent, L
       pendingIntent: ownPending ? copyLearningCommandIntent(this.pending!.intent) : null,
       rejectionCode: live ? this.rejectionCode : null,
       problem: this.problem, current: live && fresh ? structuredClone(this.current) : null,
-      answer: live && fresh ? structuredClone(this.answer) : null, stateVersion: this.floor,
+      answer: live && fresh ? structuredClone(this.answer) : null, preparingStart: live && this.preparingStart,
+      startNotSent: live && this.outcome === null && this.pending !== null && this.storedUnsent === this.pending.intent.command_id,
+      stateVersion: this.floor,
       closedSession: live && fresh ? structuredClone(this.closedSession) : null,
       canRetry: live && fresh && !this.running && this.retryVerified && this.pending !== null && !this.pending.mismatch
         && this.outcome === null && this.pending.clientInstanceId === this.options.clientInstanceId
-        && this.pending.pair === this.options.pair && sendableIntent(this.pending.intent),
+        && this.pending.pair === this.options.pair && sendableIntent(this.pending.intent)
+        // 35.1-А: a start of another page (a reload, another window) is only checked by its ID, never sent again.
+        && (this.pending.intent.kind !== "session.start" || this.page.owns(this.pending)),
       conflict: this.pending?.mismatch === true };
   }
   protected clearCurrent(): void { this.current = null; this.answer = null; this.closedSession = null; }
@@ -93,15 +120,18 @@ export class LearningCommandController extends LaneCore<LearningCommandIntent, L
     if (!this.outcome) return;
     if (this.pending && this.resolved?.commandId !== this.pending.intent.command_id) this.resolved = { commandId: this.pending.intent.command_id,
       kind: this.pending.intent.kind, sessionId: this.pending.intent.session_id };
-    if (this.pending) await this.options.pendingStore.clear(this.pending, this.lifetime.signal);
+    const cleared = this.pending;
+    if (cleared) await this.options.pendingStore.clear(cleared, this.lifetime.signal);
+    // The record of a known outcome is gone from the device: its page mark has nothing left to tell (35.1-А).
+    if (cleared) this.page.forget(cleared.intent.command_id);
     if (!this.live()) return;
     this.pending = null; this.problem = null; this.retryVerified = false; this.phase = "settled";
   }
-  private async settle(outcome: "accepted" | "rejected", reply: Settled): Promise<void> {
+  private async settle(outcome: "accepted" | "rejected", reply: Settled, restored = false): Promise<void> {
     this.outcome = outcome;
     const intent = this.pending?.intent;
     if (intent) {
-      this.resolved = { commandId: intent.command_id, kind: intent.kind, sessionId: intent.session_id };
+      this.resolved = { commandId: intent.command_id, kind: intent.kind, sessionId: intent.session_id, ...(restored ? { restored: true } : {}) };
       // The exact accepted address is immutable evidence, even when the attached
       // result projection is older than a confirmed Settings observation.
       if (outcome === "accepted" && ["answer.submit", "result.correct", "result.grade", "result.undo"].includes(intent.kind)
@@ -111,10 +141,14 @@ export class LearningCommandController extends LaneCore<LearningCommandIntent, L
     }
     this.rejectionCode = outcome === "rejected" && "error" in reply ? reply.error.code : null;
     const current = "step" in reply ? reply.step : reply.current;
-    if (!this.observe(reply.state_version, current)) this.clearCurrent();
+    const otherPair = "pair" in current && current.pair !== this.options.pair;
+    const observed = this.observe(reply.state_version, current);
+    if (!observed) this.clearCurrent();
     else this.answer = this.current !== null && "pair" in this.current && "step" in reply
       ? structuredClone({ action: reply.action, result: reply.result, capabilities: reply.capabilities }) : null;
     await this.clearSettled();
+    // As the shared lane (commandLane settle): the accepted fact stays, its session is open in another pair (R1).
+    if (observed && otherPair && outcome === "accepted" && this.live() && current.status !== "closed") this.problem = "pair_changed";
   }
 
   /** Reload checks the original ID. No missing fact can itself trigger a POST. */
@@ -134,7 +168,13 @@ export class LearningCommandController extends LaneCore<LearningCommandIntent, L
       const pending = this.pending;
       const reply = await this.options.check(copyLearningCommandIntent(pending.intent));
       if (!this.live()) return;
-      if (reply.outcome === "accepted") { await this.settle("accepted", reply); return; }
+      if (reply.outcome === "accepted") { await this.settle("accepted", reply, this.inherited); return; }
+      if (reply.outcome === "rejected") {
+        // A stored final refusal of this start (its own ID and intent hash, learningSessionApi): the same outcome as
+        // the refusal its POST got, once it is not older than what this lane already knows.
+        if (!this.observe(reply.state_version)) { this.problem = "stale_response"; this.phase = "unresolved"; return; }
+        await this.settle("rejected", reply); return;
+      }
       const missing: MissingStatus = reply, problem = missingProblem(missing, pending, this.options);
       if (!this.observe(reply.state_version)) this.problem = "stale_response";
       else if (problem === "not_applied") {
@@ -160,7 +200,19 @@ export class LearningCommandController extends LaneCore<LearningCommandIntent, L
       else {
         const read = await this.options.read(pending.intent.session_id);
         if (!this.live()) return;
+        const found = pending.intent.kind === "session.start" && this.storedUnsent === pending.intent.command_id
+          ? retryStep(read.current, pending.intent, pending.pair) : null;
         if (!this.observe(read.state_version, read.current)) this.problem = "stale_response";
+        else if (found !== null && typeof found !== "string") {
+          // 33.1-А (F6): the session of this never sent start exists (S): nothing of the start is left to send. Its
+          // record is cleared and S is recovered from this read like any open session; Stop follows the rights of S.
+          await this.options.pendingStore.clear(pending, this.lifetime.signal);
+          // As in clearSettled: the record is gone from the device, so its page mark ends too (35.1-А).
+          this.page.forget(pending.intent.command_id);
+          if (!this.live()) return;
+          this.storedUnsent = null; this.pending = null; this.retryVerified = false; this.phase = "idle";
+          return;
+        }
         else {
           this.problem = retryProblem(pending.intent, read.current, pending.pair);
           this.retryVerified = this.problem === "not_found";
@@ -170,14 +222,22 @@ export class LearningCommandController extends LaneCore<LearningCommandIntent, L
     });
   }
 
-  private async sendPending(transmitted?: () => void): Promise<void> {
+  /** first: the new intent of start, never stored or sent before; resend and retry pass a retained one. */
+  private async sendPending(transmitted?: () => void, first = false): Promise<void> {
     const pending = this.pending;
     // A stored closure record is only checked by its ID (D-CP4 4.6.1): never sent from here.
     if (!pending || !this.live() || !sendableIntent(pending.intent)) return;
     this.phase = "sending"; this.problem = null; this.retryVerified = false; this.clearCurrent(); this.emit();
     if (!this.live()) return;
-    await this.options.pendingStore.save(pending, this.lifetime.signal);
+    try { await this.options.pendingStore.save(pending, this.lifetime.signal); }
+    catch (error: unknown) {
+      // A new intent the shared slot refused (another record, or one it cannot read) was neither stored nor sent: it is no
+      // unknown outcome to check or retry, and the record in the slot stays exactly as it is. A retained intent keeps its record.
+      if (first && refusedUnsent(error)) this.pending = null;
+      throw error;
+    }
     if (!this.live()) return;
+    if (this.preparingStart) this.storedUnsent = pending.intent.command_id;
     // A manual send passes no hook: its exchange stays exactly what it was before automatic recovery.
     const intent = copyLearningCommandIntent(pending.intent);
     const reply = await (transmitted ? this.options.send(intent, transmitted) : this.options.send(intent));
@@ -187,6 +247,17 @@ export class LearningCommandController extends LaneCore<LearningCommandIntent, L
       this.pending = { ...pending, mismatch: true }; this.problem = "mismatch"; this.phase = "unresolved";
       await this.options.pendingStore.markMismatch(this.pending, this.lifetime.signal);
     } else await this.settle(reply.outcome, reply);
+  }
+  /**
+   * The host tells this right where the request of the current send starts (inside the open handle, after its check):
+   * a new start may exist from now on. The update is announced after this synchronous step, so the request has already
+   * entered the transport before anyone can see Stop offered again (21.1-А).
+   */
+  requestStarted(): void {
+    this.storedUnsent = null;
+    if (!this.preparingStart) return;
+    this.preparingStart = false;
+    void Promise.resolve().then(() => this.emit());
   }
   begin(action: LearningTransition): Promise<void> {
     if (this.busy()) return this.running ?? Promise.resolve();
@@ -204,8 +275,21 @@ export class LearningCommandController extends LaneCore<LearningCommandIntent, L
     if (this.busy()) return this.running ?? Promise.resolve();
     const pending: LearningSessionPending = { schemaVersion: 1, profileId: this.options.profileId,
       clientInstanceId: this.options.clientInstanceId, pair: this.options.pair, intent: copyLearningCommandIntent(intent) };
+    // Marked before the deferred run and its slot write: a record of this start never exists without its page mark.
+    this.page.mark(pending);
+    // Set before the deferred run: a Stop in the same tick as the tap on «Начать» already sees it.
+    this.preparingStart = intent.kind === "session.start";
+    this.noteCreated(pending.intent.command_id);
     return this.run(async () => {
-      this.outcome = null; this.resolved = null; this.rejectionCode = null; this.pending = pending; await this.sendPending(transmitted);
+      this.outcome = null; this.resolved = null; this.rejectionCode = null; this.pending = pending;
+      // Every end of this send (refused, failed, or a transport that never started a request) ends the preparation.
+      try { await this.sendPending(transmitted, true); }
+      catch (error: unknown) {
+        // A send refused before its request (a handle replaced under this live owner, or a command the API refused
+        // locally) keeps «stored, not sent»; a closed or denied owner keeps nothing.
+        if (!this.live()) this.storedUnsent = null;
+        throw error;
+      } finally { this.preparingStart = false; }
     });
   }
   /**
@@ -219,6 +303,13 @@ export class LearningCommandController extends LaneCore<LearningCommandIntent, L
   retry(): Promise<void> {
     if (!this.snapshot().canRetry) return this.running ?? Promise.resolve();
     return this.run(() => this.sendPending());
+  }
+  release(commandId: string): Promise<void> { return this.forgetCleared(super.release(commandId)); }
+  releaseClosed(sessionId: string): Promise<void> { return this.forgetCleared(super.releaseClosed(sessionId)); }
+  /** A record cleared by a release ends its page mark too; a failed clear keeps both. */
+  private forgetCleared(task: Promise<void>): Promise<void> {
+    const pending = this.pending;
+    return task.then(() => { if (pending && this.pending === null) this.page.forget(pending.intent.command_id); });
   }
 }
 

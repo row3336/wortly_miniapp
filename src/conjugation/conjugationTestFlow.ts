@@ -24,7 +24,9 @@ type Common = { canStop: boolean; stopping: boolean; problem: string | null; can
    * session whose frozen summary is unknown (T2 C2). It re-proves the same command IDs; it never sends. */
   canCheck: boolean };
 export type ConjugationView = Common & (
-  | { screen: "loading" } | { screen: "recovery" } | { screen: "stale" }
+  | { screen: "loading" } | { screen: "recovery" }
+  /** `known`: the session is proved open in another pair and no problem is named: a fact, not a failed update (C178). */
+  | { screen: "stale"; known?: boolean }
   | { screen: "question"; question: ConjugationQuestion; draft: string; editable: boolean; canSubmit: boolean; canForget: boolean;
       status: "presenting" | "submitting" | "unknown" | null; pendingForgot: boolean; canPrevious: boolean;
       presentationTicket: ConjugationPresentationTicket | null }
@@ -334,7 +336,7 @@ export class ConjugationTestFlow {
       return { ...(summary ? common : checkable), screen: "closed", reason: state.closed?.reason ?? null, summary };
     }
     if (state.phase === "loading" || state.phase === "idle") return { ...common, screen: "loading" };
-    if (state.phase === "stale") return { ...checkable, screen: "stale" };
+    if (state.phase === "stale") return { ...checkable, screen: "stale", known: state.pairMismatch !== null && state.problem === null };
     if (state.phase === "unknown") {
       // Row 10: the last question of the same assignment with the exact pending text, read-only.
       const answer = pendingAnswer(state);

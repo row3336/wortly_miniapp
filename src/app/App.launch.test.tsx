@@ -48,6 +48,8 @@ function fixture(initial: Partial<Server> = {}) {
     if (path.endsWith("/settings")) {
       const data = settingsResponse(); data.state_version = "1";
       for (const field of Object.values(data.settings)) field.version = "1";
+      // The dictionary language is already chosen (19.3-А); the first choice has its own tests (App.firstChoice).
+      data.settings.dictionary_language.version = "2";
       data.settings.ui_language.value = "ru"; data.settings.dictionary_language.value = "ru";
       return json(data);
     }

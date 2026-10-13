@@ -111,6 +111,12 @@ function device(options: { locks?: boolean; session?: boolean; close?: boolean; 
   const eventsOf = (document: string) => opens().filter(body => body.document_id === document).map(body => body.event);
   return { server, locks, close, opens, posts, calls, refused, eventsOf, release, held: () => waiting.length };
 }
+/** The intents of the commands the document sent. */
+const sentIntents = (d: ReturnType<typeof device>, document: string) => d.posts()
+  .map(([, init]) => JSON.parse(String(init!.body))).filter(body => body.document_id === document)
+  .map(({ client_instance_id: _client, document_id: _document, ...intent }) => intent);
+/** The intent of the record in the shared slot, as a list for comparison with sentIntents. */
+const keptIntent = (key: string) => { const raw = localStorage.getItem(key); return raw === null ? [] : [JSON.parse(raw).intent]; };
 const foreground = () => {
   vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
   fireEvent(document, new Event("visibilitychange"));
@@ -190,7 +196,7 @@ describe("two windows of one installation (decision 2.3)", () => {
     expect(d.server).toMatchObject({ document: d.opens()[1].document_id, epoch: 2 });
   });
 
-  it("Ф1: A with an open oral session taps «Раскрыть» after B took over: A closes; its refusal leaves nothing for B", async () => {
+  it("Ф1: A with an open oral session taps «Раскрыть» after B took over: A closes; its record stays, B sends nothing of it", async () => {
     const d = device({ session: true });
     const a = render(<App />); await within(a.container).findByText("wenn");
     const old = d.opens()[0].document_id;
@@ -204,17 +210,21 @@ describe("two windows of one installation (decision 2.3)", () => {
     expect(within(a.container).queryByText("wenn")).toBeNull();
     expect(within(a.container).queryByText("Не удалось обновить занятие. Проверь состояние.")).toBeNull();
     expect(d.refused.filter(path => path.endsWith("/commands"))).toHaveLength(1);
-    // The old window settled its refusal before it closed: no saved action is left in the shared storage.
-    expect(localStorage.getItem("wortly.pending.oral_session")).toBeNull();
+    // DOCUMENT_STALE refuses this window's attempt, not the action (C091 §1, Р2): its record stays as sent.
+    expect(keptIntent("wortly.pending.oral_session")).toEqual(sentIntents(d, old));
     expect(d.eventsOf(old)).toEqual(["open", "foreground"]);
-    // B keeps the document; its input and the old window's unconfirmed action do not appear there.
+    // B keeps the document. Its next reconcile meets A's kept action in the shared slot and offers only its check: what
+    // B shows for it is the owner's question В-1 (D-STALE-WINDOW 5); this pins the current answer, not a decision.
     foreground();
     await settle();
-    await within(b.container).findByText("wenn");
-    expect(within(b.container).queryByText(unconfirmed)).toBeNull();
+    await within(b.container).findByText(unconfirmed);
+    expect(within(b.container).getByRole("button", { name: "Проверить состояние" })).toBeTruthy();
     expect(within(b.container).queryByText(busyTitle)).toBeNull();
     expect(d.server).toMatchObject({ document: d.opens()[1].document_id, epoch: 2 });
     expect(d.eventsOf(old)).toEqual(["open", "foreground"]);
+    // A new document_id never sends the old window's action (CT §6.1 п. 5, Codex C093 п. 5, question В-2).
+    expect(d.posts()).toHaveLength(1);
+    expect(keptIntent("wortly.pending.oral_session")).toEqual(sentIntents(d, old));
   });
 
   it("outside Telegram's close (until Q54): A shows «already open» without buttons and sends nothing more on return", async () => {
@@ -267,8 +277,8 @@ describe("no false error while the window checks its document (2.33, contracts �
     fireEvent.click(reveal);
     await waitFor(() => expect(d.held()).toBe(1));
     await settle();
-    // The module has settled its refusal (nothing left in the shared storage), but the user does not see it.
-    expect(localStorage.getItem("wortly.pending.oral_session")).toBeNull();
+    // The module keeps its record (C091 §1, Р2), and the user sees no refusal while the window checks.
+    expect(keptIntent("wortly.pending.oral_session")).toHaveLength(1);
     expect(within(a.container).queryAllByText(oralRefusal)).not.toHaveLength(0);
     expect(unseen(a.container, oralRefusal)).toBe(true);
     expect(unseen(a.container, "wenn")).toBe(true);

@@ -1,9 +1,13 @@
 import type { SettingsResponse } from "../api/generated";
 
 const big = "9007199254740995";
+/**
+ * A profile whose dictionary language is already chosen (field version above 1, 19.3-А), so the App opens Today. Tests
+ * of the first choice set the version back to "1" themselves.
+ */
 export function settingsResponse(): SettingsResponse {
   return { state_version: big, needs_setup: true, settings: {
-    ui_language: { value: "ru", version: big }, dictionary_language: { value: "uk", version: "1" },
+    ui_language: { value: "ru", version: big }, dictionary_language: { value: "uk", version: "2" },
     time_zone: { value: "Asia/Tokyo", version: "3" }, retry_gap: { value: null, version: "1" },
     retry_count: { value: 3, version: "2" }, learning_group_size: { value: null, version: "1" },
     learning_intervals_seconds: { value: [120, 30, 120], version: "2" },

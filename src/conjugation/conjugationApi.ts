@@ -3,6 +3,7 @@ import type { ClosedSessionBoundary, ConjugationCatalog, ConjugationCatalogRespo
   UnavailableCurrent, UnavailableSession } from "../api/generated";
 import { validExactProfile } from "../api/entryApi";
 import { ApiError, createJsonTransport, errorCode, httpError, type HttpOptions } from "../api/http";
+import { attemptRefusal } from "../commands/commandRefusal";
 import { eventTime, exactKeys, oneOf, record, sameId, uuid, validClosedSessionBoundary, version } from "../api/wireValidation";
 import { validUndoFact } from "../commands/resultUndo";
 import { conjugationIntentHash, copyConjugationIntent, validConjugationIntent, type ConjugationCommand,
@@ -153,6 +154,8 @@ export function createConjugationApi(options: HttpOptions): ConjugationApi {
     async send(token: string, proof: string, original: ConjugationCommand): Promise<ConjugationReply> {
       const command = prepare(token, proof, original);
       const reply = await request("/commands", { method: "POST", token, proof, body: command });
+      // A refusal of this attempt only (window) never reads as a refused intent (commandRefusal.ts).
+      if (!reply.ok && attemptRefusal(reply.status, errorCode(reply.value))) throw httpError(reply);
       const value = reply.value;
       if (envelope(value, resultCommand(command) ? ["command", "action", "result", "step", "capabilities"] : ["command", "current"], true)) {
         const view = current(value, command, false);

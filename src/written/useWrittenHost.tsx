@@ -3,6 +3,7 @@ import type { HttpOptions } from "../api/http";
 import { useBackLayer } from "../app/navigationBack";
 import type { OpenedAccess } from "../app/openedAccess";
 import type { Language } from "../i18n/language";
+import { acceptedForeignStart } from "../commands/foreignStart";
 import { notifyAcceptedMilestone } from "../platform/telegram";
 import type { AsyncStorage } from "../platform/storage";
 import type { SettingsDocument } from "../settings/useSettingsDocument";
@@ -30,6 +31,11 @@ export type WrittenHostOptions = {
    * Without it the result offers no such button.
    */
   onOpenCard?(cardId: string, details: { assignment: string }): void;
+  /**
+   * Answer 17.1-А (R1): this owner's accepted start made a session the server holds open in another pair. The document
+   * refreshes its access once per such session and goes into it; the owner only reports it.
+   */
+  onForeignStart?(sessionId: string): void;
 };
 /**
  * An accepted card study action of a card opened from this quiz (M-ACTIONS cardActionsController), or its manual interval
@@ -170,6 +176,9 @@ export function useWrittenHost(options: WrittenHostOptions): WrittenHost {
       void current.onToday();
     }
   }, [bound, state, route, claim, lanesPending, ownSummary]);
+
+  const startedElsewhere = state && state.phase !== "disposed" ? acceptedForeignStart(state.commands.primary, state) : null;
+  useEffect(() => { if (startedElsewhere !== null) latest.current.onForeignStart?.(startedElsewhere); }, [startedElsewhere]);
 
   // root decision, pending owner (M-ACTIONS Р4): the quiz goes on by itself only from the result of that card, and only
   // after a read at least as new as the action (canNext needs a fresh projection); any other step means it already moved.

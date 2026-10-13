@@ -2,6 +2,7 @@ import type { OralSessionProjection } from "../api/generated";
 import { ApiError, type HttpOptions } from "../api/http";
 import { sameId, uuid, version } from "../api/wireValidation";
 import { ClosedAccessError, type OpenedAccess } from "../app/openedAccess";
+import { onlyCheckedAbsent } from "../commands/commandLane";
 import { createOralApi, type OralRead } from "./oralApi";
 import { OralCommandController, type OralCommandSnapshot, type OralTransition } from "./oralCommandController";
 import type { OralCommandLane, OralSessionPendingStore, OralStopPendingStore } from "./oralPending";
@@ -32,8 +33,20 @@ export type OralDocumentSnapshot = {
   canStart: boolean; canReveal: boolean; canGrade: boolean; canStop: boolean; canSummaryHome: boolean;
   canRetry: Record<OralCommandLane, boolean>;
   closed: OralClosed | null;
+  /**
+   * The own session the server proved open in another pair (a read or a reply not below the floor): a fact about the
+   * session, not a failed update, so it is never the shown problem (C149, C178; as StudyViewFields). null when nothing
+   * proves it.
+   */
+  pairMismatch: string | null;
   /** Loading only because the owner waits for its window's foreground answer: nothing else of it is to be shown (2.33). */
   suspended?: true;
+  /**
+   * The only cause of `problem` is a successful lane check that found its command absent on the same open step
+   * ("not_found"): nothing failed, the outcome of the action is just not confirmed. Set only when every current cause
+   * agrees, so an older marker of the other lane never hides a read failure, a lost connection or a stale answer.
+   */
+  checkedAbsent?: true;
 };
 const busyRefusal = (commands: Record<OralCommandLane, OralCommandSnapshot>): "SESSION_BUSY" | null =>
   commands.study.rejectionCode === "SESSION_BUSY" || commands.stop.rejectionCode === "SESSION_BUSY" ? "SESSION_BUSY" : null;
@@ -77,10 +90,13 @@ export class OralDocumentController {
   private current: OralSessionProjection | null = null;
   private currentVersion: string | null = null;
   private problem: string | null = null;
+  /** The own session as the server showed it open in another pair; a projection of this pair of it ends it (pairMismatch). */
+  private mismatch: string | null = null;
   private ticket: OralPresentationTicket | null = null;
   private shownPending = false;
   private stopRight: { sessionId: string; version: string; stop: boolean; home: boolean } | null = null;
   private closedFacts: OralClosed | null = null;
+  private readonly slotBlocked: Record<OralCommandLane, boolean> = { study: false, stop: false };
 
   constructor(options: OralDocumentOptions) {
     if (options.initialSessionId !== null && !uuid(options.initialSessionId)
@@ -101,6 +117,8 @@ export class OralDocumentController {
       pendingStore: lane === "study" ? options.studyStore : options.stopStore,
       stateVersion: this.floor, minimumStateVersion: () => this.minimum(),
       newId: options.newId, isLive: () => this.live(), read,
+      // 14.8.8.1 А: the seam of fixB; the check of the other window's record follows the end of this step (begin).
+      slotConflict: () => { this.slotBlocked[lane] = true; },
       check: intent => this.exchange(({ token, proof, clientInstanceId, documentId }) => {
         return api.status(token, proof, { ...intent, client_instance_id: clientInstanceId, document_id: documentId });
       }),
@@ -188,8 +206,12 @@ export class OralDocumentController {
     if ('pair' in current && this.terminal.has(current.session_id.toLowerCase())) return;
     if (!('pair' in current) || current.pair !== `${this.options.access.profile.dictionary_language}-de`) {
       this.current = null; this.currentVersion = null; this.stopRight = null;
-      this.problem = 'pair' in current ? "pair_changed" : current.status; return;
+      // An open projection of another pair is no failed read: the pair changed elsewhere and the session lives there (R1).
+      // It is kept as a fact; nothing of it is shown and it grants no right here (no Stop before the window's refresh).
+      if ('pair' in current) { this.mismatch = current.session_id; this.problem = null; } else this.problem = current.status;
+      return;
     }
+    this.mismatch = null;
     this.current = structuredClone(current); this.currentVersion = read.state_version; this.problem = null;
     this.stopRight = { sessionId: current.session_id, version: read.state_version,
       stop: current.capabilities.stop, home: current.capabilities.summary_home };
@@ -239,6 +261,8 @@ export class OralDocumentController {
       ? foreignHistory
       : Object.values(commands).some(command => command.pending && command.sessionId !== null
         && !sameId(command.sessionId, this.sessionId!) && !this.terminal.has(command.sessionId.toLowerCase()));
+    const checkedAbsent = live && onlyCheckedAbsent([commands.study, commands.stop],
+      this.problem ?? (foreignReceipt ? "unconfirmed_session" : null) ?? busyRefusal(commands));
     const right = this.stopRight;
     const canStop = this.active("stop") && stopReady && !closed && !!right
       && BigInt(right.version) >= BigInt(this.floor) && !!this.sessionId && sameId(right.sessionId, this.sessionId);
@@ -261,7 +285,10 @@ export class OralDocumentController {
       terminalSessionIds: [...this.terminal], commands,
       // A start refused as SESSION_BUSY is a fact of the core, not a lost reply: it outranks the generic problem that the
       // follow-up read of the never-created session leaves behind, so the screen can name the other device (К10-018).
-      problem: live ? commands.study.problem ?? commands.stop.problem ?? busyRefusal(commands) ?? this.problem
+      // The lane's pair change for an applied command is the same known fact (commandLane settle, guard v3): the observed
+      // reply keeps it as pairMismatch, so it is no shown problem either (C149, C178; as studyView).
+      problem: live ? (commands.study.outcome === "accepted" && commands.study.problem === "pair_changed" ? null : commands.study.problem)
+        ?? commands.stop.problem ?? busyRefusal(commands) ?? this.problem
         ?? (foreignReceipt ? "unconfirmed_session" : null) : null,
       presentationTicket: live ? this.ticket : null,
       canStart: this.active("study") && this.recovered && !this.refreshing && studyReady && stopReady
@@ -271,9 +298,16 @@ export class OralDocumentController {
       canGrade: this.active("study") && studyReady && stopReady && !foreignReceipt && assignment?.status === "presented"
         && assignment.revealed && sameId(current!.capabilities.grade_target, assignment.id),
       canStop: canStop && !!right?.stop, canSummaryHome: canStop && !!right?.home,
-      canRetry: { study: this.active("study") && commands.study.canRetry, stop: this.active("stop") && commands.stop.canRetry },
+      // Decision 2.3 А: a study action of another window or of the page before a reload is only checked, never retried
+      // by hand here. Stop keeps its own rules.
+      canRetry: { study: this.active("study") && commands.study.canRetry
+        && this.options.studyStore.created(commands.study.pendingIntent?.command_id),
+        stop: this.active("stop") && commands.stop.canRetry },
       closed: live && closed ? this.closedSnapshot(this.sessionId!) : null,
-      ...(live && this.foregroundBlocked && phase === "loading" ? { suspended: true as const } : {}) };
+      pairMismatch: live && !closed && this.mismatch !== null && !!this.sessionId && sameId(this.mismatch, this.sessionId)
+        ? this.mismatch : null,
+      ...(live && this.foregroundBlocked && phase === "loading" ? { suspended: true as const } : {}),
+      ...(checkedAbsent ? { checkedAbsent: true as const } : {}) };
   }
   private closedSnapshot(sessionId: string): OralClosed {
     const facts = this.closedFacts && sameId(this.closedFacts.sessionId, sessionId) ? this.closedFacts : null;
@@ -369,8 +403,16 @@ export class OralDocumentController {
     if (!this.active(lane) || this.busy[lane]) return;
     this.busy[lane] = true; this.sendEpoch[lane] = this.activityEpoch; this.ticket = null;
     try {
+      this.slotBlocked[lane] = false;
       await this.commands[lane].begin(transition);
       if (!this.live()) return;
+      // 14.8.8.1 А (owner, C117): the new study action met another record in the shared slot and was neither stored nor
+      // sent; read that record now and check it by its own ID, once. It is never sent from here (2.3 А).
+      if (lane === "study" && this.slotBlocked.study) {
+        this.slotBlocked.study = false;
+        await this.commands.study.adopt();
+        if (!this.live()) return;
+      }
       this.ingest(lane, this.commands[lane].snapshot());
       this.shownPending = false;
       const command = this.commands[lane].snapshot();
@@ -396,7 +438,7 @@ export class OralDocumentController {
     const sessionId = this.options.newId();
     if (!uuid(sessionId)) throw new Error("invalid oral session ID");
     this.sessionId = sessionId; this.current = null; this.currentVersion = null; this.stopRight = null;
-    this.closedFacts = null;
+    this.closedFacts = null; this.mismatch = null;
     await this.begin("study", { kind: "session.start", session_id: sessionId, payload: { mode: "oral", bucket } });
   }
   shown(ticket: OralPresentationTicket): Promise<void> {

@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { sameId } from "../api/wireValidation";
 import { useStudyDocument, type StudyDocumentOptions } from "../commands/useStudyDocument";
 import { WrittenViewController, type WrittenViewSnapshot } from "./writtenViewController";
 
@@ -10,6 +11,11 @@ export type WrittenActions = Pick<WrittenViewController, "setDraft" | "submit" |
   | "undo" | "retry" | "refresh" | "cleanup" | "stop">
   & { start(bucket: "words" | "phrases"): Promise<void> };
 
+/** A resume seed naming the session this owner already leads only addresses it (its restored result stays). */
+export function leadsSession(controller: Pick<WrittenViewController, "snapshot">, seed: string): boolean {
+  const sessionId = controller.snapshot().sessionId;
+  return sessionId !== null && sameId(sessionId, seed);
+}
 /**
  * One owner per opened document, dictionary pair and resume seed. It stays mounted across routes so a durable receipt
  * is recovered by its ID. A seed only addresses the session: its step comes from the server projection, never from
@@ -17,7 +23,7 @@ export type WrittenActions = Pick<WrittenViewController, "setDraft" | "submit" |
  */
 export function useWrittenDocument(options: Options): { state: WrittenViewSnapshot | null; actions: WrittenActions } {
   const study = useStudyDocument<Options, WrittenViewController, WrittenViewSnapshot>(options, options.initialSessionId ?? null,
-    (_current, seed, settings) => new WrittenViewController({ ...settings, sessionId: seed }));
+    (_current, seed, settings) => new WrittenViewController({ ...settings, sessionId: seed }), leadsSession);
   const actions = useMemo<WrittenActions>(() => ({ ...study.actions,
     start: bucket => study.start(controller => controller.start(bucket)) }), [study.actions, study.start]);
   return { state: study.state, actions };

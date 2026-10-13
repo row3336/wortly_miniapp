@@ -4,6 +4,7 @@ import type { Language } from "../i18n/language";
 import { OralScreen } from "../oral/OralScreen";
 import type { OralSessionPendingStore, OralStopPendingStore } from "../oral/oralPending";
 import { useOralDocument, type OralDocumentActions } from "../oral/useOralDocument";
+import { acceptedForeignStart } from "../commands/foreignStart";
 import { notifyAcceptedMilestone } from "../platform/telegram";
 import type { SettingsDocument } from "../settings/useSettingsDocument";
 import type { OrdinaryQuiz } from "../today/TodayScreen";
@@ -35,6 +36,11 @@ export type OralHostOptions = {
    * never moves on by a card action (К07-080), so nothing is reported back.
    */
   onOpenCard?(cardId: string, details: { assignment: string }): void;
+  /**
+   * Answer 17.1-А (R1): this owner's accepted start made a session the server holds open in another pair. The document
+   * refreshes its access once per such session and goes into it; the owner only reports it.
+   */
+  onForeignStart?(sessionId: string): void;
 };
 export type OralHost = {
   /** Today waits for the first recovery and for own receipts or sessions it must show first. */
@@ -161,6 +167,9 @@ export function useOralHost(options: OralHostOptions): OralHost {
       void current.onToday();
     }
   }, [bound, state, route, claim, resolvedStart, study?.outcome, lanesPending, options.seedPending]);
+
+  const startedElsewhere = state && state.phase !== "disposed" ? acceptedForeignStart(study, state) : null;
+  useEffect(() => { if (startedElsewhere !== null) latest.current.onForeignStart?.(startedElsewhere); }, [startedElsewhere]);
 
   const screenActions = useMemo<OralDocumentActions>(() => ({ ...actions, grade: correct => {
     bound.graded = latestState.current?.sessionId?.toLowerCase() ?? null;

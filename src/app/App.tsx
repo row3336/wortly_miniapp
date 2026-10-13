@@ -11,6 +11,7 @@ import { EntryScreen } from "./EntryScreen";
 import type { EntryState } from "./entryState";
 import { clientContractVersion, type HttpOptions } from "../api/http";
 import type { OpenedAccess } from "./openedAccess";
+import type { LearningPageStarts } from "../learning/learningPageStarts";
 import type { BusyAccess } from "./busyAccess";
 import { BusyTodayHost } from "./TodayHost";
 import { createTodayApi } from "../today/todayApi";
@@ -37,7 +38,8 @@ const holdBack = () => {};
 /** The single identity source for entry and study commands. */
 const newId = () => window.crypto.randomUUID();
 
-export function App() {
+/** learningPage models another JS document in tests; the app itself always runs with its own document's page. */
+export function App({ learningPage }: { learningPage?: LearningPageStarts } = {}) {
   const [language, setLanguage] = useState<Language | null>(null);
   const [entryState, setEntryState] = useState<EntryState>({ kind: "checking" });
   const [controller, setController] = useState<EntryController | null>(null);
@@ -204,7 +206,7 @@ export function App() {
           <ApplicationDocument key={access.key} access={access} transport={transport} pendingStore={pendingStore}
             storage={storage} oralStores={oralStores} conjugationStores={conjugationStores} newId={newId} language={language}
             foreground={foreground} onCurrent={observeSettings}
-            launchCard={launchCard} />
+            launchCard={launchCard} learningPage={learningPage} />
         </div>
         {documentCheck && <EntryScreen state={{ kind: "checking" }} language={language} afterStale />}
       </>;

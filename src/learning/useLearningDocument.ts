@@ -2,11 +2,14 @@ import { useMemo } from "react";
 import { useStudyDocument, type StudyDocumentOptions } from "../commands/useStudyDocument";
 import { notifyAcceptedMilestone } from "../platform/telegram";
 import type { LearningActions } from "./LearningScreen";
+import type { LearningPageStarts } from "./learningPageStarts";
 import { LearningViewController, type LearningViewSnapshot } from "./learningViewController";
 
 type Options = StudyDocumentOptions & {
   /** Seed from a confirmed Learning resume; null means explicit start is still required. */
   initialSessionId: string | null;
+  /** The starts of this page (35.1-А); the JS document's own unless a test models another page. */
+  page?: LearningPageStarts;
 };
 export type LearningDocumentActions = LearningActions & { start(): Promise<void> };
 
@@ -14,7 +17,7 @@ export type LearningDocumentActions = LearningActions & { start(): Promise<void>
 export function useLearningDocument(options: Options): { state: LearningViewSnapshot | null; actions: LearningDocumentActions } {
   // The seed is read once when the owner is created; a later seed never re-creates it.
   const study = useStudyDocument<Options, LearningViewController, LearningViewSnapshot>(options, null,
-    (current, _seed, settings) => new LearningViewController({ ...settings, sessionId: current.initialSessionId,
+    (current, _seed, settings) => new LearningViewController({ ...settings, sessionId: current.initialSessionId, page: current.page,
       // К09-004 haptic signal; when it fires: root decision, pending owner (M-LEARN-FIN Р1–Р5).
       onLearningComplete: () => notifyAcceptedMilestone(window, "learning-complete") }));
   const actions = useMemo<LearningDocumentActions>(() => ({ ...study.actions,

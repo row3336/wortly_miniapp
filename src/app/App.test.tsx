@@ -15,6 +15,7 @@ const today = (): TodayResponse => ({ state_version: "11", pair: "uk-de", local_
     new_group_size: 2, manual_eligible: 0, automatic_eligible: 2 },
   conjugation: { ready: 1, openable: 1, next_due_date: null }, next_repeat_date: null });
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status });
+function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(r => { resolve = r; }); return { promise, resolve }; }
 const sessionId = "22222222-2222-4222-8222-222222222222";
 // A closed written session: its closure, not its mode, decides the route (no assignment, no step to resume).
 const written = (): SessionResponse => ({ state_version: "11", current: {
@@ -44,8 +45,10 @@ const remoteStopped = (): SessionResponse => ({ state_version: "11", current: {
   capabilities: { answer_target: null, correct_target: null, grades: null, undo_target: null, stop: false, summary_home: false } } });
 const conjugationScreen = { name: "Тест спряжений", level: 1 } as const;
 
-function fixture(options: { profile?: Profile; session?: OpenedClient["session"]; busy?: boolean; settingsVersion?: string } = {}) {
+function fixture(options: { profile?: Profile; session?: OpenedClient["session"]; busy?: boolean; settingsVersion?: string;
+  dictionaryVersion?: string } = {}) {
   const user = options.profile ?? profile();
+  let settingsVersion = options.settingsVersion;
   const todayReply = vi.fn(async () => json(today()));
   const sessionReply = vi.fn(async (_path: string) => json(conjugation()));
   const haptic = vi.fn();
@@ -63,8 +66,10 @@ function fixture(options: { profile?: Profile; session?: OpenedClient["session"]
       status: "registered", origin_proof: "synthetic-proof", proof_version: "1", activated: false });
     if (path.endsWith("/client/open")) return openReply(body);
     if (path.endsWith("/settings")) {
-      const data = settingsResponse(); data.state_version = options.settingsVersion ?? user.state_version;
+      const data = settingsResponse(); data.state_version = settingsVersion ?? user.state_version;
       for (const field of Object.values(data.settings)) field.version = "1";
+      // The dictionary language is already chosen (19.3-А); the first choice has its own tests (App.firstChoice).
+      data.settings.dictionary_language.version = options.dictionaryVersion ?? "2";
       data.settings.ui_language.value = user.ui_language; data.settings.dictionary_language.value = user.dictionary_language;
       return json(data);
     }
@@ -79,7 +84,9 @@ function fixture(options: { profile?: Profile; session?: OpenedClient["session"]
   vi.stubGlobal("Telegram", { WebApp: { initData: "synthetic-init-data", initDataUnsafe: { user: { language_code: "en" } },
     colorScheme: "light", HapticFeedback: { notificationOccurred: haptic } } });
   const posts = () => fetcher.mock.calls.filter(call => call[1]?.method === "POST" && !/\/(auth\/telegram|client\/(register|open))$/.test(String(call[0])));
-  return { fetcher, todayReply, openReply, sessionReply, haptic, posts };
+  return { fetcher, todayReply, openReply, sessionReply, haptic, posts,
+    /** Settings follow a newer server state from now on. */
+    serveSettingsAt(version: string) { settingsVersion = version; } };
 }
 
 beforeEach(() => {
@@ -274,6 +281,43 @@ describe("ordinary Entry to Today integration", () => {
     expect(f.openReply).toHaveBeenCalledTimes(3);
     expect(f.todayReply).toHaveBeenCalledOnce(); expect(f.posts()).toEqual([]);
     expect(f.haptic).toHaveBeenCalledOnce();
+  });
+
+  it("an active session of a profile without a chosen language keeps its route; after its confirmed closure Today asks for the choice", async () => {
+    const f = fixture({ session: { id: sessionId, phase: "active" }, dictionaryVersion: "1" });
+    render(<App />); await screen.findByRole("heading", conjugationScreen);
+    // From the reopen on, Settings are served at the state it reports (11), as one server would.
+    f.serveSettingsAt("11");
+    expect(screen.queryByRole("heading", { level: 1, name: "Язык словаря" })).toBeNull();
+    f.openReply.mockImplementation(async body => json({ status: "opened", ...body,
+      profile: { ...profile(), state_version: "11" }, compatibility: { compatible: true, contract_version: "1" },
+      proof_version: "1", document_epoch: "1", session: null }));
+    f.sessionReply.mockImplementation(async () => json(remoteStopped()));
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    fireEvent(window, new Event("pageshow")); await screen.findByText("Занятие завершено на другом устройстве");
+    fireEvent.click(screen.getByRole("button", { name: "На Сегодня" }));
+    await screen.findByRole("heading", { level: 1, name: "Язык словаря" });
+    expect(screen.queryByText("В базе")).toBeNull(); expect(screen.queryByRole("navigation", { name: "Основная навигация" })).toBeNull();
+    expect(f.posts()).toEqual([]);
+  });
+
+  it("a session reported while the choice is shown is read and followed, never taken for absent", async () => {
+    const f = fixture({ dictionaryVersion: "1" }); render(<App />);
+    await screen.findByRole("heading", { level: 1, name: "Язык словаря" });
+    const read = deferred<Response>();
+    f.sessionReply.mockImplementationOnce(() => read.promise);
+    f.openReply.mockImplementationOnce(async body => json({ status: "opened", ...body,
+      profile: { ...profile(), state_version: "11" }, compatibility: { compatible: true, contract_version: "1" },
+      proof_version: "1", document_epoch: "1", session: { id: sessionId, phase: "active" } }));
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    fireEvent(window, new Event("pageshow"));
+    await waitFor(() => expect(f.sessionReply).toHaveBeenCalled());
+    // While the mode is unknown neither the choice nor Today is shown.
+    expect(screen.queryByRole("heading", { level: 1, name: "Язык словаря" })).toBeNull();
+    expect(screen.queryByText("В базе")).toBeNull();
+    read.resolve(json(conjugation()));
+    await screen.findByRole("heading", conjugationScreen);
+    expect(f.posts()).toEqual([]);
   });
 
   it("preserves the server's newly reported session instead of fetching Today", async () => {

@@ -2,6 +2,7 @@ import type { AnswerSubmitCommand, ResultCorrectCommand, ResultGradeCommand, Res
   RejectedCommandFact, SavedCommandFact, StoredCommandFact, WrittenAnswerDetail } from "../api/generated";
 import { validProfile } from "../api/entryApi";
 import { ApiError, createJsonTransport, errorCode, httpError, type HttpOptions } from "../api/http";
+import { attemptRefusal } from "../commands/commandRefusal";
 import { count, date, eventTime, exactKeys, oneOf, record, sameId, uuid, version, validClosedSessionBoundary } from "../api/wireValidation";
 import { validResultFact } from "../commands/resultRevision";
 import { copyResultUndoIntent, validResultUndoIntent, validUndoFact } from "../commands/resultUndo";
@@ -31,7 +32,8 @@ export interface LearningAnswerApi {
 }
 export interface LearningResultApi {
   read(token: string, proof: string, address: LearningResultAddress): Promise<LearningResultRead>;
-  send(token: string, proof: string, command: LearningResultCommand): Promise<LearningAnswerReply>;
+  /** started, when given, is told right before the built request goes to fetch (after every local check). */
+  send(token: string, proof: string, command: LearningResultCommand, started?: () => void): Promise<LearningAnswerReply>;
   status(token: string, proof: string, command: LearningResultCommand): Promise<LearningAnswerStatus>;
 }
 
@@ -207,9 +209,11 @@ export function createLearningResultApi(options: HttpOptions): LearningResultApi
       }
       throw new ApiError("invalid_response");
     },
-    async send(token, proof, original) {
+    async send(token, proof, original, started) {
       const command = prepare(token, proof, original);
-      const reply = await request("/commands", { method: "POST", token, proof, body: command });
+      const reply = await request("/commands", { method: "POST", token, proof, body: command, ...(started ? { started } : {}) });
+      // A refusal of this attempt only (window) never reads as a refused intent (commandRefusal.ts).
+      if (!reply.ok && attemptRefusal(reply.status, errorCode(reply.value))) throw httpError(reply);
       const value = reply.value;
       if (envelope(value)) {
         const view = current(value, command);

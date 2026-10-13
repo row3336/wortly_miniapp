@@ -1,0 +1,169 @@
+{
+ "source": "core create_app via TestClient (tools/record_learning_refusal.py), disposable wortly_test schema",
+ "exchanges": [
+  {
+   "name": "busy_start",
+   "method": "POST",
+   "path": "/api/v1/commands",
+   "query": {},
+   "body": {
+    "command_id": "00000000-0000-4000-8000-000000000300",
+    "client_instance_id": "00000000-0000-4000-8000-000000000061",
+    "document_id": "00000000-0000-4000-8000-000000000062",
+    "session_id": "00000000-0000-4000-8000-000000000064",
+    "kind": "session.start",
+    "payload": {
+     "mode": "learning"
+    }
+   },
+   "status": 200,
+   "response": {
+    "command": {
+     "id": "00000000-0000-4000-8000-000000000300",
+     "kind": "session.start",
+     "status": "applied",
+     "applied_at": "2026-09-29T12:00:00Z",
+     "target_id": "00000000-0000-4000-8000-000000000064",
+     "action_id": null,
+     "result_id": null,
+     "context_id": null,
+     "object_version": null
+    },
+    "current": {
+     "session_id": "00000000-0000-4000-8000-000000000064",
+     "status": "active",
+     "mode": "learning",
+     "pair": "ru-de",
+     "local_date": "2026-09-29",
+     "close_reason": null,
+     "group": {
+      "id": "00000000-0000-4000-9000-000000000001",
+      "status": "assembling",
+      "version": "1",
+      "preview_position": 0,
+      "total": 2
+     },
+     "preview": {
+      "id": "00000000-0000-4000-9000-000000000002",
+      "card_id": "00000000-0000-4000-8000-000000000010",
+      "position": 1,
+      "total": 2,
+      "content": {
+       "pair": "ru-de",
+       "card": {
+        "id": "00000000-0000-4000-8000-000000000010",
+        "revision": "1",
+        "lemma": "Haus",
+        "type": "noun",
+        "cefr": "A1"
+       },
+       "translations": {
+        "common": [
+         "дом"
+        ],
+        "personal": null
+       },
+       "grammar": {
+        "gender": "neuter",
+        "gender_status": "applicable",
+        "singular": "Haus",
+        "singular_status": "applicable",
+        "plural": "Häuser",
+        "plural_status": "applicable",
+        "article_status": "applicable"
+       },
+       "reference_conjugations": [],
+       "examples": {
+        "common": [
+         {
+          "id": "00000000-0000-4000-8000-000000000030",
+          "text": "Das Haus ist alt.",
+          "role": "general",
+          "highlighted_parts": []
+         }
+        ],
+        "personal": null
+       },
+       "association": null
+      }
+     },
+     "assignment": null
+    },
+    "state_version": "4"
+   },
+   "schema": [
+    "SessionCommandResponse"
+   ]
+  },
+  {
+   "name": "busy_refused",
+   "method": "POST",
+   "path": "/api/v1/commands",
+   "query": {},
+   "body": {
+    "command_id": "00000000-0000-4000-8000-000000000301",
+    "client_instance_id": "00000000-0000-4000-8000-000000000061",
+    "document_id": "00000000-0000-4000-8000-000000000062",
+    "session_id": "00000000-0000-4000-8000-000000000065",
+    "kind": "session.start",
+    "payload": {
+     "mode": "learning"
+    }
+   },
+   "status": 409,
+   "response": {
+    "command": {
+     "id": "00000000-0000-4000-8000-000000000301",
+     "status": "rejected"
+    },
+    "current": {
+     "session_id": "00000000-0000-4000-8000-000000000065",
+     "status": "not_found"
+    },
+    "state_version": "4",
+    "error": {
+     "code": "SESSION_BUSY"
+    }
+   },
+   "schema": [
+    "SessionCommandResponse",
+    "RemoteSessionCommandResponse",
+    "SessionCancelStartResponse"
+   ]
+  },
+  {
+   "name": "busy_refused_status",
+   "method": "GET",
+   "path": "/api/v1/commands/00000000-0000-4000-8000-000000000301",
+   "query": {
+    "client_instance_id": "00000000-0000-4000-8000-000000000061",
+    "document_id": "00000000-0000-4000-8000-000000000062",
+    "session_id": "00000000-0000-4000-8000-000000000065",
+    "include_refusal": "true",
+    "expected_intent_hash": "bd040538c235c1114d0790a3c055927036b4ff21fae0789bf4d52c81f23edffc"
+   },
+   "body": null,
+   "status": 200,
+   "response": {
+    "command": {
+     "id": "00000000-0000-4000-8000-000000000301",
+     "kind": "session.start",
+     "status": "rejected",
+     "refused_at": "2026-09-29T12:00:00Z"
+    },
+    "current": {
+     "session_id": "00000000-0000-4000-8000-000000000065",
+     "status": "not_found"
+    },
+    "state_version": "4",
+    "verified_intent_hash": "bd040538c235c1114d0790a3c055927036b4ff21fae0789bf4d52c81f23edffc",
+    "error": {
+     "code": "SESSION_BUSY"
+    }
+   },
+   "schema": [
+    "CommandStatusResponse"
+   ]
+  }
+ ]
+}

@@ -96,9 +96,12 @@ export function OralScreen({ state, actions, language, active, onToday, onRefine
 
   // The problem line already names the cause; the generic stale line beside it would contradict it.
   const busyRefused = state?.problem === "SESSION_BUSY";
+  // A session the server proved open in another pair is a known fact, not a failed update (C178): no failure line for it
+  // unless a real problem is named; the check stays (as the written and Learning screens).
+  const knownMismatch = !!state?.pairMismatch && state.problem === null;
   const status = !active ? t.inactive : phase === "disposed" ? t.disposed : phase === "closed" ? readFailed ? t.stale : t.closed
     : phase === "stopping" ? t.stopping : phase === "visible_unconfirmed" ? t.present : saving ? t.saving : phase === "loading" ? t.loading
-    : phase === "idle" ? t.idle : phase === "unknown" ? t.unknown : phase === "stale" ? busyRefused ? null : t.stale
+    : phase === "idle" ? t.idle : phase === "unknown" ? t.unknown : phase === "stale" ? busyRefused || knownMismatch ? null : t.stale
     : phase === "prefetched" ? t.present
     : phase === "question" ? t.remember : phase === "revealed" ? t.grade : null;
   const localProblem = state?.problem === "storage" || lanes.some(lane => lane.problem === "storage");
@@ -106,9 +109,13 @@ export function OralScreen({ state, actions, language, active, onToday, onRefine
   // A suspended owner shows only «loading» until its window's foreground answers: an earlier refusal or busy line
   // beside it would read as a failure of this return (2.33). The fresh owner after the foreground shows real problems.
   const suspended = state?.suspended === true;
+  // A lane check that found the command absent on the same open step succeeded: its «not_found» is a fact about the
+  // command, not a failed refresh, and the unconfirmed-action lines already say what is true. The owner vouches for the
+  // source of the current cause (checkedAbsent); the screen never infers it from an older marker of one lane.
+  const checkedAbsent = state?.checkedAbsent === true;
   // Same wording as the written quiz: a refused start names the other device, not a generic refresh failure.
   const problem = suspended ? null
-    : localProblem ? t.cleanup : blocked ? t.blocked : busyRefused ? t.busy : state?.problem ? t.stale : null;
+    : localProblem ? t.cleanup : blocked ? t.blocked : busyRefused ? t.busy : checkedAbsent ? null : state?.problem ? t.stale : null;
   const summary = state?.current?.status === "summary" ? state.current.summary : closedSummary?.summary ?? null;
   const progress = closedSummary ? closedSummary.progress : state?.current?.progress;
   const remaining = progress ? progress.total - progress.completed : null;

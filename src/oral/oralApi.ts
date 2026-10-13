@@ -3,6 +3,7 @@ import type { ClosedSessionBoundary, ErrorDetail, OralSessionProjection,
   StoredCommandFact, UnavailableCurrent, UnavailableSession } from "../api/generated";
 import { validExactProfile } from "../api/entryApi";
 import { ApiError, createJsonTransport, errorCode, httpError, type HttpOptions } from "../api/http";
+import { attemptRefusal } from "../commands/commandRefusal";
 import { record, uuid, sameId, exactKeys, version, eventTime, oneOf, validClosedSessionBoundary } from "../api/wireValidation";
 import { copyOralIntent, oralIntentHash, validOralIntent, type OralCommand } from "./oralIntent";
 import { validOralCurrent } from "./oralProjection";
@@ -72,6 +73,8 @@ export function createOralApi(options: HttpOptions): OralApi {
     async send(token, proof, original) {
       const command = prepareCommand(token, proof, original);
       const reply = await request("/commands", { method: "POST", token, proof, body: command });
+      // A refusal of this attempt only (window) never reads as a refused intent (commandRefusal.ts).
+      if (!reply.ok && attemptRefusal(reply.status, errorCode(reply.value))) throw httpError(reply);
       const value = reply.value;
       if (record(value) && version(value.state_version)
         && exactKeys(value, ["command", "current", "state_version", ...(Object.hasOwn(value, "error") ? ["error"] : [])])

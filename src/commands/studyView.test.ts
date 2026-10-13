@@ -70,7 +70,7 @@ function view(options: { mode?: "normal" | "accelerated"; rules?: Partial<StudyV
   const onUpdate = vi.fn<(snapshot: Snapshot) => void>();
   const controller = new TestView({ access: () => access, newId: () => id(99), sessionId: options.sessionId === undefined ? SESSION : options.sessionId,
     transitionMode: () => options.mode ?? "normal", onUpdate },
-  { ignoreUnboundUnavailable: true, keepClosedAfterRead: true, ...options.rules }, f.connect);
+  { ignoreUnboundUnavailable: true, keepClosedAfterRead: true, waitRestoredCorrection: false, ...options.rules }, f.connect);
   return { ...f, controller, onUpdate };
 }
 /** An answer whose undo the server grants (C-UNDO-1). */
@@ -444,5 +444,284 @@ describe("shared study view: the read an empty Stop got (M-WRITTEN-STUCK, C101)"
     expect(await queued).toEqual({ outcome: "applied", joined: true });
     await subscriber;
     expect(f.commands.readSession.mock.calls.length - reads).toBe(2);
+  });
+});
+
+/** The view's internal fact that the server proved its session open in another pair (never its shown problem, C149). */
+/** The published fact that the server proved the session open in another pair (C151), never the shown problem. */
+const mismatch = (view: { snapshot(): { pairMismatch: string | null } }) => view.snapshot().pairMismatch !== null;
+
+describe("shared study view: a session the server shows open in another pair (M-LANE-PAIR-GUARD)", () => {
+  const foreign = (status: StudyCurrent["status"] = "active"): StudyCurrent =>
+    ({ session_id: SESSION, status, pair: "uk-de", close_reason: null, assignment: status === "active" ? assignment(6, "presented") : null });
+  const accepted = (version: string): Lane => ({ ...idle(), phase: "settled", outcome: "accepted", stateVersion: version,
+    resolved: { commandId: id(90), kind: "answer.submit", sessionId: SESSION, assignmentId: id(6), resultId: id(7) } });
+
+  it("SG1: a read of the view's own session open in another pair is a known mismatch: kept, never shown as a problem", async () => {
+    const f = view(); f.state.stateVersion = "9";
+    f.commands.readSession.mockResolvedValueOnce({ state_version: "9", current: foreign() });
+    await f.controller.refresh();
+    expect(f.controller.snapshot()).toMatchObject({ phase: "stale", problem: null, current: null, question: null });
+    expect(mismatch(f.controller)).toBe(true);
+  });
+  it("SG19: a projection of this pair of the same session ends the known mismatch", async () => {
+    const f = view(); f.state.stateVersion = "9";
+    f.commands.readSession.mockResolvedValueOnce({ state_version: "9", current: foreign() });
+    await f.controller.refresh();
+    expect(mismatch(f.controller)).toBe(true);
+    f.commands.readSession.mockResolvedValueOnce({ state_version: "9", current: current(assignment(6, "presented")) });
+    await f.controller.refresh();
+    expect(mismatch(f.controller)).toBe(false);
+    expect(f.controller.snapshot()).toMatchObject({ phase: "question", problem: null });
+  });
+  it("SG2: the same read below the lanes' floor is a stale view, not this reason", async () => {
+    const f = view(); f.state.stateVersion = "9";
+    f.commands.readSession.mockResolvedValueOnce({ state_version: "8", current: foreign() });
+    await f.controller.refresh();
+    expect(f.controller.snapshot()).toMatchObject({ phase: "stale", problem: null, current: null });
+    expect(mismatch(f.controller)).toBe(false);
+  });
+  it("SG3: a session this view took in its own pair keeps its step and gets no reason from a later read", async () => {
+    const f = view(); await f.controller.refresh();
+    f.commands.readSession.mockResolvedValueOnce({ state_version: "5", current: foreign() });
+    await f.controller.refresh();
+    expect(f.controller.snapshot()).toMatchObject({ phase: "question", problem: null, current: { pair: "ru-de" } });
+  });
+  it("SG4: an accepted answer whose result step names another pair shows no result (P7 source a)", async () => {
+    const f = view(); await f.controller.refresh();
+    f.state.stateVersion = "6"; f.state.primary = accepted("6");
+    f.commands.readSession.mockResolvedValueOnce({ state_version: "6", current: current(assignment(6, "presented")) });
+    f.commands.readResult.mockResolvedValueOnce({ state_version: "6", step: foreign(), ...answer(4) });
+    await f.controller.refresh();
+    expect(f.commands.readResult).toHaveBeenCalledOnce();
+    expect(f.controller.snapshot()).toMatchObject({ phase: "stale", problem: null, answer: null });
+    expect(mismatch(f.controller)).toBe(true);
+    // The result is not read again by a later read: it is settled for this view.
+    f.commands.readSession.mockResolvedValueOnce({ state_version: "6", current: current(assignment(6, "presented")) });
+    await f.controller.refresh();
+    expect(f.commands.readResult).toHaveBeenCalledOnce();
+  });
+  it("SG5: a result step of another pair below the floor withholds the result but proves no reason (C122 п. 2)", async () => {
+    const f = view(); await f.controller.refresh();
+    f.state.stateVersion = "6"; f.state.primary = accepted("6");
+    f.commands.readSession.mockResolvedValueOnce({ state_version: "6", current: current(assignment(6, "presented")) });
+    f.commands.readResult.mockResolvedValueOnce({ state_version: "5", step: foreign(), ...answer(4) });
+    await f.controller.refresh();
+    expect(f.controller.snapshot()).toMatchObject({ phase: "stale", problem: null, answer: null, canNext: false });
+    expect(mismatch(f.controller)).toBe(false);
+  });
+  it("SG6: a session known open in another pair has its result neither read nor shown", async () => {
+    const f = view(); f.state.stateVersion = "6"; f.state.primary = accepted("6");
+    f.commands.readSession.mockResolvedValueOnce({ state_version: "6", current: foreign() });
+    await f.controller.refresh();
+    expect(f.commands.readResult).not.toHaveBeenCalled();
+    expect(f.controller.snapshot()).toMatchObject({ phase: "stale", problem: null, answer: null });
+    expect(mismatch(f.controller)).toBe(true);
+  });
+  it("SG7: the lanes' reason of the view's session marks it; a closure proven after it closes the view", async () => {
+    const f = view();
+    f.state.primary = { ...accepted("6"), problem: "pair_changed", resolved: { commandId: id(91), kind: "session.start", sessionId: SESSION } };
+    f.state.stateVersion = "6"; f.publish();
+    // The fact only, not a shown problem; the phase is the view's own (a start or a read chooses it).
+    expect(f.controller.snapshot()).toMatchObject({ problem: null, current: null });
+    expect(mismatch(f.controller)).toBe(true);
+    f.commands.readSession.mockResolvedValueOnce({ state_version: "7", current: foreign("closed") });
+    f.state.stateVersion = "7";
+    await f.controller.refresh();
+    expect(f.controller.closed).toEqual([{ sessionId: SESSION, reason: null }]);
+    expect(f.controller.snapshot().phase).toBe("closed");
+  });
+  it("SG8: a projection of this pair of the same session ends the mark", async () => {
+    const f = view(); const marked = () => (f.controller as unknown as { foreign(): boolean }).foreign();
+    f.state.primary = { ...accepted("6"), problem: "pair_changed", resolved: { commandId: id(91), kind: "session.start", sessionId: SESSION } };
+    f.state.stateVersion = "6"; f.publish();
+    expect(marked()).toBe(true);
+    f.state.primary = { ...f.state.primary, problem: null };
+    f.commands.readSession.mockResolvedValueOnce({ state_version: "6", current: current(assignment(6, "presented")) });
+    await f.controller.refresh();
+    expect(marked()).toBe(false);
+    expect(f.controller.snapshot()).toMatchObject({ phase: "question", problem: null });
+  });
+});
+
+describe("shared study view: a result of another pair below the lanes' floor (M-LANE-PAIR-GUARD, C122 п. 2)", () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+  const NEW_RESULT = id(17);
+  const other = (): StudyCurrent => ({ session_id: SESSION, status: "active", pair: "uk-de", close_reason: null,
+    assignment: assignment(10, "presented") });
+  /** A wrong answer of the new result, with its correction right, as the server would project it. */
+  const newAnswer = (version = "1"): StudyAnswer => {
+    const base = answer(2, version);
+    return { ...base, result: { ...base.result!, result_id: NEW_RESULT, assignment_id: id(10) },
+      capabilities: { ...base.capabilities, correct_target: { ...target(version), assignment_id: id(10), result_id: NEW_RESULT } } };
+  };
+  /** A shown own correct result, then a second answer accepted by the lanes whose reply carried no result. */
+  async function acceptedWithoutResult() {
+    const f = view(); await f.controller.refresh();
+    f.controller.setDraft("Haus"); f.replies.set("answer.submit", answered(4)); await f.controller.submit();
+    expect(f.controller.snapshot()).toMatchObject({ phase: "result_correct", answer: { result: { result_id: id(7) } } });
+    f.state.stateVersion = "9";
+    f.state.primary = { ...idle(), phase: "settled", outcome: "accepted", stateVersion: "9",
+      resolved: { commandId: id(95), kind: "answer.submit", sessionId: SESSION, assignmentId: id(10), resultId: NEW_RESULT } };
+    f.commands.readSession.mockResolvedValueOnce({ state_version: "9", current: current(assignment(10, "presented")) });
+    return f;
+  }
+
+  it("SG9: an older result step naming another pair shows nothing of that result and proves no reason", async () => {
+    const f = await acceptedWithoutResult(), begins = f.commands.begin.mock.calls.length;
+    f.commands.readResult.mockResolvedValueOnce({ state_version: "8", step: other(), ...newAnswer() });
+    await f.controller.refresh();
+    const after = f.controller.snapshot();
+    // Nothing of the other pair: not its result, no timer, no grade/correction/next right, no POST.
+    expect(after.answer?.result?.result_id).not.toBe(NEW_RESULT);
+    expect(after).toMatchObject({ phase: "stale", timer: null, canNext: false, canCorrect: false, grades: [], canUndo: false });
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(f.commands.begin.mock.calls.length).toBe(begins);
+    // An older step proves no current pair change.
+    expect(after.problem).toBeNull(); expect(mismatch(f.controller)).toBe(false);
+    // The own confirmed result stays known (its fact is not cleared).
+    expect((f.controller as unknown as { answer: StudyAnswer | null }).answer?.result?.result_id).toBe(id(7));
+  });
+  it("SG10: that refusal is not final: a later fresh read of this pair recovers the same accepted result", async () => {
+    const f = await acceptedWithoutResult();
+    f.commands.readResult.mockResolvedValueOnce({ state_version: "8", step: other(), ...newAnswer() });
+    await f.controller.refresh();
+    f.commands.readSession.mockResolvedValueOnce({ state_version: "9", current: current(assignment(10, "presented")) });
+    f.commands.readResult.mockResolvedValueOnce({ state_version: "9", step: current(assignment(10, "presented")), ...newAnswer() });
+    await f.controller.refresh();
+    expect(f.commands.readResult).toHaveBeenCalledTimes(2);
+    expect(f.controller.snapshot()).toMatchObject({ phase: "result_wrong", problem: null, answer: { result: { result_id: NEW_RESULT } } });
+  });
+  it("SG11: an older result step of this pair is unchanged: its result is shown (a stale step, not another pair)", async () => {
+    const f = await acceptedWithoutResult();
+    f.commands.readResult.mockResolvedValueOnce({ state_version: "8", step: current(assignment(10, "presented")), ...newAnswer() });
+    await f.controller.refresh();
+    expect(f.controller.snapshot()).toMatchObject({ phase: "result_wrong", answer: { result: { result_id: NEW_RESULT } } });
+  });
+  it("SG12: a fresh result step of another pair keeps the proven reason (as SG4)", async () => {
+    const f = await acceptedWithoutResult();
+    f.commands.readResult.mockResolvedValueOnce({ state_version: "9", step: other(), ...newAnswer() });
+    await f.controller.refresh();
+    const after = f.controller.snapshot();
+    expect(after).toMatchObject({ phase: "stale", problem: null, canNext: false, grades: [], canCorrect: false });
+    expect(mismatch(f.controller)).toBe(true);
+    expect(after.answer?.result?.result_id).not.toBe(NEW_RESULT);
+  });
+  it("SG13: a closed own-session result step of another pair is the closure, not this guard", async () => {
+    const f = await acceptedWithoutResult();
+    f.commands.readResult.mockResolvedValueOnce({ state_version: "9",
+      step: { ...other(), status: "closed", close_reason: "pair_changed", assignment: null }, ...newAnswer() });
+    await f.controller.refresh();
+    expect(f.controller.closed).toEqual([{ sessionId: SESSION, reason: "pair_changed" }]);
+    expect(f.controller.snapshot().phase).toBe("closed");
+  });
+  /** A closed step of the view's session naming another pair, as a result read may carry it. */
+  const closedOther = (): StudyCurrent => ({ ...other(), status: "closed", close_reason: "pair_changed", assignment: null });
+  it("SG15 (F3, case 1): an older closed step of another pair gives no new result, no Next and no reason (C158)", async () => {
+    const f = await acceptedWithoutResult(), begins = f.commands.begin.mock.calls.length;
+    f.commands.readResult.mockResolvedValueOnce({ state_version: "8", step: closedOther(), ...newAnswer() });
+    await f.controller.refresh();
+    const after = f.controller.snapshot();
+    // The old version proves neither the closure nor the pair change, and the new result of that step is not taken.
+    expect(f.controller.closed).toEqual([]);
+    expect(after.answer?.result?.result_id).not.toBe(NEW_RESULT);
+    expect(after).toMatchObject({ phase: "stale", problem: null, pairMismatch: null, timer: null, canNext: false,
+      canCorrect: false, grades: [], canUndo: false });
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(f.commands.begin.mock.calls.length).toBe(begins);
+  });
+  it("SG20 (F3, case 2): the own confirmed result stays known after that refusal", async () => {
+    const f = await acceptedWithoutResult();
+    f.commands.readResult.mockResolvedValueOnce({ state_version: "8", step: closedOther(), ...newAnswer() });
+    await f.controller.refresh();
+    expect((f.controller as unknown as { answer: StudyAnswer | null }).answer?.result?.result_id).toBe(id(7));
+  });
+  it("SG21 (F3): the refusal is not final: a fresh own result is recovered with its current rights and version", async () => {
+    const f = await acceptedWithoutResult();
+    f.commands.readResult.mockResolvedValueOnce({ state_version: "8", step: closedOther(), ...newAnswer() });
+    await f.controller.refresh();
+    f.commands.readSession.mockResolvedValueOnce({ state_version: "9", current: current(assignment(10, "presented")) });
+    f.commands.readResult.mockResolvedValueOnce({ state_version: "9", step: current(assignment(10, "presented")), ...newAnswer("3") });
+    await f.controller.refresh();
+    // The accepted result itself is read again (it was not taken as handled), not merely the shown own answer.
+    expect(f.commands.readResult).toHaveBeenCalledTimes(2);
+    expect((f.commands.readResult.mock.calls[1] as unknown[])[0]).toMatchObject({ result_id: NEW_RESULT });
+    expect(f.controller.snapshot()).toMatchObject({ phase: "result_wrong", problem: null, canCorrect: true,
+      answer: { result: { result_id: NEW_RESULT, version: "3" }, capabilities: { correct_target: { expected_result_version: "3" } } } });
+  });
+  it("SG22 (F3, case 3): the own closure at the floor ends the view as before, with no grade or undo", async () => {
+    const f = await acceptedWithoutResult();
+    f.commands.readResult.mockResolvedValueOnce({ state_version: "9", step: closedOther(), ...newAnswer() });
+    await f.controller.refresh();
+    expect(f.controller.closed).toEqual([{ sessionId: SESSION, reason: "pair_changed" }]);
+    expect(f.controller.snapshot()).toMatchObject({ phase: "closed", grades: [], canUndo: false, canCorrect: false, canNext: false });
+  });
+  it("SG23 (F3): re-reading the shown own result takes nothing from an older closed step of another pair", async () => {
+    const f = view(); await f.controller.refresh();
+    f.controller.setDraft("Haus"); f.replies.set("answer.submit", answered(4)); await f.controller.submit();
+    const before = (f.controller as unknown as { answer: StudyAnswer }).answer;
+    f.controller.suspend();
+    f.state.stateVersion = "7";
+    f.commands.readSession.mockResolvedValueOnce({ state_version: "7", current: current(assignment(10, "prefetched")) });
+    f.commands.readResult.mockResolvedValueOnce({ state_version: "6", step: closedOther(), ...answer(4, "2"),
+      capabilities: { ...answer(4, "2").capabilities, grades: { ...target("2"), values: [3, 4, 5] } } });
+    await f.controller.resume();
+    expect(f.controller.closed).toEqual([]);
+    expect((f.controller as unknown as { answer: StudyAnswer }).answer).toEqual(before);
+  });
+  it("SG14: re-reading the shown own result never takes rights from a step of another pair", async () => {
+    const f = view(); await f.controller.refresh();
+    f.controller.setDraft("Haus"); f.replies.set("answer.submit", answered(4)); await f.controller.submit();
+    const before = (f.controller as unknown as { answer: StudyAnswer }).answer;
+    f.controller.suspend();
+    f.commands.readSession.mockResolvedValueOnce({ state_version: "6", current: current(assignment(10, "prefetched")) });
+    f.commands.readResult.mockResolvedValueOnce({ state_version: "6", step: other(), ...answer(4, "2"),
+      capabilities: { ...answer(4, "2").capabilities, grades: { ...target("2"), values: [3, 4, 5] } } });
+    await f.controller.resume();
+    expect((f.controller as unknown as { answer: StudyAnswer }).answer).toEqual(before);
+  });
+});
+
+describe("shared study view: a known mismatch against an update in progress and a failed update (C149)", () => {
+  const foreign = (): StudyCurrent => ({ session_id: SESSION, status: "active", pair: "uk-de", close_reason: null,
+    assignment: assignment(6, "presented") });
+  const r1 = (f: ReturnType<typeof view>) => {
+    f.state.primary = { ...idle(), phase: "settled", outcome: "accepted", stateVersion: "6", problem: "pair_changed",
+      resolved: { commandId: id(91), kind: "session.start", sessionId: SESSION } };
+    f.state.stateVersion = "6"; f.publish();
+  };
+  it("SG16: the lanes' pair reason of an applied command is no shown problem; an unknown command's still is", () => {
+    const f = view(); r1(f);
+    // The fact stays published for whoever needs it (the lane's reason and the view's pairMismatch, C151).
+    expect(f.controller.snapshot()).toMatchObject({ problem: null, pairMismatch: SESSION,
+      commands: { primary: { outcome: "accepted", problem: "pair_changed" } } });
+    f.state.primary = { ...idle(), phase: "unresolved", pending: true, kind: "answer.submit", problem: "pair_changed" };
+    f.publish();
+    expect(f.controller.snapshot().problem).toBe("pair_changed");
+  });
+  it("SG17: while the update runs nothing claims a failure", async () => {
+    const f = view(); r1(f);
+    let release!: () => void;
+    f.commands.readSession.mockImplementationOnce(() => new Promise(done => {
+      release = () => done({ state_version: "6", current: foreign() }); }));
+    const reading = f.controller.refresh();
+    await vi.waitFor(() => expect(f.commands.readSession).toHaveBeenCalled());
+    expect(f.controller.snapshot().problem).toBeNull();
+    release(); await reading;
+    expect(f.controller.snapshot()).toMatchObject({ phase: "stale", problem: null });
+    expect(mismatch(f.controller)).toBe(true);
+  });
+  it("SG18: a failed update keeps its own problem after the mismatch (read failure, refused check, stale check)", async () => {
+    const failed = view(); r1(failed);
+    failed.commands.readSession.mockRejectedValueOnce(new Error("offline"));
+    await failed.controller.refresh();
+    expect(failed.controller.snapshot()).toMatchObject({ phase: "stale", problem: "load" });
+    for (const problem of ["network", "stale_response"]) {
+      const f = view(); r1(f);
+      f.state.primary = { ...idle(), phase: "unresolved", pending: true, kind: "answer.submit", problem };
+      f.publish();
+      expect(f.controller.snapshot().problem).toBe(problem);
+    }
   });
 });

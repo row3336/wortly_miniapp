@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, type ReactNode } from "react";
 import type { HttpOptions } from "../api/http";
+import { acceptedForeignStart } from "../commands/foreignStart";
 import type { CloseReason } from "../conjugation/conjugationDocumentController";
 import type { ConjugationSessionPendingStore, ConjugationStopPendingStore } from "../conjugation/conjugationPending";
 import { ConjugationTestFlow, type ConjugationView, type FlowInput } from "../conjugation/conjugationTestFlow";
@@ -30,6 +31,11 @@ export type ConjugationHostOptions = {
   onConjugation(): void;
   /** Navigation only: a summary_home closure, an explicit return or nothing left to show. */
   onToday(): void | Promise<void>;
+  /**
+   * Answer 17.1-А (R1): this owner's accepted start made a session the server holds open in another pair. The document
+   * refreshes its access once per such session and goes into it; the owner only reports it.
+   */
+  onForeignStart?(sessionId: string): void;
 };
 export type ConjugationHost = {
   /** Today waits for the first recovery and for own receipts or sessions it must show first. */
@@ -161,6 +167,8 @@ export function useConjugationHost(options: ConjugationHostOptions): Conjugation
   const claim = live && !refusedStart && (lanesPending || state.phase === "unknown"
     || state.sessionId !== null && state.phase !== "closed" && state.phase !== "idle")
     ? state.sessionId ?? study?.sessionId ?? stop?.sessionId ?? "receipt" : null;
+  const startedElsewhere = state && state.phase !== "disposed" ? acceptedForeignStart(study, state) : null;
+  useEffect(() => { if (startedElsewhere !== null) latest.current.onForeignStart?.(startedElsewhere); }, [startedElsewhere]);
   useEffect(() => {
     const current = latest.current;
     if (current.route !== "conjugation") bound.idleNotified = false;

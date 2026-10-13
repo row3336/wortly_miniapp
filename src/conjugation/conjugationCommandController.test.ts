@@ -188,8 +188,19 @@ describe("conjugation persistence and immutable command lifecycle", () => {
   it("an intervening replacement slot blocks later check, retry and clearing", async () => {
     const f = fixture(); await f.controller.refresh(); const replacement = pending(); replacement.intent.command_id = id(99);
     await f.stores.study.save(replacement, new AbortController().signal); await f.controller.begin(action()); await f.controller.refresh(); await f.controller.retry();
+    // The new intent was neither stored nor sent: no unknown outcome is left of it; the other record stays as it was.
+    expect(f.controller.snapshot()).toMatchObject({ problem: "pending_changed", pending: false, phase: "blocked", canRetry: false });
+    expect(f.send).not.toHaveBeenCalled(); expect(f.check).not.toHaveBeenCalled(); expect(f.read).not.toHaveBeenCalled();
+    expect(JSON.parse(f.values.get(f.key)!).intent.command_id).toBe(id(99));
+  });
+  it("a retained intent whose slot changed before its retry keeps its record and stays unknown", async () => {
+    const f = fixture(pending()); await f.controller.refresh(); expect(f.controller.snapshot().canRetry).toBe(true);
+    const replacement = pending(); replacement.intent.command_id = id(99); f.values.set(f.key, JSON.stringify(replacement));
+    await f.controller.retry();
+    // A retry is no new intent: the slot conflict leaves its unknown outcome as it was, and nothing is sent.
     expect(f.controller.snapshot()).toMatchObject({ problem: "pending_changed", pending: true, canRetry: false });
-    expect(f.send).not.toHaveBeenCalled(); expect(f.check).not.toHaveBeenCalled(); expect(JSON.parse(f.values.get(f.key)!).intent.command_id).toBe(id(99));
+    expect(f.controller.snapshot().pendingIntent?.command_id).toBe(id(10));
+    expect(f.send).not.toHaveBeenCalled(); expect(JSON.parse(f.values.get(f.key)!).intent.command_id).toBe(id(99));
   });
   it.each(intents.map((intent, index) => ({ kind: intent.kind, intent, index })))("lost $kind reply reloads with only exact addressed GET proof", async ({ intent }) => {
     const f = fixture(undefined, intent); f.model.lostReply = true; await f.controller.refresh(); await f.controller.begin(action(intent));
@@ -471,7 +482,7 @@ describe("identity, tagged results and document/version lifetime", () => {
   });
 });
 
-describe("D-STALE-WINDOW 3.1.4 guard: the core's business refusal envelope settles the intent", () => {
+describe("D-STALE-WINDOW 3.1.4: the core's DOCUMENT_STALE envelope refuses this attempt, not the intent", () => {
   /** The core's refusal envelope of this intent (study/coordinator.py; app.py flattens answer kinds; schedule projects its catalog). */
   function refusal(intent: ConjugationIntent, code: string): Record<string, unknown> {
     const head = { command: { id: intent.command_id, status: "rejected" }, state_version: "9", error: { code } };
@@ -481,6 +492,23 @@ describe("D-STALE-WINDOW 3.1.4 guard: the core's business refusal envelope settl
       capabilities: { answer_target: null, correct_target: null, grades: null, undo_target: null, stop: false, summary_home: false } };
     return { ...head, current: { session_id: id(3), status: "unavailable" } };
   }
+  it.each(intents)("$kind keeps its record, sends once and stays unresolved as window_stale", async intent => {
+    const f = fixture(undefined, intent); await f.controller.refresh();
+    let saved: string | undefined;
+    f.model.intercept = async (_url, init) => {
+      if (init.method !== "POST") return null;
+      saved = f.values.get(f.key);
+      return new Response(JSON.stringify(refusal(intent, "DOCUMENT_STALE")), { status: 409 });
+    };
+    await f.controller.begin(action(intent));
+    expect(saved).toBeDefined();
+    // The same raw record as before the POST: neither cleared nor rewritten.
+    expect(f.values.get(f.key)).toBe(saved);
+    expect(f.storage.remove).not.toHaveBeenCalled();
+    expect(f.send).toHaveBeenCalledOnce();
+    expect(f.controller.snapshot()).toMatchObject({ phase: "unresolved", pending: true, outcome: null, rejectionCode: null,
+      problem: "window_stale", canRetry: false });
+  });
   it.each(intents)("$kind refused as SESSION_CLOSED still settles rejected and clears its record", async intent => {
     const f = fixture(undefined, intent); await f.controller.refresh();
     f.model.intercept = async (_url, init) => init.method === "POST"
@@ -488,5 +516,37 @@ describe("D-STALE-WINDOW 3.1.4 guard: the core's business refusal envelope settl
     await f.controller.begin(action(intent));
     expect(f.values.has(f.key)).toBe(false);
     expect(f.controller.snapshot()).toMatchObject({ outcome: "rejected", pending: false, rejectionCode: "SESSION_CLOSED" });
+  });
+});
+
+// M-SLOT-INVALID: a NEW action whose save the slot refuses over an unreadable record was neither stored nor sent: it is no unknown
+// outcome, so it is never checked or retried. The unreadable record itself stays untouched; a retained one keeps its record.
+describe("conjugation: an unreadable record in the shared slot meets a new action", () => {
+  it.each([["not JSON", "{not json"], ["JSON of another shape", "{\"a\":1}"]])("%s: the action is dropped, nothing is requested", async (_name, raw) => {
+    const f = fixture(); await f.controller.refresh(); const before = f.fetcher.mock.calls.length;
+    f.values.set(f.key, raw);
+    await f.controller.begin(action());
+    expect(f.controller.snapshot()).toMatchObject({ phase: "blocked", problem: "invalid_pending", pending: false, pendingIntent: null, canRetry: false });
+    await f.controller.refresh(); await f.controller.retry();
+    expect(f.fetcher.mock.calls.length).toBe(before);
+    expect(f.send).not.toHaveBeenCalled(); expect(f.check).not.toHaveBeenCalled();
+    expect(f.controller.snapshot()).toMatchObject({ phase: "idle", pending: false });
+    expect(f.values.get(f.key)).toBe(raw);
+  });
+  it("a retained intent keeps its record and stays pending when the slot turns unreadable under its retry", async () => {
+    const f = fixture(pending()); await f.controller.refresh();
+    expect(f.controller.snapshot()).toMatchObject({ pending: true, canRetry: true });
+    f.values.set(f.key, "{not json");
+    await f.controller.retry();
+    expect(f.send).not.toHaveBeenCalled();
+    expect(f.controller.snapshot()).toMatchObject({ pending: true, problem: "invalid_pending", canRetry: false });
+    expect(f.values.get(f.key)).toBe("{not json");
+  });
+  it("once the record is gone, a new action goes out once with a new ID", async () => {
+    const f = fixture(); await f.controller.refresh();
+    f.values.set(f.key, "{not json"); await f.controller.begin(action());
+    f.values.delete(f.key); await f.controller.refresh();
+    await f.controller.begin(action());
+    expect(f.send).toHaveBeenCalledOnce(); expect(f.check).not.toHaveBeenCalled();
   });
 });

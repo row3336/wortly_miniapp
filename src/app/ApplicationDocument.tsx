@@ -9,6 +9,8 @@ import type { Language } from "../i18n/language";
 import { LearningPreviewCard } from "../learning/LearningPreviewCard";
 import { ManualPendingStore } from "../learning/manualPending";
 import type { AsyncStorage } from "../platform/storage";
+import { dictionaryChoice } from "../settings/dictionaryChoice";
+import { DictionaryChoiceScreen } from "../settings/DictionaryChoiceScreen";
 import { SettingsHost } from "../settings/SettingsHost";
 import { StatisticsHost } from "../statistics/StatisticsHost";
 import { useSettingsDocument, type SettingsObservation } from "../settings/useSettingsDocument";
@@ -25,6 +27,7 @@ import { backDestination, initialRoute, navigationReducer, type Route, type Tab 
 import { useBackLayer } from "./navigationBack";
 import { useScreenTransition } from "./navigationMotion";
 import type { OpenedAccess } from "./openedAccess";
+import type { LearningPageStarts } from "../learning/learningPageStarts";
 import { useOralHost, type OralStores } from "./OralHost";
 import { useConjugationHost, type ConjugationStores } from "./ConjugationHost";
 
@@ -35,6 +38,8 @@ type Props = {
   onCurrent(current: SettingsObservation): void;
   /** The card a bot button asked for at launch (answer Q20); taken by the first document only. */
   launchCard?: LaunchCard;
+  /** The Learning starts of this page (35.1-А); the JS document's own unless a test models another page. */
+  learningPage?: LearningPageStarts;
 };
 function covers(opened: OpenedAccess, floor: SettingsObservation | null): boolean {
   if (!floor) return true;
@@ -112,6 +117,9 @@ export function ApplicationDocument(props: Props) {
   const hostClaimed = useRef(false);
   const seedReleased = useRef(false);
   const synchronizedClosed = useRef(new Set<string>());
+  // Answer 17.1-А (R1): the sessions this document refreshed its access for after its own accepted start landed in
+  // another pair. One refresh per session: a failed one ends as any foreground does, with its manual retry.
+  const refreshedFor = useRef(new Set<string>());
   useEffect(() => { lifetime.current++; return () => { lifetime.current++; running.current = null; }; }, []);
 
   const synchronize = useCallback(() => {
@@ -135,6 +143,14 @@ export function ApplicationDocument(props: Props) {
     return task;
   }, []);
 
+  // The same refresh as a return to the window (client/open): the server names the pair and the session to go into.
+  const refreshForStart = useCallback((sessionId: string) => {
+    const id = sessionId.toLowerCase();
+    if (!current.current.access.isLive() || refreshedFor.current.has(id)) return;
+    refreshedFor.current.add(id);
+    void current.current.foreground();
+  }, []);
+
   const observe = useCallback((observation: SettingsObservation) => {
     const { access, onCurrent } = current.current;
     if (!access.isLive() || observation.accessKey !== access.key || observation.profileId !== access.profile.profile_id) return;
@@ -144,9 +160,24 @@ export function ApplicationDocument(props: Props) {
     onCurrent(observation);
   }, []);
 
+  // Every mode owner gates on confirmed settings at least as new as its seed read (useWrittenHost and the other hosts),
+  // so Settings are read at least that new too: a profile write between the Settings read and a later seed read must
+  // re-read Settings, not leave the owner closed until a manual refresh.
   const settings = useSettingsDocument({ access: props.access, transport: props.transport, pendingStore: props.pendingStore,
-    minimumStateVersion: floor?.version, onCurrent: observe });
+    minimumStateVersion: highest(floor?.version, selected?.version, oralSelected?.version, writtenSelected?.version,
+      conjugationSelected?.version), onCurrent: observe });
   const fits = covers(props.access, floor);
+  // The first choice of the dictionary language (19.2-А, 29.1-А) stands in front of Today, wherever Today is reached
+  // from: the first open, or the return after an earlier session. Only a Settings read decides it, never the profile.
+  const choice = dictionaryChoice(settings.state, settings.confirmed);
+  // Set once the choice screen was shown in this document. If the language turns out chosen without this screen's own
+  // accepted save (VERSION_CONFLICT, another window), the screen stays to name the current pair until it is left.
+  const [choiceShown, setChoiceShown] = useState(false);
+  const outcome = settings.state.outcome;
+  const ownChoice = outcome?.key === "dictionary_language" && outcome.status === "accepted";
+  const settledChoice = choiceShown && choice === "chosen" && !ownChoice;
+  useEffect(() => { if (choiceShown && choice === "chosen" && ownChoice) setChoiceShown(false); }, [choiceShown, choice, ownChoice]);
+  const leaveChoice = () => { setChoiceShown(false); settings.actions.acceptCurrent("dictionary_language"); };
   useEffect(() => {
     if (at === "today" && !fits && floor && attemptedFloor.current !== floor.version) {
       attemptedFloor.current = floor.version;
@@ -173,6 +204,10 @@ export function ApplicationDocument(props: Props) {
   // update as the start route, so the session is never shown (nor its question committed as shown) before the card.
   // It is a message entry: it takes no rights of the quiz under it (cardOrigin) and is not a dictionary opening (S02).
   const launchCard = useRef(props.launchCard);
+  // An empty start leaves the launch card in place until the dictionary language is chosen and the document shows its
+  // pair (29.1-А): no card host mounts, reads or writes under a pair that is not chosen yet. A resumed session keeps
+  // its own route and takes the card at once, as before.
+  const [launchWaiting, setLaunchWaiting] = useState(false);
   const start = useCallback((screen: "learning" | "oral" | "written" | "conjugation" | null) => {
     if (screen !== null) navigate({ type: "open", screen });
     const cardId = launchCard.current?.take() ?? null;
@@ -184,7 +219,14 @@ export function ApplicationDocument(props: Props) {
       [conjugationSelected, setConjugationSelected]] as const) {
       if (selection !== null && selection.seed !== null && selection.pair !== pair) { select({ ...selection, seed: null }); return; }
     }
-    if (selected === null && session === null) { setSelected({ seed: null, pair }); start(null); return; }
+    // The refreshed access names the new pair and the session this document's start made there (17.1-А): select anew, as
+    // a fresh document does. Until the mode read answers only the loading screen shows, never Today of either pair; the
+    // read then opens that session on its own route, whatever mode it is. Only a session this document refreshed for:
+    // a window that got the new pair otherwise keeps its owners and what is typed in them (QA-REOPEN-FIX F1).
+    if (selected !== null && selected.pair !== pair && session !== null && refreshedFor.current.has(session.id.toLowerCase())) {
+      setSelected(null); navigate({ type: "home" }); return;
+    }
+    if (selected === null && session === null) { setSelected({ seed: null, pair }); setLaunchWaiting(true); return; }
     if (selected === null && read.kind === "learning") {
       setSelected({ seed: read.id, pair, version: read.version }); start("learning"); return;
     }
@@ -212,6 +254,8 @@ export function ApplicationDocument(props: Props) {
       void synchronize();
     }
   }, [selected, oralSelected, writtenSelected, conjugationSelected, session, pair, read.kind, readId, readAfter, synchronize, start]);
+  const launchReady = launchWaiting && at === "today" && choice === "chosen" && !settledChoice && fits && gate === "ready";
+  useEffect(() => { if (launchReady) { setLaunchWaiting(false); start(null); } }, [launchReady, start]);
   // The launch card host that has shown its content: closing it after that forgets the card in the address (answer S03).
   const shownLaunch = useRef<string | null>(null);
 
@@ -246,7 +290,7 @@ export function ApplicationDocument(props: Props) {
 
   // hostRoute "settings" means hidden, not navigation: the Host renders nothing and keeps its owner mounted.
   let hostRoute: "today" | "learning" | "settings" = at === "today" || at === "learning" ? at : "settings";
-  let screen: ReactNode = null, todayShown = false;
+  let screen: ReactNode = null, todayShown = false, choosing = false;
   // The launch card over an undecided start hides its screen until Back.
   if (selected === null) screen = at === "card" ? null : readScreen();
   else if (at === "today") {
@@ -256,6 +300,18 @@ export function ApplicationDocument(props: Props) {
     } else if (readAfter && read.kind !== "pending") {
       hostRoute = "settings";
       screen = readScreen();
+    } else if (choice !== "chosen" || settledChoice) {
+      // An unadopted session still being read is never taken for its absence: the read decides its route first.
+      hostRoute = "settings";
+      choosing = !readAfter && (choice === "required" || settledChoice);
+      screen = readAfter || choice === "loading" ? loading
+        : choice === "failed" ? <TodayScreen state={{ kind: "failed", reason: "load" }} language={props.language}
+          onRetry={() => { void settings.actions.refresh(); }} />
+        : <DictionaryChoiceScreen document={settings} language={props.language} settled={settledChoice} onLeave={leaveChoice} />;
+    } else if (launchReady && launchCard.current?.has()) {
+      // The card is pushed by the effect right after this render; Today is not shown under it first.
+      hostRoute = "settings";
+      screen = loading;
     } else todayShown = true;
   } else if (at === "statistics") {
     // Every entry mounts a fresh host and so reads the server; a foreground access is read again by the host (TA:362).
@@ -268,14 +324,14 @@ export function ApplicationDocument(props: Props) {
     language: props.language, settings, minimumStateVersion: highest(floor?.version, oralSelected?.version),
     initialSessionId: oralSeed, seedPending: at === "oral" && readAfter && (read.kind === "pending" || read.kind === "oral"),
     route: at === "oral" ? "oral" : todayShown ? "today" : "hidden",
-    onOral: () => navigate({ type: "open", screen: "oral" }), onToday: today,
+    onOral: () => navigate({ type: "open", screen: "oral" }), onToday: today, onForeignStart: refreshForStart,
     // «Уточнить поля» in М18 (M-ORAL-ENTRY): the card opens on top of the oral quiz; Back returns to the same question.
     onOpenCard: (cardId, details) => navigate({ type: "push", screen: "card", subject: cardId, details }) });
   // The written owner also lives for the whole document; L1→De rows of Today start it (tz_app М09).
   const written = useWrittenHost({ access: props.access, transport: props.transport, storage: props.storage, newId: props.newId,
     language: props.language, settings, minimumStateVersion: highest(floor?.version, writtenSelected?.version),
     initialSessionId: writtenSeed, route: at === "written" ? "written" : todayShown ? "today" : "hidden",
-    onWritten: () => navigate({ type: "open", screen: "written" }), onToday: today,
+    onWritten: () => navigate({ type: "open", screen: "written" }), onToday: today, onForeignStart: refreshForStart,
     // «Уточнить поля» (M-ACTIONS): the answered card opens on top of the quiz and returns to it.
     onOpenCard: (cardId, details) => navigate({ type: "push", screen: "card", subject: cardId, details }) });
   // The conjugation owner lives for the whole document too; the Today button «Тест спряжений» starts it (М16).
@@ -284,7 +340,8 @@ export function ApplicationDocument(props: Props) {
     minimumStateVersion: highest(floor?.version, conjugationSelected?.version), initialSessionId: conjugationSeed,
     seedPending: at === "conjugation" && readAfter && (read.kind === "pending" || read.kind === "conjugation"),
     route: at === "conjugation" ? "conjugation" : todayShown ? "today" : "hidden",
-    onConjugation: () => navigate({ type: "open", screen: "conjugation" }), onToday: today });
+    onConjugation: () => navigate({ type: "open", screen: "conjugation" }), onToday: today, onForeignStart: refreshForStart });
+  useEffect(() => { if (choosing) setChoiceShown(true); }, [choosing]);
   if (todayShown && (oral.blocksToday || written.blocksToday || conjugation.blocksToday)) { hostRoute = "settings"; screen = loading; }
   // One host per opened card route (TA:86, К07-096): a fresh key per route object, so reopening a card while its
   // previous host still awaits a close starts a new host. The slot keeps one position, so leaving keeps the same host.
@@ -306,10 +363,10 @@ export function ApplicationDocument(props: Props) {
     {selected !== null && <LearningHost access={props.access} transport={props.transport} storage={props.storage}
       newId={props.newId} language={props.language} settings={settings}
       minimumStateVersion={highest(floor?.version, selected.version)} initialSessionId={seed}
-      route={hostRoute} submitOnEnter renderPreview={renderPreview} quizzes={quizzes}
+      route={hostRoute} submitOnEnter renderPreview={renderPreview} quizzes={quizzes} page={props.learningPage}
       onLearning={() => { hostClaimed.current = true; navigate({ type: "open", screen: "learning" }); }}
       onToday={() => { hostClaimed.current = false; seedReleased.current = true; today(); }}
-      onSettings={openSettings}
+      onSettings={openSettings} onForeignStart={refreshForStart}
       onNavigate={destination => destination === "statistics" ? navigate({ type: "push", screen: "statistics" }) : openTab(destination)} />}
     {screen}
     {oral.screen}

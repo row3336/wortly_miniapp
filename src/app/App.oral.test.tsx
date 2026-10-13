@@ -77,7 +77,9 @@ function app(options: { session?: boolean } = {}) {
   const posts = () => fetcher.mock.calls.filter(([url, init]) => init?.method === "POST" && String(url).endsWith("/commands"))
     .map(([, init]) => JSON.parse(String(init!.body)) as OralCommand);
   return { server, openReply, todayReply, fetcher, posts, back,
-    close(reason: OralSessionProjection["close_reason"]) { current = oral("closed", reason); server.session = null; version++; } };
+    close(reason: OralSessionProjection["close_reason"]) { current = oral("closed", reason); server.session = null; version++; },
+    /** Another write of the profile (another window's open, an accepted command, calendar maintenance): the version moves. */
+    bump() { version++; } };
 }
 const dd = () => Array.from(screen.getByRole("region", { name: "Итог занятия" }).querySelectorAll("dd"), e => e.textContent);
 
@@ -147,5 +149,30 @@ describe("M-NAV bottom navigation around the oral session", () => {
     fireEvent.click(screen.getByRole("button", { name: "На Сегодня" }));
     await screen.findByText(pairText);
     expect(screen.getByRole("navigation", { name: "Основная навигация" })).toBeTruthy();
+  });
+});
+
+// race_fix (A-SETTINGS-RACE, ApplicationDocument: Settings are read at least as new as every mode seed, C153/C159; QA-FINAL
+// Q3, C245): a fresh document of an open oral session reads Settings and the session separately, and another write of the
+// profile can land between those reads. The pair stays the chosen one; only the version moves.
+describe("Oral: a profile write between the Settings read and the session read of a new document (race_fix)", () => {
+  it("re-reads Settings and keeps the resumed question answerable, without a settings refusal", async () => {
+    const a = app({ session: true });
+    const base = a.fetcher.getMockImplementation()!;
+    let bumped = false, settingsReads = 0;
+    a.fetcher.mockImplementation(async (url, init) => {
+      const reply = await base(url, init);
+      if ((init?.method ?? "GET") === "GET" && new URL(String(url), "http://localhost").pathname.endsWith("/settings")) {
+        settingsReads++;
+        if (!bumped) { bumped = true; a.bump(); }
+      }
+      return reply;
+    });
+    render(<App />);
+    await screen.findByText("wenn", undefined, { timeout: 5000 });
+    await waitFor(() => expect((screen.getByRole("button", { name: "Раскрыть" }) as HTMLButtonElement).disabled).toBe(false), { timeout: 5000 });
+    expect(bumped).toBe(true);
+    expect(settingsReads).toBeGreaterThanOrEqual(2);
+    expect(a.posts()).toEqual([]);
   });
 });

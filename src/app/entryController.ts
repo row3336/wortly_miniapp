@@ -217,9 +217,10 @@ export class EntryController {
   /**
    * A request of this window got DOCUMENT_STALE: the shared transport reports it before the module reads the reply.
    * The core gives that answer to a replaced document, but also to a closed card context of the live one, so a
-   * foreground of this same document decides. It asks one task later, on purpose: the module settles its refusal
-   * first and clears its saved action from the storage that the installation's windows share; a window closed
-   * before that would leave the action there to block the new window's next command.
+   * foreground of this same document decides. It asks one task later, on purpose: the module handles its refusal
+   * first. That refusal refuses this attempt, not the action: the module keeps its saved action in the storage that the
+   * installation's windows share for a live window to check (C091 §1, Р2). What a newer window shows for that action
+   * is the open question В-1; whether it may send it is В-2 (commandRefusal.ts).
    */
   documentStale(): void {
     if (this.disposed || this.replaced) return;

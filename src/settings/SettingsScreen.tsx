@@ -9,6 +9,8 @@ import type { SettingsController, SettingsSnapshot } from "./settingsController"
 import { catalogAllows, MaterialEditor, materialParts, type CatalogState } from "./MaterialEditor";
 import { SettingsFeedback } from "./SettingsFeedback";
 import { SettingsResetDialog } from "./SettingsResetDialog";
+import { languageChosen } from "./dictionaryChoice";
+import { dictionaryChoiceCopy } from "./dictionaryChoiceCopy";
 import { languageNames, settingsCopy } from "./settingsCopy";
 import "./settings.css";
 
@@ -58,6 +60,33 @@ function bounds(rule: SettingConstraint, language: Language): string | null {
   const a = list ? rule.item_minimum : rule.minimum;
   const b = list ? rule.item_maximum : rule.maximum;
   return typeof a === "number" && typeof b === "number" ? settingsCopy[language].bounds(a, b) : null;
+}
+
+/**
+ * The dictionary language once chosen (19.2-А): shown, never offered for change. A draft or a refused intent of another
+ * language may remain in the owner; it is not shown as the field's value and offers no save, so nothing waits on it.
+ */
+function LockedLanguage({ snapshot, language }: Pick<SettingsScreenProps, "snapshot" | "language">) {
+  const id = useId(), t = settingsCopy[language], lock = dictionaryChoiceCopy[language];
+  const current = snapshot.data!.settings.dictionary_language;
+  const outcome = snapshot.outcome?.key === "dictionary_language" ? snapshot.outcome : null;
+  return <section className="settings-field" role="group" aria-labelledby={`${id}-title`}>
+    <h3 id={`${id}-title`}>{t.fields.dictionary_language}</h3>
+    <p>{displayValue(current.value, "dictionary_language", language)}</p>
+    <p className="settings-help">{lock.locked}</p>
+    <div className="settings-error" aria-live="polite">
+      {outcome?.status === "rejected" && outcome.code === "DICTIONARY_LANGUAGE_LOCKED" && <p>{lock.lockedRefusal}</p>}
+      {/* A first choice that met an earlier one: no claim about where it was made, only the pair now chosen. */}
+      {outcome?.status === "rejected" && outcome.code === "VERSION_CONFLICT"
+        && <p>{lock.confirmed(lock.pairs[current.value as Language] ?? displayValue(current.value, "dictionary_language", language))}</p>}
+    </div>
+    <div className="settings-actions">
+      {/* An unresolved save keeps its existing line; after a known refusal the top line explains it. */}
+      {snapshot.pending?.intent.payload.key === "dictionary_language" && !knownRefusal(snapshot)
+        && <span role="status">{snapshot.phase === "sending" ? t.saving : t.unknown}</span>}
+      {outcome?.status === "accepted" && <span className="settings-saved" role="status">{t.saved}</span>}
+    </div>
+  </section>;
 }
 
 function SettingField({ setting, ...props }: SettingsScreenProps & { setting: SettingKey }) {
@@ -168,7 +197,7 @@ function knownRefusal(snapshot: SettingsSnapshot): boolean {
 }
 
 /** The top line's wording for the current problem. */
-function problemText(snapshot: SettingsSnapshot, language: Language): string {
+export function problemText(snapshot: SettingsSnapshot, language: Language): string {
   const t = settingsCopy[language], reason = snapshot.problem!.reason;
   // Exactly CLIENT_INCOMPATIBLE of a command: the app's text for that refusal (CommandRecovery). Working text, G05 open.
   if (reason === "incompatible") return appText(language).commandIncompatible;
@@ -277,7 +306,9 @@ export function SettingsScreen(props: SettingsScreenProps) {
       </details>
       : <section className="settings-group" key={group.name} aria-labelledby={`settings-${group.name}`}>
         <h2 id={`settings-${group.name}`}>{t[group.name]}</h2>
-        <div className="settings-group-body">{group.fields.map(setting => <SettingField key={setting} setting={setting} {...fieldProps} />)}</div>
+        <div className="settings-group-body">{group.fields.map(setting => setting === "dictionary_language"
+          && languageChosen(snapshot.data) ? <LockedLanguage key={setting} snapshot={snapshot} language={language} />
+          : <SettingField key={setting} setting={setting} {...fieldProps} />)}</div>
       </section>)}
     {snapshot.data && <SettingsReset snapshot={snapshot} language={language} onReset={() => { clearResult(); void actions.reset(); }}
       onRetry={() => { void actions.retry(); }} />}

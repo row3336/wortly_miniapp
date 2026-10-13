@@ -2,7 +2,7 @@ import { ApiError } from "../api/http";
 import type { ClosedSessionBoundary, Profile } from "../api/generated";
 import { exactKeys, oneOf, record, sameId, uuid, version } from "../api/wireValidation";
 import { sendableIntent } from "./closeIntent";
-import { PendingStoreError, type PendingSlot } from "./pendingSlot";
+import { PendingStoreError, refusedUnsent, type PendingSlot } from "./pendingSlot";
 
 export type CommandPhase = "loading" | "idle" | "checking" | "sending" | "unresolved" | "blocked" | "settled" | "disposed";
 export type CommandProblem = "network" | "storage" | "invalid_pending" | "pending_changed" | "mismatch" | "not_found"
@@ -10,7 +10,10 @@ export type CommandProblem = "network" | "storage" | "invalid_pending" | "pendin
   | "closed" | "stale_response"
   // Known refusals of a write that is not a lost reply: a planned pause (503 MAINTENANCE, К14-021) and an outdated
   // client (409 CLIENT_INCOMPATIBLE, К10-059). Both leave the intent unknown and checkable like "network".
-  | "maintenance" | "incompatible";
+  | "maintenance" | "incompatible"
+  // 409 DOCUMENT_STALE: a newer window of this installation owns the document. Not a lost reply (the write was refused
+  // before it began) and not a refusal of the intent: the record stays for a live window to check (C091 §1).
+  | "window_stale";
 export type CommandOutcome = "accepted" | "rejected" | "not_applied";
 export type Pair = "ru-de" | "uk-de" | "en-de";
 export type LaneIntent = { command_id: string; kind: string; session_id: string };
@@ -38,7 +41,16 @@ export function copyLanePending<I extends LaneIntent>(value: LanePending<I>, cop
   return { schemaVersion: 1, profileId: value.profileId, clientInstanceId: value.clientInstanceId, pair: value.pair,
     intent: copyIntent(value.intent), ...(value.mismatch ? { mismatch: true } : {}) };
 }
-export type LaneResolved<K extends string> = { commandId: string; kind: K; sessionId: string };
+export type LaneResolved<K extends string> = {
+  commandId: string; kind: K; sessionId: string;
+  /**
+   * The outcome is an old one: the first status check of this owner found it already on the server for an intent an
+   * earlier owner left in the durable slot (a reload, a re-entry), and this owner never sent it. Its result was never
+   * shown (decisions 20.1-А, 22.1-А). A request this owner started, even of the same intent, makes the outcome a live
+   * one; a send stopped before its request (a failed save, a closed handle) does not.
+   */
+  restored?: true;
+};
 /** A not_found status of the same ID: the locked profile observation and, at most, the final closure of its session. */
 export type MissingStatus = { outcome: "not_found"; state_version: string; current: Profile; closed_session?: ClosedSessionBoundary };
 type Refused = { outcome: "rejected" | "mismatch"; error: { code: string } };
@@ -96,6 +108,13 @@ export type LaneOptions<S extends LaneSpec> = {
   check(intent: S["intent"]): Promise<S["status"]>;
   read(sessionId: string): Promise<S["read"]>;
   onUpdate(snapshot: S["snapshot"]): void;
+  /**
+   * Called once when a NEW intent met another record in the shared slot before anything was sent (the proof: its save was
+   * refused and the transport was never called). The record of the other window (X) is not this lane's: the owner that
+   * wires this seam may check X by its own ID (decision 14.8.8.1 А, C117); the new intent is already dropped and never checked.
+   * Unwired by this patch; PLAN_A connects it.
+   */
+  slotConflict?(): void;
   stateVersion?: string;
   minimumStateVersion?(): string | null;
 };
@@ -114,8 +133,21 @@ export function failureProblem(error: unknown): CommandProblem {
   if (error instanceof ApiError && error.kind === "http") {
     if (error.status === 503 && error.code === "MAINTENANCE") return "maintenance";
     if (error.status === 409 && error.code === "CLIENT_INCOMPATIBLE") return "incompatible";
+    if (error.status === 409 && error.code === "DOCUMENT_STALE") return "window_stale";
   }
   return "network";
+}
+
+/**
+ * A successful check that found its command absent on the same open step ("not_found", retryVerified) is a fact about the
+ * command, not a failed refresh. It may hide the generic «could not refresh» line only when it is the ONLY current cause:
+ * every lane problem is a not_found or none, at least one lane holds it, no lane carries a refusal, and nothing else
+ * (a failed session read, a busy refusal, a foreign receipt: otherCause) is set. An older not_found of one lane never
+ * hides a lost connection, a failed read or a stale answer found by the other.
+ */
+export function onlyCheckedAbsent(lanes: readonly { problem: string | null; rejectionCode: string | null }[], otherCause: string | null): boolean {
+  return otherCause === null && lanes.some(lane => lane.problem === "not_found")
+    && lanes.every(lane => (lane.problem === null || lane.problem === "not_found") && lane.rejectionCode === null);
 }
 
 /**
@@ -158,6 +190,8 @@ export abstract class LaneCore<I extends LaneIntent, Snapshot> {
   protected loaded = false;
   protected running: Promise<void> | null = null;
   protected retryVerified = false;
+  /** The pending intent came from the durable slot at this owner's first load and no request of it started here since. */
+  protected inherited = false;
   /** The raw error of the last step that failed, for automatic recovery to classify (CP2); null after a clean step. */
   private failure: unknown = null;
 
@@ -190,7 +224,7 @@ export abstract class LaneCore<I extends LaneIntent, Snapshot> {
     if (!this.loaded) {
       this.pending = await this.core.pendingStore.load(this.core.profileId, this.lifetime.signal);
       if (!this.live()) return false;
-      this.loaded = true;
+      this.loaded = true; this.inherited = this.pending !== null;
     }
     return true;
   }
@@ -198,6 +232,13 @@ export abstract class LaneCore<I extends LaneIntent, Snapshot> {
   protected busy(): boolean {
     return !this.live() || !!this.running || !this.loaded || !!this.pending || !["idle", "settled"].includes(this.phase);
   }
+  /**
+   * The host tells this from the transport once the request of the current send is built, right before fetch: from now
+   * on its outcome may come from this owner's own request (LaneResolved.restored).
+   */
+  sendStarted(): void { this.inherited = false; }
+  /** A new intent of this page (decision 2.3 А): a record loaded from storage without this mark came from elsewhere. */
+  protected noteCreated(commandId: string): void { this.core.pendingStore.noteCreated(commandId); }
   /** The error of the last step if it failed (a lost reply, a refusal, a closed handle); null otherwise. */
   lastFailure(): unknown { return this.failure; }
   /**
@@ -339,18 +380,26 @@ export abstract class CommandLane<S extends LaneSpec, O extends LaneOptions<S> =
     if (!this.live()) return;
     this.pending = null; this.problem = null; this.retryVerified = false; this.phase = "settled";
   }
-  private async settle(reply: LaneSettled<S>): Promise<void> {
+  private async settle(reply: LaneSettled<S>, restored = false): Promise<void> {
     const intent = this.pending!.intent;
     this.outcome = reply.outcome === "accepted" ? "accepted" : "rejected";
-    this.resolved = { commandId: intent.command_id, kind: intent.kind, sessionId: intent.session_id } as S["resolved"];
+    this.resolved = { commandId: intent.command_id, kind: intent.kind, sessionId: intent.session_id,
+      ...(restored ? { restored: true } : {}) } as S["resolved"];
     // The exact accepted address is immutable evidence, even if its attached projection is stale.
     if (reply.outcome === "accepted") this.accept(intent, reply as LaneSettled<S> & { outcome: "accepted" }, this.resolved);
     this.rejectionCode = reply.outcome === "accepted" ? null : (reply as Refused).error.code;
     const current = this.settledCurrent(reply), ownClosure = this.ownClosureOfOtherPair(this.pending!, current);
-    if (!this.observe(reply.state_version, current, ownClosure)) this.clearCurrent();
-    // A closure of another pair carries no mode view (an answer, a result) into this pair.
-    else if (!ownClosure) this.settledView(reply);
+    const otherPair = "pair" in current && current.pair !== this.options.pair;
+    const observed = this.observe(reply.state_version, current, ownClosure);
+    if (!observed) this.clearCurrent();
+    // No projection of another pair, closed or open, carries a mode view (an answer, a result) into this pair.
+    else if (!otherPair) this.settledView(reply);
     await this.clearSettled();
+    // The accepted fact stays (the command applied), but its session is open in another pair: the pair changed
+    // elsewhere and the server applied the command there (R1). This is no stale reply and no failed read; the reason is
+    // set after the cleanup, which resets it. An own closure in another pair is its closed fact, never this reason.
+    if (observed && otherPair && !ownClosure && reply.outcome === "accepted" && this.live()
+      && !("status" in current && current.status === "closed")) this.problem = "pair_changed";
   }
   private async markMismatch(pending: LanePending<S["intent"]>): Promise<void> {
     if (!this.live()) return;
@@ -380,7 +429,7 @@ export abstract class CommandLane<S extends LaneSpec, O extends LaneOptions<S> =
       throw error;
     }
     if (!this.live()) return;
-    if (reply.outcome === "accepted") { await this.settle(reply as LaneSettled<S>); return; }
+    if (reply.outcome === "accepted") { await this.settle(reply as LaneSettled<S>, this.inherited); return; }
     const missing = reply as MissingStatus;
     if (!this.observe(missing.state_version)) this.problem = "stale_response";
     else {
@@ -396,6 +445,18 @@ export abstract class CommandLane<S extends LaneSpec, O extends LaneOptions<S> =
     this.phase = "unresolved";
   }
   refresh(): Promise<void> { return this.run(() => this.reconcile()); }
+  /**
+   * Decision 14.8.8.1 А (owner, C117): a new action of this lane met another record in the shared slot and was dropped
+   * unsent (slotConflict). Read that record now and check it by its own ID, as a reload would. Whether it may be sent is
+   * not decided here (2.3 А: a record this page did not create is never sent). Nothing happens while an intent is held.
+   */
+  adopt(): Promise<void> {
+    return this.run(async () => {
+      if (this.pending || this.outcome) return;
+      this.loaded = false;
+      await this.reconcile();
+    });
+  }
 
   private retryFresh(): boolean {
     if (this.fresh()) return true;
@@ -405,11 +466,26 @@ export abstract class CommandLane<S extends LaneSpec, O extends LaneOptions<S> =
   private async sendPending(retry = false, transmitted?: () => void): Promise<void> {
     const pending = this.pending;
     // A stored closure record is only checked by its ID (D-CP4 4.6.1): never sent from here.
+    // Open question В-2 (D-STALE-WINDOW 5, Codex C093 п. 5): the record names no document, so a record kept after
+    // DOCUMENT_STALE that another document loaded can be sent from here with that document's id after a manual retry, as a
+    // record after a reload already is. CT §6.1 п. 5 asks for the same working document; no transfer is added here.
     if (!pending || !this.live() || !sendableIntent(pending.intent)) return;
     if (retry && (!this.retryVerified || !this.retryFresh())) return;
     this.phase = "sending"; this.problem = null; this.retryVerified = false; this.clearCurrent(); this.emit();
     if (!this.live() || retry && !this.retryFresh()) return;
-    await this.options.pendingStore.save(pending, this.lifetime.signal);
+    try { await this.options.pendingStore.save(pending, this.lifetime.signal); }
+    catch (error: unknown) {
+      // Proof that this NEW intent never left: its save was refused over another record, so the transport below was not
+      // reached and nothing can call it later (a lane without a pending intent cannot retry or resend). It is no unknown
+      // outcome to check or retry. The record in the slot is not touched. A retained intent (retry) keeps its record: it
+      // was stored, and may have been sent, before the slot changed under it.
+      if (!retry && refusedUnsent(error)) {
+        this.pending = null;
+        // Only a record of another window (X) can be checked; an unreadable one names no ID, so there is nothing to look for.
+        if (error.kind === "changed") this.options.slotConflict?.();
+      }
+      throw error;
+    }
     if (!this.live() || retry && !this.retryFresh()) return;
     // A manual send passes no hook: its exchange stays exactly what it was before automatic recovery.
     const intent = this.mode.copy(pending.intent);
@@ -433,6 +509,7 @@ export abstract class CommandLane<S extends LaneSpec, O extends LaneOptions<S> =
     if (this.busy()) return this.running ?? Promise.resolve();
     const pending: LanePending<S["intent"]> = { schemaVersion: 1, profileId: this.options.profileId,
       clientInstanceId: this.options.clientInstanceId, pair: this.options.pair, intent: this.mode.copy(intent) };
+    this.noteCreated(pending.intent.command_id);
     return this.run(async () => {
       this.outcome = null; this.resolved = null; this.rejectionCode = null; this.pending = pending;
       await this.sendPending(false, transmitted);

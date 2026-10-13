@@ -1,11 +1,14 @@
-import { StrictMode } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Profile, TodayResponse } from "../api/generated";
 import { conjugationId as id, conjugationServer, FORMS, type ModelSession } from "../conjugation/conjugationModel.test-support";
 import { cardIdOf } from "../dictionary/card/cardTestData.test-support";
 import { settingsResponse } from "../settings/settingsRead.test-support";
 import { App } from "./App";
+import { gate, replaceDocument, watchFlash } from "./flashWatch.test-support";
+import { commandPosts, enabledExits, foregroundOpen, loseReply as loseStudyReply, moveWithout, noLandings, pairMoved,
+  settle as pause, watchCommits } from "./pairMoved.test-support";
 import { besidesContext, launch, serveLaunchCard } from "./launchCard.test-support";
 
 /** The mode matrix below runs every suite plain and under StrictMode, as src/main.tsx does in development. */
@@ -308,5 +311,159 @@ describe.each([["StrictMode", true], ["plain render", false]])("App (%s)", (_nam
       expect(besidesContext(a.kinds())).toEqual(["assignment.present"]);
       expect(a.todayReply).not.toHaveBeenCalled();
     });
+  });
+});
+
+// Answer 17.1-А (R1): the pair moved to uk on another device and this window's start made the conjugation test in uk-de;
+// the window refreshes its access by itself (one client/open) and shows that test.
+describe("conjugation R1: the window refreshes itself into the session of the new pair (17.1-А)", () => {
+  it.each([false, true])("lost reply %s: one client/open, the uk question, its answer and Stop of that session", async lose => {
+    const a = app(); const world = pairMoved(a.fetcher);
+    render(<App />); const start = await startButton(); const opens = world.opens.length, mark = a.fetcher.mock.calls.length;
+    world.moved = true; if (lose) loseStudyReply(a.fetcher, "session.start");
+    fireEvent.click(start);
+    if (lose) {
+      const check = await screen.findByRole("button", { name: "Проверить статус" }, exchange);
+      await pause(1000); expect(world.opens.slice(opens)).toEqual([]);
+      fireEvent.click(check);
+    }
+    const field = await screen.findByRole("textbox", undefined, exchange) as HTMLTextAreaElement;
+    await waitFor(() => expect(field.readOnly).toBe(false));
+    await pause(500);
+    expect(world.opens.slice(opens)).toEqual(["foreground"]);
+    fireEvent.change(field, { target: { value: "kommst" } });
+    fireEvent.click(screen.getByRole("button", { name: "Проверить" })); await pause(1000);
+    fireEvent.click(screen.getByRole("button", { name: "Завершить" })); await pause(1500);
+    expect(commandPosts(a.fetcher, mark).map(post => [post.kind, post.session_id])).toEqual([["session.start", world.started],
+      ["assignment.present", world.started], ["answer.submit", world.started], ["session.stop", world.started]]);
+  });
+  // C178 (a): the server proved the created session open in another pair; that is a known fact, not a failed update, so
+  // no failure text is shown from the tap until the landing, neither for a direct reply nor after the check of a lost one.
+  it.each([false, true])("lost reply %s: no failure text for the known pair change, one client/open, the same session", async lose => {
+    const a = app(); const world = pairMoved(a.fetcher);
+    render(<App />); const start = await startButton(); const opens = world.opens.length, mark = a.fetcher.mock.calls.length;
+    const failure = ["Не удалось обновить занятие", "Не вдалося оновити заняття"];
+    world.moved = true; if (lose) loseStudyReply(a.fetcher, "session.start");
+    fireEvent.click(start);
+    let shown: { seen: string[]; stop(): void };
+    if (lose) {
+      // The lost reply itself is a real unknown: its own lines stay until the check.
+      const check = await screen.findByRole("button", { name: "Проверить статус" }, exchange);
+      await pause(500); expect(world.opens.slice(opens)).toEqual([]);
+      shown = watchCommits(failure); fireEvent.click(check);
+    } else shown = watchCommits(failure);
+    try {
+      const field = await screen.findByRole("textbox", undefined, exchange) as HTMLTextAreaElement;
+      await waitFor(() => expect(field.readOnly).toBe(false)); await pause(500);
+    } finally { shown.stop(); }
+    expect(shown.seen).toEqual([]);
+    expect(world.opens.slice(opens)).toEqual(["foreground"]);
+    expect(commandPosts(a.fetcher, mark).map(post => [post.kind, post.session_id])).toEqual([["session.start", world.started],
+      ["assignment.present", world.started]]);
+  });
+  it("a failed refresh keeps its own failure and manual retry; the retry goes into the same session", async () => {
+    const a = app(); const world = pairMoved(a.fetcher);
+    render(<App />); const start = await startButton(); const mark = a.fetcher.mock.calls.length;
+    world.moved = true; const open = foregroundOpen(a.fetcher, "fail");
+    fireEvent.click(start);
+    const retry = await screen.findByRole("button", { name: "Попробовать ещё раз" }, exchange);
+    await pause(2000); expect(open.attempts).toBe(1);
+    expect(commandPosts(a.fetcher, mark).map(post => post.kind)).toEqual(["session.start"]);
+    fireEvent.click(retry);
+    const field = await screen.findByRole("textbox", undefined, exchange) as HTMLTextAreaElement;
+    await waitFor(() => expect(field.readOnly).toBe(false));
+    expect(commandPosts(a.fetcher, mark).map(post => [post.kind, post.session_id])).toEqual([["session.start", world.started],
+      ["assignment.present", world.started]]);
+  });
+  // StrictMode (with the conjugation StrictMode fix, fbc7566): the refresh is asked once and the window lands in the
+  // created session as without StrictMode: its question is answerable, and nothing but its start and present is sent.
+  it("StrictMode direct reply: one client/open, the answerable question of the same session, no other start and no Stop", async () => {
+    const a = app(); const world = pairMoved(a.fetcher);
+    render(<StrictMode><App /></StrictMode>); const start = await startButton();
+    const opens = world.opens.length, mark = a.fetcher.mock.calls.length;
+    world.moved = true; fireEvent.click(start);
+    const field = await screen.findByRole("textbox", undefined, exchange) as HTMLTextAreaElement;
+    await waitFor(() => expect(field.readOnly).toBe(false));
+    await pause(1000);
+    expect(world.opens.slice(opens)).toEqual(["foreground"]);
+    expect(commandPosts(a.fetcher, mark).map(post => [post.kind, post.session_id])).toEqual([["session.start", world.started],
+      ["assignment.present", world.started]]);
+  });
+  // QA-R1-V3 F3 (QA-C3): a start in the window's own pair is no R1, also after a lost reply and its check by ID.
+  it.each([false, true])("own pair (lost reply %s): no refresh, the session of this pair", async lose => {
+    const a = app(); const world = pairMoved(a.fetcher);
+    render(<App />); const start = await startButton(); const opens = world.opens.length, mark = a.fetcher.mock.calls.length;
+    if (lose) loseStudyReply(a.fetcher, "session.start");
+    fireEvent.click(start);
+    if (lose) fireEvent.click(await screen.findByRole("button", { name: "Проверить статус" }, exchange));
+    const field = await screen.findByRole("textbox", undefined, exchange) as HTMLTextAreaElement;
+    await waitFor(() => expect(field.readOnly).toBe(false)); await pause(2500);
+    expect(world.opens.slice(opens)).toEqual([]);
+    expect(commandPosts(a.fetcher, mark).map(post => post.kind)).toEqual(["session.start", "assignment.present"]);
+  });
+  // C151 forks: a reply below the floor, a reply naming another session, and a refresh that finds the created session
+  // closed, another session open or the pair changed again. None is this start's R1 landing: no refresh into it, no new
+  // start, no Stop of any session, and the test is never shown. The refresh asks once; the second open after it is the
+  // new owner's existing return to Today (idle → onToday → synchronize).
+  it.each(noLandings)("no landing (%s): no second start, no Stop, the created session is not shown", async kind => {
+    const a = app(); const world = pairMoved(a.fetcher); world.low = kind === "low";
+    render(<App />); const start = await startButton(); const opens = world.opens.length, mark = a.fetcher.mock.calls.length;
+    moveWithout(world, kind); fireEvent.click(start);
+    await pause(3000);
+    expect(world.opens.slice(opens)).toEqual(kind === "low" || kind === "foreign" ? [] : ["foreground", "foreground"]);
+    expect(commandPosts(a.fetcher, mark).map(post => post.kind)).toEqual(["session.start"]);
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(enabledExits()).toEqual([]);
+    // A reply below the floor is a real failed update: its failure text stays (C178 hides only the known pair change).
+    if (kind === "low") expect(screen.getAllByText(/Не удалось обновить занятие/).length).toBeGreaterThan(0);
+  });
+});
+
+// D-STALE-WINDOW 3.1.14 (2.33): an answer of a replaced window refused with the core's envelope shows no refusal.
+describe("the conjugation test while the window checks its document", () => {
+  it("replaced window: an answer refused as DOCUMENT_STALE keeps its record and never shows a refusal on any screen update", async () => {
+    const a = app({ sessions: [active()], reported: S1 });
+    vi.stubGlobal("Telegram", { WebApp: { ...(window as unknown as { Telegram: { WebApp: object } }).Telegram.WebApp, close: vi.fn() } });
+    render(<App />);
+    const input = await editable();
+    fireEvent.change(input, { target: { value: "kommst" } });
+    const hold = gate(), r = replaceDocument(a.fetcher, hold.promise), watch = watchFlash(document.body);
+    fireEvent.click(screen.getByRole("button", { name: "Проверить" }));
+    await waitFor(() => expect(r.foregrounds()).toBe(1));
+    await settled();
+    expect(watch.seen).toEqual([]);
+    expect(JSON.parse(localStorage.getItem("wortly.pending.conjugation_session")!).intent).toMatchObject({ kind: "answer.submit" });
+    await act(async () => { hold.open(); }); await settled();
+    await screen.findByRole("heading", { name: "Wortly уже открыт" });
+    watch.stop();
+    expect(watch.seen).toEqual([]);
+    // One answer POST, refused by the core before the model: nothing more is sent after the refusal.
+    expect(a.fetcher.mock.calls.filter(([, init]) => init?.method === "POST" && JSON.parse(String(init.body)).kind === "answer.submit"))
+      .toHaveLength(1);
+  });
+});
+
+// race_fix (A-SETTINGS-RACE, ApplicationDocument: Settings are read at least as new as every mode seed, C153/C159; QA-FINAL
+// Q3, C245): a restart with an open conjugation session reads Settings and the session separately, and another write of
+// the profile can land between those reads. The pair stays the chosen one; only the version moves.
+describe("conjugation: a profile write between the Settings read and the session read of a new document (race_fix)", () => {
+  it("re-reads Settings and keeps the resumed form answerable; nothing is sent", async () => {
+    const a = app({ sessions: [active()], reported: S1 });
+    const base = a.fetcher.getMockImplementation()!;
+    let bumped = false, settingsReads = 0;
+    a.fetcher.mockImplementation(async (url, init) => {
+      const reply = await base(url, init);
+      if ((init?.method ?? "GET") === "GET" && new URL(String(url), "http://localhost").pathname.endsWith("/settings")) {
+        settingsReads++;
+        if (!bumped) { bumped = true; a.model.bump(); }
+      }
+      return reply;
+    });
+    render(<App />);
+    await screen.findByRole("heading", testScreen, exchange);
+    await editable();
+    expect(bumped).toBe(true);
+    expect(settingsReads).toBeGreaterThanOrEqual(2);
+    expect(a.model.posted).toEqual([]);
   });
 });

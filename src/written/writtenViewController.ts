@@ -43,6 +43,8 @@ export type WrittenViewSnapshot = {
   answer: WrittenAnswer | null;
   submittedText: string | null;
   problem: string | null;
+  /** `problem` is only a successful lane check that found its command absent on the same open step (see StudyViewFields). */
+  checkedAbsent: boolean;
   commands: WrittenDocumentSnapshot;
   timer: ResultTimerView | null;
   /** Material of the current or last requested session; a refused start has no projection of its own. */
@@ -71,6 +73,8 @@ export type WrittenViewSnapshot = {
   canRetryPrimary: boolean;
   /** The last Stop of this session that sent nothing: internal facts, nothing of it is shown (EmptyStop). */
   emptyStop: EmptyStop | null;
+  /** The session the server proved open in another pair: a fact, never the shown problem (StudyViewFields). */
+  pairMismatch: string | null;
   /** A prefetched question waits for the host to be enabled (confirmed settings); until then the view cannot leave "loading". */
   waitingForSettings: boolean;
   /**
@@ -97,6 +101,8 @@ export class WrittenViewController extends StudyView<WrittenDocumentCommands, Cu
   private practice: { value: WrittenPractice; version: string } | null = null;
   private requestedBucket: "words" | "phrases" | null = null;
   private closedFacts: WrittenClosed | null = null;
+  /** The session of the last start this view itself began (start()); only its own manual retry takes the step (C246). */
+  private begunStart: string | null = null;
   /** The session whose server summary projection proves a natural end; an undo back to active withdraws it. */
   private naturalEnd: string | null = null;
   /** That proof while «Шаг назад» from the summary is unresolved: only the undo's own outcome settles it. */
@@ -104,7 +110,7 @@ export class WrittenViewController extends StudyView<WrittenDocumentCommands, Cu
   private summaryReading: Promise<void> | null = null;
 
   constructor(options: Options) {
-    super(options, { ignoreUnboundUnavailable: true, keepClosedAfterRead: true },
+    super(options, { ignoreUnboundUnavailable: true, keepClosedAfterRead: true, waitRestoredCorrection: true },
       onUpdate => new WrittenDocumentCommands({ ...options, onUpdate }));
   }
   protected close(sessionId: string, reason: string | null): void {
@@ -152,10 +158,13 @@ export class WrittenViewController extends StudyView<WrittenDocumentCommands, Cu
     this.sessionId = null; this.current = null; this.phase = "idle";
     return true;
   }
+  protected beganStart(sessionId: string): boolean { return this.begunStart !== null && sameId(this.begunStart, sessionId); }
   protected async afterRead(): Promise<void> { if (this.is("closed")) await this.readClosedSummary(); }
   snapshot(): WrittenViewSnapshot {
     const { fields, live, interactive } = this.view(), commands = fields.commands, pending = commands.primary.pendingIntent;
-    const closing = live && commands.canStop && this.sessionId !== null && !this.stopping && !this.is("closed", "idle", "disposed");
+    // 17.2-А: no Stop of the R1 session from the window that has not got its pair yet (StudyView.foreignStart).
+    const closing = live && commands.canStop && this.sessionId !== null && !this.stopping && !this.is("closed", "idle", "disposed")
+      && !this.foreignStart();
     return { phase: live ? this.phase as Phase : "disposed", ...fields,
       bucket: live ? this.current?.bucket ?? this.requestedBucket ?? (pending?.kind === "session.start" ? pending.payload.bucket : null) : null,
       practice: live && this.practice ? structuredClone(this.practice.value) : null,
@@ -228,7 +237,7 @@ export class WrittenViewController extends StudyView<WrittenDocumentCommands, Cu
   start(bucket: "words" | "phrases"): Promise<void> {
     if (bucket !== "words" && bucket !== "phrases") return Promise.reject(new Error("written bucket required"));
     if (!this.snapshot().canStart) return Promise.resolve();
-    this.sessionId = this.options.newId(); this.current = null; this.currentVersion = null; this.summary = null; this.practice = null; this.closedFacts = null;
+    this.sessionId = this.options.newId(); this.begunStart = this.sessionId; this.current = null; this.currentVersion = null; this.summary = null; this.practice = null; this.closedFacts = null;
     this.naturalEnd = null; this.naturalSuspended = null;
     this.requestedBucket = bucket;
     this.question = null; this.answer = null; this.answerVersion = null; this.draft = ""; this.draftAssignmentId = null;

@@ -41,6 +41,9 @@ export function withoutLaunchCard(search: string): string {
 export class LaunchCard {
   constructor(private cardId: string | null, private forget: () => void = () => {}) {}
 
+  /** Whether a card is still waiting to be taken; it is not taken by asking. */
+  has(): boolean { return this.cardId !== null; }
+
   take(): string | null {
     const cardId = this.cardId;
     this.cardId = null;
