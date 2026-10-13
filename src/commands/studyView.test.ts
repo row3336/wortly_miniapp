@@ -474,6 +474,17 @@ describe("shared study view: a session the server shows open in another pair (M-
     expect(mismatch(f.controller)).toBe(false);
     expect(f.controller.snapshot()).toMatchObject({ phase: "question", problem: null });
   });
+  it("SG24 (N1, C193): the view's own session read closed at a version not below the floor ends the published mismatch", async () => {
+    const f = view(); f.state.stateVersion = "9";
+    f.commands.readSession.mockResolvedValueOnce({ state_version: "9", current: foreign() });
+    await f.controller.refresh();
+    expect(mismatch(f.controller)).toBe(true);
+    // The same session, now closed (another pair is no reason to keep it open): the closure itself is SG13's.
+    f.commands.readSession.mockResolvedValueOnce({ state_version: "10", current: { ...foreign("closed"), close_reason: "remote_stop" } });
+    await f.controller.refresh();
+    expect(f.controller.snapshot()).toMatchObject({ phase: "closed", sessionId: SESSION, problem: null, pairMismatch: null });
+    expect(f.controller.closed).toEqual([{ sessionId: SESSION, reason: "remote_stop" }]);
+  });
   it("SG2: the same read below the lanes' floor is a stale view, not this reason", async () => {
     const f = view(); f.state.stateVersion = "9";
     f.commands.readSession.mockResolvedValueOnce({ state_version: "8", current: foreign() });
