@@ -215,16 +215,58 @@ describe("the launch card in the actual App document", () => {
     expect(a.views()).toHaveLength(2);
   });
 
-  it("L9 S03: a card that was never shown (unavailable) keeps the address after Back", async () => {
-    launch(`?card=${CARD}`);
+  it("L9 R2-03: a card refused for good (unavailable) is forgotten in the address at once; a reload opens Today", async () => {
+    launch(`?v=2&card=${CARD}`);
     const a = launchApp({ hidden: true });
     render(<App />);
     await screen.findByText("Карточка недоступна", undefined, exchange);
+    expect(window.location.search).toBe("?v=2");
     fireEvent.click(screen.getByRole("button", { name: "Назад" }));
     await screen.findByText(pairText, undefined, exchange);
-    expect(window.location.search).toBe(`?card=${CARD}`);
+    expect(window.location.search).toBe("?v=2");
+    cleanup(); render(<App />);
+    await screen.findByText(pairText, undefined, exchange);
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 300)); });
+    expect(screen.queryByRole("main", { name: "Карточка" })).toBeNull();
     expect(a.views()).toHaveLength(1);
   });
+
+  /** The card read answers like this (a status, or a dropped connection), the rest of the server as before. */
+  function failingView(fetcher: ReturnType<typeof launchApp>["fetcher"], failure: number | "network") {
+    const served = fetcher.getMockImplementation()!;
+    fetcher.mockImplementation(async (url, init) => {
+      if (new URL(String(url), "http://localhost").pathname.endsWith("/view")) {
+        if (failure === "network") throw new TypeError("Failed to fetch");
+        return new Response(JSON.stringify({ error: { code: "refused" } }), { status: failure });
+      }
+      return served(url, init);
+    });
+    return () => fetcher.mockImplementation(served);
+  }
+
+  it("L12 R2-03: a 403 on the card read is an access denial of the whole entry (onDenied): no card is shown, no study command is sent", async () => {
+    launch(`?card=${CARD}`);
+    const a = launchApp();
+    failingView(a.fetcher, 403);
+    render(<App />);
+    await screen.findByText("Не удалось открыть Wortly", undefined, exchange);
+    expect(screen.queryByRole("main", { name: "Карточка" })).toBeNull();
+    expect(a.kinds()).toEqual([]);
+  });
+
+  it.each([["network", "network" as const], ["503", 503], ["500", 500]])(
+    "L13 R2-03: a temporary failure (%s) keeps the address; a reload opens the card", async (_name, failure) => {
+      launch(`?card=${CARD}`);
+      const a = launchApp();
+      const recover = failingView(a.fetcher, failure);
+      render(<App />);
+      await screen.findByText("Не удалось загрузить карточку", undefined, exchange);
+      fireEvent.click(screen.getByRole("button", { name: "Назад" }));
+      await screen.findByText(pairText, undefined, exchange);
+      expect(window.location.search).toBe(`?card=${CARD}`);
+      cleanup(); recover(); render(<App />);
+      await screen.findByText("В очереди на изучение", undefined, exchange);
+    });
 
   it("L11 C024: «Не повторять» of the current question's card in the complaint card: the server moves the quiz on; Back shows its step", async () => {
     const CURRENT = id(106);

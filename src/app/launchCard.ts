@@ -35,7 +35,8 @@ export function withoutLaunchCard(search: string): string {
 /**
  * One request per launch: the first document that starts takes it, a later document (a reopen) never sees it.
  * Once the card was shown and closed, `viewed` forgets it in the address too (answer S03): a reload of this same address
- * then opens the application without it. A new tap of the bot button opens a new address with the card again.
+ * then opens the application without it. A definitive refusal forgets it the same way (`refused`); a temporary failure
+ * of the read keeps the address, so a reload asks again. A new tap of the bot button opens a new address with the card again.
  */
 export class LaunchCard {
   constructor(private cardId: string | null, private forget: () => void = () => {}) {}
@@ -51,6 +52,9 @@ export class LaunchCard {
     this.forget = () => {};
     forget();
   }
+
+  /** The core refused the card for good (unavailable to this user, R2-03): the address forgets it at once, no Back needed. */
+  refused(): void { this.viewed(); }
 }
 
 /** Replaces the address in place, without a new history entry or a reload; a window that refuses keeps its address. */

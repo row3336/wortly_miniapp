@@ -322,6 +322,7 @@ export function ApplicationDocument(props: Props) {
       onStudyAction={movesWrittenQuiz(cardSlot.origin) ? written.cardActionApplied : undefined}
       onShown={cardSlot.origin.kind === "dictionary" && cardSlot.origin.via === "message"
         ? () => { shownLaunch.current = cardSlot.key; } : undefined}
+      onRefused={cardSlot.origin.kind === "dictionary" && cardSlot.origin.via === "message" ? () => props.launchCard?.refused() : undefined}
       onBack={close => {
         if (shownLaunch.current === cardSlot.key) props.launchCard?.viewed();
         if (close === "after_open" && activeCard) setLeavingCard(activeCard);

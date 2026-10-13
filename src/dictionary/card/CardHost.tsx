@@ -62,6 +62,8 @@ export type CardHostProps = {
   onStudyAction?(event: CardStudyEvent): void;
   /** The card's content was shown for the first time (an unavailable card or a failed read never is). */
   onShown?(): void;
+  /** The core answered that the card is unavailable to this user: a final answer (a failed read never is one). */
+  onRefused?(): void;
 };
 
 type ManualDocument = ReturnType<typeof useManualSelectionDocument>;
@@ -157,6 +159,9 @@ export function CardHost(props: CardHostProps) {
   const viewed = shown !== null && !leaving;
   const latestShown = useRef(props.onShown); latestShown.current = props.onShown;
   useEffect(() => { if (viewed) latestShown.current?.(); }, [viewed]);
+  const refused = card.state.phase === "unavailable" && !leaving;
+  const latestRefused = useRef(props.onRefused); latestRefused.current = props.onRefused;
+  useEffect(() => { if (refused) latestRefused.current?.(); }, [refused]);
   // Own fields (M-EDIT): saved through the open card context; an accepted or refused field command reads the card and
   // its context again (the save also ends the interval undo on the server, CT 2.3). Unsaved text asks before Back.
   const editors = useFieldEditors({ access: props.access, transport: props.transport, enabled: !leaving, view: shown,
