@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WrittenResult } from "../api/generated";
 import { WrittenAnswerResult, type WrittenAnswerResultProps } from "./WrittenAnswerResult";
@@ -173,4 +173,69 @@ describe("example after a written answer (К05-126)", () => {
     const { container } = render(<WrittenAnswerResult {...p} example={{ random: () => 0 }} />);
     expect(shown(container)).toEqual(["Beispiel 2", "Beispiel 1"]);
   });
+});
+
+// R12-08 вар.2: the learner's own association as a hint after a mistake (the first check failed; «Не помню» included).
+describe("the learner's association after a mistake", () => {
+  const own = { value: "Haus = дом, где ХАУс", version: "6" };
+  const hint = () => screen.queryByRole("region", { name: "Твоя ассоциация" });
+  const invite = "Своей ассоциации пока нет. Добавь её — так слово легче вспомнить.";
+  const wrong = (association?: unknown) => {
+    const p = props(); if (association !== undefined) Object.assign(p.result.detail!, { association }); return p;
+  };
+
+  it("B1 a mistake shows the own association after the right answer and the example, before the timer; text in the pair's language", () => {
+    const p = { ...wrong(own), association: { textLanguage: "ru" }, timer: { key: "k", durationMs: 3000 }, example: { random: () => 0 } } as WrittenAnswerResultProps;
+    p.result.detail!.examples = { common: [], personal: { value: "Mein Haus ist groß.", version: "1" } };
+    const { container } = render(<WrittenAnswerResult {...p} />);
+    expect(within(hint()!).getByText(own.value).getAttribute("lang")).toBe("ru");
+    expect(screen.queryByText(invite)).toBeNull();
+    const order = [screen.getByText("Mein Haus ist groß."), hint()!, container.querySelector(".written-timer")!];
+    for (let i = 1; i < order.length; i++) expect(order[i - 1].compareDocumentPosition(order[i]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+  it("B2 a correct first answer shows no block, whatever the property says", () => {
+    const p = wrong(); const detail = p.result.detail!, check = detail.initial_check;
+    p.result.correct = true; p.result.grade = 4;
+    detail.input = { kind: "text", text: "😀Haus" };
+    Object.assign(check, { correct: true, variant_index: 0, matched_spans: [{ start: 0, end: 5 }], input_errors: [], answer_errors: [] });
+    render(<WrittenAnswerResult {...p} association={{ onAdd: vi.fn() }} />);
+    expect(screen.queryByText("Твоя ассоциация")).toBeNull(); expect(screen.queryByText(invite)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Добавить ассоциацию" })).toBeNull();
+  });
+  it("B3 «Не помню» is a mistake: the block is shown", () => {
+    const p = wrong(own); p.result.detail!.input = { kind: "forgot" };
+    Object.assign(p.result.detail!.initial_check, { input_errors: [], answer_errors: [] });
+    render(<WrittenAnswerResult {...p} association={{}} />);
+    expect(within(hint()!).getByText(own.value)).toBeTruthy();
+  });
+  it("B4 the block stays after «Исправить ответ»: the initial check decides, not the corrected grade", () => {
+    const p = wrong(own); p.result.correct = true; p.result.grade = 4;
+    render(<WrittenAnswerResult {...p} association={{}} />);
+    expect(screen.getByRole("status").textContent).toBe("Ответ исправлен"); expect(within(hint()!).getByText(own.value)).toBeTruthy();
+  });
+  it("B5 none of their own: the invitation with the button when the screen can open the card, otherwise the line alone (R13-07)", () => {
+    const onAdd = vi.fn(), p = wrong(null);
+    const ui = render(<WrittenAnswerResult {...p} association={{ onAdd }} />);
+    expect(within(hint()!).getByText(invite)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Добавить ассоциацию" })); expect(onAdd).toHaveBeenCalledOnce();
+    ui.rerender(<WrittenAnswerResult {...p} association={{}} />);
+    expect(within(hint()!).getByText(invite)).toBeTruthy(); expect(screen.queryByRole("button", { name: "Добавить ассоциацию" })).toBeNull();
+    ui.rerender(<WrittenAnswerResult {...wrong({ value: " \n", version: "2" })} association={{}} />);
+    expect(within(hint()!).getByText(invite)).toBeTruthy();
+  });
+  it("B6 no property (the conjugation test) or no key (an older core) or no detail: no block, no invitation", () => {
+    const ui = render(<WrittenAnswerResult {...wrong(own)} />);
+    expect(hint()).toBeNull(); expect(screen.queryByText("Ассоциация")).toBeNull();
+    ui.rerender(<WrittenAnswerResult {...wrong()} association={{ onAdd: vi.fn() }} />);
+    expect(hint()).toBeNull(); expect(screen.queryByText(invite)).toBeNull();
+    ui.rerender(<WrittenAnswerResult {...wrong(own)} result={{ ...wrong(own).result, detail: null }} association={{}} />);
+    expect(hint()).toBeNull();
+  });
+  it.each([["uk", "Твоя асоціація", "Своєї асоціації поки немає. Додай її — так слово легше згадати.", "Додати асоціацію"],
+    ["en", "Your association", "You have no association of your own yet. Add one to make the word easier to recall.", "Add association"]] as const)(
+    "B7 %s texts", (language, title, text, add) => {
+      render(<WrittenAnswerResult {...wrong(null)} language={language} association={{ onAdd: vi.fn() }} />);
+      expect(within(screen.getByRole("region", { name: title })).getByText(text)).toBeTruthy();
+      expect(screen.getByRole("button", { name: add })).toBeTruthy();
+    });
 });

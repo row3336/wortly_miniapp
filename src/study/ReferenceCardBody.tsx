@@ -1,6 +1,7 @@
 import { useId, type ReactNode } from "react";
 import type { CardExamples, DictionaryCardContent, LearningPreviewContent } from "../api/generated";
 import type { Language } from "../i18n/language";
+import { AssociationBlock } from "./AssociationBlock";
 import { CardDescription } from "./CardDescription";
 import { ReferenceConjugations } from "./ReferenceConjugations";
 import "./referenceCard.css";
@@ -13,23 +14,16 @@ type Props = {
   /** М12 only: own-field controls placed at the translation and the association (M-EDIT). */
   fieldSlots?: { translation?: ReactNode; association?: ReactNode };
 };
-const copy = {
-  ru: { association: "Ассоциация", missing: "Не заполнено" },
-  uk: { association: "Асоціація", missing: "Не заповнено" },
-  en: { association: "Association", missing: "Not filled in" },
-} as const;
-
 /** Read-only reference body. Rights, study state and example selection belong to their owners. */
 export function ReferenceCardBody({ content, language, renderExamples, fieldSlots }: Props) {
-  const name = useId(), t = copy[language];
+  const name = useId();
   return <section className="reference-card" aria-labelledby={`${name}-word`}>
     <CardDescription content={content} language={language} headingId={`${name}-word`} translationSlot={fieldSlots?.translation} />
     {content.card.type === "verb" && <ReferenceConjugations tables={content.reference_conjugations} language={language} />}
     {renderExamples(content.examples)}
-    <section className="reference-association" aria-label={t.association}>
-      <h3>{t.association}</h3><p>{content.association?.value.trim() ? content.association.value
-        : <span className="reference-missing" lang={language}>{t.missing}</span>}</p>
+    {/* R12-07: an empty association invites the learner to add one; the editor's own button stays the slot below it. */}
+    <AssociationBlock association={content.association} language={language} textLanguage={content.pair.split("-")[0]} invite="text">
       {fieldSlots?.association}
-    </section>
+    </AssociationBlock>
   </section>;
 }

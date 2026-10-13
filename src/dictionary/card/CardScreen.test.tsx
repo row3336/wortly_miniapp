@@ -32,8 +32,8 @@ describe("М12 content (RA 6.1.9, TA §7, Т28)", () => {
     expect(document.querySelector(".reference-plural")!.textContent).toBe("Häuser");
     expect(screen.getByText("Существительное")).toBeTruthy();
     expect(screen.getByText("A1")).toBeTruthy();
-    // The empty association is applicable: «Не заполнено».
-    expect(within(screen.getByRole("region", { name: "Ассоциация" })).getByText("Не заполнено")).toBeTruthy();
+    // R12-07: the empty association shows the invitation to add one of the learner's own.
+    expect(within(screen.getByRole("region", { name: "Ассоциация" })).getByText("Своей ассоциации пока нет. Добавь её — так слово легче вспомнить.")).toBeTruthy();
   });
 
   it("an applicable empty field shows «Не заполнено», a not applicable one is hidden (Т28)", () => {

@@ -11,6 +11,7 @@ import { copyLearningAnswerIntent, validLearningAnswerIntent } from "./learningC
 import { copyLearningRevisionIntent, validLearningRevisionIntent } from "./learningRevisionIntent";
 import { validConjunctionHint } from "../study/questionContext";
 import { validCardExamples } from "./learningPreviewContent";
+import { personal } from "../study/referenceCardContent";
 
 export type LearningResultCommand = AnswerSubmitCommand | ResultCorrectCommand | ResultGradeCommand | ResultUndoCommand;
 export type LearningResultAddress = Pick<ResultCorrectCommand,
@@ -61,7 +62,10 @@ function validErrorSpans(value: unknown, length: number, mustBeEmpty: boolean): 
   });
 }
 export function validWrittenAnswerDetail(value: unknown): value is WrittenAnswerDetail {
-  if (!record(value) || !exactKeys(value, ["input", "initial_check", "variants", "conjunction_hint", "examples"])
+  // `association` is optional (an older core sends none); it is `null` unless the first check failed (see below).
+  const baseDetail = ["input", "initial_check", "variants", "conjunction_hint", "examples"];
+  if (!record(value) || !exactKeys(value, Object.hasOwn(value, "association") ? [...baseDetail, "association"] : baseDetail)
+    || !personal(value.association ?? null)
     || !validConjunctionHint(value.conjunction_hint)
     || !(value.examples === null || validCardExamples(value.examples))
     || !record(value.input) || !record(value.initial_check) || !Array.isArray(value.variants) || !value.variants.length) return false;
@@ -87,6 +91,8 @@ export function validWrittenAnswerDetail(value: unknown): value is WrittenAnswer
       || !validErrorSpans(check.answer_errors, Array.from(check.correct_answer).length, mustBeEmpty)) return false;
   }
   const index = check.variant_index;
+  // A hint after a mistake only: a correct first answer must not carry the learner's association.
+  if (check.correct === true && (value.association ?? null) !== null) return false;
   return (index === null || count(index) && index < value.variants.length)
     && check.correct === (index !== null) && (input.kind !== "forgot" || !check.correct && !check.matched_spans.length);
 }

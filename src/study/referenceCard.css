@@ -15,4 +15,7 @@
 .reference-taxonomy > div { display: flex; flex-wrap: wrap; gap: 4px 12px; }
 .reference-taxonomy dt, .reference-personal, .reference-association h3 { color: var(--muted); font-size: .875rem; font-weight: 400; }
 .reference-translation, .reference-association { display: grid; gap: 6px; line-height: 1.5; }
-.reference-card p, .reference-card dd { white-space: pre-wrap; }
+.reference-card p, .reference-card dd, .reference-association p { white-space: pre-wrap; }
+.reference-association h3, .reference-association p { margin: 0; }
+.reference-association .reference-missing { color: var(--muted); font-style: italic; }
+.reference-association-add { justify-self: start; min-height: 48px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; color: var(--text); background: var(--surface); font: inherit; }

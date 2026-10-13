@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CardExamples, LearningPreviewContent } from "../api/generated";
 import { previewContent } from "./learningPreview.test-support";
@@ -25,10 +25,11 @@ describe("Learning preview card content", () => {
     expect(screen.getByRole("region", { name: /gehen.*ging.*ist\s+gegangen/ })).toBeTruthy();
     expect(screen.getByText("Глагол")).toBeTruthy(); expect(screen.getByTitle("Уровень").textContent).toBe("A2");
     expect(screen.getByRole("region", { name: "Перевод" }).textContent).toBe("идтиходить");
-    expect(container.textContent).not.toContain("reference-only"); expect(container.textContent).not.toContain("private hint");
+    expect(container.textContent).not.toContain("reference-only conjugation"); expect(container.textContent).not.toContain("private hint");
     expect(screen.queryByRole("table")).toBeNull(); expect(screen.queryByRole("button")).toBeNull();
     expect(screen.queryByRole("textbox")).toBeNull(); expect(screen.queryByText("Примеры")).toBeNull();
-    expect(screen.queryByText("Ассоциация")).toBeNull();
+    // R12-08: the introduction shows the learner's own association (the card of the pair carries it as before).
+    expect(within(screen.getByRole("region", { name: "Ассоциация" })).getByText("reference-only association")).toBeTruthy();
   });
   it("passes every frozen example source intact to the required renderer after translation", () => {
     const value = content(), before = structuredClone(value);
@@ -61,7 +62,7 @@ describe("Learning preview card content", () => {
     const missing = { ru: "Не заполнено", uk: "Не заповнено", en: "Not filled in" }[language];
     expect(screen.getAllByText(missing)).toHaveLength(2);
     expect(container.querySelector(".reference-translation")?.getAttribute("lang")).toBe("uk");
-    expect(screen.getByRole("heading").getAttribute("lang")).toBe("de");
+    expect(screen.getByRole("heading", { level: 2 }).getAttribute("lang")).toBe("de");
     for (const node of screen.getAllByText(missing)) expect(node.getAttribute("lang")).toBe(language);
   });
   it("replaces all visible card data from the next addressed preview without retaining the previous content", () => {
@@ -80,6 +81,33 @@ describe("Learning preview card content", () => {
     expect(container.querySelectorAll("script,img")).toHaveLength(0);
     expect(screen.getByRole("region", { name: "<script>lemma</script>" })).toBeTruthy();
     expect(screen.getByText("<img src=x onerror=bad()>")).toBeTruthy();
-    expect(new Set(screen.getAllByRole("heading").map(node => node.id)).size).toBe(2);
+    expect(new Set(screen.getAllByRole("heading", { level: 2 }).map(node => node.id)).size).toBe(2);
+  });
+});
+
+// R12-08: the introduction (М07) shows the learner's own association; R12-07: an empty one is an invitation line (no button: R13-07).
+describe("Learning introduction: the learner's association", () => {
+  const invite = { ru: "Своей ассоциации пока нет. Добавь её — так слово легче вспомнить.",
+    uk: "Своєї асоціації поки немає. Додай її — так слово легше згадати.",
+    en: "You have no association of your own yet. Add one to make the word easier to recall." };
+  const title = { ru: "Ассоциация", uk: "Асоціація", en: "Association" };
+  it("shows the own text after the examples, in the language of the pair", () => {
+    const value = previewContent(id, "uk-de"); value.association = { value: "Hallo — як «халоу»", version: "2" };
+    const { container } = render(<LearningPreviewCard content={value} language="ru" renderExamples={() => <p data-testid="examples">Beispiele.</p>} />);
+    const block = screen.getByRole("region", { name: "Ассоциация" });
+    expect(within(block).getByText("Hallo — як «халоу»").getAttribute("lang")).toBe("uk");
+    expect(screen.getByTestId("examples").compareDocumentPosition(block) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(container.querySelector("button")).toBeNull();
+  });
+  it.each(["ru", "uk", "en"] as const)("%s: none of their own is an invitation line without a button", language => {
+    const value = previewContent(id); value.association = null;
+    render(<LearningPreviewCard content={value} language={language} renderExamples={() => null} />);
+    expect(within(screen.getByRole("region", { name: title[language] })).getByText(invite[language])).toBeTruthy();
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+  it("a blank text counts as none", () => {
+    const value = previewContent(id); value.association = { value: "  \n ", version: "2" };
+    render(<LearningPreviewCard content={value} language="ru" renderExamples={() => null} />);
+    expect(screen.getByText(invite.ru)).toBeTruthy();
   });
 });

@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DictionaryCardContent, LearningPreviewContent, ReferenceAdjective, ReferenceNoun, ReferenceVerb } from "../api/generated";
 import { previewContent } from "../learning/learningPreview.test-support";
@@ -140,7 +140,12 @@ describe("read-only reference card body", () => {
   it.each(["ru", "uk", "en"] as const)("%s localizes missing fields independently of dictionary language", language => {
     const value = content("particle"); value.pair = "uk-de"; value.card.cefr = null; value.translations.common = []; value.association = null;
     const { container } = show(value, language); const labels = { ru: "Не заполнено", uk: "Не заповнено", en: "Not filled in" };
-    expect(screen.getAllByText(labels[language])).toHaveLength(3);
+    // R12-07: the empty association is not «Не заполнено» any more: it invites the learner to add one of their own.
+    expect(screen.getAllByText(labels[language])).toHaveLength(2);
+    const invite = { ru: "Своей ассоциации пока нет. Добавь её — так слово легче вспомнить.",
+      uk: "Своєї асоціації поки немає. Додай її — так слово легше згадати.",
+      en: "You have no association of your own yet. Add one to make the word easier to recall." }[language];
+    expect(within(screen.getByRole("region", { name: { ru: "Ассоциация", uk: "Асоціація", en: "Association" }[language] })).getByText(invite)).toBeTruthy();
     expect(container.querySelector(".reference-translation")?.getAttribute("lang")).toBe("uk");
     expect(container.querySelector(".reference-missing")?.getAttribute("lang")).toBe(language);
   });
@@ -157,5 +162,26 @@ describe("read-only reference card body", () => {
     value.examples.common = [{ id, text: "plain", role: null, highlighted_parts: [{ dangerouslySetInnerHTML: { __html: "<script>bad()</script>" } }] }];
     const { container } = show(value); expect(container.querySelectorAll("script,img,a")).toHaveLength(0);
     expect(container.textContent).toContain("<script>bad()</script>"); expect(container.textContent).toContain("<img src=x onerror=bad()>");
+  });
+});
+
+// М12 on the shared block: the own text, the invitation line (R12-07) and the editor's button as the caller's slot.
+describe("reference card association block", () => {
+  it("shows the own text in the language of the pair and the editor slot under it", () => {
+    const value = content(); value.pair = "en-de"; value.association = { value: "mein Haus\nmy house", version: "2" };
+    const { container } = render(<ReferenceCardBody content={value} language="ru" renderExamples={() => null}
+      fieldSlots={{ association: <button type="button">Изменить ассоциацию</button> }} />);
+    const block = screen.getByRole("region", { name: "Ассоциация" });
+    expect(container.querySelector(".reference-association p")?.textContent).toBe("mein Haus\nmy house");
+    expect(container.querySelector(".reference-association p")?.getAttribute("lang")).toBe("en");
+    expect(within(block).getByRole("button", { name: "Изменить ассоциацию" })).toBeTruthy();
+  });
+  it("an empty association shows the invitation line and keeps the editor's own button the only button", () => {
+    const value = content(); value.association = null;
+    render(<ReferenceCardBody content={value} language="ru" renderExamples={() => null}
+      fieldSlots={{ association: <button type="button">Добавить ассоциацию</button> }} />);
+    const block = screen.getByRole("region", { name: "Ассоциация" });
+    expect(within(block).getByText("Своей ассоциации пока нет. Добавь её — так слово легче вспомнить.")).toBeTruthy();
+    expect(within(block).getAllByRole("button")).toHaveLength(1);
   });
 });

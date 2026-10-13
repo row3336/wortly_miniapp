@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef } from "react";
 import { commandCopy } from "../commands/commandCopy";
 import type { Language } from "../i18n/language";
+import { AssociationBlock } from "../study/AssociationBlock";
 import type { OralDocumentSnapshot } from "./oralDocumentController";
 import { oralRefineCardId } from "./oralRefine";
 import type { OralDocumentActions } from "./useOralDocument";
@@ -150,6 +151,11 @@ export function OralScreen({ state, actions, language, active, onToday, onRefine
         {assignment.prompt.conjunction_hint.meaning_category !== null && <div><dt>{t.meaning}</dt><dd>{assignment.prompt.conjunction_hint.meaning_category}</dd></div>}
         {assignment.prompt.conjunction_hint.verb_position !== null && <div><dt>{t.verb}</dt><dd>{assignment.prompt.conjunction_hint.verb_position}</dd></div>}
       </dl>}
+      {/* R12-08 вар.2: the learner's own association stands in the German → native question, before and after «Раскрыть».
+          `undefined` is an older core that sends none: no block, no invitation. The invitation opens М12 like «Уточнить поля». */}
+      {assignment.prompt.association !== undefined && <AssociationBlock association={assignment.prompt.association} language={language}
+        textLanguage={state!.current!.pair.split("-")[0]}
+        invite={refineCard !== null && onRefineFields ? { onAdd: () => onRefineFields(refineCard, assignment.id) } : "text"} />}
       {assignment.revealed ? <>
         <section className="oral-translation" aria-label={t.translation} lang={state!.current!.pair.split("-")[0]}>
           {assignment.translations.map((translation, index) => <p key={index}>{translation}</p>)}

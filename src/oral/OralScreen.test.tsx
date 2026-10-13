@@ -666,3 +666,67 @@ describe("a suspended owner shows only loading (2.33)", () => {
   });
 });
 
+
+// R12-08 вар.2: the learner's own association stands in the German → native question; an empty one invites to add it (R12-07).
+describe("OralScreen: the learner's association in the question", () => {
+  const withAssociation = (step: Step, association: unknown): OralSessionProjection => {
+    const value = projection(step);
+    if (association !== undefined) Object.assign((value.assignment as { prompt: object }).prompt, { association });
+    return value;
+  };
+  const block = () => screen.queryByRole("region", { name: "Ассоциация" });
+  const inviteText = "Своей ассоциации пока нет. Добавь её — так слово легче вспомнить.";
+  async function show(step: Step, association: unknown, onRefineFields?: (cardId: string, assignmentId: string) => void, language: Language = "ru") {
+    const f = fixture(step); f.set(withAssociation(step, association)); await f.controller.refresh();
+    const ui = render(<OralScreen state={f.controller.snapshot()} actions={f.actions} language={language} active onToday={() => {}}
+      onRefineFields={onRefineFields} />);
+    return { f, ui };
+  }
+
+  it("A1 the own association is shown before «Раскрыть» and stays after it, as text in the language of the pair", async () => {
+    const { f, ui } = await show("presented", { value: "wenn = wann?\nAls Wenn-Wecker", version: "4" });
+    expect(within(block()!).getByText(/wenn = wann\?/).textContent).toBe("wenn = wann?\nAls Wenn-Wecker");
+    expect(within(block()!).getByText(/wenn = wann\?/).getAttribute("lang")).toBe("ru");
+    expect(screen.queryByText("если")).toBeNull(); expect(screen.queryByText(inviteText)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Добавить ассоциацию" })).toBeNull();
+    f.set({ ...withAssociation("revealed", { value: "wenn = wann?\nAls Wenn-Wecker", version: "4" }) }); await f.controller.refresh();
+    ui.rerender(<OralScreen state={f.controller.snapshot()} actions={f.actions} language="ru" active onToday={() => {}} />);
+    expect(screen.getByText("если")).toBeTruthy(); expect(within(block()!).getByText(/wenn = wann\?/)).toBeTruthy();
+    f.controller.dispose();
+  });
+
+  it("A2 an empty association (null or blank) invites; the button opens the card like «Уточнить поля» and sends no command", async () => {
+    for (const association of [null, { value: "   ", version: "2" }]) {
+      const opened = vi.fn(); const { f, ui } = await show("presented", association, opened);
+      expect(within(block()!).getByText(inviteText)).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Добавить ассоциацию" }));
+      expect(opened).toHaveBeenCalledExactlyOnceWith(id(7), id(6));
+      await act(async () => {}); expect(f.posts).toEqual([]);
+      f.controller.dispose(); ui.unmount();
+    }
+  });
+
+  it("A3 without the host option (no way into the card) the invitation is a line only", async () => {
+    const { f } = await show("presented", null);
+    expect(within(block()!).getByText(inviteText)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Добавить ассоциацию" })).toBeNull();
+    f.controller.dispose();
+  });
+
+  it("A4 a core that sends no association key (older core) shows neither the block nor the invitation", async () => {
+    const opened = vi.fn(); const { f } = await show("presented", undefined, opened);
+    expect(block()).toBeNull(); expect(screen.queryByText(inviteText)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Добавить ассоциацию" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Уточнить поля" })).toBeTruthy();
+    f.controller.dispose();
+  });
+
+  it.each([["uk", "Асоціація", "Своєї асоціації поки немає. Додай її — так слово легше згадати.", "Додати асоціацію"],
+    ["en", "Association", "You have no association of your own yet. Add one to make the word easier to recall.", "Add association"]] as const)(
+    "A5 %s invitation and button texts", async (language, title, invite, add) => {
+      const { f } = await show("presented", null, vi.fn(), language);
+      expect(within(screen.getByRole("region", { name: title })).getByText(invite)).toBeTruthy();
+      expect(screen.getByRole("button", { name: add })).toBeTruthy();
+      f.controller.dispose();
+    });
+});

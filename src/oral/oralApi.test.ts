@@ -113,6 +113,19 @@ describe("oral adapter command and addressed read interface", () => {
       expect((await f.api.read("token", "proof", origin)).current).toEqual(projection);
     }
   });
+  // R12-08: the learner's own association stands in the oral question. Older core: no key (accepted); the core with the patch: null or a value.
+  it.each([["no key (an older core)", undefined], ["null: none of their own", null],
+    ["a value", { value: "Haus wie ein Zuhause", version: "4" }], ["a blank value", { value: "  ", version: "1" }]] as const)(
+    "accepts the optional association of the oral prompt: %s", async (_name, association) => {
+      for (const revealed of [false, true]) {
+        const projection = revealed ? current("presented", true) : current();
+        if (association !== undefined) Object.assign(projection.assignment!.prompt, { association });
+        const f = fixture({ current: projection, state_version: "3" });
+        const read = (await f.api.read("token", "proof", origin)).current as OralSessionProjection;
+        expect(read).toEqual(projection);
+        expect(Object.hasOwn(read.assignment!.prompt, "association")).toBe(association !== undefined);
+      }
+    });
   it("practice follows current profile pair and date independently of the historical session", async () => {
     const projection = finished("closed", 1);
     projection.practice = { ...projection.practice, pair: "en-de", local_date: "9999-12-31", time_zone: "Europe/Berlin" };
@@ -172,6 +185,12 @@ describe("oral adapter rejects malformed public projections", () => {
     ["unrevealed translation leak", v => { v.assignment.translations = ["leak"]; }],
     ["missing conjunction key", v => { delete v.assignment.prompt.conjunction_hint; }],
     ["extra conjunction field", v => { v.assignment.prompt.conjunction_hint = { meaning_category: null, verb_position: null, hint: "private" }; }],
+    ["association of the wrong shape", v => { v.assignment.prompt.association = "my own"; }],
+    ["association without version", v => { v.assignment.prompt.association = { value: "mine" }; }],
+    ["association with a private extra key", v => { v.assignment.prompt.association = { value: "mine", version: "1", language: "ru" }; }],
+    ["association with a non-text value", v => { v.assignment.prompt.association = { value: 7, version: "1" }; }],
+    ["association with a bad version", v => { v.assignment.prompt.association = { value: "mine", version: "01" }; }],
+    ["association undefined-as-key beside an extra prompt key", v => { v.assignment.prompt.association = null; v.assignment.prompt.hint = "x"; }],
     ["non-German prompt", v => { v.assignment.prompt.language = "ru"; }], ["non-string text", v => { v.assignment.prompt.text = null; }],
     ["invalid assignment UUID", v => { v.assignment.id = "bad"; }], ["invalid card UUID", v => { v.assignment.card_id = "bad"; }],
     ["written kind", v => { v.assignment.kind = "learning"; }], ["answered assignment", v => { v.assignment.status = "answered"; }],

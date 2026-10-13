@@ -157,6 +157,8 @@ export function WrittenScreen({ state, language, submitOnEnter, actions, onToday
     </section>}
     {result && <WrittenAnswerResult result={result} language={language} pending={pendingResult}
       grades={state.grades} canCorrect={state.canCorrect} canNext={canNext} timer={state.timer} example={answerExampleSource}
+      association={{ textLanguage: state.practice?.pair.split("-")[0],
+        onAdd: refineCard !== null && onRefineFields ? () => onRefineFields(refineCard, result.assignment_id) : undefined }}
       onGrade={grade => { void actions.grade(grade); }} onCorrect={() => { void actions.correct(); }} onNext={() => { void actions.next(); }} />}
     {result && refineCard !== null && onRefineFields && <button type="button" className="written-refine"
       onClick={() => onRefineFields(refineCard, result.assignment_id)}>{t.refine}</button>}

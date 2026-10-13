@@ -6,7 +6,8 @@ const pronouns = ["ich", "du", "er_sie_es", "wir", "ihr", "sie_sie"];
 const formFields: Record<string, string[]> = { noun: ["gender", "singular", "plural"],
   verb: ["infinitive", "preterite", "participle_ii", "auxiliary"], adjective: ["positive", "comparative", "superlative"] };
 const nullableText = (value: unknown) => value === null || typeof value === "string";
-const personal = (value: unknown) => value === null || record(value) && exactKeys(value, ["value", "version"])
+/** A personal text of a card (translation, association): `null` or `{value, version}`. The one check for every decoder. */
+export const personal = (value: unknown) => value === null || record(value) && exactKeys(value, ["value", "version"])
   && typeof value.value === "string" && version(value.version);
 const term = (value: unknown) => record(value) && exactKeys(value, ["id", "name"]) && uuid(value.id) && typeof value.name === "string";
 

@@ -1,5 +1,5 @@
 import { vi } from "vitest";
-import type { LearningSessionProjection } from "../api/generated";
+import type { LearningSessionProjection, WrittenAnswerDetail } from "../api/generated";
 import type { LearningCommandIntent } from "./learningCommandIntent";
 import { LearningViewController } from "./learningViewController";
 import { current, fact, fixture, id, response, resultRead } from "./learningFixtures.test-support";
@@ -9,7 +9,7 @@ import { previewContent } from "./learningPreview.test-support";
 export function learningViewFixture(mode: "normal" | "accelerated" = "normal", sessionId: string | null = id(3)) {
   const f = fixture();
   if (sessionId === null) f.replace({ session: null });
-  let step = current(), version = 1, answerGrade = 4, latest: string | null = null;
+  let step = current(), version = 1, answerGrade = 4, latest: string | null = null, answerDetail: WrittenAnswerDetail | null = null;
   const results = new Map<string, ReturnType<typeof resultRead>>(), receipts = new Map<string, { intent: LearningCommandIntent; fact: ReturnType<typeof fact> }>();
   function project(result: ReturnType<typeof resultRead>) {
     const value = structuredClone(result); value.state_version = String(version); value.step = structuredClone(step);
@@ -41,6 +41,7 @@ export function learningViewFixture(mode: "normal" | "accelerated" = "normal", s
       const index = Number(intent.assignment_id.slice(-3)), resultId = id(700 + index), actionId = id(800 + index);
       const result = resultRead("1", answerGrade, String(version), step);
       result.result.assignment_id = intent.assignment_id; result.result.result_id = resultId; result.action.action_id = actionId;
+      if (answerDetail) (result.result as { detail: unknown }).detail = structuredClone(answerDetail);
       results.set(resultId, result); latest = resultId;
       step = { ...step, assignment: { ...current().assignment!, id: id(index + 1), status: "prefetched" } };
       const saved = { ...fact(intent, true), result_id: resultId, action_id: actionId };
@@ -67,6 +68,8 @@ export function learningViewFixture(mode: "normal" | "accelerated" = "normal", s
   const view = new LearningViewController({ access: f.access, storage: f.storage, newId: f.newId,
     transport: { fetcher: f.fetcher, timeoutMs: 30000, maxResponseBytes: 100000 }, sessionId, transitionMode: () => mode, onUpdate });
   return { ...f, view, onUpdate, wrong: () => { answerGrade = 2; },
+    /** The detail every later answer carries (the default result has none). */
+    setDetail: (value: WrittenAnswerDetail) => { answerDetail = value; },
     setStep: (value: LearningSessionProjection) => { step = value; },
     posts: () => f.fetcher.mock.calls.filter(call => call[1]?.method === "POST").map(call => JSON.parse(String(call[1]?.body))),
     handler: f.fetcher.getMockImplementation()! };

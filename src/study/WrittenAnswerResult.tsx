@@ -1,6 +1,7 @@
 import { useRef } from "react";
 import type { MatchedSpan, WrittenResult } from "../api/generated";
 import type { Language } from "../i18n/language";
+import { AssociationBlock } from "./AssociationBlock";
 import { answerExampleCandidates, selectAnswerExample, type AnswerExampleChoice } from "./answerExample";
 import { ConjunctionHint } from "./ConjunctionHint";
 import { GermanExample } from "./GermanExample";
@@ -21,6 +22,12 @@ export type WrittenAnswerResultProps = {
   onNext(): void;
   /** The written quiz and Learning show one example after the answer (К05-126); its source of randomness is injectable. */
   example?: { random(): number };
+  /**
+   * R12-08: the learner's own association as a hint after a mistake (the first check failed, «Не помню» included; it stays after
+   * «Исправить ответ»). Without this property there is no block, as in the conjugation test. `onAdd` is the way into М12; without it
+   * the invitation is a line only (R13-07, variant 1). `textLanguage` is L1 of the pair when the screen knows it.
+   */
+  association?: { onAdd?(): void; textLanguage?: string };
 };
 const copy = {
   ru: { correct: "Верно", wrong: "Есть ошибка", corrected: "Ответ исправлен", changing: "Сохраняем изменение", unknown: "Проверяем изменение",
@@ -100,6 +107,10 @@ export function WrittenAnswerResult(props: WrittenAnswerResultProps) {
         <ul lang="de">{check!.other_answers.map((answer, index) => <li key={index}>{answer}</li>)}</ul>
       </div>}
       <AnswerExample choice={example} />
+      {props.association && check!.correct === false && detail.association !== undefined
+        && <AssociationBlock association={detail.association} language={props.language} heading="own"
+          textLanguage={props.association.textLanguage}
+          invite={props.association.onAdd ? { onAdd: props.association.onAdd } : "text"} />}
     </> : <><p role="status">{status}</p><p>{t.unavailable}</p></>}
     {props.timer && !blocked && <div className="written-timer" aria-hidden="true">
       <span key={props.timer.key} style={props.timer.elapsedMs

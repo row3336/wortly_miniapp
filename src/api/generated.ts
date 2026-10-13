@@ -316,7 +316,7 @@ export type OralGradePayload = { "correct": boolean; };
 
 export type OralPractice = { "pair": "ru-de" | "uk-de" | "en-de"; "direction": "de-l1"; "local_date": string; "time_zone": string; "count": number; };
 
-export type OralPrompt = { "text": string; "language": "de"; "conjunction_hint": (ConjunctionHint | null); };
+export type OralPrompt = { "text": string; "language": "de"; "conjunction_hint": (ConjunctionHint | null); "association"?: (PersonalCardText | null); };
 
 export type OralRevealCommand = { "command_id": string; "client_instance_id": string; "document_id": string; "session_id": string; "kind": "oral.reveal"; "assignment_id": string; "payload": EmptyPayload; };
 
@@ -502,7 +502,7 @@ export type UndoOfferCommand = { "command_id": string; "kind": "action.undo_offe
 
 export type WrittenAction = { "action_id": string; "kind": "answer.submit"; "version": string; "status": "active" | "undone"; };
 
-export type WrittenAnswerDetail = { "input": (WrittenTextInput | WrittenForgotInput); "initial_check": InitialAnswerCheck; "variants": Array<CompleteAnswerVariant>; "conjunction_hint": (ConjunctionHint | null); "examples": (CardExamples | PrepositionCardExamples | null); };
+export type WrittenAnswerDetail = { "input": (WrittenTextInput | WrittenForgotInput); "initial_check": InitialAnswerCheck; "variants": Array<CompleteAnswerVariant>; "conjunction_hint": (ConjunctionHint | null); "examples": (CardExamples | PrepositionCardExamples | null); "association"?: (PersonalCardText | null); };
 
 export type WrittenCapabilities = { "answer_target": (string | null); "grades": (WrittenGradeCapability | null); "correct_target": (LearningResultTarget | null); "undo_target": (WrittenUndoTarget | null); "stop": boolean; "summary_home": boolean; };
 

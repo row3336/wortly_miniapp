@@ -201,6 +201,39 @@ describe("Learning answer HTTP boundary", () => {
       await expect(fixture(value).api.send("token", "proof", command())).rejects.toMatchObject({ kind: "invalid_response" });
     });
 
+  // R12-08: the learner's own association is a hint after a mistake only. The key is optional (an older core sends none).
+  const mistaken = (association?: unknown, forgot = false): LearningAnswerResponse => {
+    const value = response(); const detail = value.result!.detail!;
+    Object.assign(value.result!, { grade: 2, correct: false });
+    detail.input = forgot ? { kind: "forgot" } : { kind: "text", text: "Hallo" };
+    detail.initial_check = { ...detail.initial_check, correct: false, variant_index: null, matched_spans: [] };
+    if (association !== undefined) Object.assign(detail, { association });
+    return value;
+  };
+  it.each([["no key (an older core)", undefined], ["null: none of their own", null],
+    ["a value", { value: "Hallo wie Halle", version: "5" }]] as const)(
+    "accepts the association of a mistaken answer: %s", async (_name, association) => {
+      for (const forgot of [false, true]) {
+        const value = mistaken(association, forgot);
+        const sent = command(); if (forgot) sent.payload = { forgot: true };
+        const reply = await fixture(value).api.send("token", "proof", sent);
+        expect(Object.hasOwn(reply.result!.detail!, "association")).toBe(association !== undefined);
+        expect(reply.result!.detail!.association).toEqual(association);
+      }
+    });
+  it.each([undefined, null])("accepts the correct first answer with association %s", async association => {
+    const value = response(); if (association !== undefined) Object.assign(value.result!.detail!, { association });
+    await expect(fixture(value).api.send("token", "proof", command())).resolves.toBeTruthy();
+  });
+  it("refuses an association beside a correct first answer: a hint comes after a mistake only", async () => {
+    const value = response(); Object.assign(value.result!.detail!, { association: { value: "Hallo wie Halle", version: "5" } });
+    await expect(fixture(value).api.send("token", "proof", command())).rejects.toMatchObject({ kind: "invalid_response" });
+  });
+  it.each([false, "mine", {}, { value: "x" }, { value: "x", version: "0" }, { value: 3, version: "1" },
+    { value: "x", version: "1", language: "ru" }])("refuses a malformed association %j", async association => {
+    await expect(fixture(mistaken(association)).api.send("token", "proof", command())).rejects.toMatchObject({ kind: "invalid_response" });
+  });
+
   const invalid: [string, (value: LearningAnswerResponse) => void][] = [
     ["other session", value => { value.step = { ...step(), session_id: id(99) }; }],
     ["other assignment", value => { value.result!.assignment_id = id(99); }],

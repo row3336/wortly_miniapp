@@ -1,6 +1,7 @@
 import type { OralSessionProjection, UnavailableSession } from "../api/generated";
 import { count, date, exactKeys, oneOf, record, sameId, uuid, CLOSE_REASONS } from "../api/wireValidation";
 import { validConjunctionHint } from "../study/questionContext";
+import { personal } from "../study/referenceCardContent";
 
 const pairs = ["ru-de", "uk-de", "en-de"];
 
@@ -9,7 +10,9 @@ function validAssignment(value: unknown): boolean {
     || !exactKeys(value, ["id", "card_id", "status", "kind", "prompt", "revealed", ...(value.revealed ? ["translations"] : [])])
     || !uuid(value.id) || !uuid(value.card_id) || !oneOf(value.kind, ["original", "drill"])
     || !oneOf(value.status, ["prefetched", "presented"]) || !record(value.prompt)) return false;
-  return exactKeys(value.prompt, ["text", "language", "conjunction_hint"])
+  // `association` is the learner's own, frozen with the question; an older core sends no key at all.
+  return exactKeys(value.prompt, ["text", "language", "conjunction_hint", ...(Object.hasOwn(value.prompt, "association") ? ["association"] : [])])
+    && personal(value.prompt.association ?? null)
     && typeof value.prompt.text === "string" && value.prompt.language === "de"
     && validConjunctionHint(value.prompt.conjunction_hint)
     && (!value.revealed || value.status === "presented" && Array.isArray(value.translations)

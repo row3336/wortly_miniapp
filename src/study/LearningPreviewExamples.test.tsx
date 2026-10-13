@@ -83,7 +83,7 @@ describe("Learning preview examples (current CardExamples shape)", () => {
     const { container } = showPreview({ common: [], personal: null });
     expect(sentences(container)).toEqual([]);
     expect(screen.queryByText(/Примеры|Examples|Приклади/)).toBeNull();
-    expect(screen.getAllByRole("heading")).toHaveLength(1);
+    expect(screen.getAllByRole("heading", { level: 2 })).toHaveLength(1);
     expect(screen.getByRole("region", { name: "Перевод" }).textContent).toBe("ведь");
   });
 

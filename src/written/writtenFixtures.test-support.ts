@@ -1,6 +1,6 @@
 import { vi } from "vitest";
 import { hashInPlace } from "../commands/recoveryTime.test-support";
-import type { CardExamples, OpenedClient, Profile, PublicAssignment, SessionProjection, WrittenStep } from "../api/generated";
+import type { CardExamples, OpenedClient, PersonalCardText, Profile, PublicAssignment, SessionProjection, WrittenStep } from "../api/generated";
 import { createOpenedAccess, type OpenedAccess } from "../app/openedAccess";
 import type { AsyncStorage } from "../platform/storage";
 import { writtenIntentHash, type WrittenIntent } from "./writtenIntent";
@@ -46,6 +46,8 @@ export type ServerOptions = {
   drills?: boolean;
   /** Frozen example candidates of every answered card (result detail). */
   examples?: CardExamples;
+  /** The learner's own association of every answered card: core freezes it into the detail of a mistaken first check only (R12-08). */
+  association?: PersonalCardText | null;
   /** Unique items already practised today before this session: the daily count is never the number of its answers. */
   dailyBase?: number;
   /** The server grants the undo of the latest answer of this document, as core does since C-UNDO-1. */
@@ -114,7 +116,8 @@ export function writtenServer(options: ServerOptions = {}) {
         detail: open && item.status === "active" ? { input: item.text === null ? { kind: "forgot" } : { kind: "text", text: item.text },
           initial_check: { correct: initial, variant_index: initial ? 0 : null, correct_answer: "das Haus", other_answers: ["Haus"],
             matched_spans: [], span_unit: "unicode_code_point", span_bounds: "start_inclusive_end_exclusive" },
-          variants: [{ parts: ["das Haus"] }, { parts: ["Haus"] }], conjunction_hint: null, examples: options.examples ?? null } : null },
+          variants: [{ parts: ["das Haus"] }, { parts: ["Haus"] }], conjunction_hint: null, examples: options.examples ?? null,
+          ...(options.association !== undefined ? { association: initial ? null : options.association } : {}) } : null },
       step: step(),
       capabilities: { answer_target: shown?.status === "presented" ? shown.id : null,
         grades: latest && correct ? { ...target, values: [3, 4, 5] } : null,

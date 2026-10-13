@@ -43,6 +43,15 @@ describe("stored-mode session read", () => {
       const current = written(); Object.assign(current.assignment!.prompt, { conjunction_hint: hint });
       await expect(fixture(current).api.read("token", "proof", address)).rejects.toMatchObject({ kind: "invalid_response" });
     });
+  // R12-08: the native → German question must not carry the learner's association (it would hand over the answer's image).
+  it.each([null, { value: "Haus wie ein Zuhause", version: "4" }])(
+    "rejects an association inside a written or Learning question %j", async association => {
+      const current = written(); Object.assign(current.assignment!.prompt, { association });
+      await expect(fixture(current).api.read("token", "proof", address)).rejects.toMatchObject({ kind: "invalid_response" });
+      const taught = { ...learning(), preview: null, group: { id: id(8), status: "active", version: "1", total: 2, preview_position: 2 },
+        assignment: { ...written().assignment!, kind: "learning", prompt: { ...written().assignment!.prompt, association } } };
+      await expect(fixture(taught).learning.read("token", "proof", address)).rejects.toMatchObject({ kind: "invalid_response" });
+    });
   it.each([written(), learning(), { ...written(), status: "summary", assignment: null, ...numbers(0, 0, 0) },
     { ...written(), status: "summary", bucket: null, assignment: null, ...numbers(0, 0, 0, 0) },
     { ...written(), status: "closed", close_reason: "stop", assignment: null, ...numbers(0, 0, 0) },

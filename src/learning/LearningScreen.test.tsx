@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { WrittenAnswerDetail } from "../api/generated";
 import type { Language } from "../i18n/language";
 import { LearningScreen } from "./LearningScreen";
 import { learningViewFixture } from "./learningView.test-support";
@@ -459,5 +460,35 @@ describe("Learning screen keyboard boundaries", () => {
     const event = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }); event.preventDefault();
     document.body.dispatchEvent(event); expect(f.posts()).toHaveLength(1);
     unmount(); fireEvent.keyDown(document.body, { key: "Enter" }); expect(f.posts()).toHaveLength(1);
+  });
+});
+
+// R12-08 вар.2 / R13-07 вариант 1: after a mistake Learning shows the own association; with none of their own it is the
+// invitation line alone: Learning has no way into М12 yet. A correct answer carries no association.
+describe("Learning screen: the own association after a mistake", () => {
+  const detail = (association: WrittenAnswerDetail["association"] | undefined, correct = false): WrittenAnswerDetail => ({
+    input: { kind: "text", text: "Haus" }, conjunction_hint: null, examples: null, variants: [{ parts: ["das Haus"] }],
+    initial_check: { correct, variant_index: correct ? 0 : null, correct_answer: "das Haus", other_answers: [],
+      matched_spans: correct ? [{ start: 0, end: 4 }] : [], span_unit: "unicode_code_point", span_bounds: "start_inclusive_end_exclusive" },
+    ...(association === undefined ? {} : { association }) });
+  const hint = () => screen.queryByRole("region", { name: "Твоя ассоциация" });
+  async function run(value: WrittenAnswerDetail, wrong: boolean) {
+    const { f } = await mount({ wrong }); f.setDetail(value); await answer(f, "Haus"); return f;
+  }
+  it("a mistake shows the saved own association in the pair's language", async () => {
+    await run(detail({ value: "Haus: ха-ус", version: "2" }), true);
+    const block = hint()!; expect(block.querySelector("p")!.textContent).toBe("Haus: ха-ус");
+    expect(block.querySelector("p")!.getAttribute("lang")).toBe("ru");
+  });
+  it("none of their own: the invitation line alone, no button", async () => {
+    await run(detail(null), true);
+    expect(hint()!.textContent).toContain("Своей ассоциации пока нет. Добавь её — так слово легче вспомнить.");
+    expect(hint()!.querySelector("button")).toBeNull(); expect(screen.queryByRole("button", { name: "Добавить ассоциацию" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Уточнить поля" })).toBeNull();
+  });
+  it("a correct answer, or an older core without the key: no block", async () => {
+    await run(detail(null, true), false); expect(hint()).toBeNull(); expect(screen.queryByText(/Своей ассоциации пока нет/)).toBeNull();
+    cleanup();
+    await run(detail(undefined), true); expect(hint()).toBeNull(); expect(screen.queryByText(/Своей ассоциации пока нет/)).toBeNull();
   });
 });

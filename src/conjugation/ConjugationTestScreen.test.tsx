@@ -201,6 +201,19 @@ describe("ConjugationTestScreen question", () => {
     expect(r.actions.refresh).toHaveBeenCalledTimes(1);
   });
 
+  it("R12-08: the conjugation test has no association hint after a mistake, even when the detail carries a value or none", () => {
+    for (const association of [{ value: "my own", version: "3" }, null]) {
+      const wrong = result(false);
+      wrong.detail = { input: { kind: "text", text: "gehst" }, conjunction_hint: null, examples: null, variants: [{ parts: ["gehst"] }],
+        initial_check: { correct: false, variant_index: null, correct_answer: "gehst", other_answers: [], matched_spans: [],
+          span_unit: "unicode_code_point", span_bounds: "start_inclusive_end_exclusive" }, association };
+      setup(onResult(wrong));
+      expect(screen.getByText("Есть ошибка")).toBeTruthy();
+      expect(screen.queryByText("my own")).toBeNull(); expect(screen.queryByText(/ссоциаци/)).toBeNull();
+      cleanup();
+    }
+  });
+
   it("Ф9: a known refusal is shown with the text of Learning/written on the question; an unlisted code gets the general text", async () => {
     const h = setup(snap({ problem: "ASSIGNMENT_STALE" }));
     expect(screen.getByText("Задание изменилось. Обнови занятие.")).toBeTruthy();

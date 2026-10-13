@@ -140,6 +140,7 @@ export function LearningScreen({ state, language, submitOnEnter, actions, render
     </section>}
     {result && <WrittenAnswerResult result={result} language={language} pending={pendingResult}
       grades={state.grades} canCorrect={state.canCorrect} canNext={state.canNext} timer={state.timer} example={answerExampleSource}
+      association={{ textLanguage: state.current?.pair.split("-")[0] }}
       onGrade={grade => { void actions.grade(grade); }} onCorrect={() => { void actions.correct(); }} onNext={() => { void actions.next(); }} />}
     {result && state.canUndo && <StepBackButton className="learning-step-back" language={language} onUndo={() => { void actions.undo(); }} />}
     {/* The previous result shown while B's present waits says so, as the written quiz does (TA:113, Q25.2). */}
