@@ -26,12 +26,13 @@ type Active = { index: number; key: string; pointerId: number; startY: number; e
 
 export type TranslationDrag = {
   drag: DragView | null;
-  /** Pointer handlers of the field at `index` (its stable `key` identifies it through the reorder). */
+  /**
+   * Pointer handlers of the field at `index` (its stable `key` identifies it through the reorder). The press starts at
+   * the field; its move, release and cancel are followed on the whole document, so a release outside the row (a mouse
+   * leaving it, a lost pointer capture) still ends the gesture.
+   */
   handlers(index: number, key: string): {
     onPointerDown(event: ReactPointerEvent<HTMLElement>): void;
-    onPointerMove(event: ReactPointerEvent<HTMLElement>): void;
-    onPointerUp(event: ReactPointerEvent<HTMLElement>): void;
-    onPointerCancel(event: ReactPointerEvent<HTMLElement>): void;
     onContextMenu(event: { preventDefault(): void }): void;
   };
   /** The row element of a field, measured at pickup. */
@@ -64,15 +65,21 @@ export function useTranslationDrag(options: { count: number; enabled: boolean; o
   const setDrag = useCallback((next: DragView | null) => { view.current = next; setDragState(next); }, []);
   const [settle, setSettle] = useState<Settle | null>(null);
 
+  // The document listeners of the gesture under way (null: none attached).
+  const listening = useRef<(() => void) | null>(null);
+  const unlisten = useCallback(() => { listening.current?.(); listening.current = null; }, []);
+
   const clearPending = useCallback(() => {
     const waiting = pending.current;
     if (waiting) clearTimeout(waiting.timer);
     pending.current = null;
-  }, []);
+    if (!active.current) unlisten();
+  }, [unlisten]);
 
   const finish = useCallback((drop: boolean) => {
     clearPending();
     const held = active.current;
+    unlisten();
     if (!held) return;
     active.current = null;
     held.restore();
@@ -88,7 +95,7 @@ export function useTranslationDrag(options: { count: number; enabled: boolean; o
     }
     setSettle({ key: held.key, residual: offset - (to >= from ? travel : -travel), phase: "start" });
     if (to !== from) latest.current.onDrop(from, to);
-  }, [clearPending, setDrag]);
+  }, [clearPending, setDrag, unlisten]);
 
   // The drop frame: first without transitions at the old visual place, then the dropped field glides home.
   useEffect(() => {
@@ -118,14 +125,15 @@ export function useTranslationDrag(options: { count: number; enabled: boolean; o
   // An unmount in the middle of a drag gives the swipes back.
   useEffect(() => () => {
     clearPending();
+    unlisten();
     active.current?.restore();
     active.current = null;
-  }, [clearPending]);
+  }, [clearPending, unlisten]);
 
   const pickUp = useCallback(() => {
     const waiting = pending.current;
     pending.current = null;
-    if (!waiting || !latest.current.enabled) return;
+    if (!waiting || !latest.current.enabled) { if (!active.current) unlisten(); return; }
     const heights = Array.from({ length: latest.current.count }, (_, index) => {
       const row = rows.current.get(index);
       return row ? row.getBoundingClientRect().height : 0;
@@ -139,7 +147,33 @@ export function useTranslationDrag(options: { count: number; enabled: boolean; o
     setSettle(null);
     setDrag({ from: waiting.index, to: waiting.index, offset: 0, height: heights[waiting.index] ?? 0 });
     latest.current.onPickUp?.(waiting.index);
-  }, [win, setDrag]);
+  }, [win, setDrag, unlisten]);
+
+  const pointerMove = useCallback((event: PointerEvent) => {
+    const waiting = pending.current;
+    if (waiting && waiting.pointerId === event.pointerId) {
+      // Moving before the long press ends is a scroll or a text selection, not a pickup.
+      if (Math.abs(event.clientX - waiting.startX) > MOVE_TOLERANCE_PX || Math.abs(event.clientY - waiting.startY) > MOVE_TOLERANCE_PX) {
+        clearPending();
+      }
+      return;
+    }
+    const held = active.current;
+    if (!held || held.pointerId !== event.pointerId) return;
+    if (event.cancelable) event.preventDefault();
+    const offset = event.clientY - held.startY;
+    const to = dropIndex(held.index, offset, held.heights, FIELD_GAP_PX);
+    if (view.current) setDrag({ ...view.current, offset, to });
+  }, [clearPending, setDrag]);
+  const pointerUp = useCallback((event: PointerEvent) => {
+    if (pending.current?.pointerId === event.pointerId) { clearPending(); return; }
+    if (active.current?.pointerId === event.pointerId) finish(true);
+  }, [clearPending, finish]);
+  const pointerCancel = useCallback((event: PointerEvent) => {
+    if (pending.current?.pointerId === event.pointerId) { clearPending(); return; }
+    // The system took the gesture over: the field goes back, nothing is reordered.
+    if (active.current?.pointerId === event.pointerId) finish(false);
+  }, [clearPending, finish]);
 
   const handlers = useCallback((index: number, key: string) => ({
     onPointerDown(event: ReactPointerEvent<HTMLElement>) {
@@ -148,37 +182,23 @@ export function useTranslationDrag(options: { count: number; enabled: boolean; o
       clearPending();
       pending.current = { index, key, pointerId: event.pointerId, startX: event.clientX, startY: event.clientY,
         element: event.currentTarget, timer: setTimeout(pickUp, LONG_PRESS_MS) };
-    },
-    onPointerMove(event: ReactPointerEvent<HTMLElement>) {
-      const waiting = pending.current;
-      if (waiting && waiting.pointerId === event.pointerId) {
-        // Moving before the long press ends is a scroll or a text selection, not a pickup.
-        if (Math.abs(event.clientX - waiting.startX) > MOVE_TOLERANCE_PX || Math.abs(event.clientY - waiting.startY) > MOVE_TOLERANCE_PX) {
-          clearPending();
-        }
-        return;
+      if (!listening.current) {
+        const document = win.document;
+        document.addEventListener("pointermove", pointerMove, true);
+        document.addEventListener("pointerup", pointerUp, true);
+        document.addEventListener("pointercancel", pointerCancel, true);
+        listening.current = () => {
+          document.removeEventListener("pointermove", pointerMove, true);
+          document.removeEventListener("pointerup", pointerUp, true);
+          document.removeEventListener("pointercancel", pointerCancel, true);
+        };
       }
-      const held = active.current;
-      if (!held || held.pointerId !== event.pointerId) return;
-      event.preventDefault();
-      const offset = event.clientY - held.startY;
-      const to = dropIndex(held.index, offset, held.heights, FIELD_GAP_PX);
-      if (view.current) setDrag({ ...view.current, offset, to });
-    },
-    onPointerUp(event: ReactPointerEvent<HTMLElement>) {
-      if (pending.current?.pointerId === event.pointerId) { clearPending(); return; }
-      if (active.current?.pointerId === event.pointerId) finish(true);
-    },
-    onPointerCancel(event: ReactPointerEvent<HTMLElement>) {
-      if (pending.current?.pointerId === event.pointerId) { clearPending(); return; }
-      // The system took the gesture over: the field goes back, nothing is reordered.
-      if (active.current?.pointerId === event.pointerId) finish(false);
     },
     onContextMenu(event: { preventDefault(): void }) {
       // A long press must not open the text menu of the field it picks up.
       if (pending.current || active.current) event.preventDefault();
     },
-  }), [clearPending, finish, pickUp]);
+  }), [clearPending, pickUp, win, pointerMove, pointerUp, pointerCancel]);
 
   const register = useCallback((index: number, element: HTMLElement | null) => {
     if (element) rows.current.set(index, element); else rows.current.delete(index);

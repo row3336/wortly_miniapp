@@ -64,23 +64,22 @@ export function sameTexts(left: readonly string[], right: readonly string[]): bo
 /**
  * Where a dragged field lands. `heights` are the measured heights of the fields in their current order, `gap` the space
  * between two fields, `offset` how far the pointer moved the dragged field from its place (down is positive). The field
- * takes the place of a neighbour once its middle passes that neighbour's middle; it can become the first or the last.
+ * takes the place of a neighbour once its own middle passes that neighbour's middle; it can become the first or the last.
  */
 export function dropIndex(from: number, offset: number, heights: readonly number[], gap: number): number {
   if (from < 0 || from >= heights.length || !Number.isFinite(offset)) return from;
+  const half = heights[from] / 2;
   let index = from, travelled = 0;
   if (offset > 0) {
     while (index + 1 < heights.length) {
-      const step = heights[index + 1] + gap;
-      // The neighbour's middle: half of its height plus the gap before it.
-      if (offset - travelled < heights[index + 1] / 2 + gap) break;
-      travelled += step; index++;
+      // The neighbour's middle, from the dragged field's middle: its half, the gap and the neighbour's half.
+      if (offset - travelled < half + gap + heights[index + 1] / 2) break;
+      travelled += heights[index + 1] + gap; index++;
     }
   } else if (offset < 0) {
     while (index - 1 >= 0) {
-      const step = heights[index - 1] + gap;
-      if (-offset - travelled < heights[index - 1] / 2 + gap) break;
-      travelled += step; index--;
+      if (-offset - travelled < half + gap + heights[index - 1] / 2) break;
+      travelled += heights[index - 1] + gap; index--;
     }
   }
   return index;

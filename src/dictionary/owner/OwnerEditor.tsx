@@ -41,7 +41,8 @@ export function OwnerCommonSlot({ state, actions, language, dictionaryLanguage }
   </div>;
 }
 
-type Focus = { key: string; control: "up" | "down" };
+/** Where the focus goes after a change of the list: a move control of a moved field, or a field itself (after «+» / ✕). */
+type Focus = { key: string; control: "up" | "down" } | { field: number } | { field: "last" };
 
 function TranslationsEditor({ editor, actions, language, dictionaryLanguage }: {
   editor: TranslationsSnapshot; actions: OwnerEditorActions; language: Language; dictionaryLanguage: CommonLanguage;
@@ -51,6 +52,7 @@ function TranslationsEditor({ editor, actions, language, dictionaryLanguage }: {
   const [announcement, setAnnouncement] = useState("");
   const focus = useRef<Focus | null>(null);
   const controls = useRef(new Map<string, HTMLButtonElement>());
+  const fieldsRef = useRef<HTMLOListElement>(null);
   const drag = useTranslationDrag({ count: items.length, enabled: editor.canEdit,
     onDrop: (from, to) => {
       const moved = items[from];
@@ -62,6 +64,13 @@ function TranslationsEditor({ editor, actions, language, dictionaryLanguage }: {
     const wanted = focus.current;
     if (!wanted) return;
     focus.current = null;
+    if ("field" in wanted) {
+      // WCAG 2.4.3: after ✕ the neighbour field (the next one, or the previous at the end); after «+» the new field.
+      const inputs = fieldsRef.current?.querySelectorAll<HTMLInputElement>(".owner-translation-text") ?? [];
+      const target = wanted.field === "last" ? inputs.length - 1 : Math.min(wanted.field, inputs.length - 1);
+      inputs[target]?.focus();
+      return;
+    }
     const index = items.findIndex(item => item.key === wanted.key);
     const control = wanted.control === "up" && index === 0 ? "down" : wanted.control === "down" && index === items.length - 1 ? "up" : wanted.control;
     controls.current.get(`${wanted.key}:${control}`)?.focus();
@@ -77,14 +86,13 @@ function TranslationsEditor({ editor, actions, language, dictionaryLanguage }: {
   return <section className="owner-editor" aria-labelledby={`${id}-title`} lang={language} data-phase={editor.phase}>
     <h3 id={`${id}-title`} className="owner-title">{t.translationsTitle(t.languages[dictionaryLanguage])}</h3>
     <p id={`${id}-hint`} className="owner-hint">{t.dragHint}</p>
-    <ol className="owner-translation-list" aria-describedby={`${id}-hint`} data-dragging={drag.drag ? "true" : undefined}>
+    <ol ref={fieldsRef} className="owner-translation-list" aria-describedby={`${id}-hint`} data-dragging={drag.drag ? "true" : undefined}>
       {items.map((item, index) => {
         const handlers = drag.handlers(index, item.key), text = item.text.trim();
         const picked = drag.drag?.from === index;
         return <li key={item.key} ref={element => drag.register(index, element)} className="owner-translation"
           data-picked={picked ? "true" : undefined} style={drag.styleOf(index, item.key)}
           onPointerDown={event => { if (!(event.target as Element).closest("button")) handlers.onPointerDown(event); }}
-          onPointerMove={handlers.onPointerMove} onPointerUp={handlers.onPointerUp} onPointerCancel={handlers.onPointerCancel}
           onContextMenu={handlers.onContextMenu}>
           <input className="owner-translation-text" value={item.text} readOnly={!editor.canEdit} lang={dictionaryLanguage}
             aria-label={t.field(index + 1)} onChange={event => actions.editTranslation(index, event.target.value)} />
@@ -99,12 +107,16 @@ function TranslationsEditor({ editor, actions, language, dictionaryLanguage }: {
           {/* R12-06: the cross of the last field stays reachable and explains the refusal instead of removing. */}
           <button type="button" className="owner-remove" aria-label={t.removeLabel(text, index + 1)} disabled={!editor.canEdit}
             aria-disabled={editor.canRemove ? undefined : "true"} aria-describedby={editor.lastRefused ? `${id}-last` : undefined}
-            onClick={() => actions.removeTranslation(index)}><span aria-hidden="true">✕</span></button>
+            onClick={() => {
+              // A refused removal of the last field keeps the focus on its cross, next to the explanation.
+              if (editor.canRemove) focus.current = { field: index };
+              actions.removeTranslation(index);
+            }}><span aria-hidden="true">✕</span></button>
         </li>;
       })}
     </ol>
     <button type="button" className="owner-add" aria-label={t.add} title={t.add} disabled={!editor.canEdit}
-      onClick={actions.addTranslation}><span aria-hidden="true">+</span></button>
+      onClick={() => { focus.current = { field: "last" }; actions.addTranslation(); }}><span aria-hidden="true">+</span></button>
     <p className="owner-live" aria-live="polite">{announcement}</p>
     <OtherLanguages others={editor.others} actions={actions} t={t} />
     <div className="owner-notes">

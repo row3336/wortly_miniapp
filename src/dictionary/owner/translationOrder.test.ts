@@ -50,13 +50,19 @@ describe("R14-01 order of the owner's translation fields", () => {
   it("O5 a dragged field lands where its middle passes a neighbour's middle; first and last places are reachable", () => {
     const heights = [44, 44, 60, 44], gap = 8;
     expect(dropIndex(1, 0, heights, gap)).toBe(1);
-    expect(dropIndex(1, 29, heights, gap)).toBe(1);
-    expect(dropIndex(1, 30, heights, gap)).toBe(1); // 60/2 + 8 = 38 is needed to pass the third field's middle
-    expect(dropIndex(1, 38, heights, gap)).toBe(2);
-    expect(dropIndex(1, 68 + 22 + 8, heights, gap)).toBe(3);
+    // Down from 1 (height 44) past the 60-high third field: 22 + 8 + 30 = 60 to its middle.
+    expect(dropIndex(1, 38, heights, gap)).toBe(1); // the leading edge alone is not enough
+    expect(dropIndex(1, 59, heights, gap)).toBe(1);
+    expect(dropIndex(1, 60, heights, gap)).toBe(2);
+    // Then past the last field: 68 travelled + 22 + 8 + 22 = 120.
+    expect(dropIndex(1, 119, heights, gap)).toBe(2);
+    expect(dropIndex(1, 120, heights, gap)).toBe(3);
     expect(dropIndex(1, 10_000, heights, gap)).toBe(3);
-    expect(dropIndex(2, -29, heights, gap)).toBe(2);
-    expect(dropIndex(2, -30, heights, gap)).toBe(1);
+    // Up from 2 (height 60): 30 + 8 + 22 = 60, then 52 + 30 + 8 + 22 = 112.
+    expect(dropIndex(2, -59, heights, gap)).toBe(2);
+    expect(dropIndex(2, -60, heights, gap)).toBe(1);
+    expect(dropIndex(2, -111, heights, gap)).toBe(1);
+    expect(dropIndex(2, -112, heights, gap)).toBe(0);
     expect(dropIndex(2, -10_000, heights, gap)).toBe(0);
     expect(dropIndex(5, 10, heights, gap)).toBe(5);
     expect(dropIndex(1, Number.NaN, heights, gap)).toBe(1);
