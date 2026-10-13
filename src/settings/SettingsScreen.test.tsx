@@ -788,6 +788,43 @@ describe("returning the initial settings (M-SET-RESET, D-SET-RESET 4.1, 5.3.1)",
       });
     });
 
+    describe("R9-01: the continuation offered after the automatic read", () => {
+      const reading = { phase: "checking" as const, canContinueWithServer: false };
+      it("takes focus once when it appears while focus is lost, and announces the new text in the alert", () => {
+        const f = fixture(); mismatchState(f, false);
+        const view = render(<SettingsScreen {...f} snapshot={{ ...f.snapshot, ...reading }} />);
+        expect(document.activeElement).toBe(document.body);
+        view.rerender(<SettingsScreen {...f} snapshot={{ ...f.snapshot, canContinueWithServer: true }} />);
+        const button = screen.getByRole("button", { name: "Продолжить с текущими настройками" });
+        expect(document.activeElement).toBe(button);
+        expect(screen.getByRole("alert").textContent).toContain(settingsCopy.ru.mismatchContinue);
+        screen.getByRole("button", { name: "Обновить настройки" }).focus();
+        view.rerender(<SettingsScreen {...f} snapshot={{ ...f.snapshot, canContinueWithServer: true, outcome: null }} />);
+        expect(document.activeElement).toBe(screen.getByRole("button", { name: "Обновить настройки" }));
+      });
+      it("does not take focus from an element the user moved it to", () => {
+        const f = fixture(); mismatchState(f, false);
+        const view = render(<SettingsScreen {...f} snapshot={{ ...f.snapshot, ...reading }} />);
+        const box = document.createElement("input"); document.body.append(box); box.focus();
+        view.rerender(<SettingsScreen {...f} snapshot={{ ...f.snapshot, canContinueWithServer: true }} />);
+        expect(document.activeElement).toBe(box); box.remove();
+      });
+      it("a disabled element that had focus does not keep it from the offered action", () => {
+        const f = fixture(); mismatchState(f, false);
+        const view = render(<SettingsScreen {...f} snapshot={{ ...f.snapshot, ...reading }} />);
+        const gone = document.createElement("button"); document.body.append(gone); gone.focus(); gone.disabled = true;
+        view.rerender(<SettingsScreen {...f} snapshot={{ ...f.snapshot, canContinueWithServer: true }} />);
+        expect(document.activeElement).toBe(screen.getByRole("button", { name: "Продолжить с текущими настройками" })); gone.remove();
+      });
+      it("while the read runs the editors are closed, the status says so and no continuation is shown", () => {
+        const f = fixture(); mismatchState(f, false);
+        render(<SettingsScreen {...f} snapshot={{ ...f.snapshot, ...reading, canEdit: false }} />);
+        expect(screen.getByRole("status").textContent).toBe(settingsCopy.ru.refreshing);
+        expect(screen.queryByRole("button", { name: "Продолжить с текущими настройками" })).toBeNull();
+        expect((screen.getByRole("button", { name: "Обновить настройки" }) as HTMLButtonElement).disabled).toBe(true);
+      });
+    });
+
     it("without a successful readback the existing blocked text shows and no action is offered", () => {
       const f = fixture(); mismatchState(f, false); render(<SettingsScreen {...f} />);
       expect(screen.getByRole("alert").textContent).toBe(settingsCopy.ru.problems.mismatch);

@@ -950,11 +950,116 @@ describe("Q36: leaving a mismatched setting.save with the server's current setti
   it("the old ID is never sent again; the action appears only after a refresh whose readback succeeded", async () => {
     const f = await mismatched();
     expect(f.controller.snapshot()).toMatchObject({ canRetry: false, canContinueWithServer: false, pending: { mismatch: true } });
-    await f.controller.continueWithServer(); expect(f.api.get).toHaveBeenCalledOnce();
+    // R9-01: the live mismatch read the server by itself (the default read is older than the reply, so it is stale):
+    // two reads so far, and a press of the action without an offered readback reads nothing more.
+    expect(f.api.get).toHaveBeenCalledTimes(2);
+    await f.controller.continueWithServer(); expect(f.api.get).toHaveBeenCalledTimes(2);
     expect(JSON.parse(f.disk.values.get(slot)!)).toHaveProperty("mismatch", true);
     f.api.get.mockResolvedValue(serverData()); await f.controller.refresh();
     expect(f.controller.snapshot()).toMatchObject({ canContinueWithServer: true, canRetry: false, problem: { reason: "mismatch" } });
     expect(f.api.save).toHaveBeenCalledOnce(); expect(f.api.status).not.toHaveBeenCalled();
+  });
+
+  describe("R9-01 variant 1: the live mismatch reads the server by itself", () => {
+    /** A save answered with a live mismatch whose automatic read returns `later` (default: the server's data). */
+    async function live(later: () => Promise<SettingsResponse> = async () => serverData()) {
+      const f = fixture(); await f.controller.refresh(); f.controller.edit("retry_count", "4");
+      f.api.save.mockResolvedValueOnce(rejected(serverData(), true)); f.api.get.mockResolvedValue(serverData());
+      f.api.get.mockImplementationOnce(later);
+      return f;
+    }
+
+    it("offers the continuation right after the reply, with one read and no repeat of the old command or the draft", async () => {
+      const f = await live(); await f.controller.save("retry_count");
+      expect(f.api.get).toHaveBeenCalledTimes(2);
+      expect(f.controller.snapshot()).toMatchObject({ phase: "unresolved", canContinueWithServer: true, canEdit: false, canRetry: false,
+        canReset: false, problem: { reason: "mismatch" }, pending: { mismatch: true }, drafts: { retry_count: { input: "4" } } });
+      expect(f.api.save).toHaveBeenCalledOnce(); expect(f.api.status).not.toHaveBeenCalled();
+      expect(JSON.parse(f.disk.values.get(slot)!)).toHaveProperty("mismatch", true);
+      await f.controller.continueWithServer();
+      expect(f.controller.snapshot()).toMatchObject({ pending: null, problem: null, canEdit: true, phase: "ready" });
+      expect(f.disk.values.size).toBe(0); expect(f.api.save).toHaveBeenCalledOnce();
+    });
+
+    it("keeps every editor and command closed until the read answers, and says it is checking", async () => {
+      const reading = gate<SettingsResponse>(); const f = await live(() => reading.promise);
+      const saving = f.controller.save("retry_count");
+      await vi.waitFor(() => expect(f.api.get).toHaveBeenCalledTimes(2));
+      const during = f.controller.snapshot();
+      expect(during).toMatchObject({ phase: "checking", canEdit: false, canReset: false, canRetry: false, canContinueWithServer: false });
+      expect(during.drafts.retry_count).toMatchObject({ canSave: false, canKeepMine: false });
+      f.controller.edit("retry_count", "9"); expect(f.controller.snapshot().drafts.retry_count?.input).toBe("4");
+      // While the read runs these presses join it and start nothing.
+      void f.controller.continueWithServer(); void f.controller.retry(); void f.controller.reset();
+      expect(f.api.save).toHaveBeenCalledOnce(); expect(f.api.reset).not.toHaveBeenCalled();
+      reading.resolve(serverData()); await saving;
+      expect(f.controller.snapshot()).toMatchObject({ phase: "unresolved", canContinueWithServer: true });
+    });
+
+    it("a failed automatic read leaves the manual path: no continuation, the block stays, the refresh offers it", async () => {
+      const f = await live(async () => { throw new ApiError("network"); }); await f.controller.save("retry_count");
+      expect(f.controller.snapshot()).toMatchObject({ phase: "unresolved", canContinueWithServer: false, canEdit: false, canRetry: false,
+        problem: { reason: "network" }, pending: { mismatch: true } });
+      expect(f.api.save).toHaveBeenCalledOnce(); expect(f.api.status).not.toHaveBeenCalled();
+      await f.controller.continueWithServer(); expect(f.disk.values.size).toBe(1);
+      f.api.get.mockResolvedValue(serverData()); await f.controller.refresh();
+      expect(f.controller.snapshot()).toMatchObject({ canContinueWithServer: true, problem: { reason: "mismatch" } });
+    });
+
+    it("a stale automatic read does not offer the continuation; the refresh does once the read is current", async () => {
+      const f = await live(async () => current(big)); await f.controller.save("retry_count");
+      expect(f.controller.snapshot()).toMatchObject({ canContinueWithServer: false, canEdit: false, problem: { reason: "mismatch" } });
+      f.api.get.mockResolvedValue(serverData()); await f.controller.refresh();
+      expect(f.controller.snapshot().canContinueWithServer).toBe(true);
+    });
+
+    it("an expired login during the automatic read keeps the record and closes the editor without a continuation", async () => {
+      const f = await live(async () => { throw new ApiError("http", 401); }); await f.controller.save("retry_count");
+      expect(f.controller.snapshot()).toMatchObject({ data: null, canContinueWithServer: false, canEdit: false, problem: { reason: "expired" } });
+      expect(JSON.parse(f.disk.values.get(slot)!)).toHaveProperty("mismatch", true);
+    });
+
+    it("a changed access or a disposal during the automatic read offers and clears nothing", async () => {
+      const reading = gate<SettingsResponse>(); const f = await live(() => reading.promise);
+      const saving = f.controller.save("retry_count"); await vi.waitFor(() => expect(f.api.get).toHaveBeenCalledTimes(2));
+      f.replace(opened(), 2, "foreground"); reading.resolve(serverData()); await saving;
+      expect(f.controller.snapshot().canContinueWithServer).toBe(false);
+      expect(JSON.parse(f.disk.values.get(slot)!)).toHaveProperty("mismatch", true);
+      const gone = gate<SettingsResponse>(); const g = await live(() => gone.promise);
+      const saving2 = g.controller.save("retry_count"); await vi.waitFor(() => expect(g.api.get).toHaveBeenCalledTimes(2));
+      g.controller.dispose(); gone.resolve(serverData()); await saving2;
+      expect(JSON.parse(g.disk.values.get(slot)!)).toHaveProperty("mismatch", true); expect(g.api.save).toHaveBeenCalledOnce();
+    });
+
+    it("a mismatched reset reads nothing by itself and gets no continuation (P02)", async () => {
+      const f = fixture(); await f.controller.refresh();
+      f.api.reset.mockResolvedValueOnce(rejected(serverData(), true)); await f.controller.reset();
+      expect(f.api.get).toHaveBeenCalledOnce();
+      expect(f.controller.snapshot()).toMatchObject({ problem: { reason: "mismatch" }, canContinueWithServer: false, canEdit: false });
+    });
+
+    it("an exact retry that is answered with a mismatch reads by itself as well", async () => {
+      const f = fixture(); await f.controller.refresh(); f.controller.edit("retry_count", "4");
+      f.api.save.mockRejectedValueOnce(new ApiError("network")); await f.controller.save("retry_count");
+      expect(f.controller.snapshot().canRetry).toBe(true);
+      f.api.save.mockResolvedValueOnce(rejected(serverData(), true)); f.api.get.mockResolvedValueOnce(serverData());
+      await f.controller.retry();
+      expect(f.api.get).toHaveBeenCalledTimes(2); expect(f.controller.snapshot()).toMatchObject({ canContinueWithServer: true, canRetry: false });
+    });
+
+    it("R9-02 variant 1: the continuation drops only the conflicting field's draft; other drafts stay, unsent, marked where the server moved on", async () => {
+      const f = await live(); f.controller.edit("learning_group_size", "6"); f.controller.edit("strict_case", false);
+      const moved = serverData(); moved.settings.learning_group_size = { value: 8, version: next };
+      f.api.get.mockReset(); f.api.get.mockResolvedValue(moved);
+      await f.controller.save("retry_count"); expect(f.controller.snapshot().canContinueWithServer).toBe(true);
+      await f.controller.continueWithServer();
+      const state = f.controller.snapshot();
+      expect(state.drafts.retry_count).toBeUndefined();
+      expect(state.drafts.learning_group_size).toMatchObject({ input: "6", conflict: true, error: "conflict", canSave: false, canKeepMine: true });
+      expect(state.drafts.strict_case).toMatchObject({ input: false, conflict: false, canSave: true });
+      expect(state.data!.settings.retry_count.value).toBe(7);
+      expect(f.api.save).toHaveBeenCalledOnce();
+    });
   });
 
   it("clears the marked record, drops the draft, shows server values and the next save gets a new ID", async () => {

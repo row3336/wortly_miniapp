@@ -1494,11 +1494,11 @@ describe("F1 of the first choice on the real legacy path (б): version 1, no ver
     expect(saves).toHaveLength(3); expect(saves[2].payload).toMatchObject({ key: "dictionary_language", value: "en" });
   }, 30000);
 
-  it("R2-01 with 29.1-А: Settings opened by the exit keep the Dictionary unavailable until the language is chosen", async () => {
+  it("R2-01 with 29.1-А: Settings, from the older session or from the exit, keep the Dictionary unavailable until the language is chosen", async () => {
     await legacySaveOfAnotherField("never-applied-once");
     const tab = (name: string) => within(screen.getByRole("navigation")).getByRole("button", { name }) as HTMLButtonElement;
-    // Control: Settings reached from the older session keep its route as before (29.1-А is no ban for older profiles).
-    expect(tab("Словарь").disabled).toBe(false);
+    // Settings reached from the older session (path б, the language not chosen): the Dictionary is unavailable there too (29.1-А).
+    expect(tab("Словарь").disabled).toBe(true); expect(tab("Сегодня").disabled).toBe(false);
     fireEvent.click(screen.getByRole("button", { name: "Сегодня" }));
     await screen.findByText("Не удалось загрузить план", undefined, exchange);
     fireEvent.click(await screen.findByRole("button", { name: "Настройки" }, exchange));

@@ -409,15 +409,24 @@ export class SettingsController {
       if (this.sent()?.mismatch) {
         await this.markMismatch();
         if (!this.live()) return;
-        const fresh = await this.readCurrent();
-        if (!this.live()) return;
-        // Only a field save may leave the mismatch (Q36); a reset waits for the P02 barrier.
-        this.mismatchReadback = fresh && this.pending ? this.access() : null;
-        this.phase = "unresolved";
-        this.problem = { reason: "mismatch", code: "COMMAND_PAYLOAD_MISMATCH" };
+        await this.readbackAfterMismatch();
       } else if (this.sent()) await this.checkPending();
       else { await this.readCurrent(); if (this.live()) this.idle(); }
     });
+  }
+
+  /**
+   * The server read that follows a mismatch (R9-01 variant 1: the live answer starts it by itself, the refresh starts it
+   * by hand). Only a read; the old command and the drafts are never sent. Until it succeeds the editors stay closed.
+   * Only a field save may leave the mismatch (Q36); a reset waits for the P02 barrier. A failed read throws to `run`
+   * and leaves the earlier manual path: the refresh button.
+   */
+  private async readbackAfterMismatch(): Promise<void> {
+    const fresh = await this.readCurrent();
+    if (!this.live()) return;
+    this.mismatchReadback = fresh && this.pending ? this.access() : null;
+    this.phase = "unresolved";
+    this.problem = { reason: "mismatch", code: "COMMAND_PAYLOAD_MISMATCH" };
   }
 
   private async markMismatch(): Promise<void> {
@@ -434,7 +443,13 @@ export class SettingsController {
     if (reply.outcome === "mismatch") {
       this.phase = "unresolved";
       this.problem = { reason: "mismatch", code: reply.error.code };
+      this.mismatchReadback = null;
       await this.markMismatch();
+      if (!this.live() || !this.pending) return;
+      // R9-01: a field save answered with a live mismatch reads the server by itself, status shown as a refresh.
+      this.phase = "checking";
+      this.emit();
+      await this.readbackAfterMismatch();
     } else await this.resolve(reply.outcome, reply.outcome === "rejected" ? reply.error.code : undefined);
   }
   /** The intent is stored before it is sent; a retry sends the stored envelope again, never a new ID (TA 9). */

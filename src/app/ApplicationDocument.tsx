@@ -84,9 +84,6 @@ export function ApplicationDocument(props: Props) {
   const frame = useRef<HTMLDivElement>(null);
   useScreenTransition(frame, route);
   const [settingsOpened, setSettingsOpened] = useState(false);
-  // Set when Settings were opened by the R2-01 exit of the choice's failed frame. That exit is the only section before the
-  // dictionary language is chosen (29.1-А): the Dictionary stays unavailable there until a read proves the choice.
-  const [settingsBeforeChoice, setSettingsBeforeChoice] = useState(false);
   // The one durable slot of the manual Learning choice in this document (М12 «Добавить в обучение»).
   const [manualPending] = useState(() => new ManualPendingStore(props.storage));
   // A card left by Back before its context.open was confirmed stays mounted, hidden, until that close follows (M-CARD В6).
@@ -312,7 +309,7 @@ export function ApplicationDocument(props: Props) {
         : choice === "failed" ? <TodayScreen state={{ kind: "failed", reason: "load" }} language={props.language}
           onRetry={() => { void settings.actions.refresh(); }}
           notice={settingsExit(settings.state) && <button type="button" className="today-retry"
-            onClick={() => { setSettingsBeforeChoice(true); openSettings(); }}>{navigationText(props.language).settings}</button>} />
+            onClick={openSettings}>{navigationText(props.language).settings}</button>} />
         : <DictionaryChoiceScreen document={settings} language={props.language} settled={settledChoice} onLeave={leaveChoice} />;
     } else if (launchReady && launchCard.current?.has()) {
       // The card is pushed by the effect right after this render; Today is not shown under it first.
@@ -395,10 +392,12 @@ export function ApplicationDocument(props: Props) {
     {dictionaryOpened && <DictionaryHost access={props.access} transport={props.transport} language={props.language} visit={visit}
       onOpenCard={(cardId, back) => navigate({ type: "push", screen: "card", subject: cardId, details: back })}
       onNavigate={openTab} />}
+    {/* 29.1-А: before a Settings read proves the dictionary language chosen, Settings (R2-01) are the only section, by whichever
+        path they were opened (the failed frame of the choice, or an older session): the Dictionary stays unavailable. */}
     {settingsOpened && <div hidden={at !== "settings"}>
       <SettingsHost access={props.access} transport={props.transport} document={settings}
         language={props.language} active={at === "settings"} onToday={today}
-        onDictionary={settingsBeforeChoice && choice !== "chosen" ? undefined : () => openTab("dictionary")} />
+        onDictionary={choice === "chosen" ? () => openTab("dictionary") : undefined} />
     </div>}
   </div>;
 }

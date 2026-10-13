@@ -275,6 +275,17 @@ export function SettingsScreen(props: SettingsScreenProps) {
     if (leaving === "running" || (leaving === "done" || leaving === "failed")
       && (!active || active === document.body || active === leavingStatus.current)) leavingStatus.current?.focus();
   }, [leaving]);
+  // R9-01: a live mismatch is followed by an automatic read, so the continuation appears with no press of the user. The button
+  // that was pressed to save (and the refresh button) are disabled while it runs and focus falls to the page; the offered
+  // action takes it, once per offer, and never from an element the user has moved focus to.
+  const offered = useRef(false);
+  useEffect(() => {
+    const was = offered.current; offered.current = snapshot.canContinueWithServer;
+    if (!snapshot.canContinueWithServer || was || leaving) return;
+    const active = document.activeElement as HTMLElement | null;
+    if (!active || active === document.body || (active as HTMLButtonElement).disabled || !active.isConnected)
+      continueButton.current?.focus();
+  }, [snapshot.canContinueWithServer, leaving]);
   // A new save is a new operation: the old result line is not left beside it.
   const clearResult = () => setLeaving(state => state === "done" || state === "failed" ? null : state);
   const fieldProps = { ...props, actions: { ...actions, save: (key: SettingKey) => { clearResult(); return actions.save(key); } } };

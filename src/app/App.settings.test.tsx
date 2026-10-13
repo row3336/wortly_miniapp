@@ -322,12 +322,16 @@ describe("Settings in the real App document", () => {
       return json({ command: { id: command.command_id, status: "rejected" }, error: { code: "COMMAND_PAYLOAD_MISMATCH" },
         current: projection, state_version: version }, 409);
     });
-    render(<App />); await settings(); type(groupSize, "7"); save(groupSize);
-    await screen.findByText(/Не удалось подтвердить именно это изменение/);
-    expect(screen.queryByRole("button", { name: "Продолжить с текущими настройками" })).toBeNull();
+    render(<App />); await settings(); type(groupSize, "7"); const reads = f.settingsReply.mock.calls.length; save(groupSize);
+    // R9-01 variant 1: the live mismatch reads the server by itself; no press of «Обновить настройки» is needed.
+    const offered = await screen.findByRole("button", { name: "Продолжить с текущими настройками" });
+    expect(f.settingsReply).toHaveBeenCalledTimes(reads + 1);
+    expect(screen.getByRole("alert").textContent).toContain("Показаны текущие настройки сервера");
     expect(localStorage.getItem(settingSlot)).toContain('"mismatch":true');
-    await refresh();
-    fireEvent.click(await screen.findByRole("button", { name: "Продолжить с текущими настройками" }));
+    expect(f.commandReply).toHaveBeenCalledOnce(); expect(f.statusReply).not.toHaveBeenCalled();
+    expect((group(groupSize).getByRole("textbox") as HTMLInputElement).disabled).toBe(true);
+    await waitFor(() => expect(document.activeElement).toBe(offered));
+    fireEvent.click(offered);
     await waitFor(() => expect(localStorage.getItem(settingSlot)).toBeNull());
     await waitFor(() => expect((group(groupSize).getByRole("textbox") as HTMLInputElement).value).toBe("9"));
     const result = await screen.findByText("Показаны текущие настройки сервера. Можно вносить изменения.");
@@ -341,6 +345,26 @@ describe("Settings in the real App document", () => {
     expect(f.commandReply.mock.calls[1][0].command_id).not.toBe(rejectedId);
     expect(localStorage.getItem(settingSlot)).toBeNull();
   });
+  it("R9-01: a failed automatic read keeps the block and leads to «Обновить настройки»; nothing is sent by itself", async () => {
+    const f = fixture();
+    f.commandReply.mockImplementationOnce(async command => {
+      f.data.settings.learning_group_size = { value: 9, version: "2" }; f.data.state_version = "11";
+      const { state_version: version, ...projection } = f.data;
+      return json({ command: { id: command.command_id, status: "rejected" }, error: { code: "COMMAND_PAYLOAD_MISMATCH" },
+        current: projection, state_version: version }, 409);
+    });
+    render(<App />); await settings(); type(groupSize, "7");
+    f.settingsReply.mockRejectedValueOnce(new Error("offline")); save(groupSize);
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("Нажми «Обновить настройки»"));
+    expect(screen.queryByRole("button", { name: "Продолжить с текущими настройками" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Повторить отправку" })).toBeNull();
+    expect(localStorage.getItem(settingSlot)).toContain('"mismatch":true');
+    expect(f.commandReply).toHaveBeenCalledOnce(); expect(f.statusReply).not.toHaveBeenCalled();
+    await refresh();
+    fireEvent.click(await screen.findByRole("button", { name: "Продолжить с текущими настройками" }));
+    await screen.findByText("Показаны текущие настройки сервера. Можно вносить изменения.");
+    expect(localStorage.getItem(settingSlot)).toBeNull(); expect(f.commandReply).toHaveBeenCalledOnce();
+  });
   it("Q36 keyboard and failure: a failed second readback keeps the block, says so once, leads to refresh; success line leaves with the next save", async () => {
     const f = fixture(); let rejectedId = "";
     f.commandReply.mockImplementationOnce(async command => {
@@ -350,7 +374,6 @@ describe("Settings in the real App document", () => {
         current: projection, state_version: version }, 409);
     });
     render(<App />); await settings(); type(groupSize, "7"); save(groupSize);
-    await screen.findByText(/Не удалось подтвердить именно это изменение/); await refresh();
     const button = await screen.findByRole("button", { name: "Продолжить с текущими настройками" });
     f.settingsReply.mockRejectedValueOnce(new Error("offline"));
     button.focus(); await userEvent.keyboard("{Enter}");
