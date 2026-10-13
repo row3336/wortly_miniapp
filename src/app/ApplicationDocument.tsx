@@ -9,7 +9,8 @@ import type { Language } from "../i18n/language";
 import { LearningPreviewCard } from "../learning/LearningPreviewCard";
 import { ManualPendingStore } from "../learning/manualPending";
 import type { AsyncStorage } from "../platform/storage";
-import { dictionaryChoice } from "../settings/dictionaryChoice";
+import { navigationText } from "../i18n/messages";
+import { dictionaryChoice, settingsExit } from "../settings/dictionaryChoice";
 import { DictionaryChoiceScreen } from "../settings/DictionaryChoiceScreen";
 import { SettingsHost } from "../settings/SettingsHost";
 import { StatisticsHost } from "../statistics/StatisticsHost";
@@ -83,6 +84,9 @@ export function ApplicationDocument(props: Props) {
   const frame = useRef<HTMLDivElement>(null);
   useScreenTransition(frame, route);
   const [settingsOpened, setSettingsOpened] = useState(false);
+  // Set when Settings were opened by the R2-01 exit of the choice's failed frame. That exit is the only section before the
+  // dictionary language is chosen (29.1-А): the Dictionary stays unavailable there until a read proves the choice.
+  const [settingsBeforeChoice, setSettingsBeforeChoice] = useState(false);
   // The one durable slot of the manual Learning choice in this document (М12 «Добавить в обучение»).
   const [manualPending] = useState(() => new ManualPendingStore(props.storage));
   // A card left by Back before its context.open was confirmed stays mounted, hidden, until that close follows (M-CARD В6).
@@ -306,7 +310,9 @@ export function ApplicationDocument(props: Props) {
       choosing = !readAfter && (choice === "required" || settledChoice);
       screen = readAfter || choice === "loading" ? loading
         : choice === "failed" ? <TodayScreen state={{ kind: "failed", reason: "load" }} language={props.language}
-          onRetry={() => { void settings.actions.refresh(); }} />
+          onRetry={() => { void settings.actions.refresh(); }}
+          notice={settingsExit(settings.state) && <button type="button" className="today-retry"
+            onClick={() => { setSettingsBeforeChoice(true); openSettings(); }}>{navigationText(props.language).settings}</button>} />
         : <DictionaryChoiceScreen document={settings} language={props.language} settled={settledChoice} onLeave={leaveChoice} />;
     } else if (launchReady && launchCard.current?.has()) {
       // The card is pushed by the effect right after this render; Today is not shown under it first.
@@ -392,7 +398,7 @@ export function ApplicationDocument(props: Props) {
     {settingsOpened && <div hidden={at !== "settings"}>
       <SettingsHost access={props.access} transport={props.transport} document={settings}
         language={props.language} active={at === "settings"} onToday={today}
-        onDictionary={() => openTab("dictionary")} />
+        onDictionary={settingsBeforeChoice && choice !== "chosen" ? undefined : () => openTab("dictionary")} />
     </div>}
   </div>;
 }

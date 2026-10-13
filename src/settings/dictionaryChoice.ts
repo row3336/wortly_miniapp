@@ -25,3 +25,13 @@ export function dictionaryChoice(state: SettingsSnapshot, confirmed: SettingsPro
   // drop it, so the existing failed frame stands, whose retry only checks the intent's status (C211, open to the owner).
   return state.phase === "blocked" || state.phase === "unresolved" || state.phase === "disposed" ? "failed" : "loading";
 }
+
+/**
+ * R2-01 (DEV-10, T02): the failed frame of the choice leads to Settings only for the legacy state of D-MORNING §1.2 — an
+ * unresolved intent of another field (or a reset), stored before the language was chosen, whose resend Settings already
+ * allows under the same command. The frame itself neither resends nor drops it; other failures keep the plain frame.
+ */
+export function settingsExit(state: SettingsSnapshot): boolean {
+  const other = state.pending !== null && state.pending.intent.payload.key !== "dictionary_language";
+  return (other || state.resetPending !== null) && state.canRetry;
+}

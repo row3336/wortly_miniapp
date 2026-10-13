@@ -1398,14 +1398,16 @@ describe("Learning: a start the server refused for good (C168 SETUP_REQUIRED, C1
  * F1 of the first choice on its real legacy path (б), probes of QA-FIRST-CHOICE r2: the language at version 1, an older
  * session open, Learning -> Settings -> a save of another field whose reply is lost, the session closed, Today. That save
  * stays the user's own unknown outcome under its old command: the gate never resends, clears or replaces it (C211).
+ * "never-applied-once": only the first send is lost before the core; a later resend of the same command reaches it.
  */
-async function legacySaveOfAnotherField(reply: "applied-lost" | "never-applied") {
+async function legacySaveOfAnotherField(reply: "applied-lost" | "never-applied" | "never-applied-once") {
   const a = app({ session: id(3), dictionaryVersion: "1" });
   const base = a.fetcher.getMockImplementation()!;
-  let appliedId: string | null = null;
+  let appliedId: string | null = null, sends = 0;
   a.fetcher.mockImplementation(async (url, init) => {
     const path = new URL(String(url), "http://localhost").pathname;
     if (isPost(init, "setting.save") && JSON.parse(String(init!.body)).payload.key === "learning_group_size") {
+      if (reply === "never-applied-once" && sends++ > 0) return base(url, init);
       if (reply === "applied-lost") { await base(url, init); appliedId = JSON.parse(String(init!.body)).command_id; }
       throw new TypeError("lost reply");
     }
@@ -1468,7 +1470,65 @@ describe("F1 of the first choice on the real legacy path (б): version 1, no ver
     expect(screen.queryByRole("heading", { level: 1, name: "Язык словаря" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Повторить отправку" })).toBeNull();
     expect(screen.queryByRole("navigation")).toBeNull();
+    // R2-01: the frame's only way on is Settings, which owns the resend; the frame itself sends nothing.
+    await screen.findByRole("button", { name: "Настройки" }, exchange);
   });
+
+  it("R2-01: the failed frame leads to Settings; «Повторить отправку» resends the same command; Today then asks for the choice", async () => {
+    const { a, stored } = await legacySaveOfAnotherField("never-applied-once");
+    const commandId = JSON.parse(stored).intent.command_id;
+    fireEvent.click(screen.getByRole("button", { name: "Сегодня" }));
+    await screen.findByText("Не удалось загрузить план", undefined, exchange);
+    fireEvent.click(await screen.findByRole("button", { name: "Настройки" }, exchange));
+    fireEvent.click(await screen.findByRole("button", { name: "Повторить отправку" }, exchange));
+    await waitFor(() => expect(localStorage.getItem(settingSlot)).toBeNull(), exchange);
+    expect(a.posts().filter(isSettingSave).map(post => post.command_id)).toEqual([commandId, commandId]);
+    fireEvent.click(within(screen.getByRole("navigation")).getByRole("button", { name: "Сегодня" }));
+    const heading = await screen.findByRole("heading", { level: 1, name: "Язык словаря" }, exchange);
+    const page = within(heading.closest("main")!);
+    await waitFor(() => expect(page.getByRole("radio", { name: "Немецко-английский" }).hasAttribute("disabled")).toBe(false), exchange);
+    fireEvent.click(page.getByRole("radio", { name: "Немецко-английский" }));
+    fireEvent.click(page.getByRole("button", { name: "Продолжить" }));
+    await screen.findByText(enPairText, undefined, exchange);
+    const saves = a.posts().filter(isSettingSave);
+    expect(saves).toHaveLength(3); expect(saves[2].payload).toMatchObject({ key: "dictionary_language", value: "en" });
+  }, 30000);
+
+  it("R2-01 with 29.1-А: Settings opened by the exit keep the Dictionary unavailable until the language is chosen", async () => {
+    await legacySaveOfAnotherField("never-applied-once");
+    const tab = (name: string) => within(screen.getByRole("navigation")).getByRole("button", { name }) as HTMLButtonElement;
+    // Control: Settings reached from the older session keep its route as before (29.1-А is no ban for older profiles).
+    expect(tab("Словарь").disabled).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Сегодня" }));
+    await screen.findByText("Не удалось загрузить план", undefined, exchange);
+    fireEvent.click(await screen.findByRole("button", { name: "Настройки" }, exchange));
+    await screen.findByRole("button", { name: "Повторить отправку" }, exchange);
+    expect(tab("Словарь").disabled).toBe(true); expect(tab("Сегодня").disabled).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Повторить отправку" }));
+    await waitFor(() => expect(localStorage.getItem(settingSlot)).toBeNull(), exchange);
+    // The resend resolved the old intent, not the choice: the language is still at version 1.
+    expect(tab("Словарь").disabled).toBe(true);
+    fireEvent.click(tab("Сегодня"));
+    const heading = await screen.findByRole("heading", { level: 1, name: "Язык словаря" }, exchange);
+    expect(screen.queryByRole("navigation")).toBeNull();
+    const page = within(heading.closest("main")!);
+    await waitFor(() => expect(page.getByRole("radio", { name: "Немецко-английский" }).hasAttribute("disabled")).toBe(false), exchange);
+    fireEvent.click(page.getByRole("radio", { name: "Немецко-английский" }));
+    fireEvent.click(page.getByRole("button", { name: "Продолжить" }));
+    await screen.findByText(enPairText, undefined, exchange);
+    fireEvent.click(tab("Настройки"));
+    await waitFor(() => expect(tab("Словарь").disabled).toBe(false), exchange);
+  }, 30000);
+
+  it("R2-01: the Settings exit survives a full reopen of the closed-session dead end", async () => {
+    const { stored } = await legacySaveOfAnotherField("never-applied");
+    cleanup();
+    render(<App />);
+    await screen.findByText("Не удалось загрузить план", undefined, exchange);
+    fireEvent.click(await screen.findByRole("button", { name: "Настройки" }, exchange));
+    await screen.findByRole("button", { name: "Повторить отправку" }, exchange);
+    expect(localStorage.getItem(settingSlot)).toBe(stored);
+  }, 30000);
 });
 
 // C159 (no false published state): a seed read of the session can outrun the Settings read of the same document.

@@ -415,6 +415,7 @@ describe("QA: gate when Settings are not confirmed", () => {
     await screen.findByText("Не удалось загрузить план", undefined, exchange);
     expect(screen.queryByRole("heading", { level: 1, name: "Язык словаря" })).toBeNull();
     expect(screen.queryByText(/Активная пара/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Настройки" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Повторить" }));
     await choiceScreen();
   });
@@ -429,6 +430,8 @@ describe("QA: gate when Settings are not confirmed", () => {
     }
     expect(screen.queryByRole("heading", { level: 1, name: "Язык словаря" })).toBeNull();
     expect(screen.queryByText(/Активная пара/)).toBeNull();
+    // R2-01: the Settings exit belongs only to a stored intent Settings may resend; a failing read gets none.
+    expect(screen.queryByRole("button", { name: "Настройки" })).toBeNull();
     expect(f.posts()).toEqual([]); expect(f.back.size).toBe(0);
   });
 
