@@ -1,0 +1,69 @@
+.owner-entry { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.owner-open, .owner-actions button, .owner-add {
+  min-height: 44px; padding: 8px 14px; border: 1px solid var(--line); border-radius: 12px;
+  background: var(--surface); color: var(--text); font: inherit;
+}
+.owner-note, .owner-hint { color: var(--muted); font-size: .875rem; }
+.owner-editor { display: grid; gap: 8px; min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 12px; }
+.owner-title { margin: 0; font-size: 1rem; font-weight: 700; }
+.owner-translation-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+/* The fields part smoothly while one is dragged (R14-01); the picked-up field follows the pointer without a transition. */
+.owner-translation {
+  position: relative; display: flex; align-items: center; gap: 8px; min-width: 0;
+  transition: transform 160ms ease; will-change: transform; touch-action: manipulation;
+}
+.owner-translation-list[data-dragging] { user-select: none; -webkit-user-select: none; }
+.owner-translation-list[data-dragging] .owner-translation { touch-action: none; }
+.owner-translation[data-picked] { box-shadow: 0 6px 18px rgb(0 0 0 / .18); border-radius: 12px; background: var(--surface); }
+.owner-translation-text {
+  flex: 1 1 auto; min-width: 0; min-height: 44px; box-sizing: border-box; padding: 10px 12px; border: 1px solid var(--line);
+  border-radius: 12px; background: var(--surface); color: var(--text); font: inherit;
+  -webkit-touch-callout: none;
+}
+.owner-translation[data-picked] .owner-translation-text { cursor: grabbing; }
+.owner-remove {
+  flex: none; min-width: 44px; min-height: 44px; padding: 8px; border: 1px solid var(--line); border-radius: 12px;
+  background: var(--surface); color: var(--text); font: inherit; line-height: 1;
+}
+.owner-remove[aria-disabled="true"] { opacity: .5; }
+/* «Выше» / «Ниже» are for the keyboard and the screen reader (R14-01): out of sight until a keyboard focus reaches them. */
+.owner-move {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0);
+  white-space: nowrap; border: 0;
+}
+.owner-move:focus-visible {
+  position: static; width: auto; height: auto; margin: 0; overflow: visible; clip: auto; flex: none;
+  min-width: 44px; min-height: 44px; padding: 8px; border: 1px solid var(--line); border-radius: 12px;
+  background: var(--surface); color: var(--text); font: inherit;
+}
+.owner-move-text { margin-left: 4px; }
+.owner-add { justify-self: start; min-width: 44px; font-size: 1.25rem; line-height: 1; }
+.owner-live {
+  position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+}
+.owner-notes { display: grid; gap: 4px; }
+.owner-problem, .owner-conflict p:first-child { color: var(--error); }
+.owner-conflict { display: grid; gap: 4px; }
+.owner-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.owner-grammar-field { display: grid; gap: 6px; min-width: 0; margin: 0; padding: 8px 0 0; border: 0; border-top: 1px solid var(--line); }
+.owner-grammar-field legend { padding: 0; font-weight: 700; }
+.owner-grammar-controls { display: flex; flex-wrap: wrap; gap: 8px; }
+.owner-grammar-control { display: grid; gap: 4px; min-width: 0; font-size: .875rem; color: var(--muted); }
+.owner-grammar-controls select, .owner-grammar-controls input {
+  min-height: 44px; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--line); border-radius: 12px;
+  background: var(--surface); color: var(--text); font: inherit;
+}
+.owner-editor button:disabled, .owner-entry button:disabled { opacity: .5; cursor: default; }
+.owner-others { display: grid; gap: 6px; }
+.owner-others-title { margin: 0; font-size: .875rem; font-weight: 700; color: var(--muted); }
+.owner-other-list { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.owner-other { display: grid; gap: 4px; }
+.owner-badge {
+  justify-self: start; min-height: 44px; padding: 8px 14px; border: 1px solid var(--line); border-radius: 999px;
+  background: var(--surface); color: var(--text); font: inherit; font-size: .875rem;
+}
+.owner-badge[aria-expanded="true"] { border-color: var(--text); }
+.owner-other-texts ol { display: grid; gap: 2px; margin: 0; padding-left: 20px; }
+@media (prefers-reduced-motion: reduce) {
+  .owner-translation { transition: none; }
+}

@@ -60,6 +60,12 @@ export type CommonGrammarForm = { "status": "applicable" | "not_applicable" | "u
 
 export type CommonPrepositionPair = { "source": "common"; "akkusativ": CardExample; "dativ": CardExample; };
 
+export type CommonTranslationsByLanguage = { "ru": Array<string>; "uk": Array<string>; "en": Array<string>; };
+
+export type CommonTranslationsCurrent = { "status": "available"; "card_id": string; "card_revision": string; "language": "uk" | "en" | "ru"; "translations": CommonTranslationsByLanguage; };
+
+export type CommonTranslationsResponse = { "state_version": string; "current": (CommonTranslationsCurrent | UnavailableCurrent); };
+
 export type Compatibility = { "compatible": boolean; "contract_version": string; };
 
 export type CompleteAnswerVariant = { "parts": Array<string>; };

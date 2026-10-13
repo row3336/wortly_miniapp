@@ -17,6 +17,10 @@ export interface TelegramWebApp {
     offClick(callback: () => void): void;
   };
   HapticFeedback?: { notificationOccurred(type: "success"): void };
+  /** Bot API 7.7: whether a vertical swipe may collapse or close the Mini App. */
+  isVerticalSwipesEnabled?: boolean;
+  disableVerticalSwipes?(): void;
+  enableVerticalSwipes?(): void;
   ready?(): void;
   close?(): void;
   onEvent?(event: TelegramEvent, callback: () => void): void;
@@ -124,4 +128,27 @@ export function notifyAcceptedMilestone(
   try {
     if (milestone) telegramWebApp(win)?.HapticFeedback?.notificationOccurred("success");
   } catch { /* Optional device feedback cannot change a confirmed application result. */ }
+}
+
+/**
+ * R14-01: while the owner drags a translation field, a vertical swipe must not collapse the Mini App. Disables Telegram's
+ * vertical swipes and returns the restore: swipes come back only if they were enabled before (an older client without
+ * the method keeps its behaviour; a failing call changes nothing).
+ */
+export function suspendVerticalSwipes(win: Window): () => void {
+  const app = telegramWebApp(win);
+  if (!app?.disableVerticalSwipes || app.isVerticalSwipesEnabled === false) return () => {};
+  try {
+    app.disableVerticalSwipes();
+  } catch {
+    return () => {};
+  }
+  let restored = false;
+  return () => {
+    if (restored) return;
+    restored = true;
+    try {
+      app.enableVerticalSwipes?.();
+    } catch { /* The swipe setting is a convenience of the gesture, never part of a saved result. */ }
+  };
 }

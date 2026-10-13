@@ -32,6 +32,10 @@ function grammar(value: unknown, kind: string): boolean {
     && term(value.meaning_category) && term(value.verb_position);
   return false;
 }
+/** The grammar of one card type as a card read carries it; also the grammar of the owner's common current (C-FIELDS-3). */
+export function validCardGrammar(value: unknown, kind: string): boolean {
+  return grammar(value, kind);
+}
 function conjugations(value: unknown, kind: string): boolean {
   if (!Array.isArray(value) || kind !== "verb" && value.length > 0) return false;
   const seen = new Set<string>();

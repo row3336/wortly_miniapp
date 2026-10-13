@@ -10,8 +10,11 @@ import { CardActions } from "../actions/CardActions";
 import type { CardActionApplied } from "../actions/cardActionsController";
 import { useCardActions } from "../actions/useCardActions";
 import { useDictionaryCardDocument } from "../useDictionaryCardDocument";
-import { cardFieldSlots } from "../editors/CardFieldSlots";
+import { cardFieldSlots, type CardFieldSlots } from "../editors/CardFieldSlots";
 import { useFieldEditors } from "../editors/useFieldEditors";
+import { UnsavedLeaveDialog } from "../editors/UnsavedLeaveDialog";
+import { OwnerCommonSlot } from "../owner/OwnerEditor";
+import { useOwnerEditor } from "../owner/useOwnerEditor";
 import { IntervalPanel } from "../IntervalPanel";
 import { useDictionaryIntervalContext } from "../useDictionaryIntervalContext";
 import { movesWrittenQuiz, viewOrigin, type CardOrigin } from "./cardOrigin";
@@ -82,6 +85,18 @@ function manualControl({ state, actions }: ManualDocument, cardId: string, ready
   return { status, enabled: ready && state.canChange,
     onChange: selected => { void actions.change(cardId, selected); },
     onRetry: () => { void actions.retry(cardId); } };
+}
+
+/** The owner's entries and editors follow the personal translation slot; their leave question shares the slot. */
+function withOwner(slots: CardFieldSlots, owner: ReturnType<typeof useOwnerEditor>, language: Language,
+  view: DictionaryCardView): CardFieldSlots {
+  const dictionaryLanguage = view.content.pair.slice(0, 2) as "ru" | "uk" | "en";
+  return { ...slots,
+    translation: <>{slots.translation}
+      <OwnerCommonSlot state={owner.state} actions={owner.actions} language={language} dictionaryLanguage={dictionaryLanguage} /></>,
+    leave: slots.leave ?? (owner.state.leaveAsked
+      ? <UnsavedLeaveDialog language={language} onContinue={owner.actions.continueEditing} onLeave={owner.actions.confirmLeave} />
+      : null) };
 }
 
 /**
@@ -169,6 +184,16 @@ export function CardHost(props: CardHostProps) {
     contextId: context.state.phase === "ready" ? context.state.context?.id ?? null : null,
     contextStateVersion: context.state.stateVersion, newId: props.newId,
     onChanged: () => { void card.refresh(); void context.actions.refresh(); }, onLeave: () => latestLeave.current() });
+  // The owner's common data (R12-04…06, R14-01): «Изменить перевод для всех» and the allowed grammar, only for the owner
+  // (K07-030). One editor and one command at a time across the personal and the common editors (M-EDIT Р2, Р13).
+  const owner = useOwnerEditor({ access: props.access, transport: props.transport, enabled: !leaving, view: shown,
+    stateVersion: shown ? previous!.state_version : null,
+    contextId: context.state.phase === "ready" ? context.state.context?.id ?? null : null,
+    blocked: !editors.state.canOpen, newId: props.newId,
+    onChanged: () => { void card.refresh(); void context.actions.refresh(); }, onLeave: () => latestLeave.current() });
+  // Screen Back and a managed exit ask first while a common change is unsaved, then while an own field is.
+  const requestLeave = () => { if (!owner.actions.guardLeave()) editors.actions.requestLeave(); };
+  const latestRequestLeave = useRef(requestLeave); latestRequestLeave.current = requestLeave;
   const latestProps = useRef(props); latestProps.current = props;
   // Study actions and the complaint (M-ACTIONS): root decision, pending owner (Р11) — every accepted or refused command reads
   // the card and its context again (they end the context's undo rights on the server, CT 2.3). root decision, pending owner (M-ACTIONS Р4): from the main
@@ -180,7 +205,7 @@ export function CardHost(props: CardHostProps) {
       const current = latestProps.current;
       current.onStudyAction?.(event);
       void card.refresh(); void context.actions.refresh();
-      if (movesWrittenQuiz(current.origin) && event.kind !== "card.return") editors.actions.requestLeave();
+      if (movesWrittenQuiz(current.origin) && event.kind !== "card.return") latestRequestLeave.current();
     },
     onChanged: () => { void card.refresh(); void context.actions.refresh(); } });
   if (leaving) return null;
@@ -197,6 +222,11 @@ export function CardHost(props: CardHostProps) {
     interval={shown && (props.origin.kind === "dictionary" || movesWrittenQuiz(props.origin))
       && (props.extensions?.renderInterval ? props.extensions.renderInterval(shown, context)
         : <IntervalPanel language={props.language} context={context} enabled={!leaving} />)}
-    fields={shown ? cardFieldSlots({ state: editors.state, actions: editors.actions, view: shown, language: props.language }) : undefined}
-    onBack={editors.actions.requestLeave} onRetry={() => { void card.refresh(); }} />;
+    fields={shown ? withOwner(cardFieldSlots({ state: { ...editors.state,
+      canOpen: editors.state.canOpen && owner.state.open === null && !owner.state.busy,
+      // One command at a time: the personal «Шаг назад» waits while the common editor is open or its save is under way.
+      undo: editors.state.undo && (owner.state.open !== null || owner.state.busy)
+        ? { ...editors.state.undo, canUndo: false, canRetry: false } : editors.state.undo },
+    actions: editors.actions, view: shown, language: props.language }), owner, props.language, shown) : undefined}
+    onBack={requestLeave} onRetry={() => { void card.refresh(); }} />;
 }
