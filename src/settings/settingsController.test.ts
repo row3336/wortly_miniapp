@@ -67,7 +67,7 @@ function rejected(data = current(next), mismatch = false): SettingSaveReply {
   return { outcome: mismatch ? "mismatch" : "rejected", command: { id: id(100), status: "rejected" },
     error: { code: mismatch ? "COMMAND_PAYLOAD_MISMATCH" : "VERSION_CONFLICT" }, current: data, state_version: data.state_version };
 }
-const resetSlot = "wortly.pending.settings-reset";
+const resetSlot = `wortly.pending.settings-reset:profile:${id(1)}`;
 const resetIntent = (commandId = id(100)): SettingsResetIntent => ({ command_id: commandId, kind: "settings.reset", payload: {} });
 const resetRecord = (commandId = id(100)): SettingsResetPending => ({ schemaVersion: 1, profileId: id(1), clientInstanceId: id(2),
   intent: resetIntent(commandId) });

@@ -216,7 +216,7 @@ describe("application-owned settings for study and the editor", () => {
 });
 
 describe("settings reset through the document owner (M-SET-RESET, D-SET-RESET 4.3.4, 5.3.7)", () => {
-  const resetSlot = "wortly.pending.settings-reset";
+  const resetSlot = `wortly.pending.settings-reset:profile:${id(50)}`;
   const resetPending = { schemaVersion: 1, profileId: id(50), clientInstanceId: id(1),
     intent: { command_id: id(100), kind: "settings.reset", payload: {} } };
   /** The server side of a reset: retry_count returns to 4 and the reply carries the full current settings. */
