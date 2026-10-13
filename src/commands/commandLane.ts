@@ -50,6 +50,13 @@ export type LaneResolved<K extends string> = {
    * one; a send stopped before its request (a failed save, a closed handle) does not.
    */
   restored?: true;
+  /**
+   * The server reports the outcome of a request this owner sent itself as already recorded (Q03): the status check by
+   * its ID after the reply was lost, or the reply to a repeated send (an automatic resend, a retry) that the server
+   * answers with command.status "already_applied" because an earlier copy of the request was committed first. The reply
+   * to a first send that recorded the command now ("applied") is no such outcome.
+   */
+  checked?: true;
 };
 /** A not_found status of the same ID: the locked profile observation and, at most, the final closure of its session. */
 export type MissingStatus = { outcome: "not_found"; state_version: string; current: Profile; closed_session?: ClosedSessionBoundary };
@@ -380,11 +387,11 @@ export abstract class CommandLane<S extends LaneSpec, O extends LaneOptions<S> =
     if (!this.live()) return;
     this.pending = null; this.problem = null; this.retryVerified = false; this.phase = "settled";
   }
-  private async settle(reply: LaneSettled<S>, restored = false): Promise<void> {
+  private async settle(reply: LaneSettled<S>, restored = false, checked = false): Promise<void> {
     const intent = this.pending!.intent;
     this.outcome = reply.outcome === "accepted" ? "accepted" : "rejected";
     this.resolved = { commandId: intent.command_id, kind: intent.kind, sessionId: intent.session_id,
-      ...(restored ? { restored: true } : {}) } as S["resolved"];
+      ...(restored ? { restored: true } : {}), ...(checked ? { checked: true } : {}) } as S["resolved"];
     // The exact accepted address is immutable evidence, even if its attached projection is stale.
     if (reply.outcome === "accepted") this.accept(intent, reply as LaneSettled<S> & { outcome: "accepted" }, this.resolved);
     this.rejectionCode = reply.outcome === "accepted" ? null : (reply as Refused).error.code;
@@ -429,7 +436,7 @@ export abstract class CommandLane<S extends LaneSpec, O extends LaneOptions<S> =
       throw error;
     }
     if (!this.live()) return;
-    if (reply.outcome === "accepted") { await this.settle(reply as LaneSettled<S>, this.inherited); return; }
+    if (reply.outcome === "accepted") { await this.settle(reply as LaneSettled<S>, this.inherited, !this.inherited); return; }
     const missing = reply as MissingStatus;
     if (!this.observe(missing.state_version)) this.problem = "stale_response";
     else {
@@ -494,7 +501,7 @@ export abstract class CommandLane<S extends LaneSpec, O extends LaneOptions<S> =
     if (reply.outcome === "mismatch") {
       this.observe(reply.state_version);
       await this.markMismatch(pending);
-    } else await this.settle(reply);
+    } else await this.settle(reply, false, reply.outcome === "accepted" && (reply as { command?: { status?: string } }).command?.status === "already_applied");
   }
   begin(action: WithoutId<S["intent"]>): Promise<void> {
     if (this.busy()) return this.running ?? Promise.resolve();

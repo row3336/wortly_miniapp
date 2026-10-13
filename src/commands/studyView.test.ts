@@ -70,7 +70,7 @@ function view(options: { mode?: "normal" | "accelerated"; rules?: Partial<StudyV
   const onUpdate = vi.fn<(snapshot: Snapshot) => void>();
   const controller = new TestView({ access: () => access, newId: () => id(99), sessionId: options.sessionId === undefined ? SESSION : options.sessionId,
     transitionMode: () => options.mode ?? "normal", onUpdate },
-  { ignoreUnboundUnavailable: true, keepClosedAfterRead: true, waitRestoredCorrection: false, ...options.rules }, f.connect);
+  { ignoreUnboundUnavailable: true, keepClosedAfterRead: true, waitRestoredCorrection: false, waitRecordedAnswer: false, ...options.rules }, f.connect);
   return { ...f, controller, onUpdate };
 }
 /** An answer whose undo the server grants (C-UNDO-1). */

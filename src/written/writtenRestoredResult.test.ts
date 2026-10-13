@@ -1,6 +1,6 @@
 // Decisions 20.1-А and 22.1-А at the level of one owner: an old answer result that a new owner finds on the server by
 // its command ID (the intent came from the durable slot, this owner never sent it) waits for «Далее». A result this
-// owner confirmed itself after a lost reply keeps its timer.
+// owner confirmed itself by the same check after a lost reply («уже записан») waits too (Q03 вариант 1).
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WrittenViewController } from "./writtenViewController";
 import { writtenFixture } from "./writtenFixtures.test-support";
@@ -61,15 +61,16 @@ describe("old answer result restored by a new owner", () => {
     expect(submits(f, commandId)).toHaveLength(1);
   });
 
-  it("a lost reply confirmed by the same owner's check keeps the timer", async () => {
+  it("a lost reply confirmed by the same owner's check («уже записан») waits for «Далее» (Q03)", async () => {
     const f = writtenFixture({ cards: [6, 7] }); const { first, commandId } = await answered(f);
     await first.refresh();
     const state = first.snapshot();
-    expect(state.commands.primary.resolved).toMatchObject({ commandId, kind: "answer.submit" });
+    expect(state.commands.primary.resolved).toMatchObject({ commandId, kind: "answer.submit", checked: true });
     expect(state.commands.primary.resolved?.restored).toBeUndefined();
     expect(state.phase).toBe("result_correct");
-    // The timer starts once the check's read has settled.
-    await vi.waitFor(() => expect(first.snapshot().timer?.durationMs).toBe(3000));
+    // Once the check's read has settled, still no timer.
+    await first.refresh();
+    expect(first.snapshot()).toMatchObject({ phase: "result_correct", timer: null, canNext: true });
     expect(submits(f, commandId)).toHaveLength(1);
   });
 });

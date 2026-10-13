@@ -115,10 +115,13 @@ describe("the budget of one action (Я15.5, Я15.6, 8.3)", () => {
       const random = () => { state = (state * 1103515245 + 12345) % 2147483648; return state / 2147483648; };
       const h = harness(); await h.started();
       const replies = ["drop", "lose", "maintenance", "unavailable", "pass"] as const;
+      // Every answer send with what the server held at that moment: the independent evidence of how a settled one was told.
+      const sent: { committedBefore: boolean; reply: (typeof replies)[number] }[] = [];
       h.route(request => {
         if (request.method === "GET" && request.path.startsWith("/api/v1/commands/")) return random() < 0.3 ? "drop" : undefined;
         if (request.kind !== "answer.submit") return undefined;
         const reply = replies[Math.floor(random() * replies.length)];
+        sent.push({ committedBefore: h.server.receipts.has(request.body!.command_id), reply });
         if (reply === "maintenance") return response({ error: { code: "MAINTENANCE", wait_seconds: Math.floor(random() * 40) } }, 503);
         if (reply === "unavailable") return response({ error: { code: "WRITE_UNAVAILABLE" } }, 503);
         return reply === "pass" ? undefined : reply;
@@ -127,10 +130,16 @@ describe("the budget of one action (Я15.5, Я15.6, 8.3)", () => {
       const answers = h.answers();
       expect(answers.length).toBeLessThanOrEqual(6);
       expect(new Set(answers.map(post => JSON.stringify(post))).size).toBe(1);
-      // A confirmed answer is shown (and, after its 3 s, the next card); never sent again after the confirmation.
+      // A confirmed answer is shown; never sent again after the confirmation. The server told it as "recorded now" only
+      // if the last send passed and nothing held the answer before that send: then the next card follows after its 3 s.
+      // Told in any other way (a status check of its ID, or the reply to a repeated send, «уже записан»), it waits for
+      // «Далее» (Q03). The branch is fixed by the traffic above, not by the flag under test.
       if (h.recovery()?.state.name === "settled") {
         expect(h.server.receipts.has(answers[0].command_id)).toBe(true);
-        expect(h.view.snapshot()).toMatchObject({ phase: "question", question: { id: id(7) } });
+        const last = sent.at(-1)!, live = last.reply === "pass" && !last.committedBefore;
+        expect(h.view.snapshot().commands.primary.resolved?.checked).toBe(live ? undefined : true);
+        expect(h.view.snapshot()).toMatchObject(live ? { phase: "question", question: { id: id(7) } }
+          : { phase: "result_correct", timer: null, canNext: true });
       }
       owners.splice(0).forEach(owner => owner.dispose()); vi.useRealTimers();
     }

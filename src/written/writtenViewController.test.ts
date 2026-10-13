@@ -70,15 +70,15 @@ describe("one command_id per intent (Т02)", () => {
     await tick(0);
     expect(h.view.snapshot()).toMatchObject({ phase: "result_correct", answer: { result: { grade: 4 } }, timer: { durationMs: 3000 } });
   });
-  it("a reply lost after commit is resolved by the same ID without a second POST, its timer runs from the confirmation", async () => {
+  it("a reply lost after commit is resolved by the same ID without a second POST; already recorded, it waits for «Далее» (Q03)", async () => {
     vi.useFakeTimers(); const h = harness(); await h.started(); h.view.setDraft("Haus");
     h.loseReply(); await h.view.submit();
     await tick(0);
     expect(h.kinds().filter(kind => kind === "answer.submit")).toHaveLength(1);
-    expect(h.view.snapshot()).toMatchObject({ phase: "result_correct", answer: { result: { grade: 4 } }, timer: { durationMs: 3000 },
+    expect(h.view.snapshot()).toMatchObject({ phase: "result_correct", answer: { result: { grade: 4 } }, timer: null, canNext: true,
       commands: { recovery: { state: { name: "settled" }, sends: 1 } } });
     await tick(10000);
-    expect(h.kinds().filter(kind => kind === "answer.submit")).toHaveLength(1);
+    expect(h.kinds()).toEqual(["session.start", "assignment.present", "answer.submit"]);
   });
   it("after a reload a saved intent is checked by its original ID; with an unknown count it is never sent (CT §6.1 п. 4)", async () => {
     vi.useFakeTimers();

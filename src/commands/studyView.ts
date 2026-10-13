@@ -28,7 +28,7 @@ type LaneView = {
   kind: string | null;
   pendingIntent: Intent | null;
   outcome: "accepted" | "rejected" | "not_applied" | null;
-  resolved: { commandId: string; kind: string; sessionId: string; assignmentId?: string; resultId?: string; restored?: true } | null;
+  resolved: { commandId: string; kind: string; sessionId: string; assignmentId?: string; resultId?: string; restored?: true; checked?: true } | null;
   rejectionCode: string | null;
   problem: string | null;
   canRetry: boolean;
@@ -144,6 +144,12 @@ export type StudyViewRules = {
    * decision 32.1-А). Learning has no such decision yet and keeps its timer.
    */
   waitRestoredCorrection: boolean;
+  /**
+   * An answer result the server reported already recorded after a lost reply, or an old one restored by its ID, waits for
+   * «Далее» at any grade and in any transition mode: the written quiz (Q03 вариант 1, К19-017). Learning has no such
+   * decision yet and keeps its rule.
+   */
+  waitRecordedAnswer: boolean;
 };
 
 /**
@@ -378,8 +384,8 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
     const recovery = state.recovery, ended = endedRecovery(state);
     if (recovery && recovery.commandId !== this.recoveredCommand && (recovery.afterLoss && recovery.state.name === "settled" || ended)) {
       this.recoveredCommand = recovery.commandId;
-      // The machine confirmed the outcome by the same ID: show it as a check by that ID does (the result, its timer
-      // from now, or the refusal). An ended recovery reads the session and shows its actual state (CT §6.1 п. 7).
+      // The machine confirmed the outcome by the same ID: show it as a check by that ID does (the result by its mode's
+      // rule, or the refusal). An ended recovery reads the session and shows its actual state (CT §6.1 п. 7).
       // Outside this update: a read starts from here.
       void Promise.resolve().then(() => this.refresh());
     }
@@ -465,16 +471,23 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
     this.answerVersion = read.state_version;
   }
   private resultPhase(grade: number): StudyPhase { return this.previous ? "previous_result" : grade === 2 ? "result_wrong" : "result_correct"; }
-  /** restored: the lanes proved the outcome an old one this owner never sent (LaneResolved.restored). */
+  /**
+   * restored: the lanes proved the outcome an old one this owner never sent (LaneResolved.restored); checked: the check
+   * by its ID found this owner's own request already recorded after its reply was lost (LaneResolved.checked).
+   */
   private acceptResult(read: Pick<ResultRead, "action" | "result" | "capabilities" | "state_version">, kind: string,
-    restored: boolean): void {
+    restored: boolean, checked: boolean): void {
     if (!read.result) return;
     if (kind === "result.undo") { this.undone(); return; }
     // An accepted result is a new fact of this view: a refused action before it no longer decides how it advances.
     this.setAnswer(read); this.slotWait = false;
-    // A correct answer this window confirmed live advances by its timer; an old correct one restored by its ID waits for
-    // «Далее» (20.1-А, 22.1-А). An error keeps the rule of its transition mode.
-    if (kind === "answer.submit") { this.draft = ""; this.previous = false; this.waitNext = restored && read.result.grade !== 2; }
+    // A result this window got by the reply to its send advances by its mode's rule; an old correct one restored by its
+    // ID waits for «Далее» (20.1-А, 22.1-А). In the written quiz a result restored or reported already recorded waits at
+    // any grade and mode (Q03 вариант 1); elsewhere an error keeps the rule of its transition mode.
+    if (kind === "answer.submit") {
+      this.draft = ""; this.previous = false;
+      this.waitNext = this.rules.waitRecordedAnswer ? restored || checked : restored && read.result.grade !== 2;
+    }
     if (kind === "result.correct" && restored && this.rules.waitRestoredCorrection) this.waitNext = true;
     this.phase = this.resultPhase(read.result.grade);
     if (kind === "result.grade" && !this.previous) this.pendingGradeAdvance = `${read.result.result_id}:${read.result.version}`;
@@ -547,7 +560,8 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
       return false;
     }
     if (primary.answer?.result && primary.stateVersion) {
-      this.acceptResult({ ...primary.answer, state_version: primary.stateVersion }, primary.resolved.kind, primary.resolved.restored === true);
+      this.acceptResult({ ...primary.answer, state_version: primary.stateVersion }, primary.resolved.kind, primary.resolved.restored === true,
+        primary.resolved.checked === true);
       return true;
     }
     if (!this.current || this.currentVersion === null || BigInt(this.currentVersion) < BigInt(state.stateVersion)) this.phase = "stale";
@@ -576,7 +590,7 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
     if (this.otherPairStep(read.step, resolved.sessionId)
       || this.olderOtherPairStep(read.step, read.state_version, resolved.sessionId)) { this.phase = "stale"; return true; }
     if (!read.result) { this.phase = "stale"; this.problem = "load"; return true; }
-    this.acceptResult(read, resolved.kind, resolved.restored === true); this.lastResolved = resolved.commandId;
+    this.acceptResult(read, resolved.kind, resolved.restored === true, resolved.checked === true); this.lastResolved = resolved.commandId;
     return true;
   }
   protected run(action: () => Promise<void>): Promise<void> {

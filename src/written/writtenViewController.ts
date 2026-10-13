@@ -110,7 +110,8 @@ export class WrittenViewController extends StudyView<WrittenDocumentCommands, Cu
   private summaryReading: Promise<void> | null = null;
 
   constructor(options: Options) {
-    super(options, { ignoreUnboundUnavailable: true, keepClosedAfterRead: true, waitRestoredCorrection: true },
+    super(options, { ignoreUnboundUnavailable: true, keepClosedAfterRead: true, waitRestoredCorrection: true,
+      waitRecordedAnswer: true },
       onUpdate => new WrittenDocumentCommands({ ...options, onUpdate }));
   }
   protected close(sessionId: string, reason: string | null): void {

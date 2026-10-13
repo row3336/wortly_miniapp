@@ -68,7 +68,8 @@ export class LearningViewController extends StudyView<LearningDocumentCommands, 
   private readonly onLearningComplete: (() => void) | undefined;
   private closedFacts: LearningClosed | null = null;
   constructor(options: Options) {
-    super(options, { ignoreUnboundUnavailable: false, keepClosedAfterRead: false, waitRestoredCorrection: false },
+    super(options, { ignoreUnboundUnavailable: false, keepClosedAfterRead: false, waitRestoredCorrection: false,
+      waitRecordedAnswer: false },
       onUpdate => new LearningDocumentCommands({ ...options, onUpdate }));
     this.onLearningComplete = options.onLearningComplete;
   }

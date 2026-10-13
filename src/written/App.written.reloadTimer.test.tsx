@@ -1,6 +1,7 @@
 // Owner decision 20.1-А: a written answer the server committed but whose result the user never saw, then a full
 // reload. The reloaded document shows the confirmed correct result for the first time and waits for «Далее» in every
-// transition mode. The first show in the same live window keeps the auto-advance (3 s, accelerated 2 s).
+// transition mode. The first show in the same live window keeps the auto-advance (3 s, accelerated 2 s); a result the
+// check by its ID reports already recorded after a lost reply waits for «Далее» there too (Q03 вариант 1).
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { StrictMode } from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -132,39 +133,45 @@ describe("Written correct result first shown after a full reload (decision 20.1-
     expect(elapsed).toBeLessThan(mode === "accelerated" ? 2900 : 3900);
   }, 40_000);
 
-  for (const [mode, strict] of cases) it(`control: a lost reply recovered in the live window advances after ${mode === "accelerated" ? 2 : 3} s (${label(mode, strict)})`, async () => {
+  for (const [mode, strict] of cases) it(`a lost reply the live window finds already recorded waits for «Далее» (Q03) (${label(mode, strict)})`, async () => {
     const a = app({ cards: [6, 7], transitionMode: mode }); render(tree(strict));
     await startWords();
     const { commandId, online } = await lostAnswer(a);
     online();
     await screen.findByText("Верно", undefined, { timeout: 10_000 });
-    const shown = Date.now();
-    await screen.findByText("слово 7", undefined, { timeout: 6000 });
-    expect(Date.now() - shown).toBeGreaterThanOrEqual(mode === "accelerated" ? 1800 : 2800);
+    const before = presents(a);
+    await sleep(4500);
+    expect(screen.getByText("Верно")).toBeTruthy();
+    expect(screen.queryByText("слово 7")).toBeNull();
+    expect(presents(a)).toBe(before);
+    await tap("Далее");
+    await screen.findByText("слово 7", undefined, exchange);
+    await sleep(500);
+    expect(presents(a)).toBe(before + 1);
     expect(submits(a, commandId)).toHaveLength(1);
   }, 40_000);
 });
 
-// Table 6.1.8: an error waits in the normal mode and advances after 2 s in the accelerated one; only a real background
-// or return makes it wait. The start of a reloaded document is neither, whatever the order of its reads (F5).
+// Table 6.1.8: a live error waits in the normal mode and advances after 2 s in the accelerated one; only a real
+// background or return makes it wait. An old error a reloaded document restores by its ID waits for «Далее» in both
+// modes, whatever the order of its reads (Q03 вариант 1, WM Q-06).
 describe("Written error first shown after a full reload", () => {
-  for (const delay of delays) for (const [mode, strict] of cases) it(`${mode === "accelerated" ? "advances after 2 s" : "waits"}; status check ${delay} ms late (${label(mode, strict)})`, async () => {
+  for (const delay of delays) for (const [mode, strict] of cases) it(`waits for «Далее»; status check ${delay} ms late (${label(mode, strict)})`, async () => {
     const a = app({ cards: [6, 7], transitionMode: mode }); const first = render(tree(strict));
     await startWords();
     const { commandId, online } = await lostAnswer(a, "falsch");
     first.unmount(); online(); slowCommandChecks(a, delay);
     render(tree(strict));
     await screen.findByText("Есть ошибка", undefined, { timeout: 8000 });
-    const before = presents(a), shown = Date.now();
-    if (mode === "accelerated") {
-      await screen.findByText("слово 7", undefined, { timeout: 4000 });
-      expect(Date.now() - shown).toBeGreaterThanOrEqual(1800);
-      expect(presents(a)).toBe(before + 1);
-    } else {
-      await sleep(4500);
-      expect(screen.getByText("Есть ошибка")).toBeTruthy();
-      expect(presents(a)).toBe(before);
-    }
+    const before = presents(a);
+    await sleep(4500);
+    expect(screen.getByText("Есть ошибка")).toBeTruthy();
+    expect(screen.queryByText("слово 7")).toBeNull();
+    expect(presents(a)).toBe(before);
+    await tap("Далее");
+    await screen.findByText("слово 7", undefined, exchange);
+    await sleep(500);
+    expect(presents(a)).toBe(before + 1);
     expect(submits(a, commandId)).toHaveLength(1);
   }, 40_000);
 
