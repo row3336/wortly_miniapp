@@ -36,6 +36,11 @@ export type SettingsSnapshot = {
   canEdit: boolean;
   canReset: boolean;
   canRetry: boolean;
+  /**
+   * After a COMMAND_PAYLOAD_MISMATCH of a field save (Q36): the stored intent cannot be proven, the old ID is never sent again,
+   * and the user may continue with the current server settings. Offered only after a fresh server readback of this refresh.
+   */
+  canContinueWithServer: boolean;
 };
 type Options = {
   api: SettingsApi;
@@ -118,6 +123,8 @@ export class SettingsController {
   private writeBlocked: "expired" | "forbidden" | "profile_changed" | null = null;
   private running: Promise<void> | null = null;
   private queuedRefresh: Promise<void> | null = null;
+  /** The access handle through which a readback succeeded after the mismatch was established; any other state clears it. */
+  private mismatchReadback: OpenedAccess | null = null;
 
   constructor(private readonly options: Options) {
     const access = options.access();
@@ -171,6 +178,12 @@ export class SettingsController {
       && !!this.problem && ["network", "storage", "not_found", "context_refreshed", "stale_response"].includes(this.problem.reason);
   }
 
+  private continueAllowed(): boolean {
+    const access = this.currentAccess();
+    return !!access && access === this.mismatchReadback && !this.running && !this.writeBlocked && !this.settled
+      && !!this.pending?.mismatch && !this.resetPending && this.problem?.reason === "mismatch" && this.dataIsCurrent();
+  }
+
   snapshot(): SettingsSnapshot {
     const available = !!this.currentAccess();
     const dataCurrent = available && !this.writeBlocked && this.dataIsCurrent();
@@ -191,7 +204,8 @@ export class SettingsController {
       pending: available ? this.pending : null, resetPending: available ? this.resetPending : null,
       outcome: available ? this.outcome : null, resetOutcome: available ? this.resetOutcome : null,
       problem: available ? this.problem : { reason: "context_closed" }, canEdit: this.editable(),
-      canReset: this.editable() && !this.running, canRetry: this.retryAllowed() });
+      canReset: this.editable() && !this.running, canRetry: this.retryAllowed(),
+      canContinueWithServer: this.continueAllowed() });
   }
   private emit(): void { if (this.live()) this.options.onUpdate(this.snapshot()); }
 
@@ -229,26 +243,30 @@ export class SettingsController {
     return task;
   }
 
-  private accept(current: SettingsProjection, version: string): void {
+  /** True when the answer was taken as the current data; an older answer than the known shared version is not. */
+  private accept(current: SettingsProjection, version: string): boolean {
     const minimum = this.minimumVersion();
     if (minimum !== null && BigInt(version) < BigInt(minimum)) {
       if (!this.dataIsCurrent()) this.problem = { reason: "stale_response" };
-      return;
+      return false;
     }
     this.version = version;
     this.data = structuredClone({ ...current, state_version: version });
     this.problem = null;
+    return true;
   }
   private idle(): void {
     if (this.writeBlocked) { this.data = null; this.problem = { reason: this.writeBlocked }; }
     this.phase = this.dataIsCurrent() && !this.problem ? "ready" : "blocked";
   }
-  private async readCurrent(): Promise<void> {
+  /** True only when this very read was taken as the current data. */
+  private async readCurrent(): Promise<boolean> {
     const current = await this.access().run(({ token }) => this.options.api.get(token));
-    if (!this.live()) return;
+    if (!this.live()) return false;
     this.access();
-    this.accept(current, current.state_version);
+    const taken = this.accept(current, current.state_version);
     if (!this.data && !this.problem) this.problem = { reason: "network" };
+    return taken && !this.problem;
   }
 
   edit(key: SettingKey, input: unknown): void {
@@ -371,6 +389,7 @@ export class SettingsController {
       this.access();
       this.phase = "checking";
       this.problem = null;
+      this.mismatchReadback = null;
       this.emit();
       if (!this.loaded) {
         const save = await this.options.pendingStore.load(this.scope.profileId, this.lifetime.signal);
@@ -390,8 +409,10 @@ export class SettingsController {
       if (this.sent()?.mismatch) {
         await this.markMismatch();
         if (!this.live()) return;
-        await this.readCurrent();
+        const fresh = await this.readCurrent();
         if (!this.live()) return;
+        // Only a field save may leave the mismatch (Q36); a reset waits for the P02 barrier.
+        this.mismatchReadback = fresh && this.pending ? this.access() : null;
         this.phase = "unresolved";
         this.problem = { reason: "mismatch", code: "COMMAND_PAYLOAD_MISMATCH" };
       } else if (this.sent()) await this.checkPending();
@@ -475,6 +496,37 @@ export class SettingsController {
     if (!this.retryAllowed()) return this.running ?? Promise.resolve();
     const source = this.access();
     return this.run(() => this.sendPending(source));
+  }
+  /**
+   * Q36: leaves a mismatched field save. A fresh readback is taken now; only when it succeeds for this same profile and
+   * document, the marked record is cleared by the store's `clearMarked` and the user may save anew under a new ID.
+   * The old ID is never sent. A failed readback, a changed access, an abort or a storage error clears nothing.
+   */
+  continueWithServer(): Promise<void> {
+    if (!this.continueAllowed()) return this.running ?? Promise.resolve();
+    const source = this.access();
+    const marked = this.pending!;
+    return this.run(async () => {
+      this.mismatchReadback = null;
+      this.phase = "checking";
+      this.emit();
+      const fresh = await this.readCurrent();
+      if (!this.live()) return;
+      if (this.access() !== source) throw new ClosedAccessError();
+      if (!fresh) { this.phase = "unresolved"; this.problem = this.problem ?? { reason: "stale_response" }; return; }
+      await this.options.pendingStore.clearMarked(marked, this.lifetime.signal);
+      if (!this.live()) return;
+      if (this.access() !== source) throw new ClosedAccessError();
+      // The unsent editor text of this field is not written back: the server value is shown.
+      delete this.drafts[marked.intent.payload.key];
+      this.pending = null;
+      this.refusal = null;
+      this.outcome = null;
+      this.settled = false;
+      this.submittedRevision = null;
+      this.problem = null;
+      this.idle();
+    });
   }
   dispose(): void {
     this.lifetime.abort();

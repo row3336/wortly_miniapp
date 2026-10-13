@@ -9,7 +9,7 @@ import { settingsResponse } from "./settingsRead.test-support";
 import { useSettingsDocument, type SettingsDocument } from "./useSettingsDocument";
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
-const slot = "wortly.pending.setting";
+const slot = `wortly.pending.setting:profile:${id(50)}`;
 const intent: EditableSettingIntent = { command_id: id(100), kind: "setting.save", expected_field_version: "1",
   payload: { key: "retry_count", value: 4 } };
 const pending: SettingsPending = { schemaVersion: 1, profileId: id(50), clientInstanceId: id(1), intent };

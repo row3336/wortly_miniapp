@@ -50,10 +50,12 @@ function draft(input: unknown, rest: Partial<SettingsDraft> = {}): SettingsDraft
 function fixture() {
   const props: SettingsScreenProps = {
     snapshot: { phase: "ready", data: current(), dataCurrent: true, drafts: {}, pending: null, resetPending: null,
-      outcome: null, resetOutcome: null, problem: null, canEdit: true, canReset: true, canRetry: false },
+      outcome: null, resetOutcome: null, problem: null, canEdit: true, canReset: true, canRetry: false,
+      canContinueWithServer: false },
     language: "ru", catalog: { phase: "ready", topics },
     actions: { edit: vi.fn(), save: vi.fn(async () => {}), acceptCurrent: vi.fn(), keepMine: vi.fn(async () => {}),
-      refresh: vi.fn(async () => {}), retry: vi.fn(async () => {}), reset: vi.fn(async () => {}) },
+      refresh: vi.fn(async () => {}), retry: vi.fn(async () => {}), reset: vi.fn(async () => {}),
+      continueWithServer: vi.fn(async () => {}) },
     onReloadTopics: vi.fn(), onToday: vi.fn(),
   };
   return props;
@@ -654,6 +656,143 @@ describe("returning the initial settings (M-SET-RESET, D-SET-RESET 4.1, 5.3.1)",
     render(<SettingsScreen {...f} />);
     expect(screen.getByRole("alert").textContent).toBe(settingsCopy.ru.problems.mismatch);
     expect(screen.queryByRole("status")).toBeNull(); expect(screen.queryByRole("button", { name: "Повторить отправку" })).toBeNull();
+  });
+
+  describe("Q36 continue with the server's settings after a mismatch", () => {
+    const save = { schemaVersion: 1 as const, profileId: id(1), clientInstanceId: id(2), mismatch: true as const,
+      intent: { command_id: id(100), kind: "setting.save" as const, expected_field_version: "1", payload: { key: "retry_count" as const, value: 4 } } };
+    const mismatchState = (f: ReturnType<typeof fixture>, canContinueWithServer: boolean) => {
+      f.snapshot = { ...f.snapshot, phase: "unresolved", pending: save, problem: { reason: "mismatch", code: "COMMAND_PAYLOAD_MISMATCH" },
+        canEdit: false, canReset: false, canContinueWithServer };
+    };
+    it.each([["ru", "Продолжить с текущими настройками"], ["uk", "Продовжити з поточними налаштуваннями"],
+      ["en", "Continue with the current settings"]] as const)("%s: the offered action has its own text, calls only continueWithServer", async (language, label) => {
+      const f = fixture(); mismatchState(f, true); render(<SettingsScreen {...f} language={language} />);
+      expect(screen.getByRole("alert").textContent).toContain(settingsCopy[language].mismatchContinue);
+      expect(screen.queryByRole("button", { name: settingsCopy[language].retry })).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: label }));
+      expect(f.actions.continueWithServer).toHaveBeenCalledOnce();
+      for (const name of ["retry", "save", "reset", "refresh"] as const) expect(f.actions[name]).not.toHaveBeenCalled();
+    });
+    describe("focus and announcements while leaving the mismatch", () => {
+      const pressed = async (language: "ru" | "uk" | "en" = "ru") => {
+        const f = fixture(); mismatchState(f, true);
+        const run = { finish: () => {} };
+        f.actions.continueWithServer = vi.fn(() => new Promise<void>(resolve => { run.finish = resolve; }));
+        const view = render(<SettingsScreen {...f} language={language} />);
+        const button = screen.getByRole("button", { name: settingsCopy[language].continueWithServer });
+        button.focus(); await userEvent.keyboard("{Enter}");
+        const show = (snapshot: Partial<SettingsScreenProps["snapshot"]>) =>
+          view.rerender(<SettingsScreen {...f} language={language} snapshot={{ ...f.snapshot, ...snapshot }} />);
+        return { f, run, show, button };
+      };
+      const region = () => document.querySelector<HTMLElement>(".settings-continue-status");
+      const done = { phase: "ready" as const, pending: null, problem: null, canEdit: true, canContinueWithServer: false };
+
+      it("keyboard activation calls the action once; the process is announced as a status while the button is gone", async () => {
+        const { f, show } = await pressed();
+        expect(f.actions.continueWithServer).toHaveBeenCalledOnce();
+        show({ phase: "checking", canContinueWithServer: false, canEdit: false });
+        expect(screen.queryByRole("button", { name: "Продолжить с текущими настройками" })).toBeNull();
+        expect(screen.getAllByRole("status").map(item => item.textContent).filter(text => text === settingsCopy.ru.refreshing)).toHaveLength(1);
+        expect(document.activeElement).toBe(region());
+      });
+
+      it("focus is on the progress region at once, before any new state arrives", async () => {
+        await pressed();
+        expect(document.activeElement).toBe(region());
+        expect(within(region()!).getByRole("status").textContent).toBe(settingsCopy.ru.refreshing);
+        expect(screen.getAllByRole("status").filter(item => item.textContent === settingsCopy.ru.refreshing)).toHaveLength(1);
+      });
+
+      it("the result does not take focus from where the user moved it during the action", async () => {
+        const { run, show } = await pressed();
+        const refresh = screen.getByRole("button", { name: "Обновить настройки" });
+        refresh.focus(); expect(document.activeElement).toBe(refresh);
+        show({ phase: "checking", canContinueWithServer: false });
+        await act(async () => { run.finish(); }); show(done);
+        expect(within(region()!).getByRole("status").textContent).toBe(settingsCopy.ru.continued);
+        expect(document.activeElement).toBe(refresh);
+      });
+
+      it.each([
+        ["a remaining problem", { pending: null, problem: { reason: "network" as const } }],
+        ["a remaining pending record", { pending: save, problem: null }],
+      ])("%s alone is a failure, not a success", async (_name, rest) => {
+        const { run, show } = await pressed();
+        show({ phase: "checking", canContinueWithServer: false }); await act(async () => { run.finish(); });
+        show({ phase: "unresolved", canContinueWithServer: false, canEdit: false, ...rest });
+        expect(within(region()!).getByRole("status").textContent).toBe(settingsCopy.ru.continueFailed);
+      });
+
+      it("the success line is removed when a new save starts", async () => {
+        const { f, run, show } = await pressed();
+        show({ phase: "checking", canContinueWithServer: false }); await act(async () => { run.finish(); });
+        show({ ...done, drafts: { retry_count: draft(5) } });
+        expect(within(region()!).getByRole("status").textContent).toBe(settingsCopy.ru.continued);
+        fireEvent.click(field("Повторов после ошибки").getByRole("button", { name: "Сохранить" }));
+        expect(f.actions.save).toHaveBeenCalledOnce(); expect(region()).toBeNull();
+      });
+
+      it.each([["ru"], ["uk"], ["en"]] as const)("%s: a failed check of the mismatched save leads to the refresh, never to retrying the old command", async language => {
+        const { show } = await pressed(language);
+        show({ phase: "unresolved", problem: { reason: "network" }, canContinueWithServer: false, canEdit: false, canRetry: false });
+        expect(screen.getByRole("alert").textContent).toBe(settingsCopy[language].mismatchRefresh);
+        expect(screen.queryByText(settingsCopy[language].unknown)).toBeNull();
+        expect(screen.queryByRole("button", { name: settingsCopy[language].retry })).toBeNull();
+      });
+
+      it.each(["ru", "uk", "en"] as const)("%s: after success the result is announced and focus lands on the status region", async language => {
+        const { run, show } = await pressed(language);
+        show({ phase: "checking", canContinueWithServer: false });
+        await act(async () => { run.finish(); }); show(done);
+        const status = within(region()!).getByRole("status");
+        expect(status.textContent).toBe(settingsCopy[language].continued);
+        expect(document.activeElement).toBe(status.parentElement);
+        expect(document.activeElement).not.toBe(document.body);
+        expect(screen.queryByRole("alert")).toBeNull();
+      });
+
+      it("after a failure the message is a status, focus is kept on the page region and refresh is still available", async () => {
+        const { f, run, show } = await pressed();
+        show({ phase: "checking", canContinueWithServer: false });
+        await act(async () => { run.finish(); });
+        show({ phase: "unresolved", problem: { reason: "network" }, canContinueWithServer: false, canEdit: false });
+        const status = within(region()!).getByRole("status");
+        expect(status.textContent).toBe(settingsCopy.ru.continueFailed);
+        expect(document.activeElement).toBe(status.parentElement);
+        expect(screen.getByRole("alert").textContent).toBe(settingsCopy.ru.mismatchRefresh);
+        expect(screen.queryByText(/повтори отправку/)).toBeNull(); expect(screen.queryByText(settingsCopy.ru.unknown)).toBeNull();
+        const refresh = screen.getByRole("button", { name: "Обновить настройки" });
+        expect(refresh.hasAttribute("disabled")).toBe(false);
+        fireEvent.click(refresh); expect(f.actions.refresh).toHaveBeenCalledOnce();
+        expect(region()).toBeNull();
+      });
+
+      it("when the action is offered again after a failed attempt, the stale failure line is gone", async () => {
+        const { run, show } = await pressed();
+        show({ phase: "checking", canContinueWithServer: false }); await act(async () => { run.finish(); });
+        show({ phase: "unresolved", problem: { reason: "network" }, canContinueWithServer: false });
+        expect(within(region()!).getByRole("status").textContent).toBe(settingsCopy.ru.continueFailed);
+        show({ phase: "unresolved", problem: { reason: "mismatch" }, canContinueWithServer: true });
+        expect(screen.queryByText(settingsCopy.ru.continueFailed)).toBeNull();
+        expect(screen.getByRole("button", { name: "Продолжить с текущими настройками" })).toBeDefined();
+      });
+
+      it("an action that returns at once with no state change leaves the offered button and its focus alone", async () => {
+        const { run, button } = await pressed();
+        await act(async () => { run.finish(); });
+        expect(region()).toBeNull();
+        expect(screen.getByRole("button", { name: "Продолжить с текущими настройками" })).toBe(button);
+        expect(document.activeElement).toBe(button);
+      });
+    });
+
+    it("without a successful readback the existing blocked text shows and no action is offered", () => {
+      const f = fixture(); mismatchState(f, false); render(<SettingsScreen {...f} />);
+      expect(screen.getByRole("alert").textContent).toBe(settingsCopy.ru.problems.mismatch);
+      expect(screen.queryByRole("button", { name: "Продолжить с текущими настройками" })).toBeNull();
+    });
   });
 
   it.each([

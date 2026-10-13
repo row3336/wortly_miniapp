@@ -7,6 +7,12 @@ type Copy = {
   languages: string; learning: string; checking: string; additional: string;
   save: string; saved: string; saving: string; loading: string; refreshing: string;
   refresh: string; retry: string; unknown: string; unavailable: string;
+  /** Q36: leaving a mismatched save with the server's current settings; the old change is not sent. */
+  continueWithServer: string; mismatchContinue: string;
+  /** The result lines after that action: shown in a status region that takes focus when the button is gone. */
+  continued: string; continueFailed: string;
+  /** A failed check of a mismatched save: it is not repeated, so the way on is the refresh. */
+  mismatchRefresh: string;
   invalid: string; conflict: string; acceptCurrent: string; keepMine: string; current: string;
   exhausted: string; rejected: string; notSet: string; choose: string; on: string; off: string;
   level: string; topics: string; selectedTopics: string; materialHint: string;
@@ -43,6 +49,11 @@ export const settingsCopy: Record<Language, Copy> = {
     languages: "Языки", learning: "Обучение", checking: "Проверка ответов", additional: "Дополнительно",
     save: "Сохранить", saved: "Сохранено", saving: "Сохраняем изменение", loading: "Загружаем настройки",
     refreshing: "Проверяем актуальные настройки", refresh: "Обновить настройки", retry: "Повторить отправку",
+    continued: "Показаны текущие настройки сервера. Можно вносить изменения.",
+    continueFailed: "Не удалось продолжить с текущими настройками.",
+    mismatchRefresh: "Не удалось получить актуальные настройки. Это изменение не будет отправлено, оно остаётся заблокированным. Нажми «Обновить настройки».",
+    continueWithServer: "Продолжить с текущими настройками",
+    mismatchContinue: "Не удалось подтвердить именно это изменение, и оно не будет отправлено. Показаны текущие настройки сервера: можно продолжить с ними и внести изменение заново.",
     unknown: "Пока не удалось подтвердить сохранение. Проверь состояние или повтори отправку.",
     unavailable: "Не удалось загрузить настройки", invalid: "Проверь значение и допустимые варианты.",
     conflict: "Сохранённое значение изменилось. Твой ввод остался.", acceptCurrent: "Принять сохранённое",
@@ -108,6 +119,11 @@ export const settingsCopy: Record<Language, Copy> = {
     languages: "Мови", learning: "Навчання", checking: "Перевірка відповідей", additional: "Додатково",
     save: "Зберегти", saved: "Збережено", saving: "Зберігаємо зміну", loading: "Завантажуємо налаштування",
     refreshing: "Перевіряємо актуальні налаштування", refresh: "Оновити налаштування", retry: "Повторити надсилання",
+    continued: "Показано поточні налаштування сервера. Можна вносити зміни.",
+    continueFailed: "Не вдалося продовжити з поточними налаштуваннями.",
+    mismatchRefresh: "Не вдалося отримати актуальні налаштування. Цю зміну не буде надіслано, вона лишається заблокованою. Натисни «Оновити налаштування».",
+    continueWithServer: "Продовжити з поточними налаштуваннями",
+    mismatchContinue: "Не вдалося підтвердити саме цю зміну, і її не буде надіслано. Показано поточні налаштування сервера: можна продовжити з ними й внести зміну заново.",
     unknown: "Поки не вдалося підтвердити збереження. Перевір стан або повтори надсилання.",
     unavailable: "Не вдалося завантажити налаштування", invalid: "Перевір значення й доступні варіанти.",
     conflict: "Збережене значення змінилося. Твоє введення залишилося.", acceptCurrent: "Прийняти збережене",
@@ -173,6 +189,11 @@ export const settingsCopy: Record<Language, Copy> = {
     languages: "Languages", learning: "Learning", checking: "Answer checking", additional: "Additional settings",
     save: "Save", saved: "Saved", saving: "Saving your change", loading: "Loading settings",
     refreshing: "Checking current settings", refresh: "Refresh settings", retry: "Retry sending",
+    continued: "The server's current settings are shown. You can make changes.",
+    continueFailed: "Could not continue with the current settings.",
+    mismatchRefresh: "Could not get the current settings. This change will not be sent and stays blocked. Press \"Refresh settings\".",
+    continueWithServer: "Continue with the current settings",
+    mismatchContinue: "This particular change could not be confirmed and will not be sent. The server's current settings are shown: you can continue with them and make the change again.",
     unknown: "Saving has not been confirmed yet. Check its status or retry sending.",
     unavailable: "Could not load settings", invalid: "Check the value and allowed options.",
     conflict: "The saved value changed. Your input has been kept.", acceptCurrent: "Use saved value",

@@ -31,6 +31,7 @@
 .settings-material, .settings-topic-editor, .settings-intervals, .settings-conflict { display: grid; gap: 12px; min-width: 0; }
 .settings-reset-status { min-width: 0; }
 .settings-reset-status:focus { outline: none; }
+.settings-continue-status:focus { outline: none; }
 .settings-dialog-backdrop { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 16px; background: rgb(0 0 0 / .4); }
 .settings-dialog { display: grid; gap: 12px; width: min(100%, 420px); box-sizing: border-box; padding: 20px; border: 1px solid var(--line); border-radius: 18px; background: var(--surface); color: var(--text); }
 .settings-dialog h2 { font-size: 20px; }

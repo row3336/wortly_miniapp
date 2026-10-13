@@ -36,7 +36,8 @@ type Owner = {
   run(action: () => Promise<void>): Promise<void>;
 };
 const initial: SettingsSnapshot = { phase: "loading", data: null, dataCurrent: false, drafts: {}, pending: null,
-  resetPending: null, outcome: null, resetOutcome: null, problem: null, canEdit: false, canReset: false, canRetry: false };
+  resetPending: null, outcome: null, resetOutcome: null, problem: null, canEdit: false, canReset: false, canRetry: false,
+  canContinueWithServer: false };
 
 // The reset slot shares the application storage of the settings slot, and one instance per storage serializes its
 // writes across document lifetimes, as the settings slot instance does.
@@ -118,13 +119,14 @@ export function useSettingsDocument(options: Options): SettingsDocument {
       keepMine: key => { const bound = recovered(); return bound?.run(() => bound.controller.keepMine(key)) ?? Promise.resolve(); },
       acceptCurrent: key => recovered()?.controller.acceptCurrent(key),
       retry: () => { const bound = recovered(); return bound?.run(() => bound.controller.retry()) ?? Promise.resolve(); },
+      continueWithServer: () => { const bound = recovered(); return bound?.run(() => bound.controller.continueWithServer()) ?? Promise.resolve(); },
       reset: () => { const bound = recovered(); return bound?.run(() => bound.controller.reset()) ?? Promise.resolve(); },
       refresh: () => currentOwner.current()?.refresh() ?? Promise.resolve(),
     };
   }, []);
   const bound = lookup();
   let state = bound?.controller.snapshot() ?? initial;
-  if (bound?.source !== options.access) state = { ...state, canEdit: false, canReset: false, canRetry: false,
+  if (bound?.source !== options.access) state = { ...state, canEdit: false, canReset: false, canRetry: false, canContinueWithServer: false,
     drafts: Object.fromEntries(Object.entries(state.drafts).map(([key, draft]) => [key, { ...draft, canSave: false, canKeepMine: false }])) };
   const confirmed = bound?.source === options.access && state.phase === "ready" && state.dataCurrent && !state.pending
     && !state.resetPending ? state.data : null;

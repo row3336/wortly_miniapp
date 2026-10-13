@@ -12,7 +12,7 @@ import { SettingsResetPendingStore, type SettingsResetPending } from "./settings
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const big = "9007199254740995";
 const next = "9007199254740996";
-const slot = "wortly.pending.setting";
+const slot = `wortly.pending.setting:profile:${id(1)}`;
 function current(state = big): SettingsResponse {
   return { state_version: state, needs_setup: true, settings: {
     ui_language: { value: "ru", version: "1" }, dictionary_language: { value: "uk", version: "1" },
@@ -395,6 +395,71 @@ describe("settings recovery storage", () => {
       expect(f.api.get).not.toHaveBeenCalled(); expect(f.api.save).not.toHaveBeenCalled();
       expect(f.disk.values.get(slot)).toBe(raw);
     });
+
+  it("A → B → A: entering profile B neither reads, replaces nor deletes A's unfinished save, and A gets the same ID back", async () => {
+    const disk = persisted(); await seed(disk); const stored = disk.values.get(slot)!;
+    const other = opened(); other.profile.profile_id = id(99);
+    const b = fixture({ disk, opened: other }); await b.controller.refresh();
+    expect(b.controller.snapshot()).toMatchObject({ problem: null, pending: null, canEdit: true, phase: "ready" });
+    b.controller.edit("retry_count", 5); await b.controller.save("retry_count");
+    expect(b.api.save).toHaveBeenCalledOnce(); expect(b.api.status).not.toHaveBeenCalled();
+    expect(disk.values.get(slot)).toBe(stored);
+    const bKey = `wortly.pending.setting:profile:${id(99)}`;
+    expect(disk.values.has(bKey)).toBe(false);
+    const a = fixture({ disk }); await a.controller.refresh();
+    expect(a.api.status).toHaveBeenCalledOnce();
+    expect(a.api.status.mock.calls[0][2]).toMatchObject({ command_id: pending().intent.command_id });
+    expect(a.api.save).not.toHaveBeenCalled(); expect(a.newId).not.toHaveBeenCalled();
+  });
+  it("a legacy global save of this profile is recovered by status for the same command_id and then cleared, without a new send", async () => {
+    const disk = persisted(); const legacy = "wortly.pending.setting"; disk.values.set(legacy, JSON.stringify(pending()));
+    const a = fixture({ disk }); a.api.status.mockResolvedValueOnce(applied());
+    await a.controller.refresh();
+    expect(a.api.status).toHaveBeenCalledOnce(); expect(a.api.status.mock.calls[0][2]).toMatchObject({ command_id: pending().intent.command_id });
+    expect(a.api.save).not.toHaveBeenCalled(); expect(a.newId).not.toHaveBeenCalled();
+    expect(a.controller.snapshot()).toMatchObject({ pending: null, canEdit: true, outcome: { status: "accepted" } });
+    expect(disk.values.has(legacy)).toBe(false); expect(disk.values.size).toBe(0);
+  });
+  it("a legacy global save stays (same ID, no resend) while its status is unknown, is ignored by another profile, and repeats only on explicit retry", async () => {
+    const disk = persisted(); const legacy = "wortly.pending.setting"; const raw = JSON.stringify(pending()); disk.values.set(legacy, raw);
+    const a = fixture({ disk }); await a.controller.refresh();
+    expect(a.controller.snapshot()).toMatchObject({ phase: "unresolved", problem: { reason: "not_found" }, pending: { intent: { command_id: id(100) } } });
+    expect(a.api.save).not.toHaveBeenCalled(); expect(disk.values.get(legacy)).toBe(raw); expect(disk.values.size).toBe(1);
+    const other = opened(); other.profile.profile_id = id(99);
+    const b = fixture({ disk, opened: other }); await b.controller.refresh();
+    expect(b.controller.snapshot()).toMatchObject({ problem: null, pending: null, canEdit: true });
+    expect(disk.values.get(legacy)).toBe(raw);
+    await a.controller.retry();
+    expect(a.api.save).toHaveBeenCalledOnce(); expect(a.api.save.mock.calls[0][3]).toMatchObject({ command_id: id(100) });
+    expect(a.newId).not.toHaveBeenCalled(); expect(disk.values.has(legacy)).toBe(false);
+  });
+  it("a legacy global mismatch survives a visit of another profile and still blocks the owner without status or send", async () => {
+    const disk = persisted(); const legacy = "wortly.pending.setting"; const raw = JSON.stringify({ ...pending(), mismatch: true });
+    disk.values.set(legacy, raw);
+    const a = fixture({ disk }); await a.controller.refresh(); await a.controller.retry();
+    expect(a.controller.snapshot()).toMatchObject({ canRetry: false, problem: { reason: "mismatch" }, pending: { mismatch: true } });
+    const other = opened(); other.profile.profile_id = id(99);
+    const b = fixture({ disk, opened: other }); await b.controller.refresh();
+    expect(b.controller.snapshot()).toMatchObject({ problem: null, pending: null, canEdit: true });
+    expect(disk.values.get(legacy)).toBe(raw);
+    const again = fixture({ disk }); await again.controller.refresh(); await again.controller.retry();
+    expect(again.controller.snapshot()).toMatchObject({ canRetry: false, problem: { reason: "mismatch" } });
+    for (const f of [a, again]) { expect(f.api.status).not.toHaveBeenCalled(); expect(f.api.save).not.toHaveBeenCalled(); }
+  });
+  it("a legacy global save of another client is looked up by status only (client_changed), never repeated, and stays", async () => {
+    const disk = persisted(); const legacy = "wortly.pending.setting"; const raw = JSON.stringify(pending()); disk.values.set(legacy, raw);
+    const data = opened(); data.client_instance_id = id(22);
+    const f = fixture({ disk, opened: data }); await f.controller.refresh(); await f.controller.retry();
+    expect(f.controller.snapshot()).toMatchObject({ canRetry: false, problem: { reason: "client_changed" } });
+    expect(f.api.status).toHaveBeenCalledOnce(); expect(f.api.save).not.toHaveBeenCalled(); expect(disk.values.get(legacy)).toBe(raw);
+  });
+  it("a legacy global save plus an occupied profile slot of the same profile blocks as invalid pending and keeps both", async () => {
+    const disk = persisted(); const own = pending(); own.intent.command_id = id(777);
+    disk.values.set("wortly.pending.setting", JSON.stringify(pending())); disk.values.set(slot, JSON.stringify(own));
+    const a = fixture({ disk }); await a.controller.refresh();
+    expect(a.controller.snapshot()).toMatchObject({ problem: { reason: "invalid_pending" }, canEdit: false });
+    expect(a.api.status).not.toHaveBeenCalled(); expect(a.api.save).not.toHaveBeenCalled(); expect(disk.values.size).toBe(2);
+  });
 
   it.each(["learning_poll_seconds", "learning_ready_percent"])(
     "an unfinished save of the retired %s does not block editing: it is dropped and a new save goes through", async key => {
@@ -867,5 +932,134 @@ describe("settings reset (M-SET-RESET, D-SET-RESET 4.2, owner answers R11/R12)",
     const f = await ready(); f.api.reset.mockRejectedValueOnce(new ApiError("http", 401)); await f.controller.reset();
     expect(f.controller.snapshot()).toMatchObject({ data: null, resetOutcome: null, canRetry: false, canReset: false,
       resetPending: resetRecord(), problem: { reason: "expired" } });
+  });
+});
+
+describe("Q36: leaving a mismatched setting.save with the server's current settings", () => {
+  /** The server's data after a concurrent change: retry_count is 7. */
+  function serverData() {
+    const data = current(next); data.settings.retry_count = { value: 7, version: next }; return data;
+  }
+  async function mismatched(f = fixture()) {
+    await f.controller.refresh(); f.controller.edit("retry_count", "4");
+    f.api.save.mockResolvedValueOnce(rejected(serverData(), true)); await f.controller.save("retry_count");
+    return f;
+  }
+  const oldId = intent().command_id;
+
+  it("the old ID is never sent again; the action appears only after a refresh whose readback succeeded", async () => {
+    const f = await mismatched();
+    expect(f.controller.snapshot()).toMatchObject({ canRetry: false, canContinueWithServer: false, pending: { mismatch: true } });
+    await f.controller.continueWithServer(); expect(f.api.get).toHaveBeenCalledOnce();
+    expect(JSON.parse(f.disk.values.get(slot)!)).toHaveProperty("mismatch", true);
+    f.api.get.mockResolvedValue(serverData()); await f.controller.refresh();
+    expect(f.controller.snapshot()).toMatchObject({ canContinueWithServer: true, canRetry: false, problem: { reason: "mismatch" } });
+    expect(f.api.save).toHaveBeenCalledOnce(); expect(f.api.status).not.toHaveBeenCalled();
+  });
+
+  it("clears the marked record, drops the draft, shows server values and the next save gets a new ID", async () => {
+    const f = await mismatched(); f.api.get.mockResolvedValue(serverData()); await f.controller.refresh();
+    const reads = f.api.get.mock.calls.length;
+    await f.controller.continueWithServer();
+    expect(f.api.get.mock.calls.length).toBe(reads + 1);
+    expect(f.disk.values.size).toBe(0);
+    const state = f.controller.snapshot();
+    expect(state).toMatchObject({ pending: null, problem: null, canEdit: true, canContinueWithServer: false, canRetry: false, phase: "ready" });
+    expect(state.drafts.retry_count).toBeUndefined(); expect(state.data!.settings.retry_count.value).toBe(7);
+    f.controller.edit("retry_count", "9"); await f.controller.save("retry_count");
+    expect(f.api.save).toHaveBeenCalledTimes(2);
+    const sent = f.api.save.mock.calls[1][3];
+    expect(sent.command_id).not.toBe(oldId); expect(sent.expected_field_version).toBe(next);
+    expect(f.api.save.mock.calls.filter(call => call[3].command_id === oldId)).toHaveLength(1);
+  });
+
+  it("a failed or stale readback at the action clears nothing and keeps the block", async () => {
+    const f = await mismatched(); f.api.get.mockResolvedValue(serverData()); await f.controller.refresh();
+    f.api.get.mockRejectedValueOnce(new Error("offline")); await f.controller.continueWithServer();
+    expect(JSON.parse(f.disk.values.get(slot)!)).toHaveProperty("mismatch", true);
+    expect(f.controller.snapshot()).toMatchObject({ pending: { mismatch: true }, canEdit: false, canRetry: false, canContinueWithServer: false });
+    f.api.get.mockResolvedValue(serverData()); await f.controller.refresh(); expect(f.controller.snapshot().canContinueWithServer).toBe(true);
+    f.api.get.mockResolvedValueOnce(current(big)); await f.controller.continueWithServer();
+    expect(f.disk.values.size).toBe(1); expect(f.controller.snapshot()).toMatchObject({ pending: { mismatch: true }, canEdit: false });
+    expect(f.api.save).toHaveBeenCalledOnce();
+  });
+
+  it("a stale readback in the refresh does not offer the action", async () => {
+    const f = await mismatched(); f.api.get.mockResolvedValue(current(big)); await f.controller.refresh();
+    expect(f.controller.snapshot()).toMatchObject({ canContinueWithServer: false, problem: { reason: "mismatch" } });
+    await f.controller.continueWithServer(); expect(f.disk.values.size).toBe(1);
+  });
+
+  it("a changed access during the readback clears nothing", async () => {
+    const f = await mismatched(); f.api.get.mockResolvedValue(serverData()); await f.controller.refresh();
+    const reading = gate<SettingsResponse>(); f.api.get.mockReturnValueOnce(reading.promise);
+    const leaving = f.controller.continueWithServer(); await vi.waitFor(() => expect(f.api.get.mock.calls.length).toBeGreaterThan(2));
+    f.replace(opened(), 2, "foreground"); reading.resolve(serverData()); await leaving;
+    expect(JSON.parse(f.disk.values.get(slot)!)).toHaveProperty("mismatch", true);
+    expect(f.controller.snapshot()).toMatchObject({ canEdit: false, canContinueWithServer: false });
+  });
+
+  it("another profile's document cannot use or clear the record", async () => {
+    const f = await mismatched(); const other = opened(); other.profile.profile_id = id(99);
+    const b = fixture({ disk: f.disk, opened: other }); b.api.get.mockResolvedValue(serverData()); await b.controller.refresh();
+    expect(b.controller.snapshot()).toMatchObject({ pending: null, canContinueWithServer: false, canEdit: true });
+    await b.controller.continueWithServer();
+    expect(JSON.parse(f.disk.values.get(slot)!)).toHaveProperty("mismatch", true);
+  });
+
+  it("an abort (dispose) during the readback clears nothing", async () => {
+    const f = await mismatched(); f.api.get.mockResolvedValue(serverData()); await f.controller.refresh();
+    const reading = gate<SettingsResponse>(); f.api.get.mockReturnValueOnce(reading.promise);
+    const leaving = f.controller.continueWithServer(); await vi.waitFor(() => expect(f.api.get.mock.calls.length).toBeGreaterThan(2));
+    f.controller.dispose(); reading.resolve(serverData()); await leaving;
+    expect(f.disk.values.size).toBe(1); expect(JSON.parse(f.disk.values.get(slot)!)).toHaveProperty("mismatch", true);
+  });
+
+  it.each(["remove", "get"] as const)("a failing storage %s leaves the record and the block; a refresh offers the action again", async method => {
+    const f = await mismatched(); f.api.get.mockResolvedValue(serverData()); await f.controller.refresh();
+    const before = f.disk.values.get(slot);
+    vi.mocked(f.disk.storage[method]).mockRejectedValueOnce(new Error("private-details"));
+    await f.controller.continueWithServer();
+    expect(f.disk.values.get(slot)).toBe(before);
+    expect(f.controller.snapshot()).toMatchObject({ problem: { reason: "storage" }, pending: { mismatch: true }, canEdit: false, canRetry: false, canContinueWithServer: false });
+    expect(JSON.stringify(f.states)).not.toContain("private-details");
+    await f.controller.refresh(); expect(f.controller.snapshot().canContinueWithServer).toBe(true);
+    expect(f.api.save).toHaveBeenCalledOnce();
+  });
+
+  it("a record replaced by another window is not cleared (pending_changed)", async () => {
+    const f = await mismatched(); f.api.get.mockResolvedValue(serverData()); await f.controller.refresh();
+    const other = pending(); other.intent.command_id = id(777); f.disk.values.set(slot, JSON.stringify(other));
+    await f.controller.continueWithServer();
+    expect(f.controller.snapshot()).toMatchObject({ problem: { reason: "pending_changed" }, canEdit: false });
+    expect(JSON.parse(f.disk.values.get(slot)!)).toEqual(other);
+  });
+
+  it("re-entry: a new controller recovers the mismatch, offers the action after its readback, and the cleared state survives another entry", async () => {
+    const f = await mismatched(); f.controller.dispose();
+    const again = fixture({ disk: f.disk }); again.api.get.mockResolvedValue(serverData()); await again.controller.refresh();
+    expect(again.controller.snapshot()).toMatchObject({ canContinueWithServer: true, pending: { mismatch: true }, canEdit: false });
+    expect(again.api.status).not.toHaveBeenCalled(); expect(again.api.save).not.toHaveBeenCalled();
+    await again.controller.continueWithServer(); again.controller.dispose();
+    const third = fixture({ disk: f.disk }); third.api.get.mockResolvedValue(serverData()); await third.controller.refresh();
+    expect(third.controller.snapshot()).toMatchObject({ pending: null, problem: null, canEdit: true, canContinueWithServer: false });
+    expect(third.api.status).not.toHaveBeenCalled();
+  });
+
+  it("a legacy-key mismatch of the owner is left the same way and only its own record is removed", async () => {
+    const disk = persisted(); const legacy = "wortly.pending.setting";
+    disk.values.set(legacy, JSON.stringify({ ...pending(), mismatch: true })); disk.values.set(`wortly.pending.setting:profile:${id(99)}`, "other-profile-record");
+    const f = fixture({ disk }); f.api.get.mockResolvedValue(serverData()); await f.controller.refresh();
+    expect(f.controller.snapshot()).toMatchObject({ canContinueWithServer: true });
+    await f.controller.continueWithServer();
+    expect(disk.values.has(legacy)).toBe(false); expect(disk.values.get(`wortly.pending.setting:profile:${id(99)}`)).toBe("other-profile-record");
+    expect(f.controller.snapshot()).toMatchObject({ pending: null, canEdit: true });
+  });
+
+  it("a mismatched settings.reset gets no such action (waits for P02)", async () => {
+    const disk = persisted(); await disk.resetStore.save({ ...resetRecord(), mismatch: true }, new AbortController().signal);
+    const f = fixture({ disk }); f.api.get.mockResolvedValue(serverData()); await f.controller.refresh();
+    expect(f.controller.snapshot()).toMatchObject({ problem: { reason: "mismatch" }, canContinueWithServer: false });
+    await f.controller.continueWithServer(); expect(disk.values.get(resetSlot)).toContain('"mismatch":true');
   });
 });

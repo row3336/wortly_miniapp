@@ -1,3 +1,4 @@
+import userEvent from "@testing-library/user-event";
 import { StrictMode } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
@@ -7,6 +8,7 @@ import { App } from "./App";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const profileId = id(1);
+const settingSlot = `wortly.pending.setting:profile:${profileId}`;
 // Test hook: holds the resumed session read, so the loading frame of the written owner can be observed.
 let sessionReads = 0; let sessionHook: ((n: number) => Promise<void>) | null = null;
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status });
@@ -243,7 +245,7 @@ describe("Settings in the real App document", () => {
     await screen.findByRole("heading", { name: "Settings", level: 1 });
     await waitFor(() => expect(localStorage.getItem("wortly.uiLanguage")).toBe("en"));
     expect(screen.getByText("Saved")).toBeDefined(); expect(f.haptic).toHaveBeenCalledOnce();
-    expect(localStorage.getItem("wortly.pending.setting")).toBeNull();
+    expect(localStorage.getItem(settingSlot)).toBeNull();
   });
   it("refreshes the profile before showing Today with the saved dictionary language", async () => {
     const f = fixture(); render(<App />); await settings(); change("Язык словаря", "en"); save("Язык словаря");
@@ -264,23 +266,80 @@ describe("Settings in the real App document", () => {
     const f = fixture(); f.commandReply.mockImplementationOnce(async command => { f.apply(command); throw new Error("lost reply"); });
     render(<App />); await settings(); change("Язык словаря", "en"); save("Язык словаря");
     await screen.findAllByText(/Пока не удалось подтвердить сохранение/);
-    expect(localStorage.getItem("wortly.pending.setting")).not.toBeNull();
+    expect(localStorage.getItem(settingSlot)).not.toBeNull();
     await refresh(); await screen.findByText("Сохранено");
     expect(f.statusReply).toHaveBeenCalledOnce(); expect(f.commandReply).toHaveBeenCalledOnce();
-    expect(localStorage.getItem("wortly.pending.setting")).toBeNull();
+    expect(localStorage.getItem(settingSlot)).toBeNull();
   });
   it("recovers a sent intent after a full App remount using GET status only", async () => {
     const f = fixture(); f.commandReply.mockImplementationOnce(async command => { f.apply(command); throw new Error("lost reply"); });
     const mounted = render(<App />); await settings(); change("Язык словаря", "en"); save("Язык словаря");
     await screen.findAllByText(/Пока не удалось подтвердить сохранение/);
-    const pending = localStorage.getItem("wortly.pending.setting")!;
+    const pending = localStorage.getItem(settingSlot)!;
     expect(pending).not.toMatch(/synthetic-token|synthetic-proof|document_id|init_data/);
     mounted.unmount(); render(<App />);
-    await waitFor(() => expect(localStorage.getItem("wortly.pending.setting")).toBeNull());
+    await waitFor(() => expect(localStorage.getItem(settingSlot)).toBeNull());
     expect(screen.queryByRole("heading", { name: "Настройки", level: 1 })).toBeNull();
     await settings(); await screen.findByText("Сохранено");
     expect(f.commandReply).toHaveBeenCalledOnce(); expect(f.statusReply).toHaveBeenCalledOnce();
-    expect(localStorage.getItem("wortly.pending.setting")).toBeNull();
+    expect(localStorage.getItem(settingSlot)).toBeNull();
+  });
+  it("Q36: a mismatch is left with the server's settings after a fresh readback, and the next save carries a new ID", async () => {
+    const f = fixture(); let rejectedId = "";
+    f.commandReply.mockImplementationOnce(async command => {
+      rejectedId = command.command_id; f.data.settings.dictionary_language = { value: "uk", version: "2" }; f.data.state_version = "11";
+      const { state_version: version, ...projection } = f.data;
+      return json({ command: { id: command.command_id, status: "rejected" }, error: { code: "COMMAND_PAYLOAD_MISMATCH" },
+        current: projection, state_version: version }, 409);
+    });
+    render(<App />); await settings(); change("Язык словаря", "en"); save("Язык словаря");
+    await screen.findByText(/Не удалось подтвердить именно это изменение/);
+    expect(screen.queryByRole("button", { name: "Продолжить с текущими настройками" })).toBeNull();
+    expect(localStorage.getItem(settingSlot)).toContain('"mismatch":true');
+    await refresh();
+    fireEvent.click(await screen.findByRole("button", { name: "Продолжить с текущими настройками" }));
+    await waitFor(() => expect(localStorage.getItem(settingSlot)).toBeNull());
+    await waitFor(() => expect((group("Язык словаря").getByRole("combobox") as HTMLSelectElement).value).toBe("uk"));
+    const result = await screen.findByText("Показаны текущие настройки сервера. Можно вносить изменения.");
+    expect(result.getAttribute("role")).toBe("status");
+    await waitFor(() => expect(document.activeElement).toBe(result.parentElement));
+    expect(screen.queryByText(/Не удалось подтвердить именно это изменение/)).toBeNull();
+    expect(f.commandReply).toHaveBeenCalledOnce(); expect(f.statusReply).not.toHaveBeenCalled();
+    change("Язык словаря", "en"); save("Язык словаря");
+    await screen.findByText("Сохранено");
+    expect(f.commandReply).toHaveBeenCalledTimes(2);
+    expect(f.commandReply.mock.calls[1][0].command_id).not.toBe(rejectedId);
+    expect(localStorage.getItem(settingSlot)).toBeNull();
+  });
+  it("Q36 keyboard and failure: a failed second readback keeps the block, says so once, leads to refresh; success line leaves with the next save", async () => {
+    const f = fixture(); let rejectedId = "";
+    f.commandReply.mockImplementationOnce(async command => {
+      rejectedId = command.command_id; f.data.settings.dictionary_language = { value: "uk", version: "2" }; f.data.state_version = "11";
+      const { state_version: version, ...projection } = f.data;
+      return json({ command: { id: command.command_id, status: "rejected" }, error: { code: "COMMAND_PAYLOAD_MISMATCH" },
+        current: projection, state_version: version }, 409);
+    });
+    render(<App />); await settings(); change("Язык словаря", "en"); save("Язык словаря");
+    await screen.findByText(/Не удалось подтвердить именно это изменение/); await refresh();
+    const button = await screen.findByRole("button", { name: "Продолжить с текущими настройками" });
+    f.settingsReply.mockRejectedValueOnce(new Error("offline"));
+    button.focus(); await userEvent.keyboard("{Enter}");
+    const failure = await screen.findByText("Не удалось продолжить с текущими настройками.");
+    expect(failure.getAttribute("role")).toBe("status");
+    await waitFor(() => expect(document.activeElement).toBe(failure.parentElement));
+    expect(screen.getByRole("alert").textContent).toContain("Нажми «Обновить настройки»");
+    expect(screen.queryByText(/повтори отправку/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Повторить отправку" })).toBeNull();
+    expect(localStorage.getItem(settingSlot)).toContain('"mismatch":true');
+    expect(f.commandReply).toHaveBeenCalledOnce(); expect(f.statusReply).not.toHaveBeenCalled();
+    await refresh();
+    fireEvent.click(await screen.findByRole("button", { name: "Продолжить с текущими настройками" }));
+    await screen.findByText("Показаны текущие настройки сервера. Можно вносить изменения.");
+    expect(localStorage.getItem(settingSlot)).toBeNull();
+    change("Язык словаря", "en"); save("Язык словаря");
+    await screen.findByText("Сохранено");
+    expect(screen.queryByText("Показаны текущие настройки сервера. Можно вносить изменения.")).toBeNull();
+    expect(f.commandReply).toHaveBeenCalledTimes(2); expect(f.commandReply.mock.calls[1][0].command_id).not.toBe(rejectedId);
   });
   it("keeps a foreground conflict's input and lets the user choose the stored value", async () => {
     const f = fixture(); render(<App />); await settings();
@@ -325,7 +384,7 @@ describe("Settings in the real App document", () => {
     const f = fixture(); render(<App />); await settings();
     const original = Storage.prototype.setItem;
     vi.spyOn(Storage.prototype, "setItem").mockImplementation(function (this: Storage, key, value) {
-      if (key === "wortly.pending.setting") throw new Error("full");
+      if (key === settingSlot) throw new Error("full");
       return original.call(this, key, value);
     });
     change("Язык словаря", "en"); save("Язык словаря");
@@ -343,7 +402,7 @@ describe("Settings in the real App document", () => {
     await act(async () => { pending.resolve(json(f.apply(f.commandReply.mock.calls[0][0]))); });
     await screen.findByText("Активная пара: Английский ↔ Немецкий");
     expect(f.statusReply).toHaveBeenCalledOnce(); expect(f.commandReply).toHaveBeenCalledOnce();
-    expect(localStorage.getItem("wortly.pending.setting")).toBeNull();
+    expect(localStorage.getItem(settingSlot)).toBeNull();
   });
   it("joins a pre-save foreground, then opens once more without rolling back the new UI language", async () => {
     const f = fixture(); render(<App />); await settings();
@@ -414,14 +473,14 @@ describe("Settings in the real App document", () => {
   it("keeps a confirmed locale and success when intent cleanup fails, without replay", async () => {
     const f = fixture(); render(<App />); await settings(); const original = Storage.prototype.removeItem;
     const remove = vi.spyOn(Storage.prototype, "removeItem").mockImplementation(function (this: Storage, key) {
-      if (key === "wortly.pending.setting") throw new Error("unavailable"); return original.call(this, key);
+      if (key === settingSlot) throw new Error("unavailable"); return original.call(this, key);
     });
     change("Язык интерфейса", "en"); save("Язык интерфейса"); await screen.findByText("Saved");
     expect(document.documentElement.lang).toBe("en");
-    expect(localStorage.getItem("wortly.pending.setting")).not.toBeNull();
+    expect(localStorage.getItem(settingSlot)).not.toBeNull();
     expect((group("Dictionary language").getByRole("combobox") as HTMLSelectElement).disabled).toBe(true);
     remove.mockRestore(); fireEvent.click(screen.getByRole("button", { name: "Refresh settings" }));
-    await waitFor(() => expect(localStorage.getItem("wortly.pending.setting")).toBeNull());
+    await waitFor(() => expect(localStorage.getItem(settingSlot)).toBeNull());
     expect(f.commandReply).toHaveBeenCalledOnce();
   });
   it("does not undo a confirmed locale when caching that preference fails", async () => {
@@ -431,7 +490,7 @@ describe("Settings in the real App document", () => {
     });
     change("Язык интерфейса", "en"); save("Язык интерфейса"); await screen.findByText("Saved");
     expect(document.documentElement.lang).toBe("en"); expect(f.commandReply).toHaveBeenCalledOnce();
-    expect(localStorage.getItem("wortly.pending.setting")).toBeNull();
+    expect(localStorage.getItem(settingSlot)).toBeNull();
   });
   it("keeps an unknown outcome across tabs without silently resending", async () => {
     const f = fixture(); f.commandReply.mockRejectedValueOnce(new Error("request lost"));

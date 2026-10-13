@@ -12,7 +12,7 @@ import { SettingsResetDialog } from "./SettingsResetDialog";
 import { languageNames, settingsCopy } from "./settingsCopy";
 import "./settings.css";
 
-type Actions = Pick<SettingsController, "edit" | "save" | "acceptCurrent" | "keepMine" | "refresh" | "retry" | "reset">;
+type Actions = Pick<SettingsController, "edit" | "save" | "acceptCurrent" | "keepMine" | "refresh" | "retry" | "reset" | "continueWithServer">;
 export type SettingsScreenProps = {
   snapshot: SettingsSnapshot;
   catalog: CatalogState;
@@ -156,7 +156,7 @@ function SettingField({ setting, ...props }: SettingsScreenProps & { setting: Se
       {!draft?.conflict && <button type="button" className="settings-primary"
         disabled={!draft?.canSave || !allowedCatalog} onClick={() => { void actions.save(setting); }}>{t.save}</button>}
       {/* After a known refusal the top line explains it; t.unknown would promise a repeat that is not offered. */}
-      {snapshot.pending?.intent.payload.key === setting && !knownRefusal(snapshot)
+      {snapshot.pending?.intent.payload.key === setting && !knownRefusal(snapshot) && !snapshot.pending.mismatch
         && <span role="status">{snapshot.phase === "sending" ? t.saving : t.unknown}</span>}
       {outcome?.status === "accepted" && <span className="settings-saved" role="status">{t.saved}</span>}
     </div>
@@ -174,7 +174,10 @@ function problemText(snapshot: SettingsSnapshot, language: Language): string {
   if (reason === "incompatible") return appText(language).commandIncompatible;
   // A known 422 of this attempt, the outcome of earlier ones still unconfirmed. Working text, pending owner.
   if (reason === "command_refused") return snapshot.resetPending ? t.refusedAttempt.reset : t.refusedAttempt.save;
+  if (reason === "mismatch" && snapshot.canContinueWithServer) return t.mismatchContinue;
   if (snapshot.resetPending && (reason === "network" || reason === "not_found")) return t.reset.unknown;
+  // A mismatched save is never repeated: its failed check leads to the refresh, not to "retry sending".
+  if (snapshot.pending?.mismatch && reason === "network") return t.mismatchRefresh;
   return snapshot.pending && reason === "network" ? t.unknown : t.problems[reason];
 }
 
@@ -225,26 +228,58 @@ export function SettingsScreen(props: SettingsScreenProps) {
   const t = settingsCopy[language];
   const busy = ["loading", "checking", "sending"].includes(snapshot.phase);
   const line = resetLine(snapshot);
+  // Leaving a mismatch (Q36): the button disappears when pressed, so focus moves to a status region with the result,
+  // as for the reset. "settled" means the action returned; the result is read once the snapshot is no longer busy.
+  const [leaving, setLeaving] = useState<null | "running" | "settled" | "done" | "failed">(null);
+  const leavingStatus = useRef<HTMLDivElement>(null);
+  const continueButton = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    // The button offered again means nothing changed: it takes back the focus the region held, and no result line is needed.
+    if ((leaving === "settled" && !busy || leaving === "done" || leaving === "failed") && snapshot.canContinueWithServer) {
+      if (document.activeElement === leavingStatus.current) continueButton.current?.focus();
+      setLeaving(null);
+    } else if (leaving === "settled" && !busy) setLeaving(!snapshot.pending && !snapshot.problem ? "done" : "failed");
+  }, [leaving, busy, snapshot.pending, snapshot.problem, snapshot.canContinueWithServer]);
+  useEffect(() => {
+    // The pressed button disappears, so focus moves to the region at once. The result takes it only if the user has not moved it elsewhere.
+    const active = document.activeElement;
+    if (leaving === "running" || (leaving === "done" || leaving === "failed")
+      && (!active || active === document.body || active === leavingStatus.current)) leavingStatus.current?.focus();
+  }, [leaving]);
+  // A new save is a new operation: the old result line is not left beside it.
+  const clearResult = () => setLeaving(state => state === "done" || state === "failed" ? null : state);
+  const fieldProps = { ...props, actions: { ...actions, save: (key: SettingKey) => { clearResult(); return actions.save(key); } } };
+  const leave = () => {
+    setLeaving("running");
+    void actions.continueWithServer().finally(() => setLeaving(state => state === "running" ? "settled" : state));
+  };
   return <main className="settings-screen" lang={language}>
     <header className="settings-header"><h1>{t.title}</h1>
-      <button type="button" className="settings-secondary" disabled={busy} onClick={() => { void actions.refresh(); }}>{t.refresh}</button>
+      <button type="button" className="settings-secondary" disabled={busy} onClick={() => { setLeaving(null); void actions.refresh(); }}>{t.refresh}</button>
     </header>
-    {busy && line !== "sending" && <p role="status">{snapshot.phase === "sending" ? snapshot.resetPending ? t.reset.sending : t.saving
+    {busy && line !== "sending" && leaving !== "running" && leaving !== "settled" && <p role="status">{snapshot.phase === "sending" ? snapshot.resetPending ? t.reset.sending : t.saving
       : snapshot.data ? t.refreshing : t.loading}</p>}
+    {leaving && <div className="settings-continue-status" ref={leavingStatus} tabIndex={-1}>
+      {leaving === "done" ? <span className="settings-saved" role="status">{t.continued}</span>
+        : leaving === "failed" ? <span className="settings-error" role="status">{t.continueFailed}</span>
+        : <span role="status">{t.refreshing}</span>}
+    </div>}
     {snapshot.problem && line !== "unknown" && <div className="settings-error" role="alert">
       <p>{problemText(snapshot, language)}</p>
       {snapshot.canRetry && <button className="settings-secondary" type="button" onClick={() => { void actions.retry(); }}>{t.retry}</button>}
+      {snapshot.canContinueWithServer && <button className="settings-secondary" type="button" ref={continueButton}
+        onClick={leave}>{t.continueWithServer}</button>}
     </div>}
     {!snapshot.data && !busy && !snapshot.problem && <p role="alert">{t.unavailable}</p>}
     {snapshot.data && groups.map(group => group.name === "additional"
       ? <details className="settings-group" key={group.name}><summary>{t.additional}</summary>
-        <div className="settings-group-body">{group.fields.map(setting => <SettingField key={setting} setting={setting} {...props} />)}</div>
+        <div className="settings-group-body">{group.fields.map(setting => <SettingField key={setting} setting={setting} {...fieldProps} />)}</div>
       </details>
       : <section className="settings-group" key={group.name} aria-labelledby={`settings-${group.name}`}>
         <h2 id={`settings-${group.name}`}>{t[group.name]}</h2>
-        <div className="settings-group-body">{group.fields.map(setting => <SettingField key={setting} setting={setting} {...props} />)}</div>
+        <div className="settings-group-body">{group.fields.map(setting => <SettingField key={setting} setting={setting} {...fieldProps} />)}</div>
       </section>)}
-    {snapshot.data && <SettingsReset snapshot={snapshot} language={language} onReset={() => { void actions.reset(); }}
+    {snapshot.data && <SettingsReset snapshot={snapshot} language={language} onReset={() => { clearResult(); void actions.reset(); }}
       onRetry={() => { void actions.retry(); }} />}
     {feedback && <SettingsFeedback feedback={feedback} language={language} />}
     <BottomNav current="settings" language={language} enabled={onDictionary ? ["today", "dictionary"] : ["today"]}
