@@ -1,3 +1,4 @@
+import { withTrace } from "../api/traceHeader.test-support";
 import { describe, expect, it, vi } from "vitest";
 import type { LearningCurrentResponse, ManualSelectionCommand, SavedCommandFact } from "../api/generated";
 import { clientContractVersion } from "../api/http";
@@ -40,7 +41,7 @@ describe("Learning read adapter", () => {
     const { api, fetcher } = setup(current());
     expect(await api.get("synthetic")).toEqual(current());
     expect(fetcher).toHaveBeenCalledWith("/api/v1/learning/current", expect.objectContaining({
-      method: "GET", headers: { Authorization: "Bearer synthetic" }, body: undefined,
+      method: "GET", headers: withTrace({ Authorization: "Bearer synthetic" }), body: undefined,
     }));
   });
 
@@ -111,9 +112,9 @@ describe("manual command exchange", () => {
     expect(result.command).toEqual(body.command);
     const call = (fetcher.mock.calls as unknown as [string, RequestInit][])[0];
     expect(call[0]).toBe("/api/v1/commands");
-    expect(call[1].headers).toEqual({ Authorization: "Bearer synthetic",
+    expect(call[1].headers).toEqual(withTrace({ Authorization: "Bearer synthetic",
       "X-Origin-Proof": "synthetic-proof", "Content-Type": "application/json",
-      "X-Wortly-Contract-Version": clientContractVersion() });
+      "X-Wortly-Contract-Version": clientContractVersion() }));
     expect(JSON.parse(call[1].body as string)).toEqual(request);
   });
 

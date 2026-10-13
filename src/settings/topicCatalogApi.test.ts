@@ -1,3 +1,4 @@
+import { withTrace } from "../api/traceHeader.test-support";
 import { describe, expect, it, vi } from "vitest";
 import type { TopicCatalogResponse } from "../api/generated";
 import { createTopicCatalogApi } from "./topicCatalogApi";
@@ -19,7 +20,7 @@ describe("topic catalog reader", () => {
     const expected = catalog(), f = fixture(expected);
     expect(await f.api.get("synthetic-token")).toEqual(expected);
     expect(f.fetcher).toHaveBeenCalledExactlyOnceWith("/api/v1/settings/topics", expect.objectContaining({
-      method: "GET", body: undefined, headers: { Authorization: "Bearer synthetic-token" }, cache: "no-store",
+      method: "GET", body: undefined, headers: withTrace({ Authorization: "Bearer synthetic-token" }), cache: "no-store",
     }));
   });
 

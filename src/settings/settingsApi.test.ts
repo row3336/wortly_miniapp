@@ -39,7 +39,7 @@ describe("Settings current and constraints", () => {
     const { api, fetcher } = setup(current());
     expect(await api.get("synthetic")).toEqual(current());
     expect(fetcher).toHaveBeenCalledExactlyOnceWith("/api/v1/settings", expect.objectContaining({
-      method: "GET", body: undefined, headers: { Authorization: "Bearer synthetic" }, cache: "no-store",
+      method: "GET", body: undefined, headers: { Authorization: "Bearer synthetic", "X-Wortly-Trace-Id": expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/) }, cache: "no-store",
     }));
   });
 
@@ -318,7 +318,7 @@ describe("Settings command exchange", () => {
     const [url, init] = fetcher.mock.calls[0];
     expect(url).toBe("/api/v1/commands");
     expect(init?.headers).toEqual({ Authorization: "Bearer synthetic", "X-Origin-Proof": "synthetic-proof", "Content-Type": "application/json",
-      "X-Wortly-Contract-Version": clientContractVersion() });
+      "X-Wortly-Contract-Version": clientContractVersion(), "X-Wortly-Trace-Id": expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/) });
     expect(JSON.parse(init!.body as string)).toEqual(request); expect(fetcher).toHaveBeenCalledOnce();
     expect(allowedSettingValue(current(), payload.key, payload.value)).toBe(true);
   });

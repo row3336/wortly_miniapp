@@ -1,3 +1,4 @@
+import { withJournalIntake } from "../journal/intake.test-support";
 // M-SLOT-INVALID, oral: a live window taps a new action Y while the shared slot holds a record nobody can read. Y is neither stored
 // nor sent: it is never checked by its ID, never offered for a retry, and the unreadable record stays as it is.
 import { cleanup, fireEvent, isInaccessible, render, waitFor, within } from "@testing-library/react";
@@ -69,7 +70,7 @@ function device() {
     if (path.includes("/sessions/")) { log.push("GET session"); return response({ current: oral(), state_version: String(server.version) }); }
     return response({ error: { code: "UNEXPECTED" } }, 500);
   });
-  vi.stubGlobal("fetch", fetcher);
+  vi.stubGlobal("fetch", withJournalIntake(fetcher));
   vi.stubGlobal("Telegram", { WebApp: { initData: "synthetic-init-data", initDataUnsafe: { user: { language_code: "ru" } },
     colorScheme: "light", HapticFeedback: { notificationOccurred: vi.fn() }, close: vi.fn() } });
   return { log };

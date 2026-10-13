@@ -1,3 +1,4 @@
+import { withJournalIntake } from "../journal/intake.test-support";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OralSessionProjection, Profile, TodayResponse } from "../api/generated";
@@ -71,7 +72,7 @@ function app(options: { session?: boolean } = {}) {
     return response({ error: { code: "UNEXPECTED" } }, 500);
   });
   const back = fakeBack();
-  vi.stubGlobal("fetch", fetcher);
+  vi.stubGlobal("fetch", withJournalIntake(fetcher));
   vi.stubGlobal("Telegram", { WebApp: { initData: "synthetic-init-data", initDataUnsafe: { user: { language_code: "ru" } },
     colorScheme: "light", HapticFeedback: { notificationOccurred: vi.fn() }, BackButton: back.api } });
   const posts = () => fetcher.mock.calls.filter(([url, init]) => init?.method === "POST" && String(url).endsWith("/commands"))

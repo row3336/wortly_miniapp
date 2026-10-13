@@ -1,3 +1,4 @@
+import { withJournalIntake } from "../journal/intake.test-support";
 // C190: the actual App, Learning. «Далее» meets another window's record X; a real background and return around it; then a
 // new accepted correction. Rule: after a return to the result it waits for «Далее» (К05-152, ui_spec 6.1.8, tz_app:109, 2.19).
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -38,7 +39,7 @@ function shell(fetcherTail: Fetch, today: () => TodayResponse, account: () => Pr
     return fetcherTail(url, init);
   });
   const shellState = { session: null as string | null };
-  vi.stubGlobal("fetch", fetcher);
+  vi.stubGlobal("fetch", withJournalIntake(fetcher));
   vi.stubGlobal("Telegram", { WebApp: { initData: "synthetic-init-data", initDataUnsafe: { user: { language_code: "ru" } },
     colorScheme: "light", HapticFeedback: { notificationOccurred: vi.fn() } } });
   const study = () => fetcher.mock.calls.map(([url, init]) => {

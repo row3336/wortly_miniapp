@@ -1,3 +1,4 @@
+import { withTrace } from "../api/traceHeader.test-support";
 import { describe, expect, it, vi } from "vitest";
 import type { ConjugationCatalog, ConjugationResultReadResponse, ConjugationSessionProjection, Profile, SavedCommandFact } from "../api/generated";
 import { createSessionReadApi } from "../study/sessionReadApi";
@@ -95,7 +96,7 @@ describe("conjugation transport contract", () => {
   it("reads server-owned catalog without origin and separates schedule/session/result shapes", async () => {
     const f = fixture({ current: catalog(), state_version: "9223372036854775807" });
     expect((await f.api.catalog("synthetic-token")).current).toEqual(catalog());
-    expect(f.fetcher.mock.calls[0]).toEqual(["/api/v1/conjugations", expect.objectContaining({ method: "GET", headers: { Authorization: "Bearer synthetic-token" } })]);
+    expect(f.fetcher.mock.calls[0]).toEqual(["/api/v1/conjugations", expect.objectContaining({ method: "GET", headers: withTrace({ Authorization: "Bearer synthetic-token" }) })]);
     expect((await fixture({ current: catalog(), command: fact(schedule), state_version: "9" }).api.send("t", "p", schedule)).outcome).toBe("accepted");
     for (const command of [start, present, stop]) {
       const current = command.kind === "session.stop" ? summary(true) : session();

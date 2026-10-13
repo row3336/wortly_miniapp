@@ -1,3 +1,4 @@
+import { withJournalIntake } from "../journal/intake.test-support";
 // D-FALSE-TEXTS part A: the line «could not refresh» is hidden only when a successful check that found the command absent
 // (not_found, same open step) is the ONLY current cause. A failed check, a failed session read or a lost connection keep it.
 import { cleanup, fireEvent, isInaccessible, render, waitFor, within } from "@testing-library/react";
@@ -85,7 +86,7 @@ function device(statusMode: "not_found" | "500") {
     }
     return response({ error: { code: "UNEXPECTED" } }, 500);
   });
-  vi.stubGlobal("fetch", fetcher);
+  vi.stubGlobal("fetch", withJournalIntake(fetcher));
   vi.stubGlobal("Telegram", { WebApp: { initData: "synthetic-init-data", initDataUnsafe: { user: { language_code: "ru" } },
     colorScheme: "light", HapticFeedback: { notificationOccurred: vi.fn() }, close } });
   const opens = () => fetcher.mock.calls.filter(([u]) => String(u).endsWith("/client/open")).map(([, i]) => JSON.parse(String(i!.body)) as OpenRequest);

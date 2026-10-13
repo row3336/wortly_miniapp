@@ -1,3 +1,4 @@
+import { withTrace } from "../api/traceHeader.test-support";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { TodayResponse } from "../api/generated";
@@ -175,7 +176,7 @@ describe("Today data", () => {
     const api = createTodayApi({ fetcher: fetcher as typeof fetch, timeoutMs: 1000, maxResponseBytes: 4000 });
     await expect(api.get("secret-token")).resolves.toEqual(plan);
     expect(fetcher.mock.calls[0]?.[0]).toBe("/api/v1/today");
-    expect(fetcher.mock.calls[0]?.[1]?.headers).toEqual({ Authorization: "Bearer secret-token" });
+    expect(fetcher.mock.calls[0]?.[1]?.headers).toEqual(withTrace({ Authorization: "Bearer secret-token" }));
     expect(validToday({ ...plan, base: { total: 7, words: -1, phrases: 8 } })).toBe(false);
     expect(validToday({ ...plan, learning: { ...plan.learning, next_due_at: "tomorrow" } })).toBe(false);
     expect(validToday({ ...plan, pair: ["ru-de"] })).toBe(false);

@@ -1,3 +1,4 @@
+import { withJournalIntake } from "../journal/intake.test-support";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -66,7 +67,7 @@ function app(options: { sessions?: ModelSession[]; reported?: string | null; rea
     return await model.handle(url, init) ?? response({ error: { code: "UNEXPECTED" } }, 500);
   });
   const back = fakeBack();
-  vi.stubGlobal("fetch", fetcher);
+  vi.stubGlobal("fetch", withJournalIntake(fetcher));
   vi.stubGlobal("Telegram", { WebApp: { initData: "synthetic-init-data", initDataUnsafe: { user: { language_code: language } },
     colorScheme: "light", HapticFeedback: { notificationOccurred: vi.fn() }, BackButton: back.api } });
   const kinds = () => model.kinds();

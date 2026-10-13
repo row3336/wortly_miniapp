@@ -1,3 +1,4 @@
+import { withJournalIntake } from "../journal/intake.test-support";
 // 35.1-А (C204/C205) through the actual App. Each test names its page explicitly: a remount of App in the same JS
 // document keeps its page (learningPage), a full reload or another window gets a new one. A render alone is neither.
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
@@ -77,7 +78,7 @@ function server() {
     if (typeof value?.state_version !== "string") return reply;
     return response({ ...value, state_version: String(version) }, reply.status);
   });
-  vi.stubGlobal("fetch", fetcher);
+  vi.stubGlobal("fetch", withJournalIntake(fetcher));
   vi.stubGlobal("Telegram", { WebApp: { initData: "synthetic-init-data", initDataUnsafe: { user: { language_code: "ru" } },
     colorScheme: "light", HapticFeedback: { notificationOccurred: vi.fn() } } });
   const posts = () => fetcher.mock.calls.filter(([url, init]) => init?.method === "POST" && String(url).endsWith("/commands"))

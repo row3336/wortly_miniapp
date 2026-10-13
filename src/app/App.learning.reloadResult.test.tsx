@@ -1,3 +1,4 @@
+import { withJournalIntake } from "../journal/intake.test-support";
 // A Learning answer the server committed but whose result the user never saw, then a full reload (owner decision
 // 20.1-А) or a re-entry after an access error in the same window (22.1-А): the new document shows the confirmed result
 // for the first time and waits for «Далее» in every transition mode. A result confirmed live in the same window, also
@@ -56,7 +57,7 @@ function app(mode: Mode) {
     if (path.endsWith("/settings")) return settingsReply();
     return learning(url, init);
   });
-  vi.stubGlobal("fetch", fetcher);
+  vi.stubGlobal("fetch", withJournalIntake(fetcher));
   vi.stubGlobal("Telegram", { WebApp: { initData: "synthetic-init-data", initDataUnsafe: { user: { language_code: "ru" } },
     colorScheme: "light", HapticFeedback: { notificationOccurred: vi.fn() } } });
   const posts = (): (LearningCommandIntent & Record<string, unknown>)[] => fetcher.mock.calls

@@ -1,3 +1,4 @@
+import { withJournalIntake } from "../journal/intake.test-support";
 // Several real <App/> windows over one shared synthetic server (QA-R1-V3, C151). Each window is mounted with its own
 // storage (its own installation) and its own fetch, stubbed as globals right before its render.
 //
@@ -61,7 +62,7 @@ export function windows(server: Fetch) {
       }
       return reply;
     });
-    vi.stubGlobal("fetch", device); vi.stubGlobal("localStorage", memoryStorage());
+    vi.stubGlobal("fetch", withJournalIntake(device)); vi.stubGlobal("localStorage", memoryStorage());
     const rendered = render(strict ? <StrictMode><App /></StrictMode> : <App />);
     const ui = within(rendered.container);
     // The first screen needs this window's fetch: by then it holds its references, and the next window may stub its own.

@@ -54,7 +54,7 @@ describe("coherent dictionary view", () => {
     expect(fetcher).toHaveBeenCalledOnce();
     expect(fetcher.mock.calls[0][0]).toBe(`/api/v1/dictionary/cards/${cardId.toUpperCase()}/view`);
     expect(fetcher.mock.calls[0][1]).toMatchObject({ method: "GET", cache: "no-store", credentials: "same-origin" });
-    expect(Object.keys(fetcher.mock.calls[0][1]?.headers ?? {})).toEqual(["Authorization"]);
+    expect(Object.keys(fetcher.mock.calls[0][1]?.headers ?? {})).toEqual(["X-Wortly-Trace-Id", "Authorization"]);
     expect(response).toEqual(before);
   });
   it("2.26б.1: a card opened from a quiz is read with origin=study; the dictionary keeps the bare address", async () => {

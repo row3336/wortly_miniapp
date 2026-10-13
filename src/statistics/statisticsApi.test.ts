@@ -1,3 +1,4 @@
+import { withTrace } from "../api/traceHeader.test-support";
 import { describe, expect, it, vi } from "vitest";
 import type { StatisticsOverviewResponse } from "../api/generated";
 import type { PracticeWeek } from "./practiceApi";
@@ -34,7 +35,7 @@ describe("1. synthetic overview snapshots and exact GET", () => {
       expect(await api.get("synthetic-token", week)).toEqual(expected);
       expect(fetcher).toHaveBeenCalledExactlyOnceWith(`/api/v1/statistics/overview?week=${week}`,
         expect.objectContaining({ method: "GET", cache: "no-store", credentials: "same-origin",
-          headers: { Authorization: "Bearer synthetic-token" }, body: undefined }));
+          headers: withTrace({ Authorization: "Bearer synthetic-token" }), body: undefined }));
     }
   });
   it("accepts an empty current base with daily historical practice outside it", async () => {

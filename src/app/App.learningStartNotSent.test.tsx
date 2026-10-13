@@ -1,3 +1,4 @@
+import { withJournalIntake } from "../journal/intake.test-support";
 // Learning through the actual App: the start is stored while a foreground open replaces the open handle (same key), so
 // its request never starts. Owner decision 33.1-А (C194): no Stop of it; after the check under the new handle the same
 // start is sent once, or the session the check found is recovered.
@@ -81,7 +82,7 @@ function learning() {
     if (BigInt(value.state_version) > version) version = BigInt(value.state_version);
     return response({ ...value, state_version: String(version) }, reply.status);
   });
-  vi.stubGlobal("fetch", fetcher);
+  vi.stubGlobal("fetch", withJournalIntake(fetcher));
   vi.stubGlobal("Telegram", { WebApp: { initData: "synthetic-init-data", initDataUnsafe: { user: { language_code: "ru" } },
     colorScheme: "light", HapticFeedback: { notificationOccurred: vi.fn() } } });
   const posts = () => fetcher.mock.calls.filter(([url, init]) => init?.method === "POST" && String(url).endsWith("/commands"))

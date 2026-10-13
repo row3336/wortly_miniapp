@@ -1,3 +1,4 @@
+import { withJournalIntake } from "../journal/intake.test-support";
 // М20 through the real App and HTTP client (TA:44, RA §6.1.5): the entry runs independently of the launch screen.
 import { StrictMode } from "react";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
@@ -56,7 +57,7 @@ function fixture(initial: Partial<Server> = {}) {
     if (path.endsWith("/today")) { if (server.todayGate) await server.todayGate; return json(today); }
     throw new Error(`Unexpected synthetic endpoint ${path}`);
   });
-  vi.stubGlobal("fetch", fetcher);
+  vi.stubGlobal("fetch", withJournalIntake(fetcher));
   vi.stubGlobal("Telegram", { WebApp: { initData: "synthetic-init", initDataUnsafe: { user: { language_code: "ru" } }, colorScheme: "light" } });
   return { server, fetcher, auths: () => fetcher.mock.calls.filter(call => String(call[0]).endsWith("/auth/telegram")).length };
 }

@@ -1,3 +1,4 @@
+import { withJournalIntake } from "../journal/intake.test-support";
 // Acceptance checks by the independent QA of entry and access (A-QA-E01E03), kept as regression tests:
 // entry, access and remote stop through the real App and HTTP client.
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -85,7 +86,7 @@ function fixture(language: "ru" | "uk" | "en", initial: Partial<Server> = {}) {
     if (path.endsWith("/today")) return json({ ...today, state_version: String(server.version) });
     throw new Error(`Unexpected synthetic endpoint ${path}`);
   });
-  vi.stubGlobal("fetch", fetcher);
+  vi.stubGlobal("fetch", withJournalIntake(fetcher));
   vi.stubGlobal("Telegram", { WebApp: { initData: "synthetic-init", initDataUnsafe: { user: { language_code: language } }, colorScheme: "light" } });
   const calls = (suffix: string) => fetcher.mock.calls.filter(call => String(call[0]).includes(suffix));
   return { server, fetcher, calls, release: () => releaseReapply?.() };

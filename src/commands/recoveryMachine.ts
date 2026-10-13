@@ -2,6 +2,7 @@ import type { RecoveryClock, RecoveryTimer } from "./recoveryClock";
 import { MAX_SENDS, PROBE_DELAYS_MS, RETRY_PAUSES_MS } from "./recoveryLimits";
 import { checkFailure, sendFailure, type CheckResult, type SendResult, type TerminationReason } from "./recoveryReplies";
 import { copyMarks, validMarks, type SendCounter, type SendMarks } from "./sendCounter";
+import { journalNoteAttempt, journalRecord } from "../journal/clientJournal";
 
 export { MAX_SENDS, PROBE_DELAYS_MS, RETRY_PAUSES_MS };
 
@@ -281,7 +282,13 @@ export class RecoveryMachine<I extends { command_id: string }> {
   private enter(state: RecoveryState): void {
     if (this.state.name === "disposed") return;
     this.stop();
+    const from = this.state.name;
     this.state = state;
+    // The client journal (events TZ §4.5 c.recovery): a change of state, never a step inside one (a probe, a check).
+    if (from !== state.name) {
+      journalRecord({ ev: "c.recovery", cmd: this.intent.command_id, from, to: state.name,
+        ...(state.name === "terminated" ? { reason: state.reason } : {}) });
+    }
     this.emit();
   }
   private after(delayMs: number, action: () => void): void {
@@ -332,6 +339,7 @@ export class RecoveryMachine<I extends { command_id: string }> {
       this.transmitted(attempt);
     };
     let result: SendResult;
+    journalNoteAttempt(this.intent.command_id, attempt);
     try { result = await this.ports.send(structuredClone(this.intent), transmit); }
     catch (error: unknown) { result = sendFailure(error); }
     if (result.kind === "not_sent") {
@@ -552,6 +560,8 @@ export class RecoveryMachine<I extends { command_id: string }> {
 
   /** Six sends provably went out and absence is confirmed: the end, or only checks from now on (keepChecking). */
   private exhausted(): void {
+    // MA-13: the automatic sends are spent (six went out and absence is confirmed).
+    journalRecord({ ev: "c.budget", cmd: this.intent.command_id, n: this.marks?.transmitted ?? MAX_SENDS, outcome: "failed" });
     if (this.keepChecking) this.closeSends("exhausted", null);
     else this.enter({ name: "exhausted" });
   }

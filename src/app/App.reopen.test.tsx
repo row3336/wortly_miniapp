@@ -1,3 +1,4 @@
+import { withJournalIntake } from "../journal/intake.test-support";
 // Two windows of one installation through the real App after decision 2.3 (M-REOPEN-2): the new window takes the
 // document over at once; the old one closes itself on DOCUMENT_STALE or on the lost lock, over /client/open as core
 // answers it after C-REOPEN-2.
@@ -100,7 +101,7 @@ function device(options: { locks?: boolean; session?: boolean; close?: boolean; 
     if (path.includes("/sessions/")) return response({ current: oral(), state_version: String(server.version) });
     return response({ error: { code: "UNEXPECTED" } }, 500);
   });
-  vi.stubGlobal("fetch", fetcher);
+  vi.stubGlobal("fetch", withJournalIntake(fetcher));
   vi.stubGlobal("Telegram", { WebApp: { initData: "synthetic-init-data", initDataUnsafe: { user: { language_code: "ru" } },
     colorScheme: "light", HapticFeedback: { notificationOccurred: vi.fn() }, ...(options.close === false ? {} : { close }) } });
   const opens = () => fetcher.mock.calls.filter(([url]) => String(url).endsWith("/client/open"))

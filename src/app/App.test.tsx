@@ -1,3 +1,5 @@
+import { withJournalIntake } from "../journal/intake.test-support";
+import { withTrace } from "../api/traceHeader.test-support";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenedClient, Profile, SessionResponse, TodayResponse } from "../api/generated";
@@ -74,13 +76,13 @@ function fixture(options: { profile?: Profile; session?: OpenedClient["session"]
       return json(data);
     }
     if (path.endsWith("/today")) {
-      expect(init?.headers).toEqual({ Authorization: "Bearer synthetic-token" });
+      expect(init?.headers).toEqual(withTrace({ Authorization: "Bearer synthetic-token" }));
       return todayReply();
     }
     if (path.includes(`/sessions/${sessionId}?`)) return sessionReply(path);
     throw new Error("Unexpected synthetic endpoint");
   });
-  vi.stubGlobal("fetch", fetcher);
+  vi.stubGlobal("fetch", withJournalIntake(fetcher));
   vi.stubGlobal("Telegram", { WebApp: { initData: "synthetic-init-data", initDataUnsafe: { user: { language_code: "en" } },
     colorScheme: "light", HapticFeedback: { notificationOccurred: haptic } } });
   const posts = () => fetcher.mock.calls.filter(call => call[1]?.method === "POST" && !/\/(auth\/telegram|client\/(register|open))$/.test(String(call[0])));
@@ -231,7 +233,10 @@ describe("ordinary Entry to Today integration", () => {
     const request = f.openReply.mock.calls[1][0];
     expect(request).toEqual({ ...f.openReply.mock.calls[0][0], event: "foreground" });
     const openCalls = f.fetcher.mock.calls.filter(call => String(call[0]).endsWith("/client/open"));
-    expect(openCalls[1][1]?.headers).toEqual(openCalls[0][1]?.headers);
+    // The same request again, but a new attempt: only its X-Wortly-Trace-Id differs.
+    const untraced = (headers: unknown) => { const { "X-Wortly-Trace-Id": trace, ...rest } = headers as Record<string, string>; expect(trace).toBeTruthy(); return rest; };
+    expect(untraced(openCalls[1][1]?.headers)).toEqual(untraced(openCalls[0][1]?.headers));
+    expect((openCalls[1][1]?.headers as Record<string, string>)["X-Wortly-Trace-Id"]).not.toBe((openCalls[0][1]?.headers as Record<string, string>)["X-Wortly-Trace-Id"]);
     complete(json({ status: "opened", ...request, profile: profile(),
       compatibility: { compatible: true, contract_version: "1" }, proof_version: "1", document_epoch: "1", session: null }));
     await waitFor(() => expect(f.todayReply).toHaveBeenCalledTimes(2));

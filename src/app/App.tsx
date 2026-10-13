@@ -28,6 +28,8 @@ import type { OralStores } from "./OralHost";
 import { ConjugationSessionPendingStore, ConjugationStopPendingStore } from "../conjugation/conjugationPending";
 import type { ConjugationStores } from "./ConjugationHost";
 import packageJson from "../../package.json";
+import { clientJournal, installClientJournal } from "../journal/clientJournal";
+import { createPageJournal, watchPage } from "../journal/pageJournal";
 
 /** The entry is still being decided: the launch screen keeps waiting (М20). Every other state is an answer, success or refusal. */
 const undecided: ReadonlySet<EntryState["kind"]> = new Set(["checking", "opening", "reapplying"]);
@@ -84,6 +86,7 @@ export function App({ learningPage }: { learningPage?: LearningPageStarts } = {}
     let storage: AsyncStorage | null = null;
     let currentController: EntryController | null = null;
     let enteredDocument: string | null = null;
+    let journal: ReturnType<typeof createPageJournal> | null = null;
     try {
       storage = browserStorage(window.localStorage);
     } catch {
@@ -119,6 +122,14 @@ export function App({ learningPage }: { learningPage?: LearningPageStarts } = {}
         };
         const api = createEntryApi(options);
         setTransport(options);
+        const clientVersion = import.meta.env.VITE_WORTLY_CLIENT_VERSION || packageJson.version;
+        // The client journal of this page (R3-03): it keeps nothing until the entry admits a profile. Only the explicit
+        // build flag VITE_WORTLY_CLIENT_JOURNAL=off leaves it out (the App tests set it: their synthetic servers do not
+        // serve the intake); any other value, or none, keeps it.
+        if (import.meta.env.VITE_WORTLY_CLIENT_JOURNAL !== "off") {
+          journal = createPageJournal(options, clientVersion);
+          installClientJournal(journal);
+        }
         currentController = new EntryController({
           api,
           today: createTodayApi(options),
@@ -128,7 +139,7 @@ export function App({ learningPage }: { learningPage?: LearningPageStarts } = {}
           initData: signedInitData(window),
           savedLanguage: saved,
           browserLanguage: window.navigator.language || null,
-          clientVersion: import.meta.env.VITE_WORTLY_CLIENT_VERSION || packageJson.version,
+          clientVersion,
           contractVersion: clientContractVersion(),
           timeZone: () => Intl.DateTimeFormat().resolvedOptions().timeZone || null,
           newId,
@@ -161,6 +172,8 @@ export function App({ learningPage }: { learningPage?: LearningPageStarts } = {}
     });
     return () => {
       active = false;
+      if (journal && clientJournal() === journal) installClientJournal(null);
+      journal?.dispose();
       currentController?.dispose();
       openedRef.current = null;
       if (storageRef.current === readyStorage) storageRef.current = null;
@@ -168,6 +181,7 @@ export function App({ learningPage }: { learningPage?: LearningPageStarts } = {}
   }, [publishLanguage]);
 
   useEffect(() => syncPlatform(document.documentElement, window), []);
+  useEffect(() => watchPage(window, clientJournal), []);
 
   useEffect(() => {
     const foreground = () => {

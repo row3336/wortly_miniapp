@@ -1,3 +1,4 @@
+import { withJournalIntake } from "../journal/intake.test-support";
 // The first choice of the dictionary language in the actual App document (19.2-А, 19.3-А, texts 25.1/27.1/28.1-А,
 // navigation 29.1-А): it stands in front of Today until a Settings read proves the language chosen.
 import { StrictMode } from "react";
@@ -86,7 +87,7 @@ function fixture(options: { version?: string; ui?: Language; dictionary?: Langua
     if (path.includes("/commands/")) return statusReply(path.split("/").at(-1)!);
     return json({ error: { code: "UNEXPECTED" } }, 500);
   });
-  vi.stubGlobal("fetch", fetcher);
+  vi.stubGlobal("fetch", withJournalIntake(fetcher));
   vi.stubGlobal("Telegram", { WebApp: { initData: "synthetic-init-data", initDataUnsafe: { user: { language_code: options.ui ?? "ru" } },
     colorScheme: "light", HapticFeedback: { notificationOccurred: vi.fn() },
     BackButton: { show() {}, hide() {}, onClick: (handler: () => void) => { back.add(handler); }, offClick: (handler: () => void) => { back.delete(handler); } } } });

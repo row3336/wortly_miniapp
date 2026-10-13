@@ -1,3 +1,4 @@
+import { withJournalIntake } from "../journal/intake.test-support";
 // M-SLOT-CONFLICT-LC through the actual App: a live window, and the record X of an old window written into the shared slot.
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -42,7 +43,7 @@ function shell(fetcherTail: Fetch, today: () => TodayResponse, account: () => Pr
     return fetcherTail(url, init);
   });
   const shellState = { session: null as string | null };
-  vi.stubGlobal("fetch", fetcher);
+  vi.stubGlobal("fetch", withJournalIntake(fetcher));
   vi.stubGlobal("Telegram", { WebApp: { initData: "synthetic-init-data", initDataUnsafe: { user: { language_code: "ru" } },
     colorScheme: "light", HapticFeedback: { notificationOccurred: vi.fn() } } });
   const study = () => fetcher.mock.calls.map(([url, init]) => {

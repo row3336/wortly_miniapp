@@ -1,3 +1,4 @@
+import { withJournalIntake } from "../journal/intake.test-support";
 import { createHash } from "node:crypto";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { StrictMode } from "react";
@@ -146,7 +147,7 @@ function app(options: { session?: string | null; status?: TodayResponse["learnin
     if (path.endsWith("/settings")) return settingsReply();
     return learning(url, init);
   });
-  vi.stubGlobal("fetch", fetcher);
+  vi.stubGlobal("fetch", withJournalIntake(fetcher));
   vi.stubGlobal("Telegram", { WebApp: { initData: "synthetic-init-data", initDataUnsafe: { user: { language_code: "ru" } },
     colorScheme: "light", HapticFeedback: { notificationOccurred: vi.fn() }, ...(options.back ? { BackButton: options.back.api } : {}) } });
   const posts = (): (LearningCommandIntent & Record<string, unknown>)[] => fetcher.mock.calls

@@ -15,6 +15,7 @@ import type { RemoteStopPendingStore } from "../study/remoteStopPending";
 import { RemoteStopController } from "../study/remoteStopController";
 import type { TodayApi } from "../today/todayApi";
 import { createBusyAccess, type BusyAccess } from "./busyAccess";
+import { journalAccess, journalRecord } from "../journal/clientJournal";
 
 export type EntrySnapshot = { state: EntryState; profile?: Profile };
 
@@ -281,6 +282,14 @@ export class EntryController {
   private resetInvalidSession(error: unknown): void {
     if (!(error instanceof EntryApiError) || error.kind !== "http"
       || (error.status !== 401 && error.status !== 403)) return;
+    // The sign-in ended (401): the journal waits for the next one. A lost admission or a deleted profile (403) ends it
+    // and clears its buffer (P04 r9 §3.8); another 403 (a refused proof) only stops its sending.
+    if (error.status === 403 && (error.code === "PROFILE_DELETED" || error.code === "ACCESS_PENDING" || error.code === "ACCESS_REJECTED")) {
+      journalAccess.revoke(true);
+    } else {
+      journalAccess.credentials(null);
+      if (error.status === 401) journalAccess.revoke(false);
+    }
     this.session = null;
     this.installation = null;
     this.documentId = null;
@@ -309,8 +318,20 @@ export class EntryController {
     const session = this.session;
     if (!session) { this.emit({ kind: "unavailable" }); return; }
     // An incompatible client may read why (CT §1), so this is its own state, not "unavailable" (К10-060).
-    if (!session.compatibility.compatible) { this.emit({ kind: "incompatible" }, session.profile); return; }
+    if (!session.compatibility.compatible) {
+      // Only an admitted profile has a journal (P1-2); it keeps the update screen until a compatible build sends it.
+      if (session.profile.access.status === "admitted") {
+        journalAccess.admit(session.profile.profile_id);
+        journalRecord({ ev: "c.screen", kind: "update_required", code: "CLIENT_INCOMPATIBLE" });
+      } else journalAccess.revoke(true);
+      this.emit({ kind: "incompatible" }, session.profile);
+      return;
+    }
     const profile = session.profile;
+    // The client journal exists only for an admitted profile: a pending or rejected one has none, and any other
+    // profile's buffer is dropped (events TZ §4.5; P04 r9 §2.7).
+    if (profile.access.status === "admitted") journalAccess.admit(profile.profile_id);
+    else journalAccess.revoke(true);
     if (!this.acceptProfile(profile)) throw new EntryApiError("invalid_response");
     if (profile.access.status === "pending") {
       await this.dropSettledReapplyIntent(profile.profile_id);
@@ -449,7 +470,13 @@ export class EntryController {
     if (opened.profile.access.status !== "admitted"
       || (this.observedStateVersion !== null && newerVersion(this.observedStateVersion, opened.profile.state_version))
       || !this.acceptProfile(opened.profile)) throw new EntryApiError("invalid_response");
+    // The core answered for this admitted profile and its registered installation: the journal may send now.
+    journalAccess.admit(opened.profile.profile_id);
+    journalAccess.credentials({ token, proof: installation.proof, clientInstanceId: installation.clientInstanceId });
+    const idbOk = journalAccess.idbOk();
+    journalRecord({ ev: "c.app.open", kind: event, doc: this.documentId, ...(idbOk === null ? {} : { idb_ok: idbOk }) });
     if (opened.status === "incompatible" || !opened.compatibility.compatible) {
+      journalRecord({ ev: "c.screen", kind: "update_required", code: "CLIENT_INCOMPATIBLE" });
       // The core neither made this document live nor activated the installation (В6): nothing is saved or locked here.
       if (opened.status === "incompatible" && opened.client_instance_id !== installation.clientInstanceId) {
         throw new Error("Invalid opened client");

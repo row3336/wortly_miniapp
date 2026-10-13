@@ -1,3 +1,4 @@
+import { withJournalIntake } from "../journal/intake.test-support";
 // M-ORAL-STUCK-A (AQ): an applied oral step whose reply was lost, its session closed by a pair change elsewhere. On
 // return the check by the same ID proves it applied and carries the closed projection of the old pair: that closure is
 // a fact of the own session, so the document leaves for Today instead of an unknown outcome (CT §6.1 п. 5, п. 7).
@@ -71,7 +72,7 @@ function app() {
     return response({ error: { code: "UNEXPECTED" } }, 500);
   });
   const backHandlers = new Set<() => void>();
-  vi.stubGlobal("fetch", fetcher);
+  vi.stubGlobal("fetch", withJournalIntake(fetcher));
   vi.stubGlobal("Telegram", { WebApp: { initData: "synthetic-init-data", initDataUnsafe: { user: { language_code: "ru" } },
     colorScheme: "light", HapticFeedback: { notificationOccurred: vi.fn() },
     BackButton: { show() {}, hide() {}, onClick(handler: () => void) { backHandlers.add(handler); }, offClick(handler: () => void) { backHandlers.delete(handler); } } } });

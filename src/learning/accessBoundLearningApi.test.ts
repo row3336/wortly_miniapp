@@ -1,3 +1,4 @@
+import { withTrace } from "../api/traceHeader.test-support";
 import { describe, expect, it, vi } from "vitest";
 import type { LearningCurrentResponse, ManualSelectionCommand, OpenedClient } from "../api/generated";
 import { ApiError } from "../api/http";
@@ -61,9 +62,9 @@ describe("access-bound Learning API with real OpenedAccess and Learning transpor
     await expect(f.api.status(ACCESS_BOUND_MARKER, intent())).resolves.toMatchObject({ outcome: "accepted" });
     expect(f.fetcher.mock.calls.map(([url, init]) => [url, init!.method])).toEqual([
       ["/api/v1/learning/current", "GET"], ["/api/v1/commands", "POST"], [`/api/v1/commands/${id(100)}`, "GET"]]);
-    expect(headers(f, 0)).toEqual({ Authorization: "Bearer synthetic-manual-token-1" });
+    expect(headers(f, 0)).toEqual(withTrace({ Authorization: "Bearer synthetic-manual-token-1" }));
     expect(headers(f, 1)).toMatchObject({ Authorization: "Bearer synthetic-manual-token-1", "X-Origin-Proof": "synthetic-manual-proof-1" });
-    expect(headers(f, 2)).toEqual({ Authorization: "Bearer synthetic-manual-token-1" });
+    expect(headers(f, 2)).toEqual(withTrace({ Authorization: "Bearer synthetic-manual-token-1" }));
     expect(JSON.parse(String(f.fetcher.mock.calls[1][1]!.body))).toEqual(command());
     expect(JSON.stringify(f.fetcher.mock.calls)).not.toContain(ACCESS_BOUND_MARKER);
     expect(f.denied).not.toHaveBeenCalled();

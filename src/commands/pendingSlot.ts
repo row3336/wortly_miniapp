@@ -1,5 +1,6 @@
 import type { AsyncStorage } from "../platform/storage";
 import { createdHere, noteCreatedHere } from "./pageOrigin";
+import { journalRecord } from "../journal/clientJournal";
 
 export class PendingStoreError extends Error {
   constructor(public readonly kind: "unavailable" | "invalid" | "changed" | "cancelled") { super(kind); }
@@ -21,6 +22,11 @@ export function validId(value: unknown): value is string {
 
 function active(signal: AbortSignal): void {
   if (signal.aborted) throw new PendingStoreError("cancelled");
+}
+
+/** A profile's stored record could not be read or written (events TZ §4.5 c.storage): only the class, never the key or value. */
+function journalStorage(kind: "storage_read" | "storage_write", error: unknown): void {
+  if (!(error instanceof PendingStoreError && error.kind === "cancelled")) journalRecord({ ev: "c.storage", kind });
 }
 
 /** One temporary intent. Share the instance across document controllers; Entry owns the window lease. */
@@ -49,14 +55,14 @@ export class PendingSlot<T extends { profileId: string; mismatch?: true }> {
 
   private async read(signal: AbortSignal): Promise<T | null> {
     active(signal);
-    const raw = await this.storage.get(this.key);
+    let raw: string | null;
+    try { raw = await this.storage.get(this.key); } catch (error) { journalStorage("storage_read", error); throw error; }
     active(signal);
     if (raw === null) return null;
     let value: unknown;
-    try { value = JSON.parse(raw); } catch { throw new PendingStoreError("invalid"); }
-    return this.copy(value);
+    try { value = JSON.parse(raw); } catch { journalStorage("storage_read", null); throw new PendingStoreError("invalid"); }
+    try { return this.copy(value); } catch (error) { journalStorage("storage_read", error); throw error; }
   }
-
   /** This page created the intent of commandId (decision 2.3 А): only such a record may be retried by hand. */
   noteCreated(commandId: string): void { noteCreatedHere(this.storage, commandId); }
   created(commandId: string | null | undefined): boolean { return createdHere(this.storage, commandId); }
@@ -68,7 +74,7 @@ export class PendingSlot<T extends { profileId: string; mismatch?: true }> {
       active(signal);
       if (current && current.profileId !== profileId) {
         // Serialized with save/clear so this cannot erase the newer account's write.
-        await this.storage.remove(this.key);
+        try { await this.storage.remove(this.key); } catch (error) { journalStorage("storage_write", error); throw error; }
         active(signal);
         return null;
       }
@@ -83,7 +89,7 @@ export class PendingSlot<T extends { profileId: string; mismatch?: true }> {
       active(signal);
       if (current && !this.same(current, pending)) throw new PendingStoreError("changed");
       if (!current) {
-        await this.storage.set(this.key, JSON.stringify(pending));
+        try { await this.storage.set(this.key, JSON.stringify(pending)); } catch (error) { journalStorage("storage_write", error); throw error; }
         active(signal);
       }
     });
@@ -96,7 +102,7 @@ export class PendingSlot<T extends { profileId: string; mismatch?: true }> {
       active(signal);
       if (current && !this.same(current, pending)) throw new PendingStoreError("changed");
       if (current) {
-        await this.storage.remove(this.key);
+        try { await this.storage.remove(this.key); } catch (error) { journalStorage("storage_write", error); throw error; }
         active(signal);
       }
     });
@@ -114,7 +120,7 @@ export class PendingSlot<T extends { profileId: string; mismatch?: true }> {
       active(signal);
       if (current && !this.same(unmarked(current), pending)) throw new PendingStoreError("changed");
       if (current) {
-        await this.storage.remove(this.key);
+        try { await this.storage.remove(this.key); } catch (error) { journalStorage("storage_write", error); throw error; }
         active(signal);
       }
     });
@@ -143,7 +149,7 @@ export class PendingSlot<T extends { profileId: string; mismatch?: true }> {
       active(signal);
       if (current && !this.same({ ...current, mismatch: true }, marked)) throw new PendingStoreError("changed");
       if (!current?.mismatch) {
-        await this.storage.set(this.key, JSON.stringify(marked));
+        try { await this.storage.set(this.key, JSON.stringify(marked)); } catch (error) { journalStorage("storage_write", error); throw error; }
         active(signal);
       }
     });

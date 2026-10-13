@@ -4,6 +4,8 @@ import type { RecoveryClock } from "./recoveryClock";
 import { FINAL_RECOVERY_STATES, RecoveryMachine, type KnownLoss, type RecoverySnapshot } from "./recoveryMachine";
 import { checkFailure, sendFailure, type CheckResult, type SendResult } from "./recoveryReplies";
 import { MemorySendCounter, type SendCounter } from "./sendCounter";
+import { journalRecord } from "../journal/clientJournal";
+import { isErrorCode, type ScreenEvent } from "../journal/events";
 
 export type RecoveryIntent = { command_id: string; kind: string; session_id: string };
 /** The fields of the primary lane snapshot the adapter reads. */
@@ -16,6 +18,27 @@ export type RecoveryLaneState = {
   canRetry: boolean;
 };
 /** What a screen needs of the automatic recovery of the primary lane. */
+/**
+ * What the screen decides for the action once its machine has ended (events TZ §4.5 c.screen): the class of the
+ * decision and its code, never a text. null: nothing final to show yet.
+ */
+export function screenDecision(state: RecoverySnapshot["state"], afterLoss: boolean): Pick<ScreenEvent, "kind" | "code"> | null {
+  switch (state.name) {
+    case "settled":
+      if (state.outcome === "rejected") return { kind: "refusal_shown" };
+      return { kind: afterLoss ? "already_recorded" : "result_shown" };
+    case "refused": return { kind: "refusal_shown", ...(isErrorCode(state.code) ? { code: state.code } : {}) };
+    case "conflict": return { kind: "refusal_shown", code: "COMMAND_PAYLOAD_MISMATCH" };
+    case "exhausted": return { kind: "unsaved_shown" };
+    case "terminated":
+      if (state.reason === "client_incompatible") return { kind: "update_required", code: "CLIENT_INCOMPATIBLE" };
+      // Absence confirmed and the session closed: the action was not applied and is lost (laneCheckResult not_applied).
+      if (state.reason === "session_closed") return { kind: "lost", code: "SESSION_CLOSED" };
+      return null;
+    default: return null;
+  }
+}
+
 export type RecoveryView = RecoverySnapshot & {
   commandId: string;
   /** The machine went past the first send (a lost reply, a reload, a background): a settled result is a recovered one. */
@@ -307,6 +330,8 @@ export class LaneRecovery {
   }
   private update(snapshot: RecoverySnapshot): void {
     const state = snapshot.state;
+    const decision = this.commandId ? screenDecision(state, this.afterLoss) : null;
+    if (decision && this.commandId) journalRecord({ ev: "c.screen", cmd: this.commandId, ...decision });
     // A definite refusal or a changed step: the old command will never apply, so its record goes and the view continues
     // by the server's state (CT §6.1 п. 7). Not a conflict, not a closure or a replaced window: those keep their rules.
     if (this.commandId && (state.name === "refused" || state.name === "terminated" && state.reason === "step_stale")) {

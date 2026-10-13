@@ -1,3 +1,4 @@
+import { withJournalIntake } from "../journal/intake.test-support";
 // D-FALSE-TEXTS part B, oral: a live window B taps a new action while the unconfirmed record X of the old window A sits in the
 // shared slot. The new action Y is neither stored nor sent, never checked or retried. Decision 24.1 А (owner, C167): at that
 // block B checks X on the server at once; 23.1 А: X is never sent from B; an unknown outcome lets nothing continue.
@@ -91,7 +92,7 @@ function device(statusMode: "not_found" | "500") {
     }
     return response({ error: { code: "UNEXPECTED" } }, 500);
   });
-  vi.stubGlobal("fetch", fetcher);
+  vi.stubGlobal("fetch", withJournalIntake(fetcher));
   vi.stubGlobal("Telegram", { WebApp: { initData: "synthetic-init-data", initDataUnsafe: { user: { language_code: "ru" } },
     colorScheme: "light", HapticFeedback: { notificationOccurred: vi.fn() }, close } });
   const opens = () => fetcher.mock.calls.filter(([u]) => String(u).endsWith("/client/open")).map(([, i]) => JSON.parse(String(i!.body)) as OpenRequest);

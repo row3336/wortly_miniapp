@@ -18,7 +18,7 @@ describe("bounded JSON exchange", () => {
     expect(fetcher).toHaveBeenCalledExactlyOnceWith("https://example.invalid/api/v1/commands", {
       method: "POST", headers: { Authorization: "Bearer synthetic-token",
         "X-Origin-Proof": "synthetic-proof", "Content-Type": "application/json",
-        "X-Wortly-Contract-Version": clientContractVersion() },
+        "X-Wortly-Contract-Version": clientContractVersion(), "X-Wortly-Trace-Id": expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/) },
       body: '{"command_id":"same-intent"}', signal: expect.any(AbortSignal),
       credentials: "same-origin", cache: "no-store",
     });

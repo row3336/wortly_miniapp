@@ -1,3 +1,4 @@
+import { withTrace } from "../api/traceHeader.test-support";
 import { describe, expect, it, vi } from "vitest";
 import type { DictionaryCardView, OpenDictionaryContext } from "../api/generated";
 import { ApiError, clientContractVersion } from "../api/http";
@@ -178,8 +179,8 @@ describe("dictionary context commands over the real JSON transport", () => {
     const { url, init, body } = sent(fetcher);
     expect(url).toBe("/api/v1/commands");
     expect(init).toMatchObject({ method: "POST", cache: "no-store", credentials: "same-origin" });
-    expect(init.headers).toEqual({ Authorization: `Bearer ${token}`, "X-Origin-Proof": proof, "Content-Type": "application/json",
-      "X-Wortly-Contract-Version": clientContractVersion() });
+    expect(init.headers).toEqual(withTrace({ Authorization: `Bearer ${token}`, "X-Origin-Proof": proof, "Content-Type": "application/json",
+      "X-Wortly-Contract-Version": clientContractVersion() }));
     expect(body).toEqual({ command_id: commandId, kind: "context.open", client_instance_id: clientId,
       document_id: documentId, payload: { card_id: cardId, source: { kind: "dictionary" } } });
   });
@@ -359,7 +360,7 @@ describe("contextual read", () => {
     const { url, init } = sent(fetcher);
     expect(url).toBe(`/api/v1/dictionary/contexts/${contextId}?client_instance_id=${clientId}&document_id=${documentId}`);
     expect(init.method).toBe("GET");
-    expect(init.headers).toEqual({ Authorization: `Bearer ${token}`, "X-Origin-Proof": proof });
+    expect(init.headers).toEqual(withTrace({ Authorization: `Bearer ${token}`, "X-Origin-Proof": proof }));
   });
 
   it("keeps an unrecognized document as opaque unavailable, not readiness", async () => {
@@ -548,7 +549,7 @@ describe("command status", () => {
     const { url, init } = sent(fetcher);
     expect(url).toBe(`/api/v1/commands/${commandId}?client_instance_id=${clientId}&document_id=${documentId}&expected_intent_hash=${hash}`);
     expect(init.method).toBe("GET");
-    expect(init.headers).toEqual({ Authorization: `Bearer ${token}`, "X-Origin-Proof": proof });
+    expect(init.headers).toEqual(withTrace({ Authorization: `Bearer ${token}`, "X-Origin-Proof": proof }));
     await expect(api.commandStatus(token, proof, command(intent))).rejects.toMatchObject({ kind: "invalid_response" });
   });
 

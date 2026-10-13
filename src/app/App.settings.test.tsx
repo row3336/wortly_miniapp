@@ -1,3 +1,4 @@
+import { withJournalIntake } from "../journal/intake.test-support";
 import userEvent from "@testing-library/user-event";
 import { StrictMode } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -118,7 +119,7 @@ function fixture(options: { firstChoice?: boolean } = {}) {
       summary: { completed: 2, correct: 2, wrong: 0, ratio: { numerator: 2, denominator: 2 } } }, state_version: data.state_version });
     throw new Error("Unexpected synthetic endpoint");
   });
-  vi.stubGlobal("fetch", fetcher);
+  vi.stubGlobal("fetch", withJournalIntake(fetcher));
   vi.stubGlobal("Telegram", { WebApp: { initData: "synthetic-init-data", initDataUnsafe: { user: { language_code: "en" } },
     colorScheme: "light", HapticFeedback: { notificationOccurred: haptic } } });
   return { data, profile, state, haptic, settingsReply, topicsReply, openReply, todayReply, commandReply, statusReply, fetcher, apply };

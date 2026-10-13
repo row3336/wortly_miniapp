@@ -1,3 +1,4 @@
+import { withJournalIntake } from "../journal/intake.test-support";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OralSessionProjection, Profile, TodayResponse } from "../api/generated";
@@ -145,7 +146,7 @@ function app() {
       state_version: String(version) });
     return response({ error: { code: "UNEXPECTED" } }, 500);
   });
-  vi.stubGlobal("fetch", fetcher);
+  vi.stubGlobal("fetch", withJournalIntake(fetcher));
   vi.stubGlobal("Telegram", { WebApp: { initData: "synthetic-init-data", initDataUnsafe: { user: { language_code: "ru" } },
     colorScheme: "light", HapticFeedback: { notificationOccurred: vi.fn() },
     BackButton: { show() {}, hide() {}, onClick() {}, offClick() {} } } });

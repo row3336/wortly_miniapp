@@ -1,3 +1,4 @@
+import { withJournalIntake } from "../journal/intake.test-support";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TodayResponse } from "../api/generated";
@@ -36,7 +37,7 @@ function fixture() {
     commands.push({ path, body });
     throw new Error("Unexpected synthetic endpoint");
   });
-  vi.stubGlobal("fetch", fetcher);
+  vi.stubGlobal("fetch", withJournalIntake(fetcher));
   vi.stubGlobal("Telegram", { WebApp: { initData: "synthetic-init", initDataUnsafe: { user: { language_code: "ru" } },
     colorScheme: "light", BackButton: back } });
   return { commands, log, get visible() { return visible; }, get handlers() { return handlers.size; },
