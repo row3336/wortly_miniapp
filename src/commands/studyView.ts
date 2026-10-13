@@ -125,7 +125,8 @@ export type StudyViewFields<C, A, D> = {
   emptyStop: EmptyStop | null;
   /**
    * The session the server proved open in another pair (an observation not below the lanes' floor): a fact about the
-   * session, not a failed update, so it is never the shown problem (C149, C151). null when nothing proves it.
+   * session, not a failed update, so it is never the shown problem (C149, C151). null when nothing proves it, and once
+   * this view shows that session closed.
    */
   pairMismatch: string | null;
 };
@@ -444,7 +445,8 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
       canRetryPrimary: live && interactive && !this.operation && !this.reading && !this.stopping
         && commands.primary.canRetry && !commands.stop.pending,
       emptyStop: live && this.emptyStop && this.sessionId && sameId(this.emptyStop.sessionId, this.sessionId) ? { ...this.emptyStop } : null,
-      pairMismatch: live && this.knownMismatch() ? this.mismatch : null } };
+      // A session this view shows closed is no longer open anywhere (N1, C193): as in the oral and conjugation owners.
+      pairMismatch: live && !this.is("closed") && this.knownMismatch() ? this.mismatch : null } };
   }
   private canNext(): boolean { return this.view().fields.canNext; }
   private armTimer(): void {
