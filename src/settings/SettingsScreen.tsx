@@ -4,7 +4,7 @@ import { BottomNav } from "../app/BottomNav";
 import type { FeedbackDocument } from "../feedback/useFeedbackDocument";
 import type { Language } from "../i18n/language";
 import { t as appText, navigationText } from "../i18n/messages";
-import type { MainSettingKey, SettingKey } from "./settingsApi";
+import { storedOnly, type MainSettingKey, type SettingKey } from "./settingsApi";
 import type { SettingsController, SettingsSnapshot } from "./settingsController";
 import { catalogAllows, MaterialEditor, materialParts, type CatalogState } from "./MaterialEditor";
 import { SettingsFeedback } from "./SettingsFeedback";
@@ -343,9 +343,10 @@ export function SettingsScreen(props: SettingsScreenProps) {
     {snapshot.problem && (line !== "unknown" || notifications) && <div className="settings-error" role="alert">
       <p>{problemText(snapshot, language)}</p>
       {snapshot.canRetry && <button className="settings-secondary" type="button" onClick={() => { void actions.retry(); }}>{t.retry}</button>}
-      {/* R2-09 / P5-013: the explicit cancel of a refused earlier change that has no field (stored-only key, R14-02). */}
+      {/* R2-09 / P5-013: the explicit cancel of a refused earlier change (kept between openings); a stored-only key (R14-02)
+          has no field, so its line says what the change was. */}
       {snapshot.canCancelStored && actions.cancelStored && <>
-        <p>{t.storedOnly.note}</p>
+        {snapshot.pending && storedOnly(snapshot.pending.intent.payload.key) && <p>{t.storedOnly.note}</p>}
         <button className="settings-secondary" type="button" onClick={() => { void actions.cancelStored?.(); }}>{t.storedOnly.cancel}</button>
       </>}
       {snapshot.canContinueWithServer && <button className="settings-secondary" type="button" ref={continueButton}

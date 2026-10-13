@@ -1,6 +1,6 @@
 import type { AsyncStorage } from "../platform/storage";
 import { PendingSlot, PendingStoreError, validId } from "../commands/pendingSlot";
-import { retiredKeys, storedOnly, validSettingIntent, type EditableSettingIntent } from "./settingsApi";
+import { retiredKeys, validSettingIntent, type EditableSettingIntent } from "./settingsApi";
 
 /** Only the sent intent survives recovery; credentials and unsubmitted editor drafts do not. */
 export type SettingsPending = {
@@ -11,9 +11,8 @@ export type SettingsPending = {
   /** A minimal status fact cannot prove this intent after an ID/content mismatch. */
   mismatch?: true;
   /**
-   * R2-09 / K19-024: the server refused this stored intent with 422. Kept with the record so the refusal stands between
-   * openings until the server's state is proven changed or the user explicitly cancels. Only a stored-only key (R14-02)
-   * carries it: it has no field, so this record is the only place its refusal can live.
+   * R2-09 / K19-024 / P5-013: the server refused this stored intent with 422. Kept with the record, of any key, so the
+   * refusal stands between openings until the server's state is proven changed or the user explicitly cancels.
    */
   refused?: true;
 };
@@ -26,7 +25,7 @@ export function validSettingsPending(value: unknown): value is SettingsPending {
   return Object.keys(item).length === fields.length && fields.every(key => Object.hasOwn(item, key))
     && item.schemaVersion === 1 && validId(item.profileId) && validId(item.clientInstanceId)
     && (!Object.hasOwn(item, "mismatch") || item.mismatch === true) && validSettingIntent(item.intent)
-    && (!Object.hasOwn(item, "refused") || item.refused === true && storedOnly(item.intent.payload.key));
+    && (!Object.hasOwn(item, "refused") || item.refused === true);
 }
 
 function copy(value: unknown): SettingsPending {
@@ -219,7 +218,10 @@ export class SettingsPendingStore {
     return this.serial(pending.profileId, signal, async () => (await this.route(pending.profileId, signal, false)).clearMarked(pending, signal));
   }
 
-  /** Keeps the 422 of a stored-only intent with its record (R2-09 / K19-024): one write, same intent, plus the mark. */
+  /**
+   * Keeps the 422 of a stored intent with its record (R2-09 / K19-024): one write, same intent, plus the mark. A record that
+   * changed meanwhile (another intent of this profile) is never overwritten: "changed", nothing written.
+   */
   async markRefused(value: SettingsPending, signal: AbortSignal): Promise<void> {
     const pending = copy(value);
     const marked = copy({ ...pending, refused: true });

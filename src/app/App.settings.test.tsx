@@ -753,3 +753,39 @@ describe("a stored unfinished save of the retired reminder pause", () => {
       .getByRole("textbox", { hidden: true }).hasAttribute("disabled")).toBe(false));
   });
 });
+
+// R2-09 / K19-024 / P5-013 (C282): the 422 of an ordinary field save is kept with its record between openings; only a proven
+// change of the server's state or the user's explicit cancel lifts it, and nothing is repeated by itself.
+describe("a refused field save between openings", () => {
+  it("the next opening shows the refusal and the cancel at once; the press clears only that record and shows the server's value", async () => {
+    const f = fixture();
+    f.commandReply.mockImplementation(async () => json({ error: { code: "VALIDATION_FAILED" } }, 422));
+    render(<App />);
+    await waitFor(() => expect(f.openReply).toHaveBeenCalled());
+    const client = (f.openReply.mock.calls[0][0] as { client_instance_id: string }).client_instance_id;
+    cleanup();
+    localStorage.setItem(settingSlot, JSON.stringify({ schemaVersion: 1, profileId, clientInstanceId: client,
+      intent: { command_id: id(88), kind: "setting.save", expected_field_version: "1", payload: { key: "retry_count", value: 5 } } }));
+    render(<App />);
+    fireEvent.click(await waitFor(() => todayNav().getByRole("button", { name: "Настройки" }), { timeout: 5000 }));
+    fireEvent.click(await screen.findByRole("button", { name: "Повторить отправку" }));
+    await screen.findByRole("button", { name: "Отменить это прежнее изменение" });
+    await waitFor(() => expect(JSON.parse(localStorage.getItem(settingSlot)!).refused).toBe(true));
+    cleanup();
+    render(<App />);
+    fireEvent.click(await waitFor(() => todayNav().getByRole("button", { name: "Настройки" }), { timeout: 5000 }));
+    const cancel = await screen.findByRole("button", { name: "Отменить это прежнее изменение" });
+    expect(screen.getByRole("alert").textContent).toContain("Сервер не принял эту отправку изменения.");
+    expect(screen.getByRole("alert").textContent).not.toContain("прежней версии приложения");
+    expect(screen.queryByRole("button", { name: "Повторить отправку" })).toBeNull();
+    expect(f.commandReply).toHaveBeenCalledOnce();
+    const retries = () => within(screen.getByRole("group", { name: "Повторов после ошибки", hidden: true })).getByRole("textbox", { hidden: true }) as HTMLInputElement;
+    expect(retries().value).toBe("5"); expect(retries().disabled).toBe(true);
+    fireEvent.click(cancel);
+    await waitFor(() => expect(localStorage.getItem(settingSlot)).toBeNull());
+    await waitFor(() => expect(retries().disabled).toBe(false));
+    expect(retries().value).toBe("3");
+    expect(f.commandReply).toHaveBeenCalledOnce();
+    expect(f.statusReply).toHaveBeenLastCalledWith(id(88));
+  });
+});

@@ -170,11 +170,19 @@ describe("known refusals of settings commands are not lost replies (C082)", () =
       expect(e.snapshot()).toMatchObject({ problem: { reason: "not_found" }, canRetry: true });
     });
 
-    it("a reload is a new document: it gets exactly one attempt, and a second 422 holds again", async () => {
+    it("a reload is a new document: a field save's 422 kept with its record still holds (R2-09 / K19-024); a reset gets one attempt", async () => {
       const storage = memory(); const w = world(storage); const c = w.make(); await c.refresh();
       w.postAnswers.push(refused); await send(c); c.dispose();
       // Entry gives a reloaded page a new document ID (app/entryController.ts); the stored intent is the same.
       w.open(opened(id(2), id(4)), 2); const d = w.make(); await d.refresh();
+      if (_name === "save") {
+        expect(d.snapshot()).toMatchObject({ problem: { reason: "command_refused", code: "VALIDATION_FAILED" }, canRetry: false,
+          canEdit: false, canCancelStored: true });
+        await d.retry(); expect(w.posts).toHaveLength(1);
+        await d.refresh(); await d.retry(); expect(w.posts).toHaveLength(1);
+        return;
+      }
+      // The reset keeps its earlier behaviour here (its own cancel, R8-05, is a separate step).
       expect(d.snapshot()).toMatchObject({ problem: { reason: "not_found" }, canRetry: true });
       w.postAnswers.push(refused); await d.retry();
       expect(w.posts).toHaveLength(2); expect(w.posts[1].command_id).toBe(w.posts[0].command_id);

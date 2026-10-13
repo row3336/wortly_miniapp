@@ -303,14 +303,14 @@ describe("a stored unfinished save of the Learning reminder pause (R14-02)", () 
     await f.controller.refresh();
     expect(f.controller.snapshot()).toMatchObject({ problem: { reason: "client_changed" }, canCancelStored: false });
   });
-  it("the refused mark is only valid on a stored-only key", () => {
+  it("the refused mark is a valid mark of any stored save (R2-09 / K19-024), only as true", () => {
     const ordinary = { schemaVersion: 1, profileId: id(1), clientInstanceId: id(2), refused: true, intent: { command_id: id(79),
       kind: "setting.save", expected_field_version: "2", payload: { key: "retry_count", value: 5 } } };
-    expect(validSettingsPending(ordinary)).toBe(false);
+    expect(validSettingsPending(ordinary)).toBe(true);
     expect(validSettingsPending({ ...ordinary, intent: pauseIntent })).toBe(true);
     expect(validSettingsPending({ ...ordinary, intent: pauseIntent, refused: false })).toBe(false);
   });
-  it("a failed check on cancel clears nothing; an ordinary key refused with 422 is not offered this cancel", async () => {
+  it("a failed check on cancel clears nothing; an ordinary key refused with 422 is offered the same cancel", async () => {
     const f = await refusedStored();
     f.api.status.mockRejectedValueOnce(new Error("offline"));
     await f.controller.cancelStored();
@@ -319,7 +319,7 @@ describe("a stored unfinished save of the Learning reminder pause (R14-02)", () 
     const g = fixture(); await g.controller.refresh();
     g.api.save.mockRejectedValueOnce(new KnownRefusal("command_refused", 422, "VALIDATION_FAILED"));
     g.controller.edit("retry_count", "5"); await g.controller.save("retry_count");
-    expect(g.controller.snapshot()).toMatchObject({ problem: { reason: "command_refused" }, canCancelStored: false });
+    expect(g.controller.snapshot()).toMatchObject({ problem: { reason: "command_refused" }, canCancelStored: true });
   });
   it("from another launch of the app: the record stays and «Изменение отправлено из другого запуска» is the state", async () => {
     const f = fixture(settingsResponse, stored(id(77)));

@@ -44,8 +44,9 @@ export type SettingsSnapshot = {
    */
   canContinueWithServer: boolean;
   /**
-   * R2-09 / K19-024 / P5-013: a stored save of a stored-only key (R14-02) that the server refused (422) has no field on any
-   * screen, so the user's explicit cancel of that earlier change is offered here. Absent means false.
+   * R2-09 / K19-024 / P5-013: the user's explicit cancel of a stored save the server refused with 422 (any key; the refusal is
+   * kept with the record between openings), or of a stored-only key's record of another launch (R14-02), which has no
+   * field and is never repeated from here. Absent means false.
    */
   canCancelStored?: boolean;
 };
@@ -193,11 +194,11 @@ export class SettingsController {
 
   private cancelStoredAllowed(): boolean {
     const pending = this.pending;
-    // Offered after the 422 (kept between openings), or for a record of another launch of the app, which is never
-    // repeated from here (retryAllowed): without this cancel it would close Settings for good (R2-09: explicit cancel).
+    // Offered after the 422 of any save (kept between openings), or for a stored-only key's record of another launch of the
+    // app, which is never repeated from here (retryAllowed): without it that record would close Settings for good.
     return !!this.currentAccess() && !this.running && !this.writeBlocked && !this.settled && !!pending && !this.resetPending
-      && storedOnly(pending.intent.payload.key) && !pending.mismatch && this.loaded
-      && (this.refused() === "command_refused" || pending.clientInstanceId !== this.scope.clientId);
+      && !pending.mismatch && this.loaded && (this.refused() === "command_refused"
+        || storedOnly(pending.intent.payload.key) && pending.clientInstanceId !== this.scope.clientId);
   }
 
   snapshot(): SettingsSnapshot {
@@ -387,12 +388,35 @@ export class SettingsController {
       }
       await this.readCurrent();
       if (!this.live()) return;
+      if (save && await this.releaseOutdatedRefusal(save)) return;
       // A missing fact does not undo a known refusal of the last attempt: the repeat stays closed (KnownRefusal).
       const refused = this.refused();
       if (!this.problem) this.problem = pending.clientInstanceId !== this.scope.clientId ? { reason: "client_changed" }
         : refused ? { reason: refused, code: this.refusal!.code } : { reason: "not_found" };
     }
     this.phase = "unresolved";
+  }
+
+  /**
+   * R2-09 / K19-024: a 422 stands until the server's state is proven changed. For a field it is proven when the fresh
+   * settings carry another field version than the refused intent expected (its value was saved since, by any window), so
+   * the old command could never apply: the record and its refusal are released as a rejected outcome. The unsent editor
+   * text is kept and meets the current value as a conflict. A stored-only key has no field version: never released here.
+   */
+  private async releaseOutdatedRefusal(save: SettingsPending): Promise<boolean> {
+    const key = save.intent.payload.key;
+    if (this.refused() !== "command_refused" || storedOnly(key) || !this.data || this.pending !== save
+      || this.data.settings[key].version === save.intent.expected_field_version) return false;
+    await this.options.pendingStore.clear(save, this.lifetime.signal);
+    if (!this.live()) return true;
+    this.pending = null;
+    this.refusal = null;
+    this.outcome = { commandId: save.intent.command_id, key, status: "rejected", code: "VALIDATION_FAILED" };
+    this.settled = false;
+    this.submittedRevision = null;
+    this.problem = null;
+    this.idle();
+    return true;
   }
 
   /** Refreshes queued during a send coalesce to one subsequent GET, never a replay. */
@@ -420,8 +444,8 @@ export class SettingsController {
         // One sent intent per document: both slots filled means the recorded state cannot be trusted.
         if (save && reset) throw new PendingStoreError("invalid");
         this.pending = save;
-        // R2-09 / K19-024: a stored-only intent refused with 422 in an earlier opening keeps that refusal now (its record
-        // carries it); the status read below may still prove a changed server state, and only the user's cancel clears it.
+        // R2-09 / K19-024: an intent refused with 422 in an earlier opening keeps that refusal now (its record carries it):
+        // no repeat is offered; the status read below may still prove a changed server state; otherwise only the cancel.
         if (save?.refused) this.refusal = { commandId: save.intent.command_id, reason: "command_refused",
           code: "VALIDATION_FAILED", handle: handleNumber(this.access()) };
         this.resetPending = reset;
@@ -503,10 +527,10 @@ export class SettingsController {
       : this.options.api.reset(token, proof, this.scope.profileId,
         { ...structuredClone(reset!.intent), client_instance_id: reset!.clientInstanceId, document_id: documentId }))
       .catch(async (error: unknown) => {
-        // R2-09 / K19-024: the 422 of a stored-only intent (R14-02) is kept with its record, so it stands between openings.
-        // A failed write of the mark leaves the record as it was; the refusal is then held in page memory as for any key.
+        // R2-09 / K19-024: the 422 of a stored save is kept with its record, so it stands between openings. A failed write
+        // of the mark (or a record changed meanwhile) leaves the storage as it was; the refusal is then held in page memory.
         if (error instanceof KnownRefusal && error.refusal === "command_refused" && save && !save.refused
-          && storedOnly(save.intent.payload.key) && this.live() && this.pending === save) {
+          && this.live() && this.pending === save) {
           const marked: SettingsPending = { ...save, refused: true };
           try { await this.options.pendingStore.markRefused(save, this.lifetime.signal); if (this.pending === save) this.pending = marked; }
           catch { /* the record stays unmarked; nothing is lost */ }
@@ -587,9 +611,10 @@ export class SettingsController {
     });
   }
   /**
-   * R2-09 / K19-024 / P5-013: the user's explicit cancel of an earlier stored save of a stored-only key (R14-02) that the
-   * server refused with 422. Only this press does anything: the old ID is first read once more (never sent again); if
-   * the server applied it after all, that outcome is taken; if it is not found, the stored record is cleared and fresh
+   * R2-09 / K19-024 / P5-013: the user's explicit cancel of an earlier stored save refused with 422 (or of a stored-only
+   * record of another launch). Only this press does anything: the old ID is first read once more (never sent again); if
+   * the server applied it after all, that outcome is taken; if it is not found, only this record is cleared (compared
+   * exactly: a newer intent in the slot fails as "changed" and stays), its unsent editor text is dropped and fresh
    * settings are read, so Settings open for editing. A failed read, a changed access or a storage error clears nothing.
    */
   cancelStored(): Promise<void> {
@@ -611,6 +636,8 @@ export class SettingsController {
       await this.options.pendingStore.clear(stored, this.lifetime.signal);
       if (!this.live()) return;
       if (this.access() !== source) throw new ClosedAccessError();
+      const key = stored.intent.payload.key;
+      if (!storedOnly(key)) delete this.drafts[key];
       this.pending = null;
       this.refusal = null;
       this.outcome = null;
