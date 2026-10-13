@@ -26,6 +26,8 @@ export type SettingsScreenProps = {
   onDictionary?(): void;
   /** The message to the developer, owned by the document; without it the group is not shown. */
   feedback?: FeedbackDocument;
+  /** False while the panel is hidden (another section is shown); a focus move waits until it is shown. Default: shown. */
+  active?: boolean;
 };
 const groups: Array<{ name: "languages" | "learning" | "checking" | "additional"; fields: SettingKey[] }> = [
   { name: "languages", fields: ["ui_language", "dictionary_language"] },
@@ -253,7 +255,7 @@ function SettingsReset({ snapshot, language, onReset, onRetry }: { snapshot: Set
 
 /** Presentation only: callbacks retain command identity and lifetime in the host/controller. */
 export function SettingsScreen(props: SettingsScreenProps) {
-  const { snapshot, language, actions, onToday, onDictionary, feedback } = props;
+  const { snapshot, language, actions, onToday, onDictionary, feedback, active } = props;
   const t = settingsCopy[language];
   const busy = ["loading", "checking", "sending"].includes(snapshot.phase);
   const line = resetLine(snapshot);
@@ -276,16 +278,25 @@ export function SettingsScreen(props: SettingsScreenProps) {
       && (!active || active === document.body || active === leavingStatus.current)) leavingStatus.current?.focus();
   }, [leaving]);
   // R9-01: a live mismatch is followed by an automatic read, so the continuation appears with no press of the user. The button
-  // that was pressed to save (and the refresh button) are disabled while it runs and focus falls to the page; the offered
-  // action takes it, once per offer, and never from an element the user has moved focus to.
-  const offered = useRef(false);
+  // that was pressed to save (and the refresh button) are disabled while it runs and focus falls to the page. When the
+  // read ends for a marked save, the offered action takes focus (or, if the read failed, the refresh button, the manual
+  // way on), once per result, and never from an element the user has moved focus to. A result that arrives while the
+  // panel is hidden (the user left Settings) waits and takes focus when the panel is shown again.
+  const offered = useRef(false), wasBusy = useRef(busy), focusDue = useRef(false);
+  const refreshButton = useRef<HTMLButtonElement>(null);
+  const marked = snapshot.pending?.mismatch === true;
   useEffect(() => {
-    const was = offered.current; offered.current = snapshot.canContinueWithServer;
-    if (!snapshot.canContinueWithServer || was || leaving) return;
-    const active = document.activeElement as HTMLElement | null;
-    if (!active || active === document.body || (active as HTMLButtonElement).disabled || !active.isConnected)
-      continueButton.current?.focus();
-  }, [snapshot.canContinueWithServer, leaving]);
+    const was = offered.current, wasWorking = wasBusy.current;
+    offered.current = snapshot.canContinueWithServer; wasBusy.current = busy;
+    if (leaving) { focusDue.current = false; return; }
+    if (snapshot.canContinueWithServer && !was || wasWorking && !busy && marked) focusDue.current = true;
+    if (!focusDue.current || busy || active === false) return;
+    focusDue.current = false;
+    const current = document.activeElement as HTMLElement | null;
+    if (current && current !== document.body && !(current as HTMLButtonElement).disabled && current.isConnected
+      && !current.closest("[hidden]")) return;
+    (snapshot.canContinueWithServer ? continueButton : refreshButton).current?.focus();
+  }, [snapshot.canContinueWithServer, busy, marked, leaving, active]);
   // A new save is a new operation: the old result line is not left beside it.
   const clearResult = () => setLeaving(state => state === "done" || state === "failed" ? null : state);
   const fieldProps = { ...props, actions: { ...actions, save: (key: SettingKey) => { clearResult(); return actions.save(key); } } };
@@ -295,7 +306,8 @@ export function SettingsScreen(props: SettingsScreenProps) {
   };
   return <main className="settings-screen" lang={language}>
     <header className="settings-header"><h1>{t.title}</h1>
-      <button type="button" className="settings-secondary" disabled={busy} onClick={() => { setLeaving(null); void actions.refresh(); }}>{t.refresh}</button>
+      <button type="button" className="settings-secondary" disabled={busy} ref={refreshButton}
+        onClick={() => { setLeaving(null); void actions.refresh(); }}>{t.refresh}</button>
     </header>
     {busy && line !== "sending" && leaving !== "running" && leaving !== "settled" && <p role="status">{snapshot.phase === "sending" ? snapshot.resetPending ? t.reset.sending : t.saving
       : snapshot.data ? t.refreshing : t.loading}</p>}

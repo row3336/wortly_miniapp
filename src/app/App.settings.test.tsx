@@ -365,6 +365,47 @@ describe("Settings in the real App document", () => {
     await screen.findByText("Показаны текущие настройки сервера. Можно вносить изменения.");
     expect(localStorage.getItem(settingSlot)).toBeNull(); expect(f.commandReply).toHaveBeenCalledOnce();
   });
+  describe("R9-01: a marked mismatch keeps its way to Settings when Today cannot load", () => {
+    /** The save is answered with a mismatch whose settings version is above the profile's, so the Today refresh cannot cover it. */
+    function lagging() {
+      const f = fixture();
+      f.commandReply.mockImplementationOnce(async command => {
+        f.data.settings.learning_group_size = { value: 9, version: "2" }; f.data.state_version = "11";
+        const { state_version: version, ...projection } = f.data;
+        return json({ command: { id: command.command_id, status: "rejected" }, error: { code: "COMMAND_PAYLOAD_MISMATCH" },
+          current: projection, state_version: version }, 409);
+      });
+      return f;
+    }
+    const failedFrame = async () => { await screen.findByText("Не удалось загрузить план"); return within(screen.getAllByRole("main").at(-1)!); };
+    it.each(["Today", "reload"] as const)("%s: the failed frame leads to Settings; the continuation is offered there and the old command is not sent", async how => {
+      const f = lagging();
+      render(<App />); await settings(); type(groupSize, "7"); save(groupSize);
+      await screen.findByRole("button", { name: "Продолжить с текущими настройками" });
+      if (how === "Today") fireEvent.click(within(screen.getByRole("navigation")).getByRole("button", { name: "Сегодня" }));
+      else { cleanup(); render(<App />); }
+      const frame = await failedFrame();
+      expect(frame.getByRole("button", { name: "Повторить" })).toBeTruthy();
+      f.profile.state_version = "11";
+      fireEvent.click(frame.getByRole("button", { name: "Настройки" }));
+      const offered = await screen.findByRole("button", { name: "Продолжить с текущими настройками" }, { timeout: 4000 });
+      expect(f.commandReply).toHaveBeenCalledOnce(); expect(f.statusReply).not.toHaveBeenCalled();
+      expect(localStorage.getItem(settingSlot)).toContain('"mismatch":true');
+      fireEvent.click(offered);
+      await screen.findByText("Показаны текущие настройки сервера. Можно вносить изменения.");
+      expect(localStorage.getItem(settingSlot)).toBeNull();
+      type(groupSize, "7"); save(groupSize); await screen.findByText("Сохранено");
+      expect(f.commandReply).toHaveBeenCalledTimes(2);
+    });
+    it("control: a failed Today frame with no unresolved Settings command offers no way into Settings", async () => {
+      const f = fixture(); f.profile.state_version = "10";
+      render(<App />); await settings();
+      f.data.state_version = "11"; await foreground();
+      fireEvent.click(within(screen.getByRole("navigation")).getByRole("button", { name: "Сегодня" }));
+      const frame = await failedFrame();
+      expect(frame.queryByRole("button", { name: "Настройки" })).toBeNull();
+    });
+  });
   it("Q36 keyboard and failure: a failed second readback keeps the block, says so once, leads to refresh; success line leaves with the next save", async () => {
     const f = fixture(); let rejectedId = "";
     f.commandReply.mockImplementationOnce(async command => {

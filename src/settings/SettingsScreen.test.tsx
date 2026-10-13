@@ -816,6 +816,35 @@ describe("returning the initial settings (M-SET-RESET, D-SET-RESET 4.1, 5.3.1)",
         view.rerender(<SettingsScreen {...f} snapshot={{ ...f.snapshot, canContinueWithServer: true }} />);
         expect(document.activeElement).toBe(screen.getByRole("button", { name: "Продолжить с текущими настройками" })); gone.remove();
       });
+      it("a failed read ends with focus on the refresh button, the way on, when focus was lost", () => {
+        const f = fixture(); mismatchState(f, false);
+        const view = render(<SettingsScreen {...f} snapshot={{ ...f.snapshot, ...reading, canEdit: false }} />);
+        expect(document.activeElement).toBe(document.body);
+        view.rerender(<SettingsScreen {...f} snapshot={{ ...f.snapshot, phase: "unresolved", problem: { reason: "network" }, canEdit: false }} />);
+        expect(screen.getByRole("alert").textContent).toBe(settingsCopy.ru.mismatchRefresh);
+        expect(document.activeElement).toBe(screen.getByRole("button", { name: "Обновить настройки" }));
+      });
+      it("a result that arrives while the panel is hidden takes focus when it is shown again, once", () => {
+        const f = fixture(); mismatchState(f, false);
+        const view = render(<SettingsScreen {...f} active={false} snapshot={{ ...f.snapshot, ...reading, canEdit: false }} />);
+        view.rerender(<SettingsScreen {...f} active={false} snapshot={{ ...f.snapshot, canContinueWithServer: true }} />);
+        expect(document.activeElement).toBe(document.body);
+        view.rerender(<SettingsScreen {...f} active={true} snapshot={{ ...f.snapshot, canContinueWithServer: true }} />);
+        const button = screen.getByRole("button", { name: "Продолжить с текущими настройками" });
+        expect(document.activeElement).toBe(button);
+        screen.getByRole("button", { name: "Обновить настройки" }).focus();
+        view.rerender(<SettingsScreen {...f} active={true} snapshot={{ ...f.snapshot, canContinueWithServer: true, outcome: null }} />);
+        expect(document.activeElement).toBe(screen.getByRole("button", { name: "Обновить настройки" }));
+      });
+      it("an element of a hidden section that kept focus does not block the move on return", () => {
+        const f = fixture(); mismatchState(f, false);
+        const view = render(<SettingsScreen {...f} active={false} snapshot={{ ...f.snapshot, ...reading, canEdit: false }} />);
+        const other = document.createElement("div"); other.hidden = true; const hiddenButton = document.createElement("button");
+        other.append(hiddenButton); document.body.append(other);
+        view.rerender(<SettingsScreen {...f} active={false} snapshot={{ ...f.snapshot, canContinueWithServer: true }} />);
+        view.rerender(<SettingsScreen {...f} active={true} snapshot={{ ...f.snapshot, canContinueWithServer: true }} />);
+        expect(document.activeElement).toBe(screen.getByRole("button", { name: "Продолжить с текущими настройками" })); other.remove();
+      });
       it("while the read runs the editors are closed, the status says so and no continuation is shown", () => {
         const f = fixture(); mismatchState(f, false);
         render(<SettingsScreen {...f} snapshot={{ ...f.snapshot, ...reading, canEdit: false }} />);

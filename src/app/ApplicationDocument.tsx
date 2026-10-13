@@ -10,7 +10,7 @@ import { LearningPreviewCard } from "../learning/LearningPreviewCard";
 import { ManualPendingStore } from "../learning/manualPending";
 import type { AsyncStorage } from "../platform/storage";
 import { navigationText } from "../i18n/messages";
-import { dictionaryChoice, settingsExit } from "../settings/dictionaryChoice";
+import { dictionaryChoice, markedMismatch, settingsExit } from "../settings/dictionaryChoice";
 import { DictionaryChoiceScreen } from "../settings/DictionaryChoiceScreen";
 import { SettingsHost } from "../settings/SettingsHost";
 import { StatisticsHost } from "../statistics/StatisticsHost";
@@ -281,7 +281,10 @@ export function ApplicationDocument(props: Props) {
     language={props.language} renderExamples={renderLearningPreviewExamples} />, [props.language]);
   const retry = () => { void synchronize(); };
   const loading = <TodayScreen state={{ kind: "loading" }} language={props.language} onRetry={retry} />;
-  const failed = <TodayScreen state={{ kind: "failed", reason: "load" }} language={props.language} onRetry={retry} />;
+  // A marked mismatch of a Settings command (Q36, R9-01) has its way on only in Settings, so this frame leads there too.
+  const failed = <TodayScreen state={{ kind: "failed", reason: "load" }} language={props.language} onRetry={retry}
+    notice={markedMismatch(settings.state) && <button type="button" className="today-retry"
+      onClick={openSettings}>{navigationText(props.language).settings}</button>} />;
   // No mode, no closure and no permission to Start is inferred from an unresolved read.
   const readScreen = (): ReactNode => {
     if (read.kind === "learning") return <EntryScreen state={{ kind: "opened" }} language={props.language} />;

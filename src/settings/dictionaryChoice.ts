@@ -33,5 +33,14 @@ export function dictionaryChoice(state: SettingsSnapshot, confirmed: SettingsPro
  */
 export function settingsExit(state: SettingsSnapshot): boolean {
   const other = state.pending !== null && state.pending.intent.payload.key !== "dictionary_language";
-  return (other || state.resetPending !== null) && state.canRetry;
+  return (other || state.resetPending !== null) && state.canRetry || markedMismatch(state);
+}
+
+/**
+ * A sent command that the server answered with a mismatch (Q36, R9-01): it is never repeated, so `canRetry` is false for it,
+ * and what Settings offer (the continuation after a server read, or the refresh) is the only way on. A frame that cannot
+ * show Today leads to Settings for it, whatever the state of the readback; the frame itself sends nothing.
+ */
+export function markedMismatch(state: SettingsSnapshot): boolean {
+  return state.pending?.mismatch === true || state.resetPending?.mismatch === true;
 }
