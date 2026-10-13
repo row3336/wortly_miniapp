@@ -70,11 +70,17 @@ describe("the message to the developer in settings", () => {
   it("a refused message keeps the text and can be sent again", async () => {
     const { world } = setup(["422"]); await ready();
     fireEvent.change(field(), { target: { value: TEXT } }); fireEvent.click(sendButton());
-    await screen.findByText(settingsFeedbackCopy.ru.refused);
+    await screen.findByText(settingsFeedbackCopy.ru.refusedInvalid);
     expect(field().value).toBe(TEXT);
     fireEvent.click(sendButton());
     await screen.findByText(settingsFeedbackCopy.ru.confirmed);
     expect(world.posts.map(post => post.command_id)[0]).not.toBe(world.posts[1].command_id);
+  });
+  it("a refusal without the VALIDATION_FAILED code keeps the general refusal text", async () => {
+    setup(["400"]); await ready();
+    fireEvent.change(field(), { target: { value: TEXT } }); fireEvent.click(sendButton());
+    await screen.findByText(settingsFeedbackCopy.ru.refused);
+    expect(screen.queryByText(settingsFeedbackCopy.ru.refusedInvalid)).toBeNull(); expect(field().value).toBe(TEXT);
   });
   it.each([["403", "forbidden"], ["401", "expired"]] as const)("HTTP %s shows only the access problem, not the send-again refusal", async (fate, problem) => {
     setup([fate]); await ready();
@@ -130,11 +136,65 @@ describe("the message to the developer in settings", () => {
     for (const text of [settingsFeedbackCopy[language].hint, settingsFeedbackCopy[language].send]) expect(within(section as HTMLElement).getByText(text)).toBeTruthy();
   });
   it("the three wordings differ and are complete", () => {
-    for (const key of ["title", "label", "hint", "send", "retry", "refused", "confirmed"] as const) {
+    for (const key of ["title", "label", "hint", "send", "retry", "refused", "refusedInvalid", "confirmed"] as const) {
       expect(new Set(["ru", "uk", "en"].map(language => settingsFeedbackCopy[language as Language][key])).size).toBe(3);
     }
     for (const language of ["ru", "uk", "en"] as const) {
       for (const text of Object.values(settingsFeedbackCopy[language].problems)) expect(text.length).toBeGreaterThan(10);
     }
+  });
+});
+
+// R7-01 (К19-042, П5-022): the counter, the warning over 3700 UTF-16 units, and no send over the limit.
+describe("the 3700-unit limit of the message", () => {
+  const emoji = "\u{1F600}";
+  const note = (language: Language = "ru") => document.getElementById(field(language).getAttribute("aria-describedby")!.split(" ")[1])!;
+  it("shows the counter in UTF-16 units from the start and counts an emoji as two", async () => {
+    setup(); await ready();
+    expect(note().textContent).toBe("0 из 3700");
+    fireEvent.change(field(), { target: { value: `ab${emoji}` } });
+    expect(note().textContent).toBe("4 из 3700");
+    expect(field().getAttribute("aria-invalid")).toBe("false");
+  });
+  it.each([
+    ["3700 ASCII", "a".repeat(3700), 0], ["3700 as 1850 emoji", emoji.repeat(1850), 0], ["3698 + emoji", "a".repeat(3698) + emoji, 0],
+    ["3701 ASCII", "a".repeat(3701), 1], ["1851 emoji", emoji.repeat(1851), 2], ["3699 + emoji", "a".repeat(3699) + emoji, 1],
+  ])("%s: the warning and the disabled button depend on the exact limit", async (_name, text, over) => {
+    const { world } = setup(); await ready();
+    fireEvent.change(field(), { target: { value: text } });
+    const warning = screen.queryByText(settingsFeedbackCopy.ru.tooLong(over));
+    if (over === 0) {
+      expect(screen.queryByText(/Текст слишком длинный/)).toBeNull(); expect((sendButton() as HTMLButtonElement).disabled).toBe(false);
+      expect(field().getAttribute("aria-invalid")).toBe("false");
+    } else {
+      expect(warning).not.toBeNull(); expect(warning!.getAttribute("role")).toBe("alert");
+      expect((sendButton() as HTMLButtonElement).disabled).toBe(true); expect(field().getAttribute("aria-invalid")).toBe("true");
+      expect(field().value).toBe(text); expect(field().readOnly).toBe(false);
+      fireEvent.click(sendButton()); await act(async () => {});
+      expect(world.posts).toHaveLength(0); expect(world.f.values.has(slot)).toBe(false);
+    }
+  });
+  it("shortening the over-long text removes the warning and lets it be sent", async () => {
+    const { world } = setup(); await ready();
+    fireEvent.change(field(), { target: { value: "a".repeat(3750) } });
+    screen.getByText(settingsFeedbackCopy.ru.tooLong(50));
+    fireEvent.change(field(), { target: { value: "a".repeat(3700) } });
+    expect(screen.queryByText(/Текст слишком длинный/)).toBeNull();
+    fireEvent.click(sendButton());
+    await screen.findByText(settingsFeedbackCopy.ru.confirmed);
+    expect(world.posts[0].payload.text).toBe("a".repeat(3700));
+  });
+  it.each(["uk", "en"] as const)("the warning is shown in %s", async language => {
+    setup([], language); await ready(language);
+    fireEvent.change(field(language), { target: { value: "a".repeat(3705) } });
+    screen.getByText(settingsFeedbackCopy[language].tooLong(5));
+    expect(note(language).textContent).toBe(settingsFeedbackCopy[language].counter(3705, 3700));
+  });
+  it("a server 422 on a text the client let through keeps the text and says so in its own words", async () => {
+    const { world } = setup(["422"]); await ready();
+    fireEvent.change(field(), { target: { value: "ab\ud83dcd" } }); fireEvent.click(sendButton());
+    await screen.findByText(settingsFeedbackCopy.ru.refusedInvalid);
+    expect(field().value).toBe("ab\ud83dcd"); expect(world.posts).toHaveLength(1);
+    expect(screen.queryByText(settingsFeedbackCopy.ru.confirmed)).toBeNull();
   });
 });

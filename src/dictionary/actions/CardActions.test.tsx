@@ -4,6 +4,7 @@ import type { DictionaryCardView, OpenedClient } from "../../api/generated";
 import { createOpenedAccess } from "../../app/openedAccess";
 import { excluded, reviewing } from "../card/cardTestData.test-support";
 import { CardActions } from "./CardActions";
+import { actionsCopy } from "./actionsCopy";
 import { aid, CARD, cardActionServer, json, profileCurrent, type Fate } from "./actionTestData.test-support";
 import type { CardActionApplied } from "./cardActionsController";
 import { useCardActions } from "./useCardActions";
@@ -11,7 +12,7 @@ import { useCardActions } from "./useCardActions";
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 /** Card commands from the shared fake server, plus feedback.send with its own fates (core FeedbackService shapes). */
-function world(cardFates: Fate[] = [], feedbackFates: ("ok" | "lose")[] = []) {
+function world(cardFates: Fate[] = [], feedbackFates: ("ok" | "lose" | "422")[] = []) {
   const cards = cardActionServer(cardFates);
   const complaints = { posts: [] as Record<string, any>[], applied: new Map<string, string>(), fates: [...feedbackFates] };
   const fact = (commandId: string, status: string) => ({ id: commandId, kind: "feedback.send", status, applied_at: "2026-10-07T10:00:00Z",
@@ -22,6 +23,7 @@ function world(cardFates: Fate[] = [], feedbackFates: ("ok" | "lose")[] = []) {
       const body = JSON.parse(String(init.body));
       if (body.kind !== "feedback.send") return cards.fetcher(url, init);
       complaints.posts.push(body);
+      if (complaints.fates[0] === "422") { complaints.fates.shift(); return json({ error: { code: "VALIDATION_FAILED" } }, 422); }
       const known = complaints.applied.has(body.command_id);
       if (!known) complaints.applied.set(body.command_id, aid(950 + complaints.applied.size));
       if (complaints.fates.shift() === "lose") throw new TypeError("network");
@@ -198,5 +200,72 @@ describe("card actions under the study block (RA 6.1.10–6.1.12)", () => {
     expect(screen.queryByRole("button", { name: "Повторить" })).toBeNull();
     expect(w.cards.gets).toHaveLength(0);
     expect(view.onChanged).toHaveBeenCalledTimes(1);
+  });
+
+  // R7-01 (К19-042, П5-022): counter, warning over 3700 UTF-16 units, no send over the limit, and the 422 text.
+  describe("the 3700-unit limit of the complaint", () => {
+    const emoji = "\u{1F600}";
+    async function open(w: World) {
+      show(w);
+      fireEvent.click(screen.getByRole("button", { name: "Сообщить об ошибке" }));
+      const dialog = screen.getByRole("dialog", { name: "Сообщить об ошибке" });
+      const field = within(dialog).getByRole("textbox", { name: "Что не так?" }) as HTMLTextAreaElement;
+      await waitFor(() => expect(field.readOnly).toBe(false));
+      const counter = document.getElementById(field.getAttribute("aria-describedby")!.split(" ")[1])!;
+      return { dialog, field, counter, send: within(dialog).getByRole("button", { name: "Отправить" }) as HTMLButtonElement };
+    }
+    it("shows the counter in UTF-16 units and counts an emoji as two", async () => {
+      const { field, counter } = await open(world());
+      expect(counter.textContent).toBe("0 из 3700");
+      fireEvent.change(field, { target: { value: `ab${emoji}` } });
+      expect(counter.textContent).toBe("4 из 3700"); expect(field.getAttribute("aria-invalid")).toBe("false");
+    });
+    it.each([
+      ["3700 ASCII", "a".repeat(3700), 0], ["1850 emoji", emoji.repeat(1850), 0], ["3698 + emoji", "a".repeat(3698) + emoji, 0],
+      ["3701 ASCII", "a".repeat(3701), 1], ["1851 emoji", emoji.repeat(1851), 2], ["3699 + emoji", "a".repeat(3699) + emoji, 1],
+    ])("%s: the exact limit decides the warning and the button", async (_name, text, over) => {
+      const w = world();
+      const { dialog, field, send } = await open(w);
+      fireEvent.change(field, { target: { value: text } });
+      if (over === 0) {
+        expect(within(dialog).queryByText(/Текст слишком длинный/)).toBeNull(); expect(send.disabled).toBe(false);
+      } else {
+        const warning = within(dialog).getByText(actionsCopy.ru.reportTooLong(over));
+        expect(warning.getAttribute("role")).toBe("alert"); expect(send.disabled).toBe(true);
+        expect(field.getAttribute("aria-invalid")).toBe("true"); expect(field.value).toBe(text);
+        fireEvent.click(send); await act(async () => {});
+        expect(w.complaints.posts).toHaveLength(0);
+      }
+    });
+    it("a text over the limit is kept when the window is closed and reopened; shortened, it is sent with the card", async () => {
+      const w = world();
+      const { dialog, field } = await open(w);
+      fireEvent.change(field, { target: { value: "a".repeat(3720) } });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Закрыть" }));
+      fireEvent.click(screen.getByRole("button", { name: "Сообщить об ошибке" }));
+      const again = within(screen.getByRole("dialog")).getByRole("textbox") as HTMLTextAreaElement;
+      expect(again.value).toBe("a".repeat(3720));
+      screen.getByText(actionsCopy.ru.reportTooLong(20));
+      fireEvent.change(again, { target: { value: "a".repeat(3700) } });
+      fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Отправить" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(w.complaints.posts).toEqual([expect.objectContaining({ payload: { text: "a".repeat(3700), card_id: CARD } })]);
+    });
+    it.each(["uk", "en"] as const)("%s: the warning text exists and names the excess", (language) => {
+      expect(actionsCopy[language].reportTooLong(7)).toContain("7");
+      expect(actionsCopy[language].reportCounter(12, 3700)).toContain("3700");
+      expect(actionsCopy[language].reportRefusedInvalid.length).toBeGreaterThan(20);
+      expect(actionsCopy[language].reportTooLong(7)).not.toBe(actionsCopy.ru.reportTooLong(7));
+    });
+    it("a server 422 VALIDATION_FAILED keeps the text and shows its own text, not the general refusal", async () => {
+      const w = world([], ["422"]);
+      const { dialog, field, send } = await open(w);
+      fireEvent.change(field, { target: { value: "ab\ud83dcd" } });
+      fireEvent.click(send);
+      await within(dialog).findByText(actionsCopy.ru.reportRefusedInvalid);
+      expect(within(dialog).queryByText(actionsCopy.ru.reportRefused)).toBeNull();
+      expect(field.value).toBe("ab\ud83dcd"); expect(w.complaints.posts).toHaveLength(1);
+      expect(screen.getByRole("dialog")).toBeTruthy();
+    });
   });
 });

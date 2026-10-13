@@ -1,7 +1,7 @@
 import { ApiError } from "../api/http";
 import { ClosedAccessError, type OpenedAccess } from "../app/openedAccess";
 import { PendingStoreError, validId } from "../commands/pendingSlot";
-import { blankText, validFeedbackIntent, type FeedbackApi, type FeedbackIntent, type FeedbackSendReply } from "./feedbackApi";
+import { blankText, overFeedbackLimit, validFeedbackIntent, type FeedbackApi, type FeedbackIntent, type FeedbackSendReply } from "./feedbackApi";
 import type { FeedbackPending, FeedbackPendingStore } from "./feedbackPending";
 
 export type FeedbackProblem = "network" | "not_sent" | "storage" | "invalid_pending" | "pending_changed" | "expired" | "forbidden";
@@ -71,7 +71,7 @@ export class FeedbackController {
       : !this.loaded && this.problem === "storage";
     return { phase: available ? this.phase : "disposed", text: this.text, confirmed: this.confirmed,
       refusal: this.refusal ? { ...this.refusal } : null, problem: this.problem,
-      canEdit: idle, canSend: idle && !blankText(this.text), canRetry: available && !this.running && retryable };
+      canEdit: idle, canSend: idle && !blankText(this.text) && !overFeedbackLimit(this.text), canRetry: available && !this.running && retryable };
   }
   private emit(): void { if (this.live()) this.options.onUpdate(this.snapshot()); }
 

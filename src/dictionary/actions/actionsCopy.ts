@@ -9,11 +9,13 @@ type Copy = {
   reportTitle: string; reportLabel: string; reportAttached(lemma: string): string; send: string; close: string;
   sending: string; reportChecking: string; reportRefused: string; reportSent: string; reportRetry: string;
   reportProblems: Record<FeedbackProblem, string>;
+  reportCounter(length: number, max: number): string; reportTooLong(over: number): string; reportRefusedInvalid: string;
 };
 
 // root decision, pending owner (M-ACTIONS Р10): working copy for G05. The button labels are RA tables 6.1.10–6.1.12
 // («Не повторять», «Вернуть в повторы», «Изучить заново», «Сообщить об ошибке», field «Что не так?», «Отправить»);
-// the explanations and the uk/en texts are working translations.
+// the explanations and the uk/en texts are working translations. R7-01 (К19-042, П5-022): the counter, the over-limit warning
+// and the 422 VALIDATION_FAILED text are working ru/uk/en texts too.
 export const actionsCopy: Record<Language, Copy> = {
   ru: {
     group: "Действия с карточкой", exclude: "Не повторять", restore: "Вернуть в повторы", relearn: "Изучить заново",
@@ -28,6 +30,9 @@ export const actionsCopy: Record<Language, Copy> = {
     send: "Отправить", close: "Закрыть", sending: "Отправляем…", reportChecking: "Проверяем, принято ли сообщение…",
     reportRefused: "Сообщение не принято. Текст сохранён: проверь его и отправь снова.", reportSent: "Сообщение отправлено.",
     reportRetry: "Повторить отправку",
+    reportCounter: (length, max) => `${length} из ${max}`,
+    reportTooLong: over => `Текст слишком длинный: лишних знаков ${over}. Текст сохранён — сократи его, и сообщение можно будет отправить. Эмодзи считается за 2 знака.`,
+    reportRefusedInvalid: "Сообщение не принято: текст не подходит (слишком длинный или с недопустимыми символами). Текст сохранён: сократи или исправь его и отправь снова.",
     reportProblems: {
       network: "Пока не удалось подтвердить, что сообщение принято. Текст сохранён. Повтори отправку.",
       not_sent: "Сообщение ещё не принято. Текст сохранён. Повтори отправку.",
@@ -51,6 +56,9 @@ export const actionsCopy: Record<Language, Copy> = {
     send: "Надіслати", close: "Закрити", sending: "Надсилаємо…", reportChecking: "Перевіряємо, чи прийнято повідомлення…",
     reportRefused: "Повідомлення не прийнято. Текст збережено: перевір його й надішли знову.", reportSent: "Повідомлення надіслано.",
     reportRetry: "Повторити надсилання",
+    reportCounter: (length, max) => `${length} з ${max}`,
+    reportTooLong: over => `Текст задовгий: зайвих знаків ${over}. Текст збережено — скороти його, і повідомлення можна буде надіслати. Емодзі рахується за 2 знаки.`,
+    reportRefusedInvalid: "Повідомлення не прийнято: текст не підходить (задовгий або з недопустимими символами). Текст збережено: скороти або виправ його й надішли знову.",
     reportProblems: {
       network: "Поки не вдалося підтвердити, що повідомлення прийнято. Текст збережено. Повтори надсилання.",
       not_sent: "Повідомлення ще не прийнято. Текст збережено. Повтори надсилання.",
@@ -74,6 +82,9 @@ export const actionsCopy: Record<Language, Copy> = {
     send: "Send", close: "Close", sending: "Sending…", reportChecking: "Checking whether the message was accepted…",
     reportRefused: "The message was not accepted. The text is kept: check it and send again.", reportSent: "Message sent.",
     reportRetry: "Retry sending",
+    reportCounter: (length, max) => `${length} of ${max}`,
+    reportTooLong: over => `The text is too long by ${over} characters. The text is kept: shorten it and the message can be sent. An emoji counts as 2.`,
+    reportRefusedInvalid: "The message was not accepted: the text does not fit (too long or with invalid characters). The text is kept: shorten or fix it and send again.",
     reportProblems: {
       network: "Could not confirm yet that the message was accepted. The text is kept. Retry sending.",
       not_sent: "The message has not been accepted yet. The text is kept. Retry sending.",

@@ -1,5 +1,6 @@
 import { useId, useRef } from "react";
 import type { Language } from "../../i18n/language";
+import { FEEDBACK_TEXT_MAX_UTF16, feedbackTextLength } from "../../feedback/feedbackApi";
 import { ActionDialog } from "./ActionDialog";
 import { actionsCopy } from "./actionsCopy";
 import type { CardActionsSnapshot } from "./cardActionsController";
@@ -31,6 +32,7 @@ export function CardActions({ language, lemma, document }: Props) {
   const problem = problemText(t, state);
   const relearnCancel = useRef<HTMLButtonElement>(null), field = useRef<HTMLTextAreaElement>(null);
   const form = complaint.form;
+  const length = feedbackTextLength(form.text), over = length - FEEDBACK_TEXT_MAX_UTF16;
   const formBusy = ["loading", "checking", "sending"].includes(form.phase);
   return <section className="card-actions" aria-label={t.group}>
     <div className="card-actions-buttons">
@@ -55,11 +57,13 @@ export function CardActions({ language, lemma, document }: Props) {
     {complaint.open && <ActionDialog title={t.reportTitle} initialFocus={field} onClose={actions.closeComplaint}>
       <label className="card-dialog-label" htmlFor={`${id}-text`}>{t.reportLabel}</label>
       <textarea ref={field} id={`${id}-text`} className="card-dialog-text" rows={4} value={form.text} readOnly={!form.canEdit}
-        aria-describedby={`${id}-attached ${id}-status`} onChange={event => actions.editComplaint(event.target.value)} />
+        aria-describedby={`${id}-attached ${id}-count ${id}-status`} aria-invalid={over > 0} onChange={event => actions.editComplaint(event.target.value)} />
       <p id={`${id}-attached`} className="card-actions-note">{t.reportAttached(lemma)}</p>
+      <p id={`${id}-count`} className={over > 0 ? "card-actions-problem" : "card-actions-note"}>{t.reportCounter(length, FEEDBACK_TEXT_MAX_UTF16)}</p>
       <div id={`${id}-status`} aria-live="polite">
         {formBusy && <p role="status">{form.phase === "checking" ? t.reportChecking : t.sending}</p>}
-        {form.refusal && <p className="card-actions-problem" role="alert">{t.reportRefused}</p>}
+        {over > 0 && <p className="card-actions-problem" role="alert">{t.reportTooLong(over)}</p>}
+        {form.refusal && over <= 0 && <p className="card-actions-problem" role="alert">{form.refusal.code === "VALIDATION_FAILED" ? t.reportRefusedInvalid : t.reportRefused}</p>}
         {form.problem && <p className="card-actions-problem" role="alert">{t.reportProblems[form.problem]}</p>}
       </div>
       <div className="card-dialog-actions">

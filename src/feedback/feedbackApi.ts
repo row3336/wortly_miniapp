@@ -24,6 +24,14 @@ export interface FeedbackApi {
 /** The server rejects an empty or blank text (422), so the client never sends one. */
 export function blankText(text: string): boolean { return text.trim() === ""; }
 
+/**
+ * R7-01 (К19-042, П5-022): a message or a complaint is at most 3700 UTF-16 code units, the same limit the server checks
+ * (core `TEXT_MAX_UTF16`). The unit is the one of String.length, so an emoji counts two; code points are never counted.
+ */
+export const FEEDBACK_TEXT_MAX_UTF16 = 3700;
+export function feedbackTextLength(text: string): number { return text.length; }
+export function overFeedbackLimit(text: string): boolean { return feedbackTextLength(text) > FEEDBACK_TEXT_MAX_UTF16; }
+
 export function validFeedbackIntent(value: unknown): value is FeedbackIntent {
   if (!record(value) || !exactKeys(value, ["command_id", "kind", "payload"]) || !uuid(value.command_id)
     || value.kind !== "feedback.send" || !record(value.payload)) return false;
@@ -69,6 +77,9 @@ export function createFeedbackApi(options: HttpOptions): FeedbackApi {
     async send(token, proof, origin, original) {
       if (!token || !proof || !uuid(origin.clientInstanceId) || !uuid(origin.documentId)) throw new Error("invalid feedback command");
       const intent = snapshot(original);
+      // R7-01: a text over the limit is never sent. A stored intent from before the limit (the check is on the text, not on
+      // the stored shape) ends as a definite refusal, so the text stays and the person is asked to shorten it.
+      if (overFeedbackLimit(intent.payload.text)) return { outcome: "refused", code: "VALIDATION_FAILED" };
       const reply = await request("/commands", { method: "POST", token, proof, body: wireCommand(intent, origin) });
       const value = reply.value;
       if (reply.status === 200 && record(value) && version(value.state_version) && value.error == null) {

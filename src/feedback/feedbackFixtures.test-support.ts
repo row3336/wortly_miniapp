@@ -58,12 +58,12 @@ export function feedbackWorld(fates: Fate[] = []) {
 }
 export type FeedbackWorld = ReturnType<typeof feedbackWorld>;
 
-export function makeController(world: FeedbackWorld, store = new FeedbackPendingStore(world.f.storage)) {
+export function makeController(world: FeedbackWorld, store = new FeedbackPendingStore(world.f.storage), cardId?: string) {
   const updates = vi.fn<(snapshot: FeedbackSnapshot) => void>();
   let next = 100;
   const controller = new FeedbackController({
     api: createFeedbackApi({ fetcher: world.f.fetcher, timeoutMs: 1000, maxResponseBytes: 100000 }),
-    pendingStore: store, access: () => world.f.access(), newId: () => id(next++), onUpdate: updates });
+    pendingStore: store, cardId, access: () => world.f.access(), newId: () => id(next++), onUpdate: updates });
   return { controller, store, updates };
 }
 export const pendingRecord = (commandId: string, text = TEXT) => JSON.stringify({ schemaVersion: 1, profileId: id(50),
