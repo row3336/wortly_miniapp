@@ -5,13 +5,14 @@ import { id } from "../learning/learningFixtures.test-support";
 import { FeedbackPendingStore } from "./feedbackPending";
 import { feedbackWorld, pendingRecord, slot, TEXT, type Fate } from "./feedbackFixtures.test-support";
 import { useFeedbackDocument } from "./useFeedbackDocument";
+import { testGate } from "../commands/testGate.test-support";
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 type Options = Parameters<typeof useFeedbackDocument>[0];
 function setup(fates: Fate[] = [], saved?: string, strict = false) {
   const world = feedbackWorld(fates);
   if (saved) world.f.values.set(slot, saved);
-  const options: Options = { access: world.f.access(), transport: { fetcher: world.f.fetcher, timeoutMs: 30000, maxResponseBytes: 50000 },
+  const options: Options = { access: world.f.access(), transport: { fetcher: world.f.fetcher, timeoutMs: 30000, maxResponseBytes: 50000, gate: testGate() },
     pendingStore: new FeedbackPendingStore(world.f.storage) };
   const wrapper = strict ? ({ children }: PropsWithChildren) => <StrictMode>{children}</StrictMode> : undefined;
   const ui = renderHook((props: Options) => useFeedbackDocument(props), { initialProps: options, wrapper });
@@ -60,7 +61,7 @@ describe("application-owned message form", () => {
     const access = world.f.access();
     const pending = { ...access, profile: { ...access.profile, access: { ...access.profile.access, status: "pending" as const } } };
     const { result } = renderHook(() => useFeedbackDocument({ access: pending as typeof access,
-      transport: { fetcher: world.f.fetcher, timeoutMs: 1000, maxResponseBytes: 1000 }, pendingStore: new FeedbackPendingStore(world.f.storage) }));
+      transport: { fetcher: world.f.fetcher, timeoutMs: 1000, maxResponseBytes: 1000, gate: testGate() }, pendingStore: new FeedbackPendingStore(world.f.storage) }));
     expect(result.current.state).toMatchObject({ phase: "loading", canSend: false, canEdit: false });
     await act(async () => { await result.current.actions.send(); });
     expect(world.posts).toHaveLength(0);

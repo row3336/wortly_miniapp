@@ -100,7 +100,7 @@ export function createStartCancelApi(options: HttpOptions): StartCancelApi {
       const expectedHash = await startCancelIntentHash(command.session_id);
       const query = new URLSearchParams({ client_instance_id: command.client_instance_id, document_id: command.document_id,
         session_id: command.session_id, expected_intent_hash: expectedHash });
-      const reply = await request(`/commands/${command.command_id}?${query}`, { method: "GET", token, proof });
+      const reply = await request.readback(command.command_id, `/commands/${command.command_id}?${query}`, { method: "GET", token, proof });
       // A 409 COMMAND_PAYLOAD_MISMATCH reaches the caller as an HTTP refusal of this exact ID.
       if (!reply.ok) throw httpError(reply);
       const value = reply.value;

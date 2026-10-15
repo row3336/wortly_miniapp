@@ -94,7 +94,7 @@ export function createFeedbackApi(options: HttpOptions): FeedbackApi {
     async status(token, profileId, original) {
       if (!token || !uuid(profileId)) throw new Error("invalid feedback subject");
       const intent = snapshot(original);
-      const reply = await request(`/commands/${intent.command_id}`, { method: "GET", token });
+      const reply = await request.readback(intent.command_id, `/commands/${intent.command_id}`, { method: "GET", token });
       if (!reply.ok) throw httpError(reply);
       const value = reply.value;
       if (reply.status !== 200 || !record(value) || !record(value.command) || !version(value.state_version) || value.error != null) {

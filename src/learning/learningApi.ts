@@ -174,7 +174,7 @@ export function createLearningApi(options: HttpOptions): LearningApi {
     async status(token, original) {
       requireToken(token);
       const intent = snapshotIntent(original);
-      const reply = await request(`/commands/${intent.command_id}`, { method: "GET", token });
+      const reply = await request.readback(intent.command_id, `/commands/${intent.command_id}`, { method: "GET", token });
       if (!reply.ok) throw httpError(reply);
       const value = reply.value;
       if (reply.status !== 200 || !record(value) || !record(value.command)

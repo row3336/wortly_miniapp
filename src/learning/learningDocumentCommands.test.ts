@@ -233,7 +233,8 @@ describe("Learning opened-document command owner", () => {
     expect(f.onDenied).not.toHaveBeenCalled(); expect(f.owner.snapshot()).toMatchObject({ live: true, primary: { pending: true, outcome: null } });
     f.fetcher.mockResolvedValueOnce(response(accepted(original(), "4", current(), "already_applied"))); await f.owner.refresh();
     expect(f.fetcher.mock.calls[1][1]?.headers).toMatchObject({ Authorization: "Bearer synthetic-new-token" });
-    expect(f.owner.snapshot().primary.outcome).toBe("accepted");
+    // The check by ID of the automatic recovery goes through the gate's readback ticket (R6) and may still be on its way.
+    await vi.waitFor(() => expect(f.owner.snapshot().primary.outcome).toBe("accepted"));
   });
   it.each(["primary", "stop"] as const)("foreground joining an old-handle %s POST checks its original receipt once", async lane => {
     const f = fixture(), gate = deferred<Response>(); await f.owner.refresh();

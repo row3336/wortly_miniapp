@@ -6,6 +6,7 @@ import {
   allowedSettingValue, createSettingsApi, resetKeys, validSettingIntent, validSettingsResetIntent,
   type EditableSettingIntent, type SettingIntent, type SettingKey, type SettingSaveCommand, type SettingsResetIntent,
 } from "./settingsApi";
+import { testGate } from "../commands/testGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const subject = id(4);
@@ -31,7 +32,7 @@ function reply() { return { command: fact(), current: current(), state_version: 
 function response(body: unknown, status = 200) { return new Response(JSON.stringify(body), { status }); }
 function setup(body: unknown, status = 200) {
   const fetcher = vi.fn<typeof fetch>(async () => response(body, status));
-  return { fetcher, api: createSettingsApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 20000 }) };
+  return { fetcher, api: createSettingsApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 20000, gate: testGate() }) };
 }
 
 describe("Settings current and constraints", () => {
@@ -121,7 +122,7 @@ describe("Settings current and constraints", () => {
 
   it("refuses the earlier core reply with the reminder pause and without the notification keys (R14-02, §5.7)", async () => {
     const fetcher = vi.fn<typeof fetch>(async () => new Response(coreBeforeNotifications, { status: 200 }));
-    await expect(createSettingsApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 20000 }).get("synthetic"))
+    await expect(createSettingsApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 20000, gate: testGate() }).get("synthetic"))
       .rejects.toMatchObject({ kind: "invalid_response" });
   });
 
@@ -129,7 +130,7 @@ describe("Settings current and constraints", () => {
     const recorded = JSON.parse(coreNewProfile) as SettingsResponse;
     // The recorded text is served as a string (not a re-serialized object); its key order is the sorted one.
     const fetcher = vi.fn<typeof fetch>(async () => new Response(coreNewProfile, { status: 200 }));
-    const read = await createSettingsApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 20000 }).get("synthetic");
+    const read = await createSettingsApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 20000, gate: testGate() }).get("synthetic");
     // The recorded reply comes from a core that still served the two retired readiness keys: they are skipped.
     expect(read).toEqual(withoutRetired(recorded));
     expect(read.settings.learning_content).toEqual({ value: "words", version: "1" });
@@ -326,7 +327,7 @@ describe("Settings command exchange", () => {
   it("snapshots nested values and the original address before awaiting a reply", async () => {
     let finish!: (result: Response) => void;
     const fetcher = vi.fn<typeof fetch>(() => new Promise(resolve => { finish = resolve; }));
-    const api = createSettingsApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 20000 });
+    const api = createSettingsApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 20000, gate: testGate() });
     const topics = { mode: "topics" as const, topic_ids: [id(8)] };
     const request = command(); request.payload = { key: "material", value: topics };
     const original = structuredClone(request);

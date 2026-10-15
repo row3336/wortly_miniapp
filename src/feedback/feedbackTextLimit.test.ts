@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { id } from "../learning/learningFixtures.test-support";
 import { createFeedbackApi, FEEDBACK_TEXT_MAX_UTF16, feedbackTextLength, overFeedbackLimit, type FeedbackIntent } from "./feedbackApi";
 import { feedbackWorld, makeController, pendingRecord, slot } from "./feedbackFixtures.test-support";
+import { testGate } from "../commands/testGate.test-support";
 
 // R7-01 (К19-042, П5-022): 3700 UTF-16 code units, the unit of String.length and of the server (core TEXT_MAX_UTF16).
 afterEach(() => { vi.restoreAllMocks(); });
@@ -83,7 +84,7 @@ describe("the api layer is a second guard", () => {
   const origin = { clientInstanceId: id(1), documentId: id(2) };
   it("sends nothing over the limit: a definite VALIDATION_FAILED refusal without a request", async () => {
     const fetcher = vi.fn<typeof fetch>();
-    const api = createFeedbackApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 100000 });
+    const api = createFeedbackApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 100000, gate: testGate() });
     expect(await api.send("token", "proof", origin, intent("a".repeat(3701)))).toEqual({ outcome: "refused", code: "VALIDATION_FAILED" });
     expect(await api.send("token", "proof", origin, intent(emoji.repeat(1851)))).toEqual({ outcome: "refused", code: "VALIDATION_FAILED" });
     expect(fetcher).not.toHaveBeenCalled();

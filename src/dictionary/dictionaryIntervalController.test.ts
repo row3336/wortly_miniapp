@@ -4,6 +4,7 @@ import {
   DictionaryIntervalController, dictionaryIntervalPort, type DictionaryIntervalSnapshot, type IntervalClock,
 } from "./dictionaryIntervalController";
 import { createDictionaryIntervalApi } from "./intervalApi";
+import { testGate } from "../commands/testGate.test-support";
 
 // Synthetic server shaped after core dictionary_interval.py / coordinator.py (fact fields, refusal codes,
 // state bump only on acceptance, version+1 on undo, A01 row insert/delete). Steps: CORE_HANDOFF_CP2 §5.
@@ -195,7 +196,7 @@ function fixture(start?: bigint, minimum?: () => string | null, written?: Writte
   const seen: DictionaryIntervalSnapshot[] = [];
   let live = true;
   const time = manualClock();
-  const api = createDictionaryIntervalApi({ fetcher: srv.fetcher, timeoutMs: 5000, maxResponseBytes: 1_000_000 });
+  const api = createDictionaryIntervalApi({ fetcher: srv.fetcher, timeoutMs: 5000, maxResponseBytes: 1_000_000, gate: testGate() });
   const controller = new DictionaryIntervalController({
     port: dictionaryIntervalPort(api, "synthetic-token", "synthetic-proof", { client_instance_id: CLIENT, document_id: DOCUMENT }),
     isLive: () => live, newId, minimumStateVersion: minimum, onUpdate: snapshot => { seen.push(snapshot); }, clock: time.clock,
@@ -500,7 +501,7 @@ describe("CP5 F-L1: an own late reply below a state already shown is not a stale
 describe("CP6 Q1: an unresolved initial open continues as the same command after a same-document rebind", () => {
   /** The next binding of the same document: a new controller over a new handle, same origin. */
   function rebound(f: ReturnType<typeof fixture>) {
-    const api = createDictionaryIntervalApi({ fetcher: f.srv.fetcher, timeoutMs: 5000, maxResponseBytes: 1_000_000 });
+    const api = createDictionaryIntervalApi({ fetcher: f.srv.fetcher, timeoutMs: 5000, maxResponseBytes: 1_000_000, gate: testGate() });
     return new DictionaryIntervalController({
       port: dictionaryIntervalPort(api, "synthetic-token-2", "synthetic-proof-2", { client_instance_id: CLIENT, document_id: DOCUMENT }),
       isLive: () => true, newId: f.newId, onUpdate: () => undefined,
@@ -569,7 +570,7 @@ describe("M-INTV: the one undo offer of an increase (CT 2.1.2, К07-122, Т83)",
   const kinds = (f: ReturnType<typeof fixture>) => f.posts().map(body => body.kind);
   /** The next binding of the same live document: same origin, server, IDs and monotonic clock. */
   function rebound(f: ReturnType<typeof fixture>) {
-    const api = createDictionaryIntervalApi({ fetcher: f.srv.fetcher, timeoutMs: 5000, maxResponseBytes: 1_000_000 });
+    const api = createDictionaryIntervalApi({ fetcher: f.srv.fetcher, timeoutMs: 5000, maxResponseBytes: 1_000_000, gate: testGate() });
     return new DictionaryIntervalController({
       port: dictionaryIntervalPort(api, "synthetic-token-2", "synthetic-proof-2", { client_instance_id: CLIENT, document_id: DOCUMENT }),
       isLive: () => true, newId: f.newId, onUpdate: () => undefined, clock: f.time.clock,
@@ -856,7 +857,7 @@ describe("M-INTV after QA (M-INTV-QA REPORT: QA-O, QA-O2, QA-T, QA-L, QA-U)", ()
     f.time.advance(2000, false);
     const handoff = f.controller.handoff()!;
     f.end(); f.controller.dispose();
-    const api = createDictionaryIntervalApi({ fetcher: f.srv.fetcher, timeoutMs: 5000, maxResponseBytes: 1_000_000 });
+    const api = createDictionaryIntervalApi({ fetcher: f.srv.fetcher, timeoutMs: 5000, maxResponseBytes: 1_000_000, gate: testGate() });
     const next = new DictionaryIntervalController({
       port: dictionaryIntervalPort(api, "synthetic-token-2", "synthetic-proof-2", { client_instance_id: CLIENT, document_id: DOCUMENT }),
       isLive: () => true, newId: f.newId, onUpdate: () => undefined, clock: f.time.clock });

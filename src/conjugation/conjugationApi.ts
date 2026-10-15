@@ -182,7 +182,7 @@ export function createConjugationApi(options: HttpOptions): ConjugationApi {
       const query = new URLSearchParams({ client_instance_id: command.client_instance_id, document_id: command.document_id });
       if (command.kind !== "conjugation.schedule") query.set("session_id", command.session_id);
       query.set("expected_intent_hash", expectedHash);
-      const reply = await request(`/commands/${command.command_id}?${query}`, { method: "GET", token, proof });
+      const reply = await request.readback(command.command_id, `/commands/${command.command_id}?${query}`, { method: "GET", token, proof });
       if (!reply.ok) throw httpError(reply);
       if (reply.status !== 200) throw new ApiError("invalid_response");
       const absent = missing(reply.value, command);

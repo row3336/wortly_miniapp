@@ -5,6 +5,7 @@ import {
   DictionarySearchController, searchLimits, type DictionarySearchCommit, type DictionarySearchIo, type DictionarySearchObserved,
 } from "./dictionarySearchController";
 import { createDictionarySearchApi, type SearchMaterial, type SearchRequest } from "./searchApi";
+import { testGate } from "../commands/testGate.test-support";
 
 type Pair = "ru-de" | "uk-de" | "en-de";
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -35,7 +36,7 @@ function harness() {
     return new Response(JSON.stringify(body({ query: params.get("query")!, mode: params.get("mode") as SearchMaterial, first: cursor === null,
       limit: Number(params.get("limit")), offset: cursor === null ? 0 : Number(cursor.split("_")[1]) })));
   });
-  const api = createDictionarySearchApi({ fetcher, timeoutMs: 30000, maxResponseBytes: 100000 });
+  const api = createDictionarySearchApi({ fetcher, timeoutMs: 30000, maxResponseBytes: 100000, gate: testGate() });
   const currents: Array<() => boolean> = [], reads: Array<Promise<unknown>> = [];
   const requests: SearchRequest[] = [], failures: unknown[] = [];
   let alive = true;

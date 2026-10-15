@@ -8,6 +8,7 @@ import {
   dictionaryUndoIntent, dictionaryUndoOfferIntent, validDictionaryContextCurrent, type DictionaryIntervalCommand,
   type DictionaryIntervalIntent,
 } from "./intervalApi";
+import { testGate } from "../commands/testGate.test-support";
 
 // Wire forms follow core api/models.py (Dictionary*Context*, *CommandFact), coordinator._fact and
 // dictionary_interval.context_projection. Literal steps: CORE_HANDOFF_CP2 §5 (D = 2026-09-29).
@@ -145,7 +146,7 @@ function transport(...replies: Planned[]) {
     if (next instanceof Error) throw next;
     return new Response(next.raw ?? JSON.stringify(next.body), { status: next.status });
   });
-  return { fetcher, api: createDictionaryIntervalApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 1_000_000 }) };
+  return { fetcher, api: createDictionaryIntervalApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 1_000_000, gate: testGate() }) };
 }
 function sent(fetcher: ReturnType<typeof transport>["fetcher"], index = 0) {
   const [url, init] = fetcher.mock.calls[index];

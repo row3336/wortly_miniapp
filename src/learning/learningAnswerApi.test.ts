@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AnswerSubmitCommand, LearningAnswerResponse, LearningSessionProjection } from "../api/generated";
 import { createLearningAnswerApi, validAnswerCapabilities } from "./learningAnswerApi";
+import { testGate } from "../commands/testGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const command = (): AnswerSubmitCommand => ({ command_id: id(1), client_instance_id: id(2), document_id: id(3),
@@ -24,7 +25,7 @@ const response = (): LearningAnswerResponse => ({
 });
 function fixture(value: unknown = response(), status = 200) {
   const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify(value), { status }));
-  return { fetcher, api: createLearningAnswerApi({ fetcher, timeoutMs: 200, maxResponseBytes: 10000 }) };
+  return { fetcher, api: createLearningAnswerApi({ fetcher, timeoutMs: 200, maxResponseBytes: 10000, gate: testGate() }) };
 }
 function recovered() {
   const value = response(); Object.assign(value.command, { status: "already_applied" }); return value;

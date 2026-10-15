@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { deferred, fixture, id, profile, response } from "../learning/learningFixtures.test-support";
 import { settingsResponse } from "./settingsRead.test-support";
 import { SettingsReadController, type SettingsReadState } from "./settingsReadController";
+import { testGate } from "../commands/testGate.test-support";
 
 function settings(version = "3") {
   const value = settingsResponse(); value.state_version = version;
@@ -15,7 +16,7 @@ function setup() {
   const f = fixture(); let minimum = "1";
   f.owner.dispose(); f.fetcher.mockImplementation(async () => response(settings()));
   const onUpdate = vi.fn<(state: SettingsReadState) => void>();
-  const options = { access: f.access, transport: { fetcher: f.fetcher, timeoutMs: 1000, maxResponseBytes: 30000 },
+  const options = { access: f.access, transport: { fetcher: f.fetcher, timeoutMs: 1000, maxResponseBytes: 30000, gate: testGate() },
     minimumStateVersion: () => minimum, onUpdate };
   const reader = new SettingsReadController(options); readers.push(reader);
   return { ...f, reader, options, onUpdate, floor: (value: string) => { minimum = value; } };

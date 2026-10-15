@@ -7,6 +7,7 @@ import { SettingsHost } from "./SettingsHost";
 import { SettingsPendingStore, type SettingsPending } from "./settingsPending";
 import { settingsResponse } from "./settingsRead.test-support";
 import { useSettingsDocument } from "./useSettingsDocument";
+import { testGate } from "../commands/testGate.test-support";
 
 /**
  * The dictionary language in the actual Settings screen once it is chosen (19.2-А, texts 28.1-А), with the real
@@ -46,7 +47,7 @@ function setup(options: { data: SettingsResponse; language?: Language; stored?: 
     throw new Error(`unexpected ${path}`);
   });
   const pendingStore = new SettingsPendingStore(f.storage);
-  const props: Props = { access: f.access(), transport: { fetcher: f.fetcher, timeoutMs: 30000, maxResponseBytes: 30000 },
+  const props: Props = { access: f.access(), transport: { fetcher: f.fetcher, timeoutMs: 30000, maxResponseBytes: 30000, gate: testGate() },
     pendingStore, language: options.language ?? "ru", active: true, onCurrent: vi.fn(), onToday: vi.fn() };
   const mount = async () => {
     if (options.stored) await pendingStore.save({ schemaVersion: 1, profileId: f.access().profile.profile_id,

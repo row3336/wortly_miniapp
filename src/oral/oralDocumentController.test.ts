@@ -5,6 +5,7 @@ import type { AsyncStorage } from "../platform/storage";
 import { oralIntentHash, type OralIntent, type OralCommand } from "./oralIntent";
 import { OralSessionPendingStore, OralStopPendingStore } from "./oralPending";
 import { OralDocumentController, type OralDocumentOptions } from "./oralDocumentController";
+import { testGate } from "../commands/testGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const key = (stop = false) => stop ? "wortly.pending.oral_stop" : "wortly.pending.oral_session";
@@ -82,7 +83,7 @@ function fixture(config: { saved?: OralIntent[]; seed?: string | null; step?: St
     return response({ current: { ...current, session_id: path.pathname.split("/").at(-1) }, state_version: stateVersion });
   };
   const fetcher = vi.fn<typeof fetch>(handler), newId = vi.fn(() => id(counter++)), updates = vi.fn();
-  const options: OralDocumentOptions = { access, transport: { fetcher, timeoutMs: 1000, maxResponseBytes: 100000 },
+  const options: OralDocumentOptions = { access, transport: { fetcher, timeoutMs: 1000, maxResponseBytes: 100000, gate: testGate() },
     studyStore, stopStore, newId, initialSessionId: config.seed === undefined ? id(3) : config.seed,
     minimumStateVersion: config.minimum, onUpdate: updates };
   const controller = new OralDocumentController(options);

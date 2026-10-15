@@ -157,7 +157,7 @@ export function createWrittenApi(options: HttpOptions): WrittenApi {
       const { client_instance_id: _client, document_id: _document, ...intent } = command;
       const expectedHash = await writtenIntentHash(intent);
       const query = new URLSearchParams({ ...origin(command), session_id: command.session_id, expected_intent_hash: expectedHash });
-      const reply = await request(`/commands/${command.command_id}?${query}`, { method: "GET", token, proof });
+      const reply = await request.readback(command.command_id, `/commands/${command.command_id}?${query}`, { method: "GET", token, proof });
       // A 409 COMMAND_PAYLOAD_MISMATCH reaches the controller as an HTTP refusal of this exact ID.
       if (!reply.ok) throw httpError(reply);
       const value = reply.value;

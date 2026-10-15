@@ -7,6 +7,7 @@ import type { AsyncStorage } from "../platform/storage";
 import { oralIntentHash, type OralCommand, type OralIntent } from "./oralIntent";
 import { OralSessionPendingStore, OralStopPendingStore } from "./oralPending";
 import { useOralDocument, type OralDocumentHookOptions } from "./useOralDocument";
+import { testGate } from "../commands/testGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const studyKey = "wortly.pending.oral_session";
@@ -67,7 +68,7 @@ function fixture() {
   };
   const fetcher = vi.fn<typeof fetch>(handler);
   const options: OralDocumentHookOptions = { access, studyStore, stopStore, initialSessionId: id(3),
-    newId: vi.fn(() => id(counter++)), transport: { fetcher, timeoutMs: 1000, maxResponseBytes: 100000 } };
+    newId: vi.fn(() => id(counter++)), transport: { fetcher, timeoutMs: 1000, maxResponseBytes: 100000, gate: testGate() } };
   return { options, values, storage, fetcher, handler, posts, tokens, replace, denied, access: () => access,
     revoke: () => { live = false; }, set: (step: Parameters<typeof projection>[0], version = stateVersion) => { current = projection(step); stateVersion = version; } };
 }

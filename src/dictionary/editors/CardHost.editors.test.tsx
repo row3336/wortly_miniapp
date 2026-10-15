@@ -8,6 +8,7 @@ import { ManualPendingStore } from "../../learning/manualPending";
 import type { AsyncStorage } from "../../platform/storage";
 import { CardHost, type CardHostProps } from "../card/CardHost";
 import { CARD, cardView, preposition } from "../card/cardTestData.test-support";
+import { testGate } from "../../commands/testGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const ACTION = id(777);
@@ -99,7 +100,7 @@ function fixture(base?: () => DictionaryCardView) {
   let next = 100;
   const onBack = vi.fn();
   const props: CardHostProps = { access: createOpenedAccess({ opened, token: "synthetic-edit-token", proof: "synthetic-edit-proof", generation: 1,
-    isLive: () => true, onDenied: () => {} }), transport: { fetcher: srv.fetcher, timeoutMs: 5000, maxResponseBytes: 1_000_000 },
+    isLive: () => true, onDenied: () => {} }), transport: { fetcher: srv.fetcher, timeoutMs: 5000, maxResponseBytes: 1_000_000, gate: testGate() },
     language: "ru", pendingStore: new ManualPendingStore(storage), cardId: CARD, origin: { kind: "dictionary" }, newId: () => id(next++), onBack };
   return { srv, props, onBack };
 }

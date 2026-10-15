@@ -5,6 +5,7 @@ import { fixture } from "./learningFixtures.test-support";
 import { createLearningSessionApi, type LearningSessionCommand } from "./learningSessionApi";
 import { LearningViewController } from "./learningViewController";
 import recording from "./learningCoreRecording.json";
+import { testGate } from "../commands/testGate.test-support";
 
 /**
  * Bridge to the real API: replies recorded from core's own ASGI app (TestClient over a disposable wortly_test
@@ -60,7 +61,7 @@ function replay(queue: Exchange[]) {
   return { fetcher, problems, left: () => queue.map(item => item.name) };
 }
 function adapters(fetcher: typeof fetch) {
-  const options = { fetcher, timeoutMs: 1000, maxResponseBytes: 200000 };
+  const options = { fetcher, timeoutMs: 1000, maxResponseBytes: 200000, gate: testGate() };
   const sessions = createLearningSessionApi(options), results = createLearningResultApi(options);
   const command = (name: string) => exchange(name).body as unknown as Record<string, unknown> & { kind: string };
   const isResult = (name: string) => resultKinds.includes(command(name).kind);
@@ -220,7 +221,7 @@ function screen(part: Exchange[]) {
   f.replace({ client_instance_id: first.client_instance_id as string, document_id: first.document_id as string, session: null });
   const onUpdate = vi.fn(), complete = vi.fn();
   const view = new LearningViewController({ access: f.access, storage: f.storage, transport: { fetcher: served.fetcher, timeoutMs: 30000,
-    maxResponseBytes: 200000 }, newId: () => ids.shift()!, sessionId: null, transitionMode: () => "normal", onUpdate, onLearningComplete: complete });
+    maxResponseBytes: 200000, gate: testGate() }, newId: () => ids.shift()!, sessionId: null, transitionMode: () => "normal", onUpdate, onLearningComplete: complete });
   views.push(view);
   const draft = async (name: string) => {
     const payload = exchange(name).body!.payload as { text?: string; forgot?: true };

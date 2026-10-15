@@ -3,6 +3,7 @@ import { conformsToGenerated } from "./generatedContract.test-support";
 import { createWrittenApi } from "./writtenApi";
 import type { WrittenCommand } from "./writtenIntent";
 import recording from "./writtenCoreRecording.json";
+import { testGate } from "../commands/testGate.test-support";
 
 /**
  * Bridge to the real API: replies recorded from core's own ASGI app (TestClient over a disposable wortly_test
@@ -33,7 +34,7 @@ function replay(from = 0) {
     if (expected.body) expect(JSON.parse(String(init?.body))).toEqual(expected.body);
     return new Response(JSON.stringify(expected.response), { status: expected.status });
   });
-  return { api: createWrittenApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 200000 }), fetcher };
+  return { api: createWrittenApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 200000, gate: testGate() }), fetcher };
 }
 const command = (name: string) => exchange(name).body as unknown as WrittenCommand;
 const origin = () => ({ client_instance_id: command("start").client_instance_id, document_id: command("start").document_id });

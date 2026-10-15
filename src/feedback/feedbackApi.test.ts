@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { ApiError } from "../api/http";
 import { id, profile, response } from "../learning/learningFixtures.test-support";
 import { blankText, createFeedbackApi, validFeedbackIntent, type FeedbackIntent } from "./feedbackApi";
+import { testGate } from "../commands/testGate.test-support";
 
 const intent: FeedbackIntent = { command_id: id(100), kind: "feedback.send", payload: { text: "Das Wort ist falsch" } };
 const origin = { clientInstanceId: id(1), documentId: id(2) };
@@ -10,7 +11,7 @@ const fact = (over: Record<string, unknown> = {}, status = "applied") => ({ id: 
 const saved = (over: Record<string, unknown> = {}) => ({ command: fact(), current: { inbox_id: id(900), card_id: null }, state_version: "5", ...over });
 function api(reply: () => Response | Promise<Response>) {
   const fetcher = vi.fn<typeof fetch>(async () => reply());
-  return { fetcher, api: createFeedbackApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 100000 }) };
+  return { fetcher, api: createFeedbackApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 100000, gate: testGate() }) };
 }
 const send = (client: ReturnType<typeof createFeedbackApi>, value = intent) => client.send("token", "proof", origin, value);
 

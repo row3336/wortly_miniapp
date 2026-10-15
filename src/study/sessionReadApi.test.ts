@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { SessionProjection, SessionResponse } from "../api/generated";
 import { createLearningSessionApi } from "../learning/learningSessionApi";
 import { createSessionReadApi, type SessionAddress } from "./sessionReadApi";
+import { testGate } from "../commands/testGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const address: SessionAddress = { session_id: id(3), client_instance_id: id(1), document_id: id(2) };
@@ -15,7 +16,7 @@ function written(): SessionProjection {
 }
 function fixture(current: unknown = written(), stateVersion: unknown = "3", status = 200) {
   const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ current, state_version: stateVersion }), { status }));
-  const options = { fetcher, timeoutMs: 100, maxResponseBytes: 20000 };
+  const options = { fetcher, timeoutMs: 100, maxResponseBytes: 20000, gate: testGate() };
   return { fetcher, api: createSessionReadApi(options), learning: createLearningSessionApi(options) };
 }
 // Counts as the server reports them: progress and summary agree, no ratio while nothing is completed (a Stop before the first answer).

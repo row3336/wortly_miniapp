@@ -13,6 +13,7 @@ import { learningUndoServer, type LearningUndoOptions } from "./learningUndo.tes
 import { learningViewFixture } from "./learningView.test-support";
 import { LearningViewController } from "./learningViewController";
 import { useLearningDocument } from "./useLearningDocument";
+import { testGate } from "../commands/testGate.test-support";
 
 const owners: LearningViewController[] = [];
 afterEach(() => {
@@ -24,7 +25,7 @@ async function harness(options: LearningUndoOptions = {}, onLearningComplete: ()
   const s = learningUndoServer(options);
   const own = (complete = onLearningComplete) => {
     const view = new LearningViewController({ access: s.access, storage: s.storage, newId: s.newId,
-      transport: { fetcher: s.fetcher, timeoutMs: 30000, maxResponseBytes: 100000 }, sessionId: id(3),
+      transport: { fetcher: s.fetcher, timeoutMs: 30000, maxResponseBytes: 100000, gate: testGate() }, sessionId: id(3),
       transitionMode: () => "normal", onUpdate: vi.fn(), onLearningComplete: complete });
     owners.push(view);
     return view;
@@ -143,7 +144,7 @@ describe("useLearningDocument sends «learning-complete» through the Telegram h
   function hook(s: ReturnType<typeof learningUndoServer>) {
     // One options object: a new transport on every render would re-create the owner.
     const options: Parameters<typeof useLearningDocument>[0] = { access: s.access(), storage: s.storage, newId: s.newId,
-      transport: { fetcher: s.fetcher, timeoutMs: 30000, maxResponseBytes: 100000 }, initialSessionId: id(3), transitionMode: "normal" };
+      transport: { fetcher: s.fetcher, timeoutMs: 30000, maxResponseBytes: 100000, gate: testGate() }, initialSessionId: id(3), transitionMode: "normal" };
     return renderHook(props => useLearningDocument(props), { initialProps: options });
   }
   it("one success notification for the completing answer", async () => {

@@ -4,6 +4,7 @@ import type { LearningSessionProjection } from "../api/generated";
 import { tick } from "../commands/recoveryTime.test-support";
 import { LearningViewController } from "./learningViewController";
 import { current, deferred, id, missing, original, pending, primaryKey, profile, response } from "./learningFixtures.test-support";
+import { testGate } from "../commands/testGate.test-support";
 
 const owners: LearningViewController[] = [];
 afterEach(() => { owners.splice(0).forEach(owner => owner.dispose()); vi.useRealTimers(); });
@@ -601,7 +602,7 @@ describe("Learning: a pair changed elsewhere and an empty Stop (M-WRITTEN-STUCK)
     f.setStep(closedElsewhere("pair_changed"));
     f.replace({ profile: { ...profile(), dictionary_language: "uk" }, session: null }); f.fetcher.mockImplementation(f.handler);
     const owner = new LearningViewController({ access: f.access, storage: f.storage, newId: f.newId,
-      transport: { fetcher: f.fetcher, timeoutMs: 30000, maxResponseBytes: 100000 }, sessionId: null, transitionMode: () => "normal",
+      transport: { fetcher: f.fetcher, timeoutMs: 30000, maxResponseBytes: 100000, gate: testGate() }, sessionId: null, transitionMode: () => "normal",
       onUpdate: vi.fn() });
     owners.push(owner);
     await owner.refresh();

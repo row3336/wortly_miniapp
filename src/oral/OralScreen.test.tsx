@@ -11,6 +11,7 @@ import { OralDocumentController, type OralDocumentSnapshot } from "./oralDocumen
 import { oralIntentHash, type OralIntent, type OralCommand } from "./oralIntent";
 import { OralSessionPendingStore, OralStopPendingStore } from "./oralPending";
 import { useOralDocument, type OralDocumentActions } from "./useOralDocument";
+import { testGate } from "../commands/testGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const studyKey = "wortly.pending.oral_session", stopKey = "wortly.pending.oral_stop";
@@ -76,7 +77,7 @@ function fixture(step: Step = "prefetched") {
     return response({ current, state_version: stateVersion });
   };
   const fetcher = vi.fn<typeof fetch>(handler);
-  const options = { access, transport: { fetcher, timeoutMs: 1000, maxResponseBytes: 100000 },
+  const options = { access, transport: { fetcher, timeoutMs: 1000, maxResponseBytes: 100000, gate: testGate() },
     studyStore: new OralSessionPendingStore(storage), stopStore: new OralStopPendingStore(storage),
     newId: () => id(counter++), initialSessionId: id(3) };
   const controller = new OralDocumentController({ ...options, onUpdate() {} });

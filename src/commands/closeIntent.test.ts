@@ -8,6 +8,7 @@ import { readableWrittenIntent, validWrittenIntent, writtenIntentHash } from "..
 import { validWrittenPending } from "../written/writtenPending";
 import { copySaveFailedStop, sendableIntent, validSaveFailedStop } from "./closeIntent";
 import { hashInPlace } from "./recoveryTime.test-support";
+import { testGate } from "./testGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const c = { command_id: id(300), session_id: id(3), kind: "session.stop" as const,
@@ -37,7 +38,7 @@ describe("the closure record C", () => {
   it("the written API refuses to send it without a request; its status fingerprint names the unsaved action", async () => {
     hashInPlace();
     const fetcher = vi.fn<typeof fetch>(async () => new Response("{}"));
-    const api = createWrittenApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 100000 });
+    const api = createWrittenApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 100000, gate: testGate() });
     await expect(api.send("token", "proof", { ...c, client_instance_id: id(1), document_id: id(2) } as never)).rejects.toThrow();
     expect(fetcher).not.toHaveBeenCalled();
     const plain = await writtenIntentHash({ command_id: id(300), session_id: id(3), kind: "session.stop", payload: { reason: "stop" } } as never);

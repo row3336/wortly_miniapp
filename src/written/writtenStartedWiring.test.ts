@@ -10,6 +10,7 @@ import { WrittenDocumentCommands } from "./writtenDocumentCommands";
 import { createWrittenApi } from "./writtenApi";
 import type { WrittenCommand } from "./writtenIntent";
 import { id, writtenFixture } from "./writtenFixtures.test-support";
+import { testGate } from "../commands/testGate.test-support";
 
 const owners: { dispose(): void }[] = [];
 afterEach(() => { owners.splice(0).forEach(owner => owner.dispose()); });
@@ -95,7 +96,7 @@ describe("the three send() adapters forward started to the transport", () => {
   function probe() {
     const order: string[] = [];
     const fetcher = vi.fn<typeof fetch>(async () => { order.push("fetch"); return new Response("{}", { status: 500 }); });
-    return { order, fetcher, started: () => { order.push("started"); }, http: { fetcher, timeoutMs: 1000, maxResponseBytes: 10000 } };
+    return { order, fetcher, started: () => { order.push("started"); }, http: { fetcher, timeoutMs: 1000, maxResponseBytes: 10000, gate: testGate() } };
   }
   const writtenCommand = { command_id: id(10), session_id: id(3), kind: "session.start", payload: { mode: "written", bucket: "words" }, ...origin } as WrittenCommand;
   const answer: AnswerSubmitCommand = { command_id: id(11), session_id: id(3), assignment_id: id(6), kind: "answer.submit",

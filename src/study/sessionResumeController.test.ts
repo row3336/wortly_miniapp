@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenedClient, SessionProjection } from "../api/generated";
 import { createOpenedAccess, type OpenedAccess } from "../app/openedAccess";
 import { SessionResumeController, type SessionResumeState } from "./sessionResumeController";
+import { testGate } from "../commands/testGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const written = (): SessionProjection => ({ session_id: id(3), mode: "written", status: "summary", pair: "ru-de",
@@ -26,7 +27,7 @@ function fixture() {
   replace();
   const fetcher = vi.fn<typeof fetch>(async () => response()), onUpdate = vi.fn<(state: SessionResumeState) => void>();
   const owner = new SessionResumeController({ access: () => current,
-    transport: { fetcher, timeoutMs: 500, maxResponseBytes: 20000 }, minimumStateVersion: () => minimum, onUpdate });
+    transport: { fetcher, timeoutMs: 500, maxResponseBytes: 20000, gate: testGate() }, minimumStateVersion: () => minimum, onUpdate });
   return { fetcher, owner, onUpdate, replace, denied, access: () => current, revoke: () => { live = false; }, floor: (value: string) => { minimum = value; } };
 }
 

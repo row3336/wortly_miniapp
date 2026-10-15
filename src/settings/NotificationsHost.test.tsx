@@ -5,6 +5,7 @@ import { SettingsHost } from "./SettingsHost";
 import { useSettingsDocument } from "./useSettingsDocument";
 import { SettingsPendingStore } from "./settingsPending";
 import { settingsResponse } from "./settingsRead.test-support";
+import { testGate } from "../commands/testGate.test-support";
 
 // project_notifications §8.1–8.2 (M2): the submenu is an inner view of SettingsHost on the shared controller and document.
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
@@ -37,7 +38,7 @@ function setup(opened = true) {
     }
     return response({ state_version: data.state_version, topics: [{ id: id(201), number: 1, german_name: "Haus", description: "House" }] });
   });
-  const props = { access: f.access(), transport: { fetcher: f.fetcher, timeoutMs: 30000, maxResponseBytes: 30000 },
+  const props = { access: f.access(), transport: { fetcher: f.fetcher, timeoutMs: 30000, maxResponseBytes: 30000, gate: testGate() },
     pendingStore: new SettingsPendingStore(f.storage), language: "ru" as const, active: true, onCurrent: vi.fn(), onToday: vi.fn() };
   const ui = render(<Host {...props} />);
   const back = () => act(() => { for (const handler of [...handlers]) handler(); });

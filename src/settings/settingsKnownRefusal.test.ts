@@ -7,6 +7,7 @@ import { SettingsController } from "./settingsController";
 import { SettingsPendingStore } from "./settingsPending";
 import { settingsResponse } from "./settingsRead.test-support";
 import { SettingsResetPendingStore } from "./settingsResetPending";
+import { testGate } from "../commands/testGate.test-support";
 
 // M-SETTINGS-KNOWN-REFUSAL (C082): the two exact refusals the core answers before any command handling, through the
 // real SettingsApi and controller over a synthetic server.
@@ -51,7 +52,7 @@ function world(storage = memory()) {
     const body = JSON.parse(String(init!.body)); posts.push(body);
     return answer(postAnswers.shift(), () => fact(body, "applied"));
   });
-  const api = createSettingsApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 50000 });
+  const api = createSettingsApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 50000, gate: testGate() });
   let access: OpenedAccess | null = null;
   function open(data = opened(), generation = 1) {
     const handle: OpenedAccess = createOpenedAccess({ opened: data, token: `token-${generation}`, proof: `proof-${generation}`,
@@ -239,7 +240,7 @@ describe("known refusals of settings commands are not lost replies (C082)", () =
 
   it("the api names the two refusals and nothing else", async () => {
     const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify(incompatible.body), { status: 409 }));
-    const api = createSettingsApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 20000 });
+    const api = createSettingsApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 20000, gate: testGate() });
     const command = { command_id: id(1), kind: "settings.reset" as const, client_instance_id: id(2), document_id: id(3), payload: {} };
     const error = await api.reset("t", "p", id(1), command).catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(KnownRefusal);

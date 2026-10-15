@@ -4,6 +4,7 @@ import { action, id, original, pending, primaryKey, stop } from "./learningFixtu
 import { learningUndoServer } from "./learningUndo.test-support";
 import { learningViewFixture } from "./learningView.test-support";
 import { LearningViewController } from "./learningViewController";
+import { testGate } from "../commands/testGate.test-support";
 
 const owners: LearningViewController[] = [];
 afterEach(() => { owners.splice(0).forEach(owner => owner.dispose()); vi.useRealTimers(); });
@@ -68,7 +69,7 @@ describe("Learning «Шаг назад» meets another window's record", () => {
     hashInPlace();
     const s = learningUndoServer();
     const view = new LearningViewController({ access: s.access, storage: s.storage, newId: s.newId,
-      transport: { fetcher: s.fetcher, timeoutMs: 30000, maxResponseBytes: 100000 }, sessionId: id(3), transitionMode: () => "normal",
+      transport: { fetcher: s.fetcher, timeoutMs: 30000, maxResponseBytes: 100000, gate: testGate() }, sessionId: id(3), transitionMode: () => "normal",
       onUpdate: vi.fn() });
     owners.push(view);
     await view.refresh(); view.setDraft("falsch"); await view.submit();

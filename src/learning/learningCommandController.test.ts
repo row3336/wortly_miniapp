@@ -11,6 +11,7 @@ import type { LearningAnswerIntent, LearningCommandIntent } from "./learningComm
 import { createLearningResultApi, type LearningAnswerReply, type LearningAnswerStatus } from "./learningAnswerApi";
 import { staleCommand } from "../app/openRules.test-support";
 import { LearningPageStarts } from "./learningPageStarts";
+import { testGate } from "../commands/testGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const slot = "wortly.pending.learning_session", stopSlot = "wortly.pending.learning_stop";
@@ -384,7 +385,7 @@ describe("Learning command durability and reconciliation", () => {
       const { outcome: _outcome, ...body } = recovered();
       return new Response(JSON.stringify(body));
     });
-    const api = createLearningSessionApi({ fetcher, timeoutMs: 100, maxResponseBytes: 10000 });
+    const api = createLearningSessionApi({ fetcher, timeoutMs: 100, maxResponseBytes: 10000, gate: testGate() });
     const callbacks = { send: (intent: LearningSessionIntent) => api.send("token", "proof", { ...intent, client_instance_id: id(1), document_id: documentId }),
       check: (intent: LearningSessionIntent) => api.status("token", "proof", { ...intent, client_instance_id: id(1), document_id: documentId }),
       read: (session_id: string) => api.read("token", "proof", { session_id, client_instance_id: id(1), document_id: documentId }) };
@@ -684,7 +685,7 @@ describe("D-STALE-WINDOW 3.1.4: the core's DOCUMENT_STALE envelope keeps the Lea
   /** The real adapters over a transport that answers every POST with this envelope of the core. */
   function wired(f: ReturnType<typeof fixture>, body: (intent: LearningCommandIntent) => unknown, status: number) {
     const fetcher = vi.fn<typeof fetch>(async (_url, init) => new Response(JSON.stringify(body(JSON.parse(String(init!.body)))), { status }));
-    const http = { fetcher, timeoutMs: 1000, maxResponseBytes: 100000 };
+    const http = { fetcher, timeoutMs: 1000, maxResponseBytes: 100000, gate: testGate() };
     const sessions = createLearningSessionApi(http), results = createLearningResultApi(http);
     const origin = { client_instance_id: id(1), document_id: id(2) };
     const send = vi.fn((intent: LearningCommandIntent): Promise<unknown> => ["answer.submit", "result.grade", "result.correct", "result.undo"].includes(intent.kind)

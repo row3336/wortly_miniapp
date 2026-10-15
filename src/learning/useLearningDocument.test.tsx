@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useLearningDocument } from "./useLearningDocument";
 import { learningViewFixture } from "./learningView.test-support";
 import { current, deferred, id, primaryKey, profile, response } from "./learningFixtures.test-support";
+import { testGate } from "../commands/testGate.test-support";
 
 type Options = Parameters<typeof useLearningDocument>[0];
 type Fixture = ReturnType<typeof learningViewFixture>;
@@ -13,7 +14,7 @@ function setup(fresh = false, strict = false, prefetched = false, extra: Partial
   const f = learningViewFixture("normal", fresh ? null : id(3)); fixtures.push(f);
   if (prefetched) f.setStep({ ...current(), assignment: { ...current().assignment!, status: "prefetched" } });
   const options: Options = { access: f.access(), storage: f.storage,
-    transport: { fetcher: f.fetcher, timeoutMs: 30000, maxResponseBytes: 100000 }, newId: f.newId,
+    transport: { fetcher: f.fetcher, timeoutMs: 30000, maxResponseBytes: 100000, gate: testGate() }, newId: f.newId,
     initialSessionId: fresh ? null : id(3), transitionMode: "normal", ...extra };
   const wrapper = strict ? ({ children }: PropsWithChildren) => <StrictMode>{children}</StrictMode> : undefined;
   const ui = renderHook(props => useLearningDocument(props), { initialProps: options, wrapper });
@@ -32,7 +33,7 @@ describe("React owner for an opened Learning document", () => {
   it.each(["layout", "passive"])("an explicit %s route tap waits for activation before starting", async timing => {
     const f = learningViewFixture("normal", null); fixtures.push(f);
     const options: Options = { access: f.access(), storage: f.storage, newId: f.newId,
-      transport: { fetcher: f.fetcher, timeoutMs: 30000, maxResponseBytes: 100000 },
+      transport: { fetcher: f.fetcher, timeoutMs: 30000, maxResponseBytes: 100000, gate: testGate() },
       initialSessionId: null, transitionMode: "normal", enabled: false };
     let pending: Promise<void> | null = null;
     const { result, rerender } = renderHook((props: Options) => {
@@ -101,7 +102,7 @@ describe("React owner for an opened Learning document", () => {
   it("new props revoke actions before passive effects run", async () => {
     const f = learningViewFixture(); fixtures.push(f);
     const options: Options = { access: f.access(), storage: f.storage, newId: f.newId,
-      transport: { fetcher: f.fetcher, timeoutMs: 30000, maxResponseBytes: 100000 }, initialSessionId: id(3), transitionMode: "normal" };
+      transport: { fetcher: f.fetcher, timeoutMs: 30000, maxResponseBytes: 100000, gate: testGate() }, initialSessionId: id(3), transitionMode: "normal" };
     let checked = false;
     const { result, rerender } = renderHook((props: Options) => {
       const current = useLearningDocument(props);

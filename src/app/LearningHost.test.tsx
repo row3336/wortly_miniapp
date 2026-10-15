@@ -12,6 +12,7 @@ import { useSettingsDocument } from "../settings/useSettingsDocument";
 import type { LearningCommandIntent } from "../learning/learningCommandIntent";
 import { watchCommits } from "./flashWatch.test-support";
 import { LearningHost, type LearningHostProps } from "./LearningHost";
+import { testGate } from "../commands/testGate.test-support";
 
 const fixtures: ReturnType<typeof learningViewFixture>[] = [];
 afterEach(() => {
@@ -51,7 +52,7 @@ function setup(options: { initialSessionId?: string | null; route?: Route; confi
   if (options.pendingReset) f.values.set(settingsResetSlotOf(f.access().profile.profile_id), JSON.stringify({ schemaVersion: 1, profileId: f.access().profile.profile_id,
     clientInstanceId: f.access().document.clientInstanceId, intent: { command_id: id(61), kind: "settings.reset", payload: {} } }));
   const data = settingsData(); if (options.confirmed === false) data.settings.transition_mode.value = null;
-  const transport = { fetcher: f.fetcher, timeoutMs: 30000, maxResponseBytes: 100000 };
+  const transport = { fetcher: f.fetcher, timeoutMs: 30000, maxResponseBytes: 100000, gate: testGate() };
   const store = new SettingsPendingStore(f.storage), settingsRead = vi.fn(async () => response(data));
   const onToday = vi.fn(), onLearning = vi.fn(), renderPreview = vi.fn((preview: Parameters<LearningHostProps["renderPreview"]>[0]) =>
     <p data-testid="approved-preview">{preview.content.card.lemma}</p>);
@@ -414,7 +415,7 @@ describe("a study record after the confirmed closure (Н2, Н6)", () => {
   function closure(intercept: (call: Parameters<typeof fetch>, router: (...call: Parameters<typeof fetch>) => Promise<Response>) => Promise<Response> | null) {
     const f = learningViewFixture("normal", id(3)); fixtures.push(f); f.view.dispose(); f.owner.dispose();
     const data = settingsData();
-    const transport = { fetcher: f.fetcher, timeoutMs: 30000, maxResponseBytes: 100000 };
+    const transport = { fetcher: f.fetcher, timeoutMs: 30000, maxResponseBytes: 100000, gate: testGate() };
     const store = new SettingsPendingStore(f.storage), onToday = vi.fn();
     const router = async (...call: Parameters<typeof fetch>) => {
       const path = new URL(String(call[0]), "http://localhost").pathname;

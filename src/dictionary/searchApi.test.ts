@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { DictionarySearchResponse } from "../api/generated";
 import { createDictionarySearchApi, validSearchPage, type SearchRequest } from "./searchApi";
+import { testGate } from "../commands/testGate.test-support";
 
 const id = (n: number) => `abcdef00-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const request = (): SearchRequest => ({ query: " <Ü & + % /?>\n", mode: "phrases", limit: 2, cursor_token: null });
@@ -16,7 +17,7 @@ const similarCard = (n: number, type: DictionarySearchResponse["items"][number][
   translation: { common: ["я иду домой"], personal: null } });
 function fixture(body: unknown, status = 200) {
   const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify(body), { status }));
-  return { fetcher, api: createDictionarySearchApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 100000 }) };
+  return { fetcher, api: createDictionarySearchApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 100000, gate: testGate() }) };
 }
 
 describe("ordinary dictionary transport", () => {

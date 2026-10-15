@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { LearningAnswerResponse, ResultCorrectCommand, ResultGradeCommand } from "../api/generated";
 import { createLearningResultApi } from "./learningAnswerApi";
+import { testGate } from "../commands/testGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 type Command = ResultCorrectCommand | ResultGradeCommand;
@@ -23,7 +24,7 @@ function response(original = command()): LearningAnswerResponse {
 }
 function fixture(value: unknown = response(), status = 200) {
   const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify(value), { status }));
-  return { fetcher, api: createLearningResultApi({ fetcher, timeoutMs: 100, maxResponseBytes: 10000 }) };
+  return { fetcher, api: createLearningResultApi({ fetcher, timeoutMs: 100, maxResponseBytes: 10000, gate: testGate() }) };
 }
 
 describe("Learning revision transport", () => {

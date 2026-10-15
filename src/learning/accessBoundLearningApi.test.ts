@@ -8,6 +8,7 @@ import { ACCESS_BOUND_MARKER, accessBoundLearningApi, accessBoundManualContext, 
 import { createLearningApi, type LearningApi, type ManualIntent } from "./learningApi";
 import { ManualPendingStore } from "./manualPending";
 import { ManualSelectionController, type ManualSelectionSnapshot } from "./manualSelectionController";
+import { testGate } from "../commands/testGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const big = "9007199254740995";
@@ -46,7 +47,7 @@ function fixture() {
     active = bound; return bound;
   };
   const fetcher = vi.fn<typeof fetch>();
-  const raw = createLearningApi({ fetcher, timeoutMs: 5000, maxResponseBytes: 100000 });
+  const raw = createLearningApi({ fetcher, timeoutMs: 5000, maxResponseBytes: 100000, gate: testGate() });
   const first = access();
   const api = accessBoundLearningApi({ access: first, api: raw, isCurrent: () => current });
   return { access, first, fetcher, raw, api, denied, stale: () => { current = false; } };

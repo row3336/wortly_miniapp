@@ -5,6 +5,7 @@ import type { OpenedClient, Profile } from "../api/generated";
 import { createOpenedAccess, type OpenedAccess } from "../app/openedAccess";
 import type { AsyncStorage } from "../platform/storage";
 import { useStudyDocument, type StudyDocumentOptions, type StudyViewSettings } from "./useStudyDocument";
+import { testGate } from "./testGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 type Options = StudyDocumentOptions & { initialSessionId: string | null };
@@ -40,7 +41,7 @@ function open(document = id(4), pair = profile.dictionary_language): OpenedAcces
   return createOpenedAccess({ opened, token: "t", proof: "p", generation: 1, isLive: () => true, onDenied: () => {} });
 }
 const storage: AsyncStorage = { get: vi.fn(), set: vi.fn(), remove: vi.fn() };
-const transport = { fetcher: vi.fn(), timeoutMs: 1, maxResponseBytes: 1 };
+const transport = { fetcher: vi.fn(), timeoutMs: 1, maxResponseBytes: 1, gate: testGate() };
 function setup(reseed: boolean, initial: Partial<Options> = {}) {
   const created: FakeController[] = [];
   const options: Options = { access: open(), storage, transport, newId: () => id(9), transitionMode: "normal", initialSessionId: id(3), ...initial };

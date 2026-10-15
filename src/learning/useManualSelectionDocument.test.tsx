@@ -9,6 +9,7 @@ import { ManualPendingStore, type ManualPending } from "./manualPending";
 import {
   useManualSelectionDocument, type ManualSelectionDocumentActions, type ManualSelectionDocumentOptions, type ManualSelectionDocumentState,
 } from "./useManualSelectionDocument";
+import { testGate } from "../commands/testGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const A = id(41), B = id(42), PROFILE = id(3), CLIENT = id(1);
@@ -93,7 +94,7 @@ function fixture(options: { start?: bigint; profileVersion?: string; seeded?: Ma
     return createOpenedAccess({ opened: { ...base, ...patch }, token: "synthetic-manual-token-sibling", proof: "synthetic-manual-proof-sibling",
       generation: 1, isLive: () => live, onDenied: error => { denied(error); live = false; } });
   };
-  const transport = { fetcher: srv.fetcher, timeoutMs: 5000, maxResponseBytes: 100000 };
+  const transport = { fetcher: srv.fetcher, timeoutMs: 5000, maxResponseBytes: 100000, gate: testGate() };
   const pendingStore = new ManualPendingStore(storage);
   const newId = vi.fn(() => id(next++));
   const options0: ManualSelectionDocumentOptions = { access: access(), transport, pendingStore, enabled: true, newId };

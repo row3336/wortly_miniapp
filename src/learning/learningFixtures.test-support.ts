@@ -6,6 +6,7 @@ import type { AsyncStorage } from "../platform/storage";
 import type { LearningCommandIntent } from "./learningCommandIntent";
 import type { LearningTransition } from "./learningCommandController";
 import { LearningDocumentCommands, type LearningDocumentSnapshot } from "./learningDocumentCommands";
+import { testGate } from "../commands/testGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const primaryKey = "wortly.pending.learning_session", stopKey = "wortly.pending.learning_stop";
@@ -87,7 +88,7 @@ function fixture(saved: Partial<Record<"primary" | "stop", LearningCommandIntent
   });
   const onUpdate = vi.fn<(snapshot: LearningDocumentSnapshot) => void>(), newId = vi.fn(() => id(next++));
   const make = () => new LearningDocumentCommands({ access: () => access, storage,
-    transport: { fetcher, timeoutMs: 1000, maxResponseBytes: 100000 }, newId, onUpdate, minimumStateVersion });
+    transport: { fetcher, timeoutMs: 1000, maxResponseBytes: 100000, gate: testGate() }, newId, onUpdate, minimumStateVersion });
   return { values, storage, access: () => access, replace, fetcher, onDenied, onUpdate, newId, make, owner: make(), revoke: () => { live = false; } };
 }
 

@@ -8,6 +8,7 @@ import { SettingsController, type SettingsSnapshot } from "./settingsController"
 import { SettingsPendingStore, validSettingsPending } from "./settingsPending";
 import { SettingsResetPendingStore } from "./settingsResetPending";
 import { settingsResponse } from "./settingsRead.test-support";
+import { testGate } from "../commands/testGate.test-support";
 
 // project_notifications §5, §8.2 (M1/M2): the notification keys in the settings decoder and the submenu's controller rules.
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -66,7 +67,7 @@ function choose(controller: SettingsController, key: SettingKey, value: unknown)
 describe("notification settings decoder (M1)", () => {
   const reply = (body: unknown) => {
     const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify(body), { status: 200 }));
-    return createSettingsApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 20000 }).get("synthetic");
+    return createSettingsApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 20000, gate: testGate() }).get("synthetic");
   };
   it("reads the four switches, the three hours and notifications.telegram_opened exactly as served", async () => {
     const data = settingsResponse(); data.notifications.telegram_opened = false; data.settings.daily_report_hour.value = 0;

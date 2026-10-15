@@ -2,10 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import { createCardActionApi } from "./cardActionApi";
 import { CardActionsController, type CardActionApplied, type CardActionsCard } from "./cardActionsController";
 import { aid, CARD, cardActionServer, origin, rights, type Fate } from "./actionTestData.test-support";
+import { testGate } from "../../commands/testGate.test-support";
 
 function setup(fates: Fate[] = [], live = { current: true }) {
   const server = cardActionServer(fates);
-  const api = createCardActionApi({ fetcher: server.fetcher, timeoutMs: 1000, maxResponseBytes: 100000 });
+  const api = createCardActionApi({ fetcher: server.fetcher, timeoutMs: 1000, maxResponseBytes: 100000, gate: testGate() });
   const applied = vi.fn<(event: CardActionApplied) => void>();
   const refused = vi.fn<(code: string) => void>();
   let next = 100;

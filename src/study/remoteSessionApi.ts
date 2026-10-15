@@ -83,7 +83,7 @@ export function createRemoteSessionApi(options: HttpOptions): RemoteSessionApi {
       const command = prepare(token, proof, original);
       const query = new URLSearchParams({ client_instance_id: command.client_instance_id,
         document_id: command.document_id });
-      const reply = await request(`/commands/${command.command_id}?${query}`, { method: "GET", token, proof });
+      const reply = await request.readback(command.command_id, `/commands/${command.command_id}?${query}`, { method: "GET", token, proof });
       if (!reply.ok) throw httpError(reply);
       const value = reply.value;
       if (!record(value) || !record(value.command) || !version(value.state_version) || value.error != null) {

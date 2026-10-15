@@ -5,6 +5,7 @@ import type { AsyncStorage } from "../platform/storage";
 import { createLearningApi, type LearningApi, type ManualCommandReply, type ManualStatusReply } from "./learningApi";
 import { ManualPendingStore, type ManualPending } from "./manualPending";
 import { ManualSelectionController, type ManualContext, type ManualSelectionSnapshot } from "./manualSelectionController";
+import { testGate } from "../commands/testGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const context = (): ManualContext => ({ profileId: id(1), clientInstanceId: id(2), documentId: id(3),
@@ -361,7 +362,7 @@ describe("manual selection controller", () => {
         : { command: { ...fact(), status: "already_applied" }, current: current("11"), state_version: "11" };
       return new Response(JSON.stringify(value));
     });
-    const api = createLearningApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 10000 });
+    const api = createLearningApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 10000, gate: testGate() });
     const disk = persisted();
     const first = fixture({ disk, api }); await first.controller.refresh(); await first.controller.change(id(4), true);
     expect(committed).toMatchObject(pending().intent);

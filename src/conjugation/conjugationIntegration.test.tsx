@@ -12,6 +12,7 @@ import { ConjugationDocumentController, type ConjugationAcceptedAddress, type Co
 import { ConjugationTestFlow, type FlowInput } from "./conjugationTestFlow";
 import { ConjugationTestScreen } from "./ConjugationTestScreen";
 import { useConjugationDocument, type ConjugationDocumentHookOptions } from "./useConjugationDocument";
+import { testGate } from "../commands/testGate.test-support";
 
 const id = (n: number) => `abababab-cdcd-4000-8000-${String(n).padStart(12, "0")}`;
 const S1 = id(3), B1 = id(21), B2 = id(22), B3 = id(23);
@@ -155,7 +156,7 @@ function model(initial: Session[] = [{ id: S1, status: "active", assignment: B1,
     compatibility: { compatible: true, contract_version: "1" } }, token: "synthetic-token", proof: "synthetic-proof", generation,
   isLive: () => live.value, onDenied: () => { live.value = false; } });
   const stores = { studyStore: new ConjugationSessionPendingStore(storage), stopStore: new ConjugationStopPendingStore(storage) };
-  const transport = { fetcher, timeoutMs: 1000, maxResponseBytes: 200000 };
+  const transport = { fetcher, timeoutMs: 1000, maxResponseBytes: 200000, gate: testGate() };
   const newId = vi.fn(() => id(counter++));
   const hold = (match: (url: URL, method: string) => boolean) => {
     const gate = deferred(), entered = deferred();

@@ -4,6 +4,7 @@ import type { LearningCommandIntent } from "./learningCommandIntent";
 import { LearningViewController } from "./learningViewController";
 import { current, fact, fixture, id, response, resultRead } from "./learningFixtures.test-support";
 import { previewContent } from "./learningPreview.test-support";
+import { testGate } from "../commands/testGate.test-support";
 
 /** Synthetic HTTP state with the real view, durable command owner and strict transport adapters. */
 export function learningViewFixture(mode: "normal" | "accelerated" = "normal", sessionId: string | null = id(3)) {
@@ -66,7 +67,7 @@ export function learningViewFixture(mode: "normal" | "accelerated" = "normal", s
   });
   const onUpdate = vi.fn();
   const view = new LearningViewController({ access: f.access, storage: f.storage, newId: f.newId,
-    transport: { fetcher: f.fetcher, timeoutMs: 30000, maxResponseBytes: 100000 }, sessionId, transitionMode: () => mode, onUpdate });
+    transport: { fetcher: f.fetcher, timeoutMs: 30000, maxResponseBytes: 100000, gate: testGate() }, sessionId, transitionMode: () => mode, onUpdate });
   return { ...f, view, onUpdate, wrong: () => { answerGrade = 2; },
     /** The detail every later answer carries (the default result has none). */
     setDetail: (value: WrittenAnswerDetail) => { answerDetail = value; },

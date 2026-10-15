@@ -4,6 +4,7 @@ import type { LearningSessionProjection, OpenedClient, SessionResponse } from ".
 import { createOpenedAccess, type OpenedAccess } from "../app/openedAccess";
 import { previewContent } from "../learning/learningPreview.test-support";
 import { useSessionResumeDocument, type SessionResumeDocument } from "./useSessionResumeDocument";
+import { testGate } from "../commands/testGate.test-support";
 
 type Options = Parameters<typeof useSessionResumeDocument>[0];
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -46,7 +47,7 @@ function setup(config: { initial?: Partial<OpenedClient>; enabled?: boolean; str
   fetcher?: ReturnType<typeof vi.fn<typeof fetch>>; probe?: (document: SessionResumeDocument) => void } = {}) {
   const f = fixture(config.initial);
   const fetcher = config.fetcher ?? vi.fn<typeof fetch>(async () => response());
-  const options: Options = { access: f.access(), transport: { fetcher, timeoutMs: 30000, maxResponseBytes: 50000 },
+  const options: Options = { access: f.access(), transport: { fetcher, timeoutMs: 30000, maxResponseBytes: 50000, gate: testGate() },
     enabled: config.enabled ?? true };
   const ui = renderHook((props: Options) => {
     const document = useSessionResumeDocument(props);

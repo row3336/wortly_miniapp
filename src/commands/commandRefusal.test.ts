@@ -11,6 +11,7 @@ import { createLearningSessionApi } from "../learning/learningSessionApi";
 import { createOralApi } from "../oral/oralApi";
 import { createWrittenApi } from "../written/writtenApi";
 import { attemptRefusal } from "./commandRefusal";
+import { testGate } from "./testGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const origin = { client_instance_id: id(1), document_id: id(2) };
@@ -69,7 +70,7 @@ function envelope(command: Record<string, unknown>, code: string) {
 function send(mode: Mode, command: Record<string, unknown>, body: unknown, status: number) {
   const onDocumentStale = vi.fn();
   const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify(body), { status }));
-  const reply = apis[mode]({ fetcher, timeoutMs: 500, maxResponseBytes: 100000, onDocumentStale }).send("t", "p", command as never);
+  const reply = apis[mode]({ fetcher, timeoutMs: 500, maxResponseBytes: 100000, gate: testGate(), onDocumentStale }).send("t", "p", command as never);
   return { reply, onDocumentStale, fetcher };
 }
 const refusal = (status: number, code: string) => ({ kind: "http", status, code });

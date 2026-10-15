@@ -11,6 +11,7 @@ import { browserDocumentLock } from "./documentLock";
 import { EntryController } from "./entryController";
 import type { EntryState } from "./entryState";
 import { openDocument, staleDocument, staleRefusal } from "./openRules.test-support";
+import { testGate } from "../commands/testGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const compatibility = { compatible: true, contract_version: "1" };
@@ -82,7 +83,7 @@ function device(options: { otherSession?: string; locks?: boolean } = {}) {
     const states: EntryState[] = [];
     const closeWindow = vi.fn();
     let controller: EntryController | null = null;
-    const http: HttpOptions = { fetcher: fetcher as unknown as typeof fetch, timeoutMs: 1000, maxResponseBytes: 100000,
+    const http: HttpOptions = { fetcher: fetcher as unknown as typeof fetch, timeoutMs: 1000, maxResponseBytes: 100000, gate: testGate(),
       onDocumentStale: () => controller?.documentStale() };
     controller = new EntryController({ api: createEntryApi(http), storage, lock: browserDocumentLock(nav),
       remote: { api: createRemoteSessionApi(http), pendingStore: new RemoteStopPendingStore(storage) },

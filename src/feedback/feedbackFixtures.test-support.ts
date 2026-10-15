@@ -3,6 +3,7 @@ import { deferred, fixture, id, profile, response } from "../learning/learningFi
 import { createFeedbackApi } from "./feedbackApi";
 import { FeedbackController, type FeedbackSnapshot } from "./feedbackController";
 import { FeedbackPendingStore } from "./feedbackPending";
+import { testGate } from "../commands/testGate.test-support";
 
 /** What the next POST /commands meets: the server applies or not, and the reply arrives or is lost. */
 export type Fate = "ok" | "lose-before" | "lose-after" | "422" | "409" | "403" | "401" | "500" | "garbage" | "400" | "404" | "413" | "408" | "429";
@@ -62,7 +63,7 @@ export function makeController(world: FeedbackWorld, store = new FeedbackPending
   const updates = vi.fn<(snapshot: FeedbackSnapshot) => void>();
   let next = 100;
   const controller = new FeedbackController({
-    api: createFeedbackApi({ fetcher: world.f.fetcher, timeoutMs: 1000, maxResponseBytes: 100000 }),
+    api: createFeedbackApi({ fetcher: world.f.fetcher, timeoutMs: 1000, maxResponseBytes: 100000, gate: testGate() }),
     pendingStore: store, cardId, access: () => world.f.access(), newId: () => id(next++), onUpdate: updates });
   return { controller, store, updates };
 }

@@ -10,6 +10,7 @@ import type { LearningTransition } from "./learningCommandController";
 import { LearningDocumentCommands } from "./learningDocumentCommands";
 import { id, pending, primaryKey, profile, response } from "./learningFixtures.test-support";
 import { LearningPageStarts } from "./learningPageStarts";
+import { testGate } from "../commands/testGate.test-support";
 
 const begin: LearningTransition = { kind: "session.start", session_id: id(3), payload: { mode: "learning" } };
 
@@ -32,7 +33,7 @@ function device() {
   });
   let next = 40;
   const owner = (storage: AsyncStorage, page: LearningPageStarts) => new LearningDocumentCommands({ access: () => access, storage,
-    transport: { fetcher, timeoutMs: 1000, maxResponseBytes: 100000 }, newId: () => id(next++), onUpdate: () => {}, page });
+    transport: { fetcher, timeoutMs: 1000, maxResponseBytes: 100000, gate: testGate() }, newId: () => id(next++), onUpdate: () => {}, page });
   const posts = () => fetcher.mock.calls.filter(([, init]) => init?.method === "POST")
     .map(([, init]) => JSON.parse(String(init!.body)).command_id as string);
   return { values, wrapper, owner, posts };

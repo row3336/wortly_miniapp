@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createLearningSessionApi, type LearningSessionCommand } from "./learningSessionApi";
 import recording from "./learningRefusalRecording.json";
+import { testGate } from "../commands/testGate.test-support";
 
 /**
  * A stored final refusal of a Learning start, recorded from core's own ASGI app by core/tools/record_learning_refusal.py
@@ -21,7 +22,7 @@ function replay(expected: Exchange) {
     return new Response(JSON.stringify(expected.response), { status: expected.status });
   });
 }
-const api = (fetcher: typeof fetch) => createLearningSessionApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 100000 });
+const api = (fetcher: typeof fetch) => createLearningSessionApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 100000, gate: testGate() });
 const command = (): LearningSessionCommand => {
   const body = exchange("busy_refused").body!;
   return { command_id: body.command_id as string, session_id: body.session_id as string, kind: "session.start",

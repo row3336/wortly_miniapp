@@ -5,6 +5,7 @@ import { SettingsHost } from "./SettingsHost";
 import { useSettingsDocument } from "./useSettingsDocument";
 import { SettingsPendingStore } from "./settingsPending";
 import { settingsResponse } from "./settingsRead.test-support";
+import { testGate } from "../commands/testGate.test-support";
 
 afterEach(cleanup);
 function Host(props: Parameters<typeof useSettingsDocument>[0] & { language: "ru"; active: boolean; onToday(): void }) {
@@ -20,7 +21,7 @@ function setup(minimumStateVersion?: string) {
   const get = vi.fn(async () => response(data));
   f.fetcher.mockImplementation(async url => String(url).endsWith("/settings") ? get()
     : response({ state_version: data.state_version, topics: [{ id: id(201), number: 1, german_name: "Haus", description: "House" }] }));
-  const props = { access: f.access(), transport: { fetcher: f.fetcher, timeoutMs: 30000, maxResponseBytes: 30000 },
+  const props = { access: f.access(), transport: { fetcher: f.fetcher, timeoutMs: 30000, maxResponseBytes: 30000, gate: testGate() },
     pendingStore: new SettingsPendingStore(f.storage), language: "ru" as const, active: true,
     minimumStateVersion, onCurrent: vi.fn(), onToday: vi.fn() };
   const ui = render(<Host {...props} />);

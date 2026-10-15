@@ -4,6 +4,7 @@ import { createSessionReadApi } from "../study/sessionReadApi";
 import { createLearningSessionApi } from "./learningSessionApi";
 import { previewContent } from "./learningPreview.test-support";
 import { validLearningPreviewContent } from "./learningPreviewContent";
+import { testGate } from "../commands/testGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const pronouns = ["ich", "du", "er_sie_es", "wir", "ihr", "sie_sie"] as const;
@@ -34,7 +35,7 @@ describe("Learning preview reference data", () => {
         local_date: "2026-09-30", close_reason: null, group: { id: id(20), status: "assembling", version: "1", total: 1, preview_position: 0 },
         preview: { id: id(21), card_id: id(7), position: 1, total: 1, content: value }, assignment: null };
       const response = { current, state_version: "3" }, fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify(response)));
-      const options = { fetcher, timeoutMs: 100, maxResponseBytes: 20000 };
+      const options = { fetcher, timeoutMs: 100, maxResponseBytes: 20000, gate: testGate() };
       const address = { session_id: id(3), client_instance_id: id(1), document_id: id(2) };
       expect(await createSessionReadApi(options).read("token", "proof", address)).toEqual(response);
       expect(await createLearningSessionApi(options).read("token", "proof", address)).toEqual(response);

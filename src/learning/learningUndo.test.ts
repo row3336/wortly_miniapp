@@ -5,6 +5,7 @@ import { createLearningResultApi } from "./learningAnswerApi";
 import { id, response } from "./learningFixtures.test-support";
 import { learningUndoServer, type LearningUndoOptions as Options } from "./learningUndo.test-support";
 import { LearningViewController } from "./learningViewController";
+import { testGate } from "../commands/testGate.test-support";
 
 const owners: LearningViewController[] = [];
 afterEach(() => { owners.splice(0).forEach(owner => owner.dispose()); vi.useRealTimers(); });
@@ -13,7 +14,7 @@ async function harness(options: Options = {}, mode: "normal" | "accelerated" = "
   const s = learningUndoServer(options);
   const own = () => {
     const view = new LearningViewController({ access: s.access, storage: s.storage, newId: s.newId,
-      transport: { fetcher: s.fetcher, timeoutMs: 30000, maxResponseBytes: 100000 }, sessionId: id(3), transitionMode: () => mode,
+      transport: { fetcher: s.fetcher, timeoutMs: 30000, maxResponseBytes: 100000, gate: testGate() }, sessionId: id(3), transitionMode: () => mode,
       onUpdate: vi.fn() });
     owners.push(view);
     return view;
@@ -143,7 +144,7 @@ describe("Learning undo: same ID and restart", () => {
 describe("Learning result API: result.undo", () => {
   it("sends exactly the undo address and accepts only its undone fact with an empty detail", async () => {
     const h = await harness(); await h.answer("falsch");
-    const api = createLearningResultApi({ fetcher: h.fetcher, timeoutMs: 1000, maxResponseBytes: 100000 });
+    const api = createLearningResultApi({ fetcher: h.fetcher, timeoutMs: 1000, maxResponseBytes: 100000, gate: testGate() });
     const command = { command_id: id(400), session_id: id(3), kind: "result.undo" as const, assignment_id: id(6), result_id: id(706),
       expected_result_version: "1", payload: {}, client_instance_id: id(1), document_id: id(2) };
     await expect(api.send("t", "p", { ...command, action_id: id(806) } as typeof command)).rejects.toThrow("invalid Learning result command");

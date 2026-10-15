@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenedClient } from "../api/generated";
 import { createOpenedAccess, type OpenedAccess } from "../app/openedAccess";
 import { useDictionaryHistoryDocument, type DictionaryHistoryDocumentOptions } from "./useDictionaryHistoryDocument";
+import { testGate } from "../commands/testGate.test-support";
 
 type Language = "ru" | "uk" | "en";
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -39,7 +40,7 @@ function fixture() {
     }
     throw new Error(`unexpected read ${path}`);
   });
-  const options: DictionaryHistoryDocumentOptions = { access: access(), transport: { fetcher, timeoutMs: 30000, maxResponseBytes: 100000 },
+  const options: DictionaryHistoryDocumentOptions = { access: access(), transport: { fetcher, timeoutMs: 30000, maxResponseBytes: 100000, gate: testGate() },
     enabled: true };
   const historyReads = () => fetcher.mock.calls.filter(([url]) => String(url).endsWith("/dictionary/history")).length;
   return { server, fetcher, options, access, denied, historyReads };

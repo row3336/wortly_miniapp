@@ -10,6 +10,7 @@ import { TodayHost } from "../app/TodayHost";
 import { LearningScreen } from "../learning/LearningScreen";
 import { useLearningDocument } from "../learning/useLearningDocument";
 import { learningViewFixture } from "../learning/learningView.test-support";
+import { testGate } from "../commands/testGate.test-support";
 
 afterEach(cleanup);
 
@@ -36,7 +37,7 @@ function props(state: Parameters<typeof TodayScreen>[0]["state"]) {
 describe("Today screen", () => {
   it("TodayHost connects an explicit Learning tap to one real start and preview-to-question flow", async () => {
     const f = learningViewFixture("normal", null); f.view.dispose(); f.owner.dispose();
-    const transport = { fetcher: f.fetcher, timeoutMs: 30000, maxResponseBytes: 100000 };
+    const transport = { fetcher: f.fetcher, timeoutMs: 30000, maxResponseBytes: 100000, gate: testGate() };
     f.fetcher.mockImplementation(async (...call) => String(call[0]).endsWith("/today")
       ? new Response(JSON.stringify({ ...plan, state_version: "1", learning: { ...plan.learning,
         status: "new_group", next_due_at: null, new_group_size: 4 } })) : f.handler(...call));
@@ -173,7 +174,7 @@ describe("Today data", () => {
   });
   it("validates nested counts and keeps the bearer token in the request only", async () => {
     const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify(plan), { status: 200 }));
-    const api = createTodayApi({ fetcher: fetcher as typeof fetch, timeoutMs: 1000, maxResponseBytes: 4000 });
+    const api = createTodayApi({ fetcher: fetcher as typeof fetch, timeoutMs: 1000, maxResponseBytes: 4000, gate: testGate() });
     await expect(api.get("secret-token")).resolves.toEqual(plan);
     expect(fetcher.mock.calls[0]?.[0]).toBe("/api/v1/today");
     expect(fetcher.mock.calls[0]?.[1]?.headers).toEqual(withTrace({ Authorization: "Bearer secret-token" }));
@@ -188,13 +189,13 @@ describe("Today data", () => {
 
   it("rejects oversized responses", async () => {
     const fetcher = vi.fn(async () => new Response(JSON.stringify(plan)));
-    const api = createTodayApi({ fetcher: fetcher as typeof fetch, timeoutMs: 1000, maxResponseBytes: 20 });
+    const api = createTodayApi({ fetcher: fetcher as typeof fetch, timeoutMs: 1000, maxResponseBytes: 20, gate: testGate() });
     await expect(api.get("token")).rejects.toMatchObject({ kind: "invalid_response" });
   });
 
   it.each([401, 403])("keeps HTTP %i status when its response body is oversized", async (status) => {
     const fetcher = vi.fn(async () => new Response("x".repeat(200), { status }));
-    const api = createTodayApi({ fetcher: fetcher as typeof fetch, timeoutMs: 1000, maxResponseBytes: 20 });
+    const api = createTodayApi({ fetcher: fetcher as typeof fetch, timeoutMs: 1000, maxResponseBytes: 20, gate: testGate() });
     await expect(api.get("token")).rejects.toMatchObject({ kind: "http", status });
   });
 

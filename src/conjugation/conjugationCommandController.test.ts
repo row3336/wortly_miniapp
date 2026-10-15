@@ -8,6 +8,7 @@ import { conjugationIntentHash, type ConjugationIntent } from "./conjugationInte
 import { ConjugationCatalogPendingStore, ConjugationSessionPendingStore, ConjugationStopPendingStore,
   conjugationLane, type ConjugationPending } from "./conjugationPending";
 import { ConjugationCommandController, resultAddressed, type ConjugationCommandOptions, type ConjugationRead, type ConjugationTransition } from "./conjugationCommandController";
+import { testGate } from "../commands/testGate.test-support";
 
 const id = (n: number) => `aaaaaaaa-bbbb-4000-8000-${String(n).padStart(12, "0")}`;
 const base = { command_id: id(10), session_id: id(3) };
@@ -141,7 +142,7 @@ function fixture(seed?: ConjugationPending, source = seed?.intent ?? intents[3])
     }
     return new Response(JSON.stringify(model.readBody), { status: 200 });
   });
-  const api = createConjugationApi({ fetcher, timeoutMs: 10000, maxResponseBytes: 20000 });
+  const api = createConjugationApi({ fetcher, timeoutMs: 10000, maxResponseBytes: 20000, gate: testGate() });
   const isLive = vi.fn(() => true), newId = vi.fn(() => id(10));
   const command = (intent: ConjugationIntent) => ({ ...intent, client_instance_id: id(1), document_id: id(2) });
   const send = vi.fn((intent: ConjugationIntent) => api.send("synthetic-token", "synthetic-proof", command(intent)));

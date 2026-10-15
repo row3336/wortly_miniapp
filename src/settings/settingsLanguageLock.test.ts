@@ -8,6 +8,7 @@ import { SettingsController, type SettingsSnapshot } from "./settingsController"
 import { SettingsPendingStore, type SettingsPending } from "./settingsPending";
 import { settingsResponse } from "./settingsRead.test-support";
 import { SettingsResetPendingStore } from "./settingsResetPending";
+import { testGate } from "../commands/testGate.test-support";
 
 /**
  * Core CP2 of the dictionary language lock (19.2-А, C150) against the existing client, without changing it: once the
@@ -72,7 +73,7 @@ async function seed(f: ReturnType<typeof fixture>, intent: SettingIntent) {
 
 function reply(body: unknown, status = 200) {
   const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify(body), { status }));
-  return createSettingsApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 20000 });
+  return createSettingsApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 20000, gate: testGate() });
 }
 const command = (intent: SettingIntent) => ({ ...intent, client_instance_id: id(2), document_id: id(3) });
 

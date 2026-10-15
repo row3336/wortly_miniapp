@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { LearningViewController } from "./learningViewController";
 import { id, profile, response } from "./learningFixtures.test-support";
 import { learningViewFixture } from "./learningView.test-support";
+import { testGate } from "../commands/testGate.test-support";
 
 const owners: LearningViewController[] = [];
 const mismatch = (view: { snapshot(): { pairMismatch: string | null } }) => view.snapshot().pairMismatch !== null;
@@ -21,7 +22,7 @@ function harness(sessionId: string | null = null) {
   });
   const owner = (session: string | null) => {
     const view = new LearningViewController({ access: f.access, storage: f.storage, newId: f.newId,
-      transport: { fetcher: f.fetcher, timeoutMs: 30000, maxResponseBytes: 100000 }, sessionId: session,
+      transport: { fetcher: f.fetcher, timeoutMs: 30000, maxResponseBytes: 100000, gate: testGate() }, sessionId: session,
       transitionMode: () => "normal", onUpdate: vi.fn() });
     owners.push(view); return view;
   };

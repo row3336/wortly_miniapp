@@ -247,7 +247,7 @@ export function createFieldEditorApi(options: HttpOptions): FieldEditorApi {
       const expectedHash = await fieldIntentHash(intent as FieldIntent);
       const parameters = new URLSearchParams({ client_instance_id: clientId as string, document_id: documentId as string,
         expected_intent_hash: expectedHash });
-      const reply = await request(`/commands/${command.command_id}?${parameters}`, { method: "GET", token, proof });
+      const reply = await request.readback(command.command_id, `/commands/${command.command_id}?${parameters}`, { method: "GET", token, proof });
       const value = reply.value;
       if (reply.status === 409 && record(value) && exactKeys(value, ["error"]) && record(value.error)
         && exactKeys(value.error, ["code"]) && value.error.code === "COMMAND_PAYLOAD_MISMATCH") {

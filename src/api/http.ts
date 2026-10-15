@@ -1,5 +1,6 @@
 import { clientJournal, journalRecord, journalRefusal } from "../journal/clientJournal";
 import { isCommandKind, isErrorCode, journalId, ATTEMPT_MAX_MS, type CommandReplyEvent } from "../journal/events";
+import { PausedBeforeSendError, type ReadbackTicket, type WriteGate } from "../commands/writeGate";
 
 /** The contract version of this client, sent with every write and with sign-in/open (the server compares for equality). */
 export function clientContractVersion(): string {
@@ -18,10 +19,13 @@ export const TRACE_HEADER = "X-Wortly-Trace-Id";
 /** What a planned pause (503 MAINTENANCE) says about its end: whole seconds, an estimate, never a promise; null if absent. */
 export type MaintenancePause = { waitSeconds: number | null };
 
-/** One bounded exchange. A transport error never establishes a command's outcome. */
+/**
+ * One bounded exchange. A transport error never establishes a command's outcome. `timeout` is the client's own deadline
+ * (timeoutMs) and `network` a failed or aborted fetch: the write gate's observer tells them apart (P03 RD-2, M-P03-2).
+ */
 export class ApiError extends Error {
   constructor(
-    public readonly kind: "network" | "http" | "invalid_response",
+    public readonly kind: "network" | "timeout" | "http" | "invalid_response",
     public readonly status?: number,
     public readonly code?: string,
     public readonly pause?: MaintenancePause,
@@ -41,6 +45,11 @@ export type HttpOptions = {
   contractVersion?: string;
   /** The trace of each attempt; crypto.randomUUID() by default. */
   newTraceId?(): string;
+  /**
+   * The write gate of the page (P03 RD-7 п.1, L2): required. A transport is never built without it; the construction
+   * still throws outside tests if a caller bypasses the type. It decides on every request right before fetch.
+   */
+  gate: WriteGate;
 };
 
 type Request = {
@@ -53,13 +62,62 @@ type Request = {
    * which nothing of it has left. It proves no delivery; it only ends «not started» (Learning 21.1-А, 33.1-А).
    */
   started?: () => void;
+  /** The one-shot permission of gate.runReadback to read a command's status (R6); never sent on the wire. */
+  readbackTicket?: ReadbackTicket;
+};
+
+/** The transport of one module: a request, and a command status read that goes only through gate.runReadback (R6). */
+export type JsonTransport = ((path: string, request: Request) => Promise<JsonReply>) & {
+  readback(commandId: string, path: string, request: Request): Promise<JsonReply>;
 };
 
 /**
- * retryAfter: whole seconds of a numeric Retry-After header, when the reply carried one. trace: the attempt's
+ * retryAfter: whole seconds of a numeric Retry-After header, when the reply carried one. retryAfterRaw: the header as
+ * sent (at most 64 characters) when it was present but not 1–9 digits, for the bounds of P03 §3.5. trace: the attempt's
  * X-Wortly-Trace-Id as the core echoed it, when the answer carried a well-formed one.
  */
-export type JsonReply = { status: number; ok: boolean; value: unknown; retryAfter?: number; trace?: string };
+export type JsonReply = { status: number; ok: boolean; value: unknown; retryAfter?: number; retryAfterRaw?: string; trace?: string };
+
+/** The largest wait a client accepts from one announcement, in seconds (P03 §3.5, P3-01). */
+export const RETRY_AFTER_MAX_S = 900;
+
+/**
+ * An announced wait after P03 §3.5: a whole number 0…900 as is; above 900 clamped to 900; negative, fractional or not a
+ * number ignored (null). anomaly marks the last two cases (the event `retry_after_anomaly` of §3.5; the client journal
+ * has no such event yet — P04).
+ */
+export type RetryAfter = { seconds: number | null; anomaly: boolean };
+
+/** One candidate value: undefined when absent or null (the next source is read), else its bounded reading. */
+export function boundRetryAfter(value: unknown): RetryAfter | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "number" || !Number.isFinite(value) || !Number.isInteger(value) || value < 0) {
+    return { seconds: null, anomaly: true };
+  }
+  return value > RETRY_AFTER_MAX_S ? { seconds: RETRY_AFTER_MAX_S, anomaly: true } : { seconds: value, anomaly: false };
+}
+
+/** The Retry-After header of a reply after §3.5; a date or any non-integer is ignored as an anomaly. */
+export function headerRetryAfter(reply: JsonReply): RetryAfter | undefined {
+  if (reply.retryAfter !== undefined) return boundRetryAfter(reply.retryAfter);
+  if (reply.retryAfterRaw === undefined) return undefined;
+  const raw = reply.retryAfterRaw.trim();
+  return /^\d+$/.test(raw) ? boundRetryAfter(Number(raw)) : { seconds: null, anomaly: true };
+}
+
+/**
+ * The estimate of a planned pause (P03 §3.2, §3.5): error.retry_after_s, then error.wait_seconds, then Retry-After,
+ * then none. The first source present decides; a malformed value is not replaced by a later source.
+ */
+export function readRetryAfter(reply: JsonReply): RetryAfter {
+  const error = record(reply.value) && record(reply.value.error) ? reply.value.error : {};
+  return boundRetryAfter(error.retry_after_s) ?? boundRetryAfter(error.wait_seconds) ?? headerRetryAfter(reply)
+    ?? { seconds: null, anomaly: false };
+}
+
+function record(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 export function errorCode(value: unknown): string | undefined {
   if (typeof value !== "object" || value === null || !("error" in value)) return;
@@ -100,7 +158,7 @@ async function readJson(response: Response, limit: number, signal: AbortSignal):
     let size = 0;
     try {
       while (true) {
-        if (signal.aborted) throw new ApiError("network");
+        if (signal.aborted) throw new ApiError("timeout");
         const chunk = await reader.read();
         if (chunk.done) break;
         size += chunk.value.byteLength;
@@ -123,8 +181,10 @@ async function readJson(response: Response, limit: number, signal: AbortSignal):
   catch { throw new ApiError("invalid_response"); }
 }
 
-export function createJsonTransport(options: HttpOptions) {
-  const { fetcher, timeoutMs, maxResponseBytes } = options;
+export function createJsonTransport(options: HttpOptions): JsonTransport {
+  const { fetcher, timeoutMs, maxResponseBytes, gate } = options;
+  // RD-7 п.1: no production transport without the write gate.
+  if (!gate && import.meta.env.MODE !== "test") throw new Error("HttpOptions.gate is required outside tests");
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error("timeoutMs must be positive");
   if (!Number.isSafeInteger(maxResponseBytes) || maxResponseBytes <= 0) {
     throw new Error("maxResponseBytes must be a positive safe integer");
@@ -132,7 +192,7 @@ export function createJsonTransport(options: HttpOptions) {
   const base = (options.baseUrl ?? "").replace(/\/+$/, "");
   const contractVersion = options.contractVersion || clientContractVersion();
   const newTraceId = options.newTraceId ?? (() => globalThis.crypto.randomUUID());
-  return async (path: string, request: Request): Promise<JsonReply> => {
+  const send = async (path: string, request: Request): Promise<JsonReply> => {
     const controller = new AbortController();
     let refusalStatus: number | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -142,7 +202,7 @@ export function createJsonTransport(options: HttpOptions) {
     const deadline = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
         timedOut = true;
-        reject(new ApiError("network"));
+        reject(new ApiError("timeout"));
         controller.abort();
       }, timeoutMs);
     });
@@ -155,6 +215,10 @@ export function createJsonTransport(options: HttpOptions) {
       if (request.method === "POST") headers[CONTRACT_VERSION_HEADER] = contractVersion;
       if (request.body !== undefined) headers["Content-Type"] = "application/json";
       const url = `${base}/api/v1${path}`, body = request.body === undefined ? undefined : JSON.stringify(request.body);
+      // L2 (RD-7): the gate decides here, and fetch follows in the same synchronous stretch, with no await in between.
+      // A refused request is not started: started() is not told and fetch is never called.
+      const refusal = gate?.admit({ method: request.method, path, body: request.body, readbackTicket: request.readbackTicket });
+      if (refusal) throw new PausedBeforeSendError(refusal);
       request.started?.();
       journal?.started();
       const response = await fetcher(url, {
@@ -163,7 +227,7 @@ export function createJsonTransport(options: HttpOptions) {
       });
       if (controller.signal.aborted) {
         void response.body?.cancel().catch(() => undefined);
-        throw new ApiError("network");
+        throw new ApiError("timeout");
       }
       if (!response.ok) refusalStatus = response.status;
       let value: unknown;
@@ -172,15 +236,18 @@ export function createJsonTransport(options: HttpOptions) {
         // An unreadable refusal still supplies HTTP status, never an acceptance fact.
         if (response.ok || controller.signal.aborted) throw error;
       }
-      const retryAfter = /^\d{1,9}$/.test(response.headers.get("retry-after") ?? "")
-        ? Number(response.headers.get("retry-after")) : undefined;
+      const retryAfterHeader = response.headers.get("retry-after");
+      const retryAfter = /^\d{1,9}$/.test(retryAfterHeader ?? "") ? Number(retryAfterHeader) : undefined;
+      const retryAfterRaw = retryAfter === undefined && retryAfterHeader !== null ? retryAfterHeader.slice(0, 64) : undefined;
       const echo = journalId(response.headers.get(TRACE_HEADER));
       return { status: response.status, ok: response.ok, value, ...(retryAfter === undefined ? {} : { retryAfter }),
-        ...(echo === null ? {} : { trace: echo }) };
+        ...(retryAfterRaw === undefined ? {} : { retryAfterRaw }), ...(echo === null ? {} : { trace: echo }) };
     };
     let reply: JsonReply;
     try { reply = await Promise.race([exchange(), deadline]); }
     catch (error) {
+      // Nothing left: no journal, no refusal status, the caller sees PAUSED_BEFORE_SEND as it is.
+      if (error instanceof PausedBeforeSendError) throw error;
       // A stalled body cannot erase a refusal already received in the headers.
       if (refusalStatus !== undefined) { journal?.answered({ status: refusalStatus, ok: false, value: undefined }); throw new ApiError("http", refusalStatus); }
       journal?.failed(timedOut ? "timeout" : error instanceof ApiError && error.kind === "invalid_response" ? "unknown" : "network");
@@ -194,6 +261,11 @@ export function createJsonTransport(options: HttpOptions) {
     if (reply.status === 409 && errorCode(reply.value) === "DOCUMENT_STALE") options.onDocumentStale?.();
     return reply;
   };
+  // R6: a command status read carries the ticket of gate.runReadback, which may first wait for the identity check.
+  const readback = (commandId: string, path: string, request: Request): Promise<JsonReply> => gate
+    ? gate.runReadback(commandId, ticket => send(path, { ...request, readbackTicket: ticket }))
+    : send(path, request);
+  return Object.assign(send, { readback });
 }
 
 /** The outcome of an answered command attempt as the journal names it (events TZ §4.5 c.cmd.reply). */

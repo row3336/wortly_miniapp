@@ -2,6 +2,7 @@ import { withTrace } from "../api/traceHeader.test-support";
 import { describe, expect, it, vi } from "vitest";
 import type { TopicCatalogResponse } from "../api/generated";
 import { createTopicCatalogApi } from "./topicCatalogApi";
+import { testGate } from "../commands/testGate.test-support";
 
 const id = (n: number) => `abcdef00-0000-4000-8000-${String(n).padStart(12, "0")}`;
 function catalog(): TopicCatalogResponse {
@@ -12,7 +13,7 @@ function catalog(): TopicCatalogResponse {
 }
 function fixture(body: unknown, status = 200) {
   const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify(body), { status }));
-  return { fetcher, api: createTopicCatalogApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 500000 }) };
+  return { fetcher, api: createTopicCatalogApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 500000, gate: testGate() }) };
 }
 
 describe("topic catalog reader", () => {

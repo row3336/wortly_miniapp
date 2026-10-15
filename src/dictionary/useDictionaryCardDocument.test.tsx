@@ -5,6 +5,7 @@ import type { DictionaryCardViewResponse, OpenedClient } from "../api/generated"
 import { createOpenedAccess, type OpenedAccess } from "../app/openedAccess";
 import type { DictionaryCardSnapshot } from "./dictionaryCardController";
 import { useDictionaryCardDocument, type DictionaryCardDocumentOptions } from "./useDictionaryCardDocument";
+import { testGate } from "../commands/testGate.test-support";
 
 type Pair = "ru-de" | "uk-de" | "en-de";
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -56,7 +57,7 @@ function fixture(cardId = A) {
     return response(gone ? { state_version: version, current: { status: "unavailable" } } : view(match![1], version, pair));
   };
   const fetcher = vi.fn<typeof fetch>(handler);
-  const options: DictionaryCardDocumentOptions = { access: access(), transport: { fetcher, timeoutMs: 1000, maxResponseBytes: 100000 }, cardId, enabled: true };
+  const options: DictionaryCardDocumentOptions = { access: access(), transport: { fetcher, timeoutMs: 1000, maxResponseBytes: 100000, gate: testGate() }, cardId, enabled: true };
   return { options, opened, fetcher, denied, access, revoke: () => { active = null; },
     set: (next: string, nextPair = pair) => { version = next; pair = nextPair; }, remove: () => { gone = true; } };
 }

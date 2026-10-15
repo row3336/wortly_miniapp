@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { LearningCurrentResponse, ManualSelectionCommand, SavedCommandFact } from "../api/generated";
 import { clientContractVersion } from "../api/http";
 import { createLearningApi } from "./learningApi";
+import { testGate } from "../commands/testGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const time = "2026-09-30T00:00:00.123456Z";
@@ -32,7 +33,7 @@ function profile() {
 function response(body: unknown, status = 200) { return new Response(JSON.stringify(body), { status }); }
 function setup(body: unknown, status = 200) {
   const fetcher = vi.fn(async () => response(body, status));
-  return { fetcher, api: createLearningApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 10000 }) };
+  return { fetcher, api: createLearningApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 10000, gate: testGate() }) };
 }
 function reply() { return { command: fact(), current: current(), state_version: bigVersion }; }
 
@@ -133,7 +134,7 @@ describe("manual command exchange", () => {
   it("snapshots the request before waiting, so caller mutation cannot change the expected address", async () => {
     let finish!: (value: Response) => void;
     const fetcher = vi.fn(() => new Promise<Response>(resolve => { finish = resolve; }));
-    const api = createLearningApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 10000 });
+    const api = createLearningApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 10000, gate: testGate() });
     const original = command();
     const pending = api.change("synthetic", "proof", original);
     original.command_id = id(11); original.payload.card_id = id(12);
@@ -145,7 +146,7 @@ describe("manual command exchange", () => {
     const body = reply(); body.command.status = "already_applied";
     const fetcher = vi.fn().mockRejectedValueOnce(new Error("lost-after-commit"))
       .mockResolvedValueOnce(response(body));
-    const api = createLearningApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 10000 });
+    const api = createLearningApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 10000, gate: testGate() });
     await expect(api.change("synthetic", "proof", command())).rejects.toMatchObject({ kind: "network" });
     expect(fetcher).toHaveBeenCalledOnce();
     await expect(api.change("synthetic", "proof", command())).resolves.toMatchObject({ outcome: "accepted" });

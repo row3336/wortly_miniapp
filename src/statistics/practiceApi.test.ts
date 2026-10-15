@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { PracticeResponse } from "../api/generated";
 import { ApiError } from "../api/http";
 import { createPracticeApi, validPractice, type PracticeWeek } from "./practiceApi";
+import { testGate } from "../commands/testGate.test-support";
 
 function body(week: PracticeWeek = "current"): PracticeResponse {
   const first = week === "current" ? "2026-03-23" : "2026-03-16";
@@ -15,7 +16,7 @@ function body(week: PracticeWeek = "current"): PracticeResponse {
 }
 function setup(value: unknown = body(), status = 200) {
   const fetcher = vi.fn<typeof fetch>(async () => new Response(status === 204 ? null : JSON.stringify(value), { status }));
-  return { fetcher, api: createPracticeApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 10000 }) };
+  return { fetcher, api: createPracticeApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 10000, gate: testGate() }) };
 }
 
 describe("practice aggregate HTTP", () => {

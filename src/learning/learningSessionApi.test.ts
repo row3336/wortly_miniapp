@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type { LearningSessionProjection, Profile } from "../api/generated";
 import { createLearningSessionApi, type LearningSessionCommand } from "./learningSessionApi";
+import { testGate } from "../commands/testGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const origin = { client_instance_id: id(1), document_id: id(2), session_id: id(3) };
@@ -35,7 +36,7 @@ function response(command = commands[0], current: unknown = preview(), status: "
 }
 function fixture(value: unknown = response(), status = 200) {
   const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify(value), { status }));
-  const api = createLearningSessionApi({ fetcher, timeoutMs: 100, maxResponseBytes: 10000 });
+  const api = createLearningSessionApi({ fetcher, timeoutMs: 100, maxResponseBytes: 10000, gate: testGate() });
   return { api, fetcher };
 }
 

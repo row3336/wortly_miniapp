@@ -13,6 +13,7 @@ import type { LearningCommandIntent } from "./learningCommandIntent";
 import { LearningDocumentCommands } from "./learningDocumentCommands";
 import { accepted, current, id, missing, pending, primaryKey, profile, response } from "./learningFixtures.test-support";
 import { hashInPlace } from "../commands/recoveryTime.test-support";
+import { testGate } from "../commands/testGate.test-support";
 
 const answer: LearningTransition = { kind: "answer.submit", session_id: id(3), assignment_id: id(6), payload: { text: "Haus" } };
 const owners: LearningDocumentCommands[] = [];
@@ -59,7 +60,7 @@ function page() {
   let next = 100;
   const make = () => {
     const owner = new LearningDocumentCommands({ access: () => access, storage, newId: () => id(next++), onUpdate: () => {},
-      transport: { fetcher, timeoutMs: 1000, maxResponseBytes: 100000 } });
+      transport: { fetcher, timeoutMs: 1000, maxResponseBytes: 100000, gate: testGate() } });
     owners.push(owner); return owner;
   };
   const original = LearningCommandController.prototype.sendStarted;

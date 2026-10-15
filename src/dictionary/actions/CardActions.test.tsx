@@ -8,6 +8,7 @@ import { actionsCopy } from "./actionsCopy";
 import { aid, CARD, cardActionServer, json, profileCurrent, type Fate } from "./actionTestData.test-support";
 import type { CardActionApplied } from "./cardActionsController";
 import { useCardActions } from "./useCardActions";
+import { testGate } from "../../commands/testGate.test-support";
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
@@ -44,7 +45,7 @@ function world(cardFates: Fate[] = [], feedbackFates: ("ok" | "lose" | "422")[] 
     isLive: () => true, onDenied: () => {} });
   // One ID source for the whole world: a re-render must never hand out an ID already used (a retry keeps its own).
   let next = 100;
-  return { cards, complaints, fetcher, access, transport: { fetcher, timeoutMs: 5000, maxResponseBytes: 1_000_000 },
+  return { cards, complaints, fetcher, access, transport: { fetcher, timeoutMs: 5000, maxResponseBytes: 1_000_000, gate: testGate() },
     newId: () => aid(next++) };
 }
 type World = ReturnType<typeof world>;

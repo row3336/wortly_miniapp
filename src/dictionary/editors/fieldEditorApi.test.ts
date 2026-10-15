@@ -3,10 +3,11 @@ import { createFieldEditorApi, fieldIntentHash, type FieldCommand } from "./fiel
 import {
   ACTION, CARD_ID, CONTEXT, fid, fieldFact, json, origin, pairOf, roleCurrent, saveIntent, scalarCurrent, undoIntent,
 } from "./fieldTestData.test-support";
+import { testGate } from "../../commands/testGate.test-support";
 
 function api(...replies: Response[]) {
   const fetcher = vi.fn<typeof fetch>(async () => replies.shift() ?? json({}, 500));
-  return { fetcher, api: createFieldEditorApi({ fetcher, timeoutMs: 5000, maxResponseBytes: 1_000_000 }) };
+  return { fetcher, api: createFieldEditorApi({ fetcher, timeoutMs: 5000, maxResponseBytes: 1_000_000, gate: testGate() }) };
 }
 const body = (fetcher: ReturnType<typeof api>["fetcher"], call = 0) => JSON.parse(String(fetcher.mock.calls[call][1]!.body));
 const command = <T extends object>(intent: T) => ({ ...intent, ...origin }) as unknown as FieldCommand;

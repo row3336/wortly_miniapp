@@ -1,17 +1,18 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError, clientContractVersion, createJsonTransport, httpError } from "./http";
+import { ApiError, clientContractVersion, createJsonTransport, httpError, readRetryAfter } from "./http";
+import { testGate } from "../commands/testGate.test-support";
 
 afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); });
 
 function transport(fetcher: typeof fetch, maxResponseBytes = 1000) {
-  return createJsonTransport({ fetcher, timeoutMs: 100, maxResponseBytes });
+  return createJsonTransport({ fetcher, timeoutMs: 100, maxResponseBytes, gate: testGate() });
 }
 
 describe("bounded JSON exchange", () => {
   it("keeps credentials in headers and performs exactly one noncached exchange", async () => {
     const fetcher = vi.fn(async () => new Response('{"saved":true}'));
     const request = createJsonTransport({ fetcher, baseUrl: "https://example.invalid///",
-      timeoutMs: 100, maxResponseBytes: 100 });
+      timeoutMs: 100, maxResponseBytes: 100, gate: testGate() });
     expect(await request("/commands", { method: "POST", token: "synthetic-token",
       proof: "synthetic-proof", body: { command_id: "same-intent" } }))
       .toMatchObject({ status: 200, value: { saved: true } });
@@ -27,7 +28,7 @@ describe("bounded JSON exchange", () => {
   it("tells started once, after the request is built and right before fetch; a body that cannot be built tells nothing", async () => {
     const order: string[] = [];
     const fetcher = vi.fn(async () => { order.push("fetch"); return new Response('{"saved":true}'); });
-    const request = createJsonTransport({ fetcher, timeoutMs: 100, maxResponseBytes: 100 });
+    const request = createJsonTransport({ fetcher, timeoutMs: 100, maxResponseBytes: 100, gate: testGate() });
     await request("/commands", { method: "POST", token: "t", proof: "p", body: { command_id: "x" }, started: () => order.push("started") });
     expect(order).toEqual(["started", "fetch"]);
     const cyclic: Record<string, unknown> = {}; cyclic.self = cyclic;
@@ -37,10 +38,10 @@ describe("bounded JSON exchange", () => {
   });
 
   it.each([0, -1, Infinity, NaN])("requires an explicit positive timeout (%s)", timeoutMs => {
-    expect(() => createJsonTransport({ fetcher: fetch, timeoutMs, maxResponseBytes: 100 })).toThrow();
+    expect(() => createJsonTransport({ fetcher: fetch, timeoutMs, maxResponseBytes: 100, gate: testGate() })).toThrow();
   });
   it.each([0, -1, 0.5, Infinity, NaN, Number.MAX_SAFE_INTEGER + 1])("requires a byte limit (%s)", maxResponseBytes => {
-    expect(() => createJsonTransport({ fetcher: fetch, timeoutMs: 100, maxResponseBytes })).toThrow();
+    expect(() => createJsonTransport({ fetcher: fetch, timeoutMs: 100, maxResponseBytes, gate: testGate() })).toThrow();
   });
 
   it("counts bytes and supports a Unicode code point split across chunks", async () => {
@@ -87,7 +88,7 @@ describe("bounded JSON exchange", () => {
       return new Promise<Response>(resolve => { finish = resolve; });
     });
     const pending = transport(fetcher)("/today", { method: "GET" });
-    const assertion = expect(pending).rejects.toMatchObject({ kind: "network" });
+    const assertion = expect(pending).rejects.toMatchObject({ kind: "timeout" });
     await vi.advanceTimersByTimeAsync(100);
     await assertion;
     expect(fetcher.mock.calls[0][1]?.signal?.aborted).toBe(true);
@@ -106,7 +107,7 @@ describe("bounded JSON exchange", () => {
       start(controller) { controller.enqueue(new TextEncoder().encode('{"partial":')); }, cancel,
     })));
     const pending = transport(fetcher)("/commands", { method: "POST", body: {} });
-    const assertion = expect(pending).rejects.toMatchObject({ kind: "network" });
+    const assertion = expect(pending).rejects.toMatchObject({ kind: "timeout" });
     await vi.advanceTimersByTimeAsync(100);
     await assertion;
     expect(cancel).toHaveBeenCalledOnce();
@@ -187,7 +188,7 @@ describe("the one DOCUMENT_STALE point", () => {
     const onDocumentStale = vi.fn(() => { order.push("window"); });
     const envelope = { command: { id: "c", status: "rejected" }, current: { status: "unavailable" }, state_version: "3",
       error: { code: "DOCUMENT_STALE" } };
-    const request = createJsonTransport({ fetcher: reply(envelope, 409), timeoutMs: 100, maxResponseBytes: 1000, onDocumentStale });
+    const request = createJsonTransport({ fetcher: reply(envelope, 409), timeoutMs: 100, maxResponseBytes: 1000, gate: testGate(), onDocumentStale });
     const answer = await request("/commands", { method: "POST", body: {} }).then(value => { order.push("caller"); return value; });
     expect(answer).toEqual({ status: 409, ok: false, value: envelope });
     expect(order).toEqual(["window", "caller"]);
@@ -201,7 +202,7 @@ describe("the one DOCUMENT_STALE point", () => {
     [409, { error: "DOCUMENT_STALE" }],
   ])("says nothing for HTTP %s %j", async (status, value) => {
     const onDocumentStale = vi.fn();
-    const request = createJsonTransport({ fetcher: reply(value, status), timeoutMs: 100, maxResponseBytes: 1000, onDocumentStale });
+    const request = createJsonTransport({ fetcher: reply(value, status), timeoutMs: 100, maxResponseBytes: 1000, gate: testGate(), onDocumentStale });
     await request("/commands", { method: "POST", body: {} });
     expect(onDocumentStale).not.toHaveBeenCalled();
   });
@@ -211,7 +212,7 @@ describe("the one DOCUMENT_STALE point", () => {
     await expect(transport(reply(stale, 409))("/today", { method: "GET" })).resolves.toMatchObject({ status: 409 });
     const onDocumentStale = vi.fn();
     const broken = vi.fn(async () => new Response("{", { status: 409 }));
-    const request = createJsonTransport({ fetcher: broken, timeoutMs: 100, maxResponseBytes: 1000, onDocumentStale });
+    const request = createJsonTransport({ fetcher: broken, timeoutMs: 100, maxResponseBytes: 1000, gate: testGate(), onDocumentStale });
     await expect(request("/today", { method: "GET" })).resolves.toMatchObject({ status: 409, value: undefined });
     expect(onDocumentStale).not.toHaveBeenCalled();
   });
@@ -228,14 +229,14 @@ describe("contract version on writes (M-COMPAT-HDR)", () => {
       { method: "POST" as const, token: "t", proof: "p", body: {} },
     ]) {
       const fetcher = ok();
-      await createJsonTransport({ fetcher: fetcher as typeof fetch, timeoutMs: 100, maxResponseBytes: 100, contractVersion: "7" })("/commands", request);
+      await createJsonTransport({ fetcher: fetcher as typeof fetch, timeoutMs: 100, maxResponseBytes: 100, gate: testGate(), contractVersion: "7" })("/commands", request);
       expect(sent(fetcher).get("X-Wortly-Contract-Version")).toBe("7");
     }
   });
 
   it("does not send it on a read: the core checks writes only, and an outdated client may still read", async () => {
     const fetcher = ok();
-    await createJsonTransport({ fetcher: fetcher as typeof fetch, timeoutMs: 100, maxResponseBytes: 100, contractVersion: "7" })("/today", { method: "GET", token: "t" });
+    await createJsonTransport({ fetcher: fetcher as typeof fetch, timeoutMs: 100, maxResponseBytes: 100, gate: testGate(), contractVersion: "7" })("/today", { method: "GET", token: "t" });
     expect(sent(fetcher).has("X-Wortly-Contract-Version")).toBe(false);
   });
 
@@ -244,7 +245,7 @@ describe("contract version on writes (M-COMPAT-HDR)", () => {
     expect(clientContractVersion()).toBe("1");
     for (const contractVersion of [undefined, ""]) {
       const fetcher = ok();
-      await createJsonTransport({ fetcher: fetcher as typeof fetch, timeoutMs: 100, maxResponseBytes: 100, contractVersion })("/commands", { method: "POST" });
+      await createJsonTransport({ fetcher: fetcher as typeof fetch, timeoutMs: 100, maxResponseBytes: 100, gate: testGate(), contractVersion })("/commands", { method: "POST" });
       expect(sent(fetcher).get("X-Wortly-Contract-Version")).toBe("1");
     }
     vi.unstubAllEnvs();
@@ -252,7 +253,7 @@ describe("contract version on writes (M-COMPAT-HDR)", () => {
 
   it("takes the version from the client's own configuration unless the caller overrides it", async () => {
     const fetcher = ok();
-    await createJsonTransport({ fetcher: fetcher as typeof fetch, timeoutMs: 100, maxResponseBytes: 100 })("/commands", { method: "POST" });
+    await createJsonTransport({ fetcher: fetcher as typeof fetch, timeoutMs: 100, maxResponseBytes: 100, gate: testGate() })("/commands", { method: "POST" });
     expect(sent(fetcher).get("X-Wortly-Contract-Version")).toBe(clientContractVersion());
     expect(clientContractVersion()).toMatch(/^[1-9][0-9]*$/);
   });
@@ -304,5 +305,44 @@ describe("known refusals of a write (M-COMPAT-HDR)", () => {
     expect(error).toMatchObject({ kind: "http", status: 409, code: "CLIENT_INCOMPATIBLE" });
     expect(error.pause).toBeUndefined();
     expect(JSON.stringify(error)).not.toContain("do-not-expose");
+  });
+});
+
+describe("the estimate of a pause and the own deadline (M-P03-2, P03 §3.2, §3.5)", () => {
+  const reply = (value: unknown, headers: Record<string, string> = {}) =>
+    transport(vi.fn(async () => new Response(JSON.stringify(value), { status: 503, headers })))("/commands", { method: "POST" });
+
+  it.each([
+    ["retry_after_s first", { retry_after_s: 40, wait_seconds: 41 }, { "Retry-After": "42" }, 40, false],
+    ["then wait_seconds", { wait_seconds: 41 }, { "Retry-After": "42" }, 41, false],
+    ["then Retry-After", { retry_after_s: null, wait_seconds: null }, { "Retry-After": "42" }, 42, false],
+    ["then none", {}, {}, null, false],
+    ["AC-05a 1000 → 900", { retry_after_s: 1000 }, {}, 900, true],
+    ["AC-05a −1 → ignored", { retry_after_s: -1 }, {}, null, true],
+    ["AC-05a 1.5 → ignored", { retry_after_s: 1.5 }, {}, null, true],
+    ["AC-05a Retry-After 999999999 → 900", {}, { "Retry-After": "999999999" }, 900, true],
+    ["a ten-digit Retry-After → 900", {}, { "Retry-After": "12345678901" }, 900, true],
+    ["a date Retry-After → ignored", {}, { "Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT" }, null, true],
+    ["a negative Retry-After → ignored", {}, { "Retry-After": "-5" }, null, true],
+    ["a malformed value is not replaced by a later source", { retry_after_s: "soon", wait_seconds: 30 }, {}, null, true],
+    ["a wait_seconds beyond 900 → 900", { wait_seconds: 1200 }, {}, 900, true],
+  ])("%s", async (_name, error, headers, seconds, anomaly) => {
+    expect(readRetryAfter(await reply({ error: { code: "MAINTENANCE", ...error } }, headers))).toEqual({ seconds, anomaly });
+  });
+
+  it("keeps the raw Retry-After only when it is not 1–9 digits", async () => {
+    expect(await reply({}, { "Retry-After": "30" })).not.toHaveProperty("retryAfterRaw");
+    expect(await reply({}, { "Retry-After": "x".repeat(100) })).toMatchObject({ retryAfterRaw: "x".repeat(64) });
+  });
+
+  it("tells the own deadline (timeout) from a refused connection (network)", async () => {
+    await expect(transport(vi.fn(async () => { throw new TypeError("Failed to fetch"); }))("/today", { method: "GET" }))
+      .rejects.toMatchObject({ kind: "network" });
+    vi.useFakeTimers();
+    const pending = transport(vi.fn(() => new Promise<Response>(() => {})))("/today", { method: "GET" });
+    const assertion = expect(pending).rejects.toMatchObject({ kind: "timeout" });
+    await vi.advanceTimersByTimeAsync(100);
+    await assertion;
+    expect(await pending.catch(error => error)).toBeInstanceOf(ApiError);
   });
 });

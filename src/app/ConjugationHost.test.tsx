@@ -12,6 +12,7 @@ import { ConjugationSessionPendingStore, ConjugationStopPendingStore } from "../
 import { leavesToToday, useConjugationHost, type ConjugationHost, type ConjugationHostOptions } from "./ConjugationHost";
 import { ConjugationTestFlow } from "../conjugation/conjugationTestFlow";
 import { createOpenedAccess, type OpenedAccess } from "./openedAccess";
+import { testGate } from "../commands/testGate.test-support";
 
 const S1 = id(3), studyKey = "wortly.pending.conjugation_session";
 const response = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status });
@@ -54,7 +55,7 @@ function setup(options: Options = {}) {
     if (path.endsWith("/settings/topics")) return response({ topics: [], state_version: data.state_version });
     return await model.handle(url, init) ?? response({ error: { code: "UNEXPECTED" } }, 500);
   });
-  const transport = { fetcher, timeoutMs: 1000, maxResponseBytes: 200000 };
+  const transport = { fetcher, timeoutMs: 1000, maxResponseBytes: 200000, gate: testGate() };
   const seed = options.seed ? S1 : null;
   const opened = (generation: number) => createOpenedAccess({ opened: { status: "opened", client_instance_id: id(1), document_id: id(2),
     document_epoch: "1", proof_version: "1", profile: { profile_id: id(50), role: "user", ui_language: "ru", dictionary_language: "ru",

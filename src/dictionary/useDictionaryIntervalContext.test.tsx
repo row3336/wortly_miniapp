@@ -8,6 +8,7 @@ import type { DictionaryIntervalSnapshot } from "./dictionaryIntervalController"
 import {
   useDictionaryIntervalContext, type DictionaryIntervalContextActions, type DictionaryIntervalContextOptions,
 } from "./useDictionaryIntervalContext";
+import { testGate } from "../commands/testGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const CARD = id(1), CLIENT = id(3), PROFILE = id(5), TODAY = "2026-09-29";
@@ -122,7 +123,7 @@ function fixture() {
     return createOpenedAccess({ opened: { ...base, ...patch }, token: "synthetic-interval-token-sibling", proof: "synthetic-interval-proof-sibling",
       generation: 1, isLive: () => live, onDenied: error => { denied(error); live = false; } });
   };
-  const transport = { fetcher: srv.fetcher, timeoutMs: 5000, maxResponseBytes: 1_000_000 };
+  const transport = { fetcher: srv.fetcher, timeoutMs: 5000, maxResponseBytes: 1_000_000, gate: testGate() };
   const options: DictionaryIntervalContextOptions = { access: access(), transport, cardId: CARD, enabled: true, newId: () => id(next++) };
   const calls = () => srv.fetcher.mock.calls.map(([url, init]) => `${init!.method} ${new URL(String(url), "http://local").pathname}`);
   const auth = (n = -1) => (srv.fetcher.mock.calls.at(n)![1]!.headers as Record<string, string>).Authorization;

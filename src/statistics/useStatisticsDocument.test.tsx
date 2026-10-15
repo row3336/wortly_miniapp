@@ -5,6 +5,7 @@ import type { OpenedClient, StatisticsOverviewResponse } from "../api/generated"
 import { createOpenedAccess, type OpenedAccess } from "../app/openedAccess";
 import type { PracticeWeek } from "./practiceApi";
 import { useStatisticsDocument, type StatisticsDocumentOptions } from "./useStatisticsDocument";
+import { testGate } from "../commands/testGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 function data(week: PracticeWeek, state_version = "1", pair: StatisticsOverviewResponse["pair"] = "ru-de"): StatisticsOverviewResponse {
@@ -44,7 +45,7 @@ function fixture(week: PracticeWeek = "current") {
     return response(data(path.searchParams.get("week") as PracticeWeek, version, pair));
   };
   const fetcher = vi.fn<typeof fetch>(handler);
-  const options: StatisticsDocumentOptions = { access: access(), transport: { fetcher, timeoutMs: 1000, maxResponseBytes: 100000 }, week, enabled: true };
+  const options: StatisticsDocumentOptions = { access: access(), transport: { fetcher, timeoutMs: 1000, maxResponseBytes: 100000, gate: testGate() }, week, enabled: true };
   return { options, opened, fetcher, handler, denied, access, revoke: () => { active = null; },
     set: (next: string, nextPair = pair) => { version = next; pair = nextPair; } };
 }

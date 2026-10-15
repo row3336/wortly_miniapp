@@ -5,6 +5,7 @@ import { action, current, deferred, fact, id, original, pending, primaryKey, pro
 import { previewContent } from "./learningPreview.test-support";
 import { learningViewFixture } from "./learningView.test-support";
 import type { LearningViewController } from "./learningViewController";
+import { testGate } from "../commands/testGate.test-support";
 
 const owners: LearningViewController[] = [];
 afterEach(() => { owners.splice(0).forEach(owner => owner.dispose()); vi.useRealTimers(); });
@@ -359,14 +360,14 @@ describe("The transport tells «started» only right before fetch (C198)", () =>
   it("a body that cannot be serialized: neither started nor fetch", async () => {
     const fetcher = vi.fn<typeof fetch>(async () => response({}));
     const started = vi.fn();
-    const request = createJsonTransport({ fetcher, timeoutMs: 1000, maxResponseBytes: 1000 });
+    const request = createJsonTransport({ fetcher, timeoutMs: 1000, maxResponseBytes: 1000, gate: testGate() });
     await expect(request("/commands", { method: "POST", body: { value: 1n }, started })).rejects.toThrow();
     expect(started).not.toHaveBeenCalled(); expect(fetcher).not.toHaveBeenCalled();
   });
   it("a built request: started once, before fetch is called", async () => {
     const order: string[] = [];
     const fetcher = vi.fn<typeof fetch>(async () => { order.push("fetch"); return response({}); });
-    const request = createJsonTransport({ fetcher, timeoutMs: 1000, maxResponseBytes: 1000 });
+    const request = createJsonTransport({ fetcher, timeoutMs: 1000, maxResponseBytes: 1000, gate: testGate() });
     await request("/commands", { method: "POST", body: { value: 1 }, started: () => order.push("started") });
     expect(order).toEqual(["started", "fetch"]);
   });

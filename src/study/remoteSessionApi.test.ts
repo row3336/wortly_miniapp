@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { SessionStopRemoteCommand } from "../api/generated";
 import { createRemoteSessionApi } from "./remoteSessionApi";
+import { testGate } from "../commands/testGate.test-support";
 
 const ids = {
   command: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
@@ -26,7 +27,7 @@ function profile() {
 function apiFor(body: unknown, status = 200) {
   const fetcher = vi.fn(async () => new Response(JSON.stringify(body), { status }));
   return { fetcher, api: createRemoteSessionApi({ fetcher: fetcher as typeof fetch,
-    timeoutMs: 1000, maxResponseBytes: 10000 }) };
+    timeoutMs: 1000, maxResponseBytes: 10000, gate: testGate() }) };
 }
 
 describe("addressed remote stop transport", () => {
@@ -38,7 +39,7 @@ describe("addressed remote stop transport", () => {
       expect(JSON.parse(init.body as string)).toEqual(command());
       return new Response(JSON.stringify(accepted()));
     });
-    const api = createRemoteSessionApi({ fetcher: fetcher as typeof fetch, timeoutMs: 1000, maxResponseBytes: 10000 });
+    const api = createRemoteSessionApi({ fetcher: fetcher as typeof fetch, timeoutMs: 1000, maxResponseBytes: 10000, gate: testGate() });
     const got = await api.stop("synthetic-token", "synthetic-proof", command());
     expect(got.outcome).toBe("accepted");
     expect(got.current).toEqual(accepted().current);
@@ -58,7 +59,7 @@ describe("addressed remote stop transport", () => {
       expect(init.headers).toMatchObject({ "X-Origin-Proof": "synthetic-proof" });
       return new Response(JSON.stringify(body));
     });
-    const api = createRemoteSessionApi({ fetcher: fetcher as typeof fetch, timeoutMs: 1000, maxResponseBytes: 10000 });
+    const api = createRemoteSessionApi({ fetcher: fetcher as typeof fetch, timeoutMs: 1000, maxResponseBytes: 10000, gate: testGate() });
     expect(await api.status("synthetic-token", "synthetic-proof", command())).toMatchObject({ outcome: "accepted" });
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
@@ -153,7 +154,7 @@ describe("addressed remote stop transport", () => {
 
   it("keeps a network loss unresolved and never retries POST automatically", async () => {
     const fetcher = vi.fn(async () => { throw new TypeError("synthetic connection loss"); });
-    const api = createRemoteSessionApi({ fetcher: fetcher as typeof fetch, timeoutMs: 1000, maxResponseBytes: 10000 });
+    const api = createRemoteSessionApi({ fetcher: fetcher as typeof fetch, timeoutMs: 1000, maxResponseBytes: 10000, gate: testGate() });
     await expect(api.stop("synthetic", "synthetic", command())).rejects.toMatchObject({ kind: "network" });
     expect(fetcher).toHaveBeenCalledTimes(1);
   });

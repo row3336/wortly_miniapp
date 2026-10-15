@@ -8,6 +8,7 @@ import { CardHost, type CardHostProps } from "./card/CardHost";
 import type { CardOrigin } from "./card/cardOrigin";
 import { CARD } from "./card/cardTestData.test-support";
 import { intervalWorld } from "./intervalCardTestData.test-support";
+import { testGate } from "../commands/testGate.test-support";
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
@@ -32,7 +33,7 @@ function fixture(origin: CardOrigin, extensions?: CardHostProps["extensions"]) {
   const onBack = vi.fn(), onStudyAction = vi.fn();
   const props: CardHostProps = { access: createOpenedAccess({ opened, token: "synthetic-interval-card-token",
     proof: "synthetic-interval-card-proof", generation: 1, isLive: () => true, onDenied: () => {} }),
-    transport: { fetcher, timeoutMs: 5000, maxResponseBytes: 1_000_000 }, language: "ru", pendingStore: new ManualPendingStore(storage),
+    transport: { fetcher, timeoutMs: 5000, maxResponseBytes: 1_000_000, gate: testGate() }, language: "ru", pendingStore: new ManualPendingStore(storage),
     cardId: CARD, origin, newId: () => aid(next++), onBack, onStudyAction, extensions };
   return { world, props, onBack, onStudyAction };
 }

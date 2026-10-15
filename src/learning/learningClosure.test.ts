@@ -7,6 +7,7 @@ import { tick } from "../commands/recoveryTime.test-support";
 import { closed, current, fact, id, missing, pending, primaryKey, response, stopKey } from "./learningFixtures.test-support";
 import { learningViewFixture } from "./learningView.test-support";
 import { LearningViewController } from "./learningViewController";
+import { testGate } from "../commands/testGate.test-support";
 
 type Request = { method: string; path: string; kind: string | null; commandId: string | null };
 /** undefined: the synthetic server answers; "drop": fails before the server; "lose": the server applies, the reply is lost. */
@@ -51,7 +52,7 @@ function harness() {
   const run = async (ms: number, step = 1000) => { for (let spent = 0; spent < ms; spent += step) await tick(step); };
   const own = () => {
     const view = new LearningViewController({ access: f.access, storage: f.storage, newId: f.newId,
-      transport: { fetcher: f.fetcher, timeoutMs: 30000, maxResponseBytes: 100000 }, sessionId: id(3), transitionMode: () => "normal",
+      transport: { fetcher: f.fetcher, timeoutMs: 30000, maxResponseBytes: 100000, gate: testGate() }, sessionId: id(3), transitionMode: () => "normal",
       onUpdate: vi.fn() });
     owners.push(view);
     return view;
@@ -345,7 +346,7 @@ describe("a closure record is never sent by any path", () => {
   it("the Learning session API refuses to send it, but checks it", async () => {
     const { createLearningSessionApi } = await import("./learningSessionApi");
     const fetcher = vi.fn<typeof fetch>(async () => response(missing({ command_id: id(300), session_id: id(3) } as never)));
-    const api = createLearningSessionApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 100000 });
+    const api = createLearningSessionApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 100000, gate: testGate() });
     const command = { command_id: id(300), session_id: id(3), kind: "session.stop" as const,
       payload: { reason: "save_failed" as const, unsaved_command_id: id(100) }, client_instance_id: id(1), document_id: id(2) };
     await expect(api.send("token", "proof", command)).rejects.toThrow("invalid Learning command");

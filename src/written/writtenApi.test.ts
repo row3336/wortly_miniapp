@@ -3,12 +3,13 @@ import { ApiError } from "../api/http";
 import { createWrittenApi, validWrittenStep } from "./writtenApi";
 import type { WrittenCommand } from "./writtenIntent";
 import { id, response, writtenServer } from "./writtenFixtures.test-support";
+import { testGate } from "../commands/testGate.test-support";
 
 const origin = { client_instance_id: id(1), document_id: id(2) };
 function harness(options: Parameters<typeof writtenServer>[0] = {}) {
   const server = writtenServer(options);
   const fetcher = vi.fn<typeof fetch>(server.handle);
-  const api = createWrittenApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 200000 });
+  const api = createWrittenApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 200000, gate: testGate() });
   const send = (body: object) => api.send("token", "proof", { ...origin, ...body } as WrittenCommand);
   const start = (n = 10) => send({ command_id: id(n), session_id: id(3), kind: "session.start", payload: { mode: "written", bucket: "words" } });
   const present = (n = 11, assignment = 6) => send({ command_id: id(n), session_id: id(3), kind: "assignment.present", assignment_id: id(assignment), payload: {} });

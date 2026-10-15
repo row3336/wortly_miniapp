@@ -7,6 +7,7 @@ import { deferred, fixture, id, profile, response } from "../learning/learningFi
 import { SettingsPendingStore, type SettingsPending } from "./settingsPending";
 import { settingsResponse } from "./settingsRead.test-support";
 import { useSettingsDocument, type SettingsDocument } from "./useSettingsDocument";
+import { testGate } from "../commands/testGate.test-support";
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 const slot = `wortly.pending.setting:profile:${id(50)}`;
@@ -49,7 +50,7 @@ function setup(saved?: "accepted" | "missing" | "invalid", strict = false, befor
     throw new Error("Unexpected endpoint");
   });
   before?.(f);
-  const options: Options = { access: f.access(), transport: { fetcher: f.fetcher, timeoutMs: 30000, maxResponseBytes: 50000 },
+  const options: Options = { access: f.access(), transport: { fetcher: f.fetcher, timeoutMs: 30000, maxResponseBytes: 50000, gate: testGate() },
     pendingStore: new SettingsPendingStore(f.storage), onCurrent: vi.fn() };
   const wrapper = strict ? ({ children }: PropsWithChildren) => <StrictMode>{children}</StrictMode> : undefined;
   const ui = renderHook((props: Options) => {

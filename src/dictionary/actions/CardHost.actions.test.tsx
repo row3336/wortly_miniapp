@@ -8,6 +8,7 @@ import { CardHost, type CardHostProps } from "../card/CardHost";
 import type { CardOrigin } from "../card/cardOrigin";
 import { CARD, cardView, reviewing } from "../card/cardTestData.test-support";
 import { aid, json, profileCurrent } from "./actionTestData.test-support";
+import { testGate } from "../../commands/testGate.test-support";
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
@@ -78,7 +79,7 @@ function fixture(origin: CardOrigin, gate?: Promise<void>) {
   let next = 100;
   const onBack = vi.fn(), onStudyAction = vi.fn();
   const props: CardHostProps = { access: createOpenedAccess({ opened, token: "synthetic-action-token", proof: "synthetic-action-proof",
-    generation: 1, isLive: () => true, onDenied: () => {} }), transport: { fetcher: srv.fetcher, timeoutMs: 5000, maxResponseBytes: 1_000_000 },
+    generation: 1, isLive: () => true, onDenied: () => {} }), transport: { fetcher: srv.fetcher, timeoutMs: 5000, maxResponseBytes: 1_000_000, gate: testGate() },
     language: "ru", pendingStore: new ManualPendingStore(storage), cardId: CARD, origin, newId: () => aid(next++), onBack, onStudyAction };
   return { srv, props, onBack, onStudyAction, values };
 }

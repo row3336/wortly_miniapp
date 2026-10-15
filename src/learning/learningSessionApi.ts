@@ -141,7 +141,7 @@ export function createLearningSessionApi(options: HttpOptions): LearningSessionA
       if (expectedHash !== null) {
         parameters.set("include_refusal", "true"); parameters.set("expected_intent_hash", expectedHash);
       }
-      const reply = await request(`/commands/${command.command_id}?${parameters}`, { method: "GET", token, proof });
+      const reply = await request.readback(command.command_id, `/commands/${command.command_id}?${parameters}`, { method: "GET", token, proof });
       if (!reply.ok) throw httpError(reply);
       const value = reply.value;
       if (reply.status === 200 && expectedHash !== null && record(value) && record(value.command)

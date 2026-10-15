@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { DictionaryHistoryResponse } from "../api/generated";
 import { createDictionaryHistoryApi, HISTORY_LIMIT, validDictionaryHistory } from "./historyApi";
+import { testGate } from "../commands/testGate.test-support";
 
 const id = (n: number) => `abcdef00-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const at = (minute: number) => `2026-10-06T10:${String(minute).padStart(2, "0")}:00Z`;
@@ -10,7 +11,7 @@ function body(count = 2): DictionaryHistoryResponse {
 }
 function fixture(value: unknown, status = 200) {
   const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify(value), { status }));
-  return { fetcher, api: createDictionaryHistoryApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 100000 }) };
+  return { fetcher, api: createDictionaryHistoryApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 100000, gate: testGate() }) };
 }
 
 describe("dictionary history read", () => {

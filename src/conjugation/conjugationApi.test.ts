@@ -6,6 +6,7 @@ import { recordedConjugationUnknownClosed } from "../api/realCoreStatusRecording
 import { createConjugationApi, type ConjugationResultAddress, type ConjugationSessionAddress } from "./conjugationApi";
 import { conjugationIntentHash, copyConjugationIntent, validConjugationIntent, type ConjugationCommand, type ConjugationResultCommand,
   type ConjugationScheduleTransportCommand, type ConjugationSessionCommand } from "./conjugationIntent";
+import { testGate } from "../commands/testGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const origin = { client_instance_id: id(1), document_id: id(2) };
@@ -81,7 +82,7 @@ function fact(command: ConjugationCommand, status: "applied" | "already_applied"
 }
 function fixture(body: unknown, status = 200, maxResponseBytes = 20000, timeoutMs = 100) {
   const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify(body), { status }));
-  const options = { fetcher, timeoutMs, maxResponseBytes };
+  const options = { fetcher, timeoutMs, maxResponseBytes, gate: testGate() };
   return { fetcher, api: createConjugationApi(options), sessions: createSessionReadApi(options) };
 }
 const profile: Profile = { profile_id: id(90), access: { status: "admitted", version: "1", reason: null }, role: "user", ui_language: "ru", dictionary_language: "ru", time_zone: "Europe/Berlin", state_version: "9" };
@@ -355,7 +356,7 @@ describe("conjugation transport contract", () => {
     const offline = fixture({}); offline.fetcher.mockRejectedValueOnce(new TypeError("synthetic offline"));
     await expect(offline.api.send("t", "p", submit())).rejects.toMatchObject({ kind: "network" }); expect(offline.fetcher).toHaveBeenCalledOnce();
     const deadline = fixture({}, 200, 20000, 5); deadline.fetcher.mockImplementationOnce(() => new Promise(() => {}));
-    await expect(deadline.api.status("t", "p", submit())).rejects.toMatchObject({ kind: "network" }); expect(deadline.fetcher).toHaveBeenCalledOnce();
+    await expect(deadline.api.status("t", "p", submit())).rejects.toMatchObject({ kind: "timeout" }); expect(deadline.fetcher).toHaveBeenCalledOnce();
     for (const status of [401, 403, 409, 422, 503]) {
       const f = fixture({ error: { code: "WRITE_UNAVAILABLE" } }, status);
       await expect(f.api.send("t", "p", start)).rejects.toMatchObject({ kind: "http", status }); expect(f.fetcher).toHaveBeenCalledOnce();

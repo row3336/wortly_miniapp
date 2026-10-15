@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenedClient, Profile } from "../api/generated";
 import { createOpenedAccess, type OpenedAccess } from "../app/openedAccess";
 import { DocumentLanes, type DocumentLane, type LaneWiring } from "./documentLanes";
+import { testGate } from "./testGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 type Action = { kind: "session.stop" | "item.mark"; session_id: string };
@@ -49,7 +50,7 @@ function fixture(minimum?: () => string | null) {
   const readSession = vi.fn(async (): Promise<Read> => ({ state_version: "6", current: { status: "active", session_id: id(9) } }));
   const readResult = vi.fn(async (): Promise<ResultRead> => ({ state_version: "6", step: { status: "active", session_id: id(9) } }));
   const owner = new DocumentLanes<State, Action, Read, ResultRead>({ access: () => access,
-    transport: { fetcher: vi.fn(), timeoutMs: 1, maxResponseBytes: 1 }, storage: { get: vi.fn(), set: vi.fn(), remove: vi.fn() },
+    transport: { fetcher: vi.fn(), timeoutMs: 1, maxResponseBytes: 1, gate: testGate() }, storage: { get: vi.fn(), set: vi.fn(), remove: vi.fn() },
     newId: () => id(100), minimumStateVersion: minimum, onUpdate: vi.fn() },
   { label: "test", readSession, readResult, controller: wiring => (lanes[wiring.lane] = lane(wiring)), automatic: [] });
   return { owner, lanes: lanes as Record<DocumentLane, ReturnType<typeof lane>>, readSession, readResult, open,

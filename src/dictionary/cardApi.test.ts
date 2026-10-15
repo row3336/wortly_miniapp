@@ -3,6 +3,7 @@ import type { DictionaryCardContent, DictionaryCardResponse } from "../api/gener
 import { validLearningPreviewContent } from "../learning/learningPreviewContent";
 import { previewContent } from "../learning/learningPreview.test-support";
 import { createDictionaryCardApi, validDictionaryCard } from "./cardApi";
+import { testGate } from "../commands/testGate.test-support";
 
 const id = (n: number) => `abcdef00-0000-4000-8000-${String(n).padStart(12, "0")}`;
 function content(): DictionaryCardContent {
@@ -20,7 +21,7 @@ function content(): DictionaryCardContent {
 const body = (): DictionaryCardResponse => ({ state_version: "9007199254740993", current: content() });
 function fixture(value: unknown = body(), status = 200) {
   const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify(value), { status }));
-  return { fetcher, api: createDictionaryCardApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 100000 }) };
+  return { fetcher, api: createDictionaryCardApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 100000, gate: testGate() }) };
 }
 
 describe("dictionary card read", () => {
@@ -101,7 +102,7 @@ describe("dictionary card read", () => {
   it("rejects nonfinite metadata from real JSON parsing", async () => {
     const text = JSON.stringify(body()).replace('"highlighted_parts":[', '"highlighted_parts":[1e400,');
     const fetcher = vi.fn<typeof fetch>(async () => new Response(text));
-    const api = createDictionaryCardApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 100000 });
+    const api = createDictionaryCardApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 100000, gate: testGate() });
     await expect(api.read("synthetic", id(1))).rejects.toMatchObject({ kind: "invalid_response" });
     expect(fetcher).toHaveBeenCalledOnce();
   });

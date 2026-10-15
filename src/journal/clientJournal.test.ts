@@ -7,6 +7,7 @@ import { ClientJournal, installClientJournal, JOURNAL_LIMITS, journalRecord, RET
 import { acceptedEvent, BATCH_MAX_BYTES, BATCH_MAX_EVENTS, jsonBytes } from "./events";
 import { IdbJournalStore, JOURNAL_DATABASE, JOURNAL_STORE, JournalStoreError, type JournalStore, type StoredBuffer } from "./journalStore";
 import { createPageJournal, watchPage } from "./pageJournal";
+import { testGate } from "../commands/testGate.test-support";
 
 const profileA = "11111111-1111-4111-8111-111111111111";
 const profileB = "66666666-6666-4666-8666-666666666666";
@@ -386,7 +387,7 @@ describe("the transport's part: trace and command attempts", () => {
       seen.push(trace);
       return new Response("{}", { headers: { [TRACE_HEADER]: trace.toUpperCase() } });
     }) as unknown as typeof fetch;
-    const request = createJsonTransport({ fetcher, timeoutMs: 1_000, maxResponseBytes: 1_000 });
+    const request = createJsonTransport({ fetcher, timeoutMs: 1_000, maxResponseBytes: 1_000, gate: testGate() });
     const first = await request("/today", { method: "GET", token: "t" });
     const second = await request("/today", { method: "GET", token: "t" });
     expect(seen).toHaveLength(2);
@@ -394,7 +395,7 @@ describe("the transport's part: trace and command attempts", () => {
     expect(seen[0]).not.toBe(seen[1]);
     expect(first.trace).toBe(seen[0]);
     expect(second.trace).toBe(seen[1]);
-    const bare = await createJsonTransport({ fetcher: (async () => new Response("{}")) as typeof fetch, timeoutMs: 1_000, maxResponseBytes: 1_000 })("/today", { method: "GET" });
+    const bare = await createJsonTransport({ fetcher: (async () => new Response("{}")) as typeof fetch, timeoutMs: 1_000, maxResponseBytes: 1_000, gate: testGate() })("/today", { method: "GET" });
     expect(bare).not.toHaveProperty("trace");
   });
 
@@ -412,7 +413,7 @@ describe("the transport's part: trace and command attempts", () => {
       if (calls === 2) return new Response(JSON.stringify({ error: { code: "VALIDATION_FAILED", message: "MARKER-message" } }), { status: 422 });
       throw new TypeError("MARKER-network-message");
     }) as unknown as typeof fetch;
-    const request = createJsonTransport({ fetcher, timeoutMs: 1_000, maxResponseBytes: 10_000 });
+    const request = createJsonTransport({ fetcher, timeoutMs: 1_000, maxResponseBytes: 10_000, gate: testGate() });
     const command = { command_id: cmd, kind: "answer.submit", payload: { text: "MARKER-answer" }, init_data: "MARKER-initData" };
     await request("/commands", { method: "POST", token: "MARKER-TOKEN", proof: "MARKER-PROOF", body: command });
     await request("/commands", { method: "POST", token: "MARKER-TOKEN", proof: "MARKER-PROOF", body: command });
@@ -526,10 +527,10 @@ describe("r2: QA P2-1 and P3", () => {
     subject.record(error);
     await time.settle(); await time.settle();
     const reply = (code: string) => (async () => new Response(JSON.stringify({ error: { code } }), { status: 403 })) as unknown as typeof fetch;
-    await createJsonTransport({ fetcher: reply("FORBIDDEN"), timeoutMs: 1_000, maxResponseBytes: 1_000 })("/commands",
+    await createJsonTransport({ fetcher: reply("FORBIDDEN"), timeoutMs: 1_000, maxResponseBytes: 1_000, gate: testGate() })("/commands",
       { method: "POST", token: "t", proof: "p", body: { command_id: cmd, kind: "answer.submit" } });
     expect(subject.admitted()).toBe(profileA);
-    await createJsonTransport({ fetcher: reply("ACCESS_REJECTED"), timeoutMs: 1_000, maxResponseBytes: 1_000 })("/commands",
+    await createJsonTransport({ fetcher: reply("ACCESS_REJECTED"), timeoutMs: 1_000, maxResponseBytes: 1_000, gate: testGate() })("/commands",
       { method: "POST", token: "t", proof: "p", body: { command_id: cmd, kind: "answer.submit" } });
     expect(subject.admitted()).toBeNull();
     expect(subject.pending()).toEqual({ events: [], lost: 0 });
@@ -557,7 +558,7 @@ describe("r2: QA P2-1 and P3", () => {
 
   it("a client version the core refuses, or none, is said once in the developer console", () => {
     const warn = vi.fn();
-    const transport = { fetcher: vi.fn() as unknown as typeof fetch, timeoutMs: 1_000, maxResponseBytes: 1_000 };
+    const transport = { fetcher: vi.fn() as unknown as typeof fetch, timeoutMs: 1_000, maxResponseBytes: 1_000, gate: testGate() };
     createPageJournal(transport, "1.2.3+abcdef0", {}, warn);
     expect(warn).not.toHaveBeenCalled();
     createPageJournal(transport, "1.0.0-rc1", {}, warn);
@@ -643,7 +644,7 @@ describe("r3: the intake not deployed yet, the order of a clear and a restore, t
     const onDocumentStale = vi.fn();
     const fetcher = vi.fn(async () => new Response(JSON.stringify({ error: { code: "DOCUMENT_STALE" } }), { status: 409 })) as unknown as typeof fetch;
     const time = manualClock();
-    const page = createPageJournal({ fetcher, timeoutMs: 1_000, maxResponseBytes: 1_000, onDocumentStale }, "0.0.0",
+    const page = createPageJournal({ fetcher, timeoutMs: 1_000, maxResponseBytes: 1_000, gate: testGate(), onDocumentStale }, "0.0.0",
       { clock: time.clock, openStore: async () => memoryStore() }, () => undefined);
     page.admit(profileA);
     await time.settle();

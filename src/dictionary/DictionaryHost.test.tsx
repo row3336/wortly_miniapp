@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DictionarySearchResponse, DictionarySimilarItem, OpenedClient } from "../api/generated";
 import { createOpenedAccess, type OpenedAccess } from "../app/openedAccess";
 import { DICTIONARY_SEARCH_LIMITS, DictionaryHost, type DictionaryHostProps, type DictionaryVisit } from "./DictionaryHost";
+import { testGate } from "../commands/testGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 // Test parameters only: the product values are an open question (В3, К07-092).
@@ -66,7 +67,7 @@ function fixture() {
     live.clear(); live.add(bound);
     return bound;
   };
-  const props: DictionaryHostProps = { access: access(), transport: { fetcher, timeoutMs: 30000, maxResponseBytes: 100000 },
+  const props: DictionaryHostProps = { access: access(), transport: { fetcher, timeoutMs: 30000, maxResponseBytes: 100000, gate: testGate() },
     language: "ru", limits, visit: { kind: "entry" }, onOpenCard: vi.fn(), onNavigate: vi.fn() };
   const release = (key: string) => act(async () => { held.get(key)?.shift()?.(); });
   return { server, sent, fetcher, access, props, hold: (key: string) => holds.add(key), release };

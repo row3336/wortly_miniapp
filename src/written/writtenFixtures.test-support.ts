@@ -5,6 +5,7 @@ import { createOpenedAccess, type OpenedAccess } from "../app/openedAccess";
 import type { AsyncStorage } from "../platform/storage";
 import { writtenIntentHash, type WrittenIntent } from "./writtenIntent";
 import { writtenPrimaryKey, writtenStopKey } from "./writtenPending";
+import { testGate } from "../commands/testGate.test-support";
 
 // Automatic recovery on fake time: the exchange helpers are shared with the Learning fixtures.
 export { drain, tick } from "../commands/recoveryTime.test-support";
@@ -296,7 +297,7 @@ export function writtenFixture(options: ServerOptions & { saved?: Partial<Record
     fetcher.mockImplementation(async () => { throw new TypeError("network"); });
     return () => { fetcher.mockImplementation(server.handle); };
   };
-  const transport = { fetcher, timeoutMs: 30000, maxResponseBytes: 200000 };
+  const transport = { fetcher, timeoutMs: 30000, maxResponseBytes: 200000, gate: testGate() };
   return { values, storage, access: () => access, replace, server, fetcher, newId, posts, gets, hold, loseReply, dropRequest,
     offline, transport, revoke: () => { live = false; } };
 }

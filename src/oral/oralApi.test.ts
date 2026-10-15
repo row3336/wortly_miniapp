@@ -3,6 +3,7 @@ import type { OralSessionProjection, Profile } from "../api/generated";
 import { createOralApi, type OralCommand } from "./oralApi";
 import { copyOralIntent, validOralIntent } from "./oralIntent";
 import { recordedOralUnknownClosed } from "../api/realCoreStatusRecordings.test-support";
+import { testGate } from "../commands/testGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const origin = { client_instance_id: id(1), document_id: id(2), session_id: id(3) };
@@ -60,7 +61,7 @@ function response(command = commands[0], projection: unknown = current(), status
 }
 function fixture(value: unknown = response(), status = 200, maxResponseBytes = 10000) {
   const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify(value), { status }));
-  return { fetcher, api: createOralApi({ fetcher, timeoutMs: 100, maxResponseBytes, baseUrl: "https://synthetic.invalid/" }) };
+  return { fetcher, api: createOralApi({ fetcher, timeoutMs: 100, maxResponseBytes, gate: testGate(), baseUrl: "https://synthetic.invalid/" }) };
 }
 const missing = (closed_session?: unknown) => ({ command: { id: id(4), status: "not_found" },
   current: profile, state_version: "3", ...(closed_session === undefined ? {} : { closed_session }) });

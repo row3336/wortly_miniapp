@@ -10,6 +10,7 @@ import { settingsResponse } from "../settings/settingsRead.test-support";
 import { useSettingsDocument } from "../settings/useSettingsDocument";
 import { createOpenedAccess } from "./openedAccess";
 import { oralBucket, useOralHost, type OralHost, type OralHostOptions } from "./OralHost";
+import { testGate } from "../commands/testGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const studyKey = "wortly.pending.oral_session";
@@ -91,7 +92,7 @@ function setup(options: Options = {}) {
     const session = path.split("/").at(-1)!;
     return response({ current: current ?? { session_id: session, status: "unavailable" }, state_version: String(version) });
   });
-  const transport = { fetcher, timeoutMs: 1000, maxResponseBytes: 100000 };
+  const transport = { fetcher, timeoutMs: 1000, maxResponseBytes: 100000, gate: testGate() };
   const seed = options.seed ? id(3) : null;
   const access = createOpenedAccess({ opened: { status: "opened", client_instance_id: id(1), document_id: id(2), document_epoch: "1",
     proof_version: "1", profile, session: seed ? { id: seed, phase: "active" } : null, compatibility: { compatible: true, contract_version: "1" } },

@@ -4,12 +4,13 @@ import { createFeedbackApi } from "./feedbackApi";
 import { FeedbackController } from "./feedbackController";
 import { memoryFeedbackPendingStore } from "./feedbackPending";
 import { feedbackWorld, slot, TEXT } from "./feedbackFixtures.test-support";
+import { testGate } from "../commands/testGate.test-support";
 
 const CARD = "00000000-0000-4000-8000-000000000901";
 
 function complaint(world = feedbackWorld(), store = memoryFeedbackPendingStore(), cardId = CARD.toUpperCase()) {
   let next = 100;
-  const controller = new FeedbackController({ api: createFeedbackApi({ fetcher: world.f.fetcher, timeoutMs: 1000, maxResponseBytes: 100000 }),
+  const controller = new FeedbackController({ api: createFeedbackApi({ fetcher: world.f.fetcher, timeoutMs: 1000, maxResponseBytes: 100000, gate: testGate() }),
     pendingStore: store, cardId, access: () => world.f.access(), newId: () => id(next++), onUpdate: vi.fn() });
   return { world, controller, store };
 }

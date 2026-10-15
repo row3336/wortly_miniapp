@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { DictionaryCardView, DictionaryCardViewResponse } from "../api/generated";
 import { createDictionaryViewApi, validDictionaryView } from "./viewApi";
+import { testGate } from "../commands/testGate.test-support";
 
 const cardId = "a0000000-0000-4000-8000-000000000001";
 const groupId = "a0000000-0000-4000-8000-000000000002";
@@ -44,7 +45,7 @@ function review(): DictionaryCardView {
 }
 function transport(value: unknown, status = 200, maxResponseBytes = 100000) {
   const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify(value), { status }));
-  return { fetcher, api: createDictionaryViewApi({ fetcher, timeoutMs: 1000, maxResponseBytes }) };
+  return { fetcher, api: createDictionaryViewApi({ fetcher, timeoutMs: 1000, maxResponseBytes, gate: testGate() }) };
 }
 
 describe("coherent dictionary view", () => {

@@ -4,6 +4,7 @@ import { oralIntentHash } from "./oralIntent";
 import { OralCommandController } from "./oralCommandController";
 import { OralSessionPendingStore } from "./oralPending";
 import type { AsyncStorage } from "../platform/storage";
+import { testGate } from "../commands/testGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const session = "abcdefab-abcd-4abc-8abc-abcdefabcdef", assignment = "fedcbafe-dcba-4fed-8fed-fedcbafedcba";
@@ -16,7 +17,7 @@ const fact = { id: id(4), kind: "oral.grade", status: "already_applied", target_
   action_id: id(5), result_id: id(6), context_id: null, object_version: "1", applied_at: "2026-10-01T00:00:00Z" };
 const accepted = { command: fact, current: { status: "unavailable" }, state_version: "10", verified_intent_hash: trueHash };
 const wire = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status });
-const apiFor = (fetcher: typeof fetch) => createOralApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 10000 });
+const apiFor = (fetcher: typeof fetch) => createOralApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 10000, gate: testGate() });
 
 function lifecycle(lostReply = false) {
   let raw: string | null = null;

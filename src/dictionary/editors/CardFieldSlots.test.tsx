@@ -6,6 +6,7 @@ import { cardView, preposition } from "../card/cardTestData.test-support";
 import { cardFieldSlots } from "./CardFieldSlots";
 import { ACTION, CONTEXT, fid, json, pairOf, roleCurrent, scalarCurrent } from "./fieldTestData.test-support";
 import { useFieldEditors, type FieldEditorsOptions } from "./useFieldEditors";
+import { testGate } from "../../commands/testGate.test-support";
 
 const CARD = "00000000-0000-4000-8000-000000000901";
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
@@ -80,7 +81,7 @@ function Harness(props: HarnessProps) {
 function setup(view = cardView(CARD), contextId: string | null = CONTEXT) {
   const srv = server(), onChanged = vi.fn(), onLeave = vi.fn();
   let next = 100;
-  const props: HarnessProps = { access: access(), transport: { fetcher: srv.fetcher, timeoutMs: 5000, maxResponseBytes: 1_000_000 },
+  const props: HarnessProps = { access: access(), transport: { fetcher: srv.fetcher, timeoutMs: 5000, maxResponseBytes: 1_000_000, gate: testGate() },
     view, contextId, newId: () => fid(next++), onChanged, onLeave };
   const ui = render(<Harness {...props} />);
   return { srv, onChanged, onLeave, props, ui };

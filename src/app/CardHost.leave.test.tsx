@@ -8,6 +8,7 @@ import { cardIdOf, cardView } from "../dictionary/card/cardTestData.test-support
 import { ManualPendingStore } from "../learning/manualPending";
 import type { AsyncStorage } from "../platform/storage";
 import { createOpenedAccess } from "./openedAccess";
+import { testGate } from "../commands/testGate.test-support";
 
 const closeCalls = vi.hoisted(() => ({ count: 0 }));
 // The real hook, with the close action of the host counted before it reaches the controller.
@@ -52,7 +53,7 @@ function mount() {
     remove: async key => { values.delete(key); } };
   const onBack = vi.fn();
   let next = 100;
-  render(<CardHost access={access} transport={{ fetcher, timeoutMs: 5000, maxResponseBytes: 1_000_000 }} language="ru"
+  render(<CardHost access={access} transport={{ fetcher, timeoutMs: 5000, maxResponseBytes: 1_000_000, gate: testGate() }} language="ru"
     pendingStore={new ManualPendingStore(storage)} cardId={CARD} origin={{ kind: "dictionary" }} newId={() => id(next++)} onBack={onBack} />);
   const kinds = () => fetcher.mock.calls.filter(([, init]) => init!.method === "POST").map(([, init]) => JSON.parse(String(init!.body)).kind);
   return { onBack, kinds };

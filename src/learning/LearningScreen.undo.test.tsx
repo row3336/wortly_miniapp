@@ -6,6 +6,7 @@ import { id } from "./learningFixtures.test-support";
 import { LearningScreen } from "./LearningScreen";
 import { learningUndoServer, type LearningUndoOptions } from "./learningUndo.test-support";
 import { LearningViewController, type LearningViewSnapshot } from "./learningViewController";
+import { testGate } from "../commands/testGate.test-support";
 
 const owners: LearningViewController[] = [];
 afterEach(() => { cleanup(); owners.splice(0).forEach(owner => owner.dispose()); });
@@ -14,7 +15,7 @@ async function mount(options: LearningUndoOptions = {}) {
   const s = learningUndoServer(options);
   const onUpdate = vi.fn<(snapshot: LearningViewSnapshot) => void>();
   const view = new LearningViewController({ access: s.access, storage: s.storage, newId: s.newId,
-    transport: { fetcher: s.fetcher, timeoutMs: 30000, maxResponseBytes: 100000 }, sessionId: id(3), transitionMode: () => "normal", onUpdate });
+    transport: { fetcher: s.fetcher, timeoutMs: 30000, maxResponseBytes: 100000, gate: testGate() }, sessionId: id(3), transitionMode: () => "normal", onUpdate });
   owners.push(view);
   function Live() {
     const [state, setState] = useState(() => view.snapshot());

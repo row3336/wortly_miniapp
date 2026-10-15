@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Profile, SessionCancelStartCommand } from "../api/generated";
 import { ApiError } from "../api/http";
 import { createStartCancelApi, startCancelIntent, startCancelIntentHash } from "./startCancelApi";
+import { testGate } from "./testGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const COMMAND: SessionCancelStartCommand = { command_id: id(5), client_instance_id: id(1), document_id: id(2),
@@ -28,7 +29,7 @@ const missing = (patch: Record<string, unknown> = {}) =>
 
 function fixture(value: unknown, status = 200) {
   const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify(value), { status }));
-  return { api: createStartCancelApi({ fetcher, timeoutMs: 100, maxResponseBytes: 10000 }), fetcher };
+  return { api: createStartCancelApi({ fetcher, timeoutMs: 100, maxResponseBytes: 10000, gate: testGate() }), fetcher };
 }
 
 describe("the cancel body and fingerprint (3.3.13)", () => {

@@ -8,6 +8,7 @@ import { conjugationIntentHash, type ConjugationCommand, type ConjugationIntent 
 import { ConjugationSessionPendingStore, ConjugationStopPendingStore } from "./conjugationPending";
 import type { ConjugationDocumentSnapshot } from "./conjugationDocumentController";
 import { useConjugationDocument, type ConjugationDocumentHookOptions } from "./useConjugationDocument";
+import { testGate } from "../commands/testGate.test-support";
 
 const id = (n: number) => `eeeeeeee-ffff-4000-8000-${String(n).padStart(12, "0")}`;
 const S1 = id(3), S2 = id(4), B1 = id(21);
@@ -71,7 +72,7 @@ function access(document = id(2), generation = 1, live = { value: true }): Opene
 function options(model: ReturnType<typeof server>, extra: Partial<ConjugationDocumentHookOptions> = {}): ConjugationDocumentHookOptions {
   const shared = storage();
   let counter = 100;
-  return { access: access(), transport: { fetcher: model.fetcher, timeoutMs: 1000, maxResponseBytes: 100000 },
+  return { access: access(), transport: { fetcher: model.fetcher, timeoutMs: 1000, maxResponseBytes: 100000, gate: testGate() },
     studyStore: new ConjugationSessionPendingStore(shared), stopStore: new ConjugationStopPendingStore(shared),
     initialSessionId: S1, newId: () => id(counter++), minimumStateVersion: null, enabled: true, ...extra };
 }

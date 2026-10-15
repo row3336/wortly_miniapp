@@ -8,6 +8,7 @@ import { settingsFeedbackCopy } from "./settingsFeedbackCopy";
 import { SettingsPendingStore } from "./settingsPending";
 import { settingsResponse } from "./settingsRead.test-support";
 import { useSettingsDocument } from "./useSettingsDocument";
+import { testGate } from "../commands/testGate.test-support";
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 type Props = Parameters<typeof useSettingsDocument>[0] & { language: Language; active: boolean; shown: boolean; onToday(): void };
@@ -26,7 +27,7 @@ function setup(fates: Fate[] = [], language: Language = "ru", world = feedbackWo
     if (path.includes("/commands")) return base(url, init);
     return response({ state_version: "1", topics: [] });
   });
-  const props: Props = { access: world.f.access(), transport: { fetcher: world.f.fetcher, timeoutMs: 30000, maxResponseBytes: 50000 },
+  const props: Props = { access: world.f.access(), transport: { fetcher: world.f.fetcher, timeoutMs: 30000, maxResponseBytes: 50000, gate: testGate() },
     pendingStore: new SettingsPendingStore(world.f.storage), language, active: true, shown: true, onCurrent: vi.fn(), onToday: vi.fn() };
   const ui = render(<Host {...props} />);
   return { world, props, ...ui };

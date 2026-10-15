@@ -6,6 +6,7 @@ import { conjugationIntentHash, type ConjugationCommand, type ConjugationIntent 
 import { ConjugationSessionPendingStore, ConjugationStopPendingStore } from "./conjugationPending";
 import { ConjugationDocumentController, type ConjugationDocumentOptions, type ConjugationPresentationTicket,
   type ConjugationStepTicket } from "./conjugationDocumentController";
+import { testGate } from "../commands/testGate.test-support";
 
 const id = (n: number) => `cccccccc-dddd-4000-8000-${String(n).padStart(12, "0")}`;
 const S1 = id(3), S2 = id(4), B1 = id(21), B2 = id(22), B3 = id(23), R1 = id(31);
@@ -163,7 +164,7 @@ function fixture(config: { seed?: string | null; saved?: ConjugationIntent[]; se
   const activity = { enabled: true, visible: true };
   let ownerLive = true;
   const updates = vi.fn(), newId = vi.fn(() => id(counter++));
-  const options: ConjugationDocumentOptions = { access, transport: { fetcher, timeoutMs: 1000, maxResponseBytes: 200000 },
+  const options: ConjugationDocumentOptions = { access, transport: { fetcher, timeoutMs: 1000, maxResponseBytes: 200000, gate: testGate() },
     studyStore: new ConjugationSessionPendingStore(storage), stopStore: new ConjugationStopPendingStore(storage),
     initialSessionId: config.seed === undefined ? S1 : config.seed, newId, minimumStateVersion: config.minimum ?? (() => null),
     terminalSessionIds: config.terminal ?? [], isLive: () => ownerLive, activity: () => activity, onUpdate: updates };

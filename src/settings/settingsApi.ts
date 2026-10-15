@@ -340,7 +340,7 @@ export function createSettingsApi(options: HttpOptions): SettingsApi {
     async status(token, profileId, original) {
       requireSubject(token, profileId);
       const intent = snapshot(original);
-      const reply = await request(`/commands/${intent.command_id}`, { method: "GET", token });
+      const reply = await request.readback(intent.command_id, `/commands/${intent.command_id}`, { method: "GET", token });
       return statusReply(reply, profileId, intent.command_id, (fact): fact is SavedCommandFact => acceptedFact(fact, profileId, intent));
     },
     async reset(token, proof, profileId, command) {
@@ -355,7 +355,7 @@ export function createSettingsApi(options: HttpOptions): SettingsApi {
     async resetStatus(token, profileId, original) {
       requireSubject(token, profileId);
       const intent = resetSnapshot(original);
-      const reply = await request(`/commands/${intent.command_id}`, { method: "GET", token });
+      const reply = await request.readback(intent.command_id, `/commands/${intent.command_id}`, { method: "GET", token });
       return statusReply(reply, profileId, intent.command_id, (fact): fact is SavedCommandFact => resetFact(fact, profileId, intent));
     },
   };

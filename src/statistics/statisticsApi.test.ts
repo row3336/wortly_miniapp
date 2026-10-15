@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { StatisticsOverviewResponse } from "../api/generated";
 import type { PracticeWeek } from "./practiceApi";
 import { createStatisticsApi, validStatistics } from "./statisticsApi";
+import { testGate } from "../commands/testGate.test-support";
 
 function body(week: PracticeWeek = "current", pair: StatisticsOverviewResponse["pair"] = "ru-de"): StatisticsOverviewResponse {
   const first = week === "current" ? "2026-03-23" : "2026-03-16";
@@ -24,7 +25,7 @@ function body(week: PracticeWeek = "current", pair: StatisticsOverviewResponse["
 }
 function setup(value: unknown = body(), status = 200, maxResponseBytes = 10000) {
   const fetcher = vi.fn<typeof fetch>(async () => new Response(status === 204 ? null : JSON.stringify(value), { status }));
-  return { fetcher, api: createStatisticsApi({ fetcher, timeoutMs: 1000, maxResponseBytes }) };
+  return { fetcher, api: createStatisticsApi({ fetcher, timeoutMs: 1000, maxResponseBytes, gate: testGate() }) };
 }
 type Mutation = [string, (value: any) => void];
 
@@ -159,13 +160,13 @@ describe("8. single bounded exchange and errors", () => {
   });
   it("reports malformed JSON", async () => {
     const fetcher = vi.fn<typeof fetch>(async () => new Response("{", { status: 200 }));
-    const api = createStatisticsApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 10000 });
+    const api = createStatisticsApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 10000, gate: testGate() });
     await expect(api.get("synthetic-token", "current")).rejects.toMatchObject({ kind: "invalid_response" });
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
   it("reports network failure without retry", async () => {
     const fetcher = vi.fn<typeof fetch>(async () => { throw new Error("synthetic network failure"); });
-    const api = createStatisticsApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 10000 });
+    const api = createStatisticsApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 10000, gate: testGate() });
     await expect(api.get("synthetic-token", "current")).rejects.toMatchObject({ kind: "network" });
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
@@ -173,8 +174,8 @@ describe("8. single bounded exchange and errors", () => {
     vi.useFakeTimers();
     try {
       const fetcher = vi.fn<typeof fetch>(() => new Promise<Response>(() => {}));
-      const api = createStatisticsApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 10000 });
-      const failure = expect(api.get("synthetic-token", "current")).rejects.toMatchObject({ kind: "network" });
+      const api = createStatisticsApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 10000, gate: testGate() });
+      const failure = expect(api.get("synthetic-token", "current")).rejects.toMatchObject({ kind: "timeout" });
       await vi.advanceTimersByTimeAsync(1000); await failure;
       expect(fetcher).toHaveBeenCalledTimes(1);
       expect(fetcher.mock.calls[0][1]?.signal?.aborted).toBe(true);

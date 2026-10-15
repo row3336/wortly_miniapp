@@ -10,6 +10,8 @@ import { EntryController } from "./entryController";
 import { EntryScreen } from "./EntryScreen";
 import type { EntryState } from "./entryState";
 import { clientContractVersion, type HttpOptions } from "../api/http";
+import { createAvailabilityClient } from "../api/availability";
+import { WriteGate } from "../commands/writeGate";
 import type { OpenedAccess } from "./openedAccess";
 import type { LearningPageStarts } from "../learning/learningPageStarts";
 import type { BusyAccess } from "./busyAccess";
@@ -87,6 +89,8 @@ export function App({ learningPage }: { learningPage?: LearningPageStarts } = {}
     let currentController: EntryController | null = null;
     let enteredDocument: string | null = null;
     let journal: ReturnType<typeof createPageJournal> | null = null;
+    // The write gate of this page (P03 M-P03-3): every request of every module passes it (RD-7); it owns the probes.
+    const gate = new WriteGate();
     try {
       storage = browserStorage(window.localStorage);
     } catch {
@@ -119,7 +123,9 @@ export function App({ learningPage }: { learningPage?: LearningPageStarts } = {}
           timeoutMs: Number(configuredTimeout),
           maxResponseBytes: Number(configuredLimit),
           onDocumentStale: () => currentController?.documentStale(),
+          gate,
         };
+        gate.attachProbe(createAvailabilityClient(options).probe);
         const api = createEntryApi(options);
         setTransport(options);
         const clientVersion = import.meta.env.VITE_WORTLY_CLIENT_VERSION || packageJson.version;
@@ -175,6 +181,7 @@ export function App({ learningPage }: { learningPage?: LearningPageStarts } = {}
       if (journal && clientJournal() === journal) installClientJournal(null);
       journal?.dispose();
       currentController?.dispose();
+      gate.dispose();
       openedRef.current = null;
       if (storageRef.current === readyStorage) storageRef.current = null;
     };

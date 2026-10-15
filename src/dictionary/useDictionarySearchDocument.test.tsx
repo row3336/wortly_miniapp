@@ -8,6 +8,7 @@ import {
   useDictionarySearchDocument,
   type DictionarySearchActions, type DictionarySearchDocumentOptions, type DictionarySearchSnapshot,
 } from "./useDictionarySearchDocument";
+import { testGate } from "../commands/testGate.test-support";
 
 type Pair = "ru-de" | "uk-de" | "en-de";
 type Language = "ru" | "uk" | "en";
@@ -92,7 +93,7 @@ function fixture(initial: { version?: string } = {}) {
     plans.push({ gate: o.hold ? gate.promise : undefined, reply: o.reply, pair: o.pair, version: o.version });
     return Object.assign(() => act(async () => { gate.resolve(); }), { raw: () => gate.resolve() });
   };
-  const options: DictionarySearchDocumentOptions = { access: access(), transport: { fetcher, timeoutMs: 30000, maxResponseBytes: 100000 },
+  const options: DictionarySearchDocumentOptions = { access: access(), transport: { fetcher, timeoutMs: 30000, maxResponseBytes: 100000, gate: testGate() },
     enabled: true, limits };
   return { options, server, versions, fetcher, sent, tokens, issuedBy, denied, access, next };
 }

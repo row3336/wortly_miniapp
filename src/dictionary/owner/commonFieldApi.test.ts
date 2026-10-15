@@ -3,10 +3,11 @@ import { commonIntentHash, createCommonFieldApi, validCommonCurrent } from "./co
 import {
   CARD_ID, CONTEXT, command, commonCurrent, commonFact, fid, grammarIntent, json, origin, translationIntent,
 } from "./ownerTestData.test-support";
+import { testGate } from "../../commands/testGate.test-support";
 
 function api(...replies: Response[]) {
   const fetcher = vi.fn<typeof fetch>(async () => replies.shift() ?? json({}, 500));
-  return { fetcher, api: createCommonFieldApi({ fetcher, timeoutMs: 5000, maxResponseBytes: 1_000_000 }) };
+  return { fetcher, api: createCommonFieldApi({ fetcher, timeoutMs: 5000, maxResponseBytes: 1_000_000, gate: testGate() }) };
 }
 const body = (fetcher: ReturnType<typeof api>["fetcher"], call = 0) => JSON.parse(String(fetcher.mock.calls[call][1]!.body));
 

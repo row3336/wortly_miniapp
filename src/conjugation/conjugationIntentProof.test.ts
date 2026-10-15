@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createConjugationApi } from "./conjugationApi";
 import { conjugationIntentHash, type ConjugationIntent, type ConjugationCommand } from "./conjugationIntent";
+import { testGate } from "../commands/testGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const session_id = "abcdefab-abcd-4abc-8abc-abcdefabcdef", assignment_id = "fedcbafe-dcba-4fed-8fed-fedcbafedcba";
@@ -21,7 +22,7 @@ const vectors: [ConjugationIntent, string][] = [
   [{ ...addressed, kind: "result.undo", result_id, expected_result_version: "3", payload: {} }, "e4651c21628bdb5c239fe1f65db4be30958423b94593a137e88ade75a396a5b2"],
 ];
 const wire = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
-const api = (fetcher: typeof fetch) => createConjugationApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 20000 });
+const api = (fetcher: typeof fetch) => createConjugationApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 20000, gate: testGate() });
 const command = (intent: ConjugationIntent): ConjugationCommand => ({ ...intent, client_instance_id: id(2), document_id: id(3) });
 function receipt(intent: ConjugationIntent, verified: unknown) {
   const result = ["answer.submit", "result.grade", "result.correct", "result.undo"].includes(intent.kind);
