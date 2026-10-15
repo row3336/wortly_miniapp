@@ -9,6 +9,7 @@ import { validAnswerCapabilities, validAnswerFact, validSavedAnswer } from "../l
 import { validWrittenSessionCurrent } from "../study/sessionProjection";
 import { createSessionReadApi } from "../study/sessionReadApi";
 import { copyWrittenIntent, isAnswerKind, readableWrittenIntent, validWrittenIntent, writtenIntentHash, type WrittenCommand } from "./writtenIntent";
+import type { ReadbackTicket } from "../commands/writeGate";
 
 export type WrittenAnswer = { action: WrittenAction | null; result: WrittenResult | null; capabilities: WrittenCapabilities };
 export type WrittenStepCurrent = WrittenStep | UnavailableSession | UnavailableCurrent;
@@ -32,7 +33,7 @@ export interface WrittenApi {
   readResult(token: string, proof: string, address: WrittenResultAddress): Promise<WrittenResultRead>;
   /** started, when given, is told right before the built request goes to fetch (after every local check). */
   send(token: string, proof: string, command: WrittenCommand, started?: () => void): Promise<WrittenReply>;
-  status(token: string, proof: string, command: WrittenCommand): Promise<WrittenStatus>;
+  status(token: string, proof: string, command: WrittenCommand, ticket: ReadbackTicket): Promise<WrittenStatus>;
 }
 
 const stepKeys = ["session_id", "status", "mode", "pair", "direction", "local_date", "bucket", "close_reason", "progress",
@@ -152,12 +153,12 @@ export function createWrittenApi(options: HttpOptions): WrittenApi {
       if (!reply.ok) throw httpError(reply);
       throw new ApiError("invalid_response");
     },
-    async status(token, proof, original) {
+    async status(token, proof, original, ticket: ReadbackTicket) {
       const command = prepare(token, proof, original, "status");
       const { client_instance_id: _client, document_id: _document, ...intent } = command;
       const expectedHash = await writtenIntentHash(intent);
       const query = new URLSearchParams({ ...origin(command), session_id: command.session_id, expected_intent_hash: expectedHash });
-      const reply = await request.readback(command.command_id, `/commands/${command.command_id}?${query}`, { method: "GET", token, proof });
+      const reply = await request(`/commands/${command.command_id}?${query}`, { method: "GET", token, proof, readbackTicket: ticket });
       // A 409 COMMAND_PAYLOAD_MISMATCH reaches the controller as an HTTP refusal of this exact ID.
       if (!reply.ok) throw httpError(reply);
       const value = reply.value;

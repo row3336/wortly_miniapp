@@ -5,6 +5,7 @@ import type {
 } from "../api/generated";
 import { validProfile } from "../api/entryApi";
 import { ApiError, createJsonTransport, errorCode, httpError, type HttpOptions } from "../api/http";
+import type { ReadbackTicket } from "../commands/writeGate";
 
 export type ManualIntent = Pick<ManualSelectionCommand,
   "command_id" | "kind" | "expected_selection_version" | "payload">;
@@ -22,7 +23,7 @@ export type ManualStatusReply = { state_version: string } & (
 export interface LearningApi {
   get(token: string): Promise<LearningCurrentResponse>;
   change(token: string, proof: string, command: ManualSelectionCommand): Promise<ManualCommandReply>;
-  status(token: string, intent: ManualIntent): Promise<ManualStatusReply>;
+  status(token: string, intent: ManualIntent, ticket: ReadbackTicket): Promise<ManualStatusReply>;
 }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -171,10 +172,10 @@ export function createLearningApi(options: HttpOptions): LearningApi {
       if (!reply.ok) throw httpError(reply);
       throw new ApiError("invalid_response");
     },
-    async status(token, original) {
+    async status(token, original, ticket: ReadbackTicket) {
       requireToken(token);
       const intent = snapshotIntent(original);
-      const reply = await request.readback(intent.command_id, `/commands/${intent.command_id}`, { method: "GET", token });
+      const reply = await request(`/commands/${intent.command_id}`, { method: "GET", token, readbackTicket: ticket });
       if (!reply.ok) throw httpError(reply);
       const value = reply.value;
       if (reply.status !== 200 || !record(value) || !record(value.command)

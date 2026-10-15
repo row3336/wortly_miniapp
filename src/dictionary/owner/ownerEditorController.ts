@@ -1,6 +1,8 @@
 import type { CommonFieldsCurrent, CommonGrammarForm, CommonTranslationsResponse } from "../../api/generated";
 import { version } from "../../api/wireValidation";
 import { commandOutcomeUnknown } from "../../commands/commandOutcome";
+import { GatePending, pausedBeforeSend } from "../../commands/gatePending";
+import type { ReadbackTicket, WriteGate } from "../../commands/writeGate";
 import {
   copyCommonIntent, grammarCardType, grammarFields,
   type CardType, type CommonCommand, type CommonCommandReply, type CommonCommandStatus, type CommonCurrent, type CommonLanguage,
@@ -14,7 +16,8 @@ import {
 export type OwnerEditorPort = {
   origin(): CommonOrigin | null;
   send(command: CommonCommand): Promise<CommonCommandReply>;
-  status(command: CommonCommand): Promise<CommonCommandStatus>;
+  /** The status read by ID; the ticket comes from the write gate (R6). */
+  status(command: CommonCommand, ticket: ReadbackTicket): Promise<CommonCommandStatus>;
   /** R12-04: every L1's common translations of the card (a read, never repeated by itself). */
   readTranslations(cardId: string): Promise<CommonTranslationsResponse>;
 };
@@ -37,7 +40,9 @@ export type OwnerTarget = "translations" | GrammarFieldName;
 export type OwnerPhase = "editing" | "saving" | "failed" | "conflict" | "saved";
 export type OwnerProblem = {
   /** unknown: no reply, the same command can be repeated; invalid: 422; forbidden: not the owner; unavailable: card gone. */
-  reason: "unknown" | "refused" | "invalid" | "forbidden" | "unavailable" | "mismatch";
+  reason: "unknown" | "refused" | "invalid" | "forbidden" | "unavailable" | "mismatch"
+    /** The write gate kept the request on the client (PAUSED_BEFORE_SEND, P03 §4.2): nothing left, the same ID is retried. */
+    | "paused";
   code?: string;
 };
 /** R12-04: the other languages under badges, folded until tapped; for viewing only. */
@@ -101,6 +106,8 @@ type Options = {
   onUpdate(snapshot: OwnerEditorSnapshot): void;
   /** An accepted or refused command changed what the card shows: the host reads the card and its context again. */
   onChanged(): void;
+  /** The write gate of the page (P03 M-P03-8): status reads by ticket (R6) and the readback registry. */
+  gate: WriteGate;
 };
 type Translations = {
   items: TranslationItem[]; original: string[]; current: string[]; phase: OwnerPhase; problem: OwnerProblem | null;
@@ -171,7 +178,11 @@ export class OwnerEditorController {
   private disposed = false;
   private keys = 0;
 
-  constructor(private readonly options: Options) {}
+  private readonly registry: GatePending;
+
+  constructor(private readonly options: Options) {
+    this.registry = new GatePending(options.gate, "owner_field");
+  }
 
   // ---- inputs from the host ----
 
@@ -215,6 +226,8 @@ export class OwnerEditorController {
   }
 
   dispose(): void {
+    // R3: an ID without a definite answer stays locked to itself in the gate.
+    this.registry.release();
     this.disposed = true;
     this.entry = null;
     this.close();
@@ -615,10 +628,19 @@ export class OwnerEditorController {
     try {
       const command = this.command(entry);
       if (!command) throw new Error("no live document");
+      // From now on a request of this ID may leave: its outcome is unknown until a definite answer (R1).
+      this.registry.hold(entry.intent.command_id);
       reply = await this.options.port.send(command);
     } catch (error) {
       if (this.disposed || this.entry !== entry) return;
       entry.busy = false;
+      // PAUSED_BEFORE_SEND comes before commandOutcomeUnknown: nothing left, no check; the retry repeats the same ID.
+      if (pausedBeforeSend(error)) {
+        entry.status = "unknown";
+        this.mark(entry.target, "failed", { reason: "paused" });
+        this.notify();
+        return;
+      }
       if (commandOutcomeUnknown(error)) {
         entry.status = "unknown";
         this.mark(entry.target, "failed", { reason: "unknown" });
@@ -628,6 +650,8 @@ export class OwnerEditorController {
       }
       // An HTTP refusal without a fact: nothing was saved.
       this.entry = null;
+      this.registry.settled("rejected");
+      this.registry.release();
       const code = (error as { code?: string }).code;
       this.mark(entry.target, "failed", problemOf(code, null));
       this.notify();
@@ -636,6 +660,8 @@ export class OwnerEditorController {
     }
     if (this.disposed || this.entry !== entry) return;
     this.entry = null;
+    this.registry.settled(reply.outcome === "accepted" ? "recorded" : reply.outcome === "mismatch" ? "mismatch" : "rejected");
+    this.registry.release();
     this.settle(entry, reply);
   }
 
@@ -648,7 +674,8 @@ export class OwnerEditorController {
     try {
       const command = this.command(entry);
       if (!command) throw new Error("no live document");
-      status = await this.options.port.status(command);
+      // R6: the status of this ID is read only with the gate's ticket.
+      status = await this.registry.read(command.command_id, ticket => this.options.port.status(command, ticket));
     } catch {
       if (this.disposed || this.entry !== entry) return;
       entry.busy = false;
@@ -659,12 +686,16 @@ export class OwnerEditorController {
     entry.busy = false;
     if (status.outcome === "accepted") {
       this.entry = null;
+      this.registry.settled("recorded");
+      this.registry.release();
       this.accepted(entry, status.current, status.state_version);
       return;
     }
-    if (status.outcome === "not_found") { entry.notFound = true; this.notify(); return; }
+    if (status.outcome === "not_found") { this.registry.settled("not_recorded"); entry.notFound = true; this.notify(); return; }
     // Another payload under this ID: this intent can never be confirmed; a new command is needed.
     this.entry = null;
+    this.registry.settled("mismatch");
+    this.registry.release();
     this.mark(entry.target, "failed", { reason: "mismatch", code: status.error.code });
     this.notify();
   }

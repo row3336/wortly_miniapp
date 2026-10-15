@@ -5,7 +5,7 @@ import { createLearningResultApi } from "./learningAnswerApi";
 import { id, response } from "./learningFixtures.test-support";
 import { learningUndoServer, type LearningUndoOptions as Options } from "./learningUndo.test-support";
 import { LearningViewController } from "./learningViewController";
-import { testGate } from "../commands/testGate.test-support";
+import { readWithTicket, testGate } from "../commands/testGate.test-support";
 
 const owners: LearningViewController[] = [];
 afterEach(() => { owners.splice(0).forEach(owner => owner.dispose()); vi.useRealTimers(); });
@@ -152,11 +152,11 @@ describe("Learning result API: result.undo", () => {
     expect(undone).toMatchObject({ outcome: "accepted", command: { kind: "result.undo", object_version: "2" },
       result: { status: "undone", version: "2", detail: null }, capabilities: { undo_target: null, summary_home: false },
       step: { status: "active", assignment: { id: id(10006), status: "prefetched" } } });
-    expect(await api.status("t", "p", command)).toMatchObject({ outcome: "accepted", command: { status: "already_applied" } });
+    expect(await readWithTicket(command, (__command, __ticket) => api.status("t", "p", __command, __ticket))).toMatchObject({ outcome: "accepted", command: { status: "already_applied" } });
     // A fact at another version is not this undo.
     const reply = await (await h.fetcher.getMockImplementation()!(`/api/v1/commands/${id(400)}?session_id=${id(3)}`, { method: "GET" })).json();
     h.fetcher.mockResolvedValueOnce(response({ ...reply, command: { ...reply.command, object_version: "3" } }));
-    await expect(api.status("t", "p", command)).rejects.toMatchObject({ kind: "invalid_response" });
+    await expect(readWithTicket(command, (__command, __ticket) => api.status("t", "p", __command, __ticket))).rejects.toMatchObject({ kind: "invalid_response" });
   });
 });
 

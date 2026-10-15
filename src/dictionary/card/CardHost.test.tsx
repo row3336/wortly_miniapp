@@ -68,6 +68,15 @@ function server(initial: () => DictionaryCardView = cardView) {
       s.commands.set(body.command_id, saved);
       return json({ command: saved, current: learning(), state_version: String(s.state) });
     }
+    // The status of a command by its ID (P03 I9: a manual «Повторить» reads the ID before it sends it again).
+    const status = /^\/api\/v1\/commands\/([^/]+)$/.exec(url.pathname);
+    if (status && init.method === "GET") {
+      const saved = s.commands.get(status[1]);
+      return saved ? json({ command: { ...saved, status: "already_applied" }, current: learning(), state_version: String(s.state) })
+        : json({ command: { id: status[1], status: "not_found" }, state_version: String(s.state), current: { profile_id: PROFILE,
+          role: "user", ui_language: "ru", dictionary_language: "ru", time_zone: "UTC", state_version: String(s.state),
+          access: { status: "admitted", version: "1", reason: null } } });
+    }
     throw new Error(`unexpected ${init.method} ${path}`);
   };
   const fetcher = vi.fn<typeof fetch>(async (input, init) => {
@@ -183,6 +192,8 @@ describe("М12 card host: card read, card context, manual Learning choice, Back"
     const firstId = (JSON.parse(String(f.srv.fetcher.mock.calls.find(([, init]) => init!.method === "POST" && String(init!.body).includes("learning.select"))![1]!.body))).command_id;
     fireEvent.click(retry);
     await screen.findByText("В следующей группе слов");
+    // P03 I9: the retry read the ID first (not found), then sent the same command once.
+    expect(f.srv.reads(`/commands/${firstId}`)).toBe(1);
     const selects = f.srv.posts().filter(post => post.kind === "learning.select");
     // The lost request and its retry carry one command ID and one payload.
     expect(selects.map(post => post.command_id)).toEqual([firstId, firstId]);

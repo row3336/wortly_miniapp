@@ -84,7 +84,7 @@ function accessPort(latest: { current: CardActionsOptions }, api: () => CardActi
         ? { client_instance_id: access.document.clientInstanceId, document_id: access.document.documentId } : null;
     },
     send: command => bound((current, token, proof) => current.send(token, proof, command)),
-    status: command => bound((current, token, proof) => current.status(token, proof, command)),
+    status: (command, ticket) => bound((current, token, proof) => current.status(token, proof, command, ticket)),
   };
 }
 
@@ -102,6 +102,7 @@ export function useCardActions(options: CardActionsOptions): CardActionsDocument
   if (owner.current === null) {
     owner.current = new CardActionsController({
       port: accessPort(latest, () => currentApi.current, mounted),
+      gate: options.transport.gate,
       newId: () => latest.current.newId?.() ?? window.crypto.randomUUID(),
       onUpdate: () => { if (mounted.current) repaint(); },
       onApplied: event => { if (mounted.current) latest.current.onApplied(event); },

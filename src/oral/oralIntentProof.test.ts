@@ -4,7 +4,7 @@ import { oralIntentHash } from "./oralIntent";
 import { OralCommandController } from "./oralCommandController";
 import { OralSessionPendingStore } from "./oralPending";
 import type { AsyncStorage } from "../platform/storage";
-import { testGate } from "../commands/testGate.test-support";
+import { readWithTicket, testGate } from "../commands/testGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const session = "abcdefab-abcd-4abc-8abc-abcdefabcdef", assignment = "fedcbafe-dcba-4fed-8fed-fedcbafedcba";
@@ -38,7 +38,7 @@ function lifecycle(lostReply = false) {
   const make = () => new OralCommandController({ profileId: id(50), clientInstanceId: id(1), pair: "ru-de", lane: "study",
     pendingStore: new OralSessionPendingStore(storage), isLive: () => true, newId: () => id(4), onUpdate: () => {},
     send: value => api.send("synthetic", "synthetic", { ...value, client_instance_id: id(1), document_id: id(2) }),
-    check: value => api.status("synthetic", "synthetic", { ...value, client_instance_id: id(1), document_id: id(2) }),
+    check: value => readWithTicket({ ...value, client_instance_id: id(1), document_id: id(2) }, (__command, __ticket) => api.status("synthetic", "synthetic", __command, __ticket)),
     read: async () => { throw Error("no current read needed for a known fact or mismatch"); } });
   return { make, fetcher, raw: () => raw };
 }
@@ -71,13 +71,13 @@ describe("oral exact intent recovery", () => {
   it.each([undefined, null, falseHash, trueHash.toUpperCase(), "short", { hash: trueHash }])(
     "rejects absent or invalid verified proof %j without falling back", async proof => {
       const fetcher = vi.fn<typeof fetch>(async () => wire({ ...accepted, verified_intent_hash: proof }));
-      await expect(apiFor(fetcher).status("synthetic", "synthetic", command(true))).rejects.toMatchObject({ kind: "invalid_response" });
+      await expect(readWithTicket(command(true), (__command, __ticket) => apiFor(fetcher).status("synthetic", "synthetic", __command, __ticket))).rejects.toMatchObject({ kind: "invalid_response" });
       expect(fetcher).toHaveBeenCalledOnce(); expect(fetcher.mock.calls[0][1]?.method).toBe("GET");
     });
   it("fails closed before fetch if WebCrypto is unavailable", async () => {
     const fetcher = vi.fn<typeof fetch>();
     const digest = vi.spyOn(globalThis.crypto.subtle, "digest").mockRejectedValueOnce(Error("synthetic crypto unavailable"));
-    try { await expect(apiFor(fetcher).status("synthetic", "synthetic", command(true))).rejects.toThrow(); }
+    try { await expect(readWithTicket(command(true), (__command, __ticket) => apiFor(fetcher).status("synthetic", "synthetic", __command, __ticket))).rejects.toThrow(); }
     finally { digest.mockRestore(); }
     expect(fetcher).not.toHaveBeenCalled();
   });
@@ -90,7 +90,7 @@ describe("oral exact intent recovery", () => {
   });
   it("freezes the addressed intent before asynchronous hashing", async () => {
     const original = command(true), fetcher = vi.fn<typeof fetch>(async () => wire(accepted));
-    const work = apiFor(fetcher).status("synthetic", "synthetic", original);
+    const work = readWithTicket(original, (__command, __ticket) => apiFor(fetcher).status("synthetic", "synthetic", __command, __ticket));
     original.session_id = id(77); original.command_id = id(78); Object.assign(original.payload, { correct: false });
     expect(await work).toMatchObject({ outcome: "accepted", command: { id: id(4) } });
     const url = new URL(String(fetcher.mock.calls[0][0]), "https://synthetic.invalid");

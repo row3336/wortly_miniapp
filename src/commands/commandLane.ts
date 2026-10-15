@@ -2,7 +2,9 @@ import { ApiError } from "../api/http";
 import type { ClosedSessionBoundary, Profile } from "../api/generated";
 import { exactKeys, oneOf, record, sameId, uuid, version } from "../api/wireValidation";
 import { sendableIntent } from "./closeIntent";
+import { GatePending, pausedBeforeSend } from "./gatePending";
 import { PendingStoreError, refusedUnsent, type PendingSlot } from "./pendingSlot";
+import type { WriteGate } from "./writeGate";
 
 export type CommandPhase = "loading" | "idle" | "checking" | "sending" | "unresolved" | "blocked" | "settled" | "disposed";
 export type CommandProblem = "network" | "storage" | "invalid_pending" | "pending_changed" | "mismatch" | "not_found"
@@ -13,7 +15,10 @@ export type CommandProblem = "network" | "storage" | "invalid_pending" | "pendin
   | "maintenance" | "incompatible"
   // 409 DOCUMENT_STALE: a newer window of this installation owns the document. Not a lost reply (the write was refused
   // before it began) and not a refusal of the intent: the record stays for a live window to check (C091 §1).
-  | "window_stale";
+  | "window_stale"
+  // PAUSED_BEFORE_SEND (P03 §4.2): the write gate kept the request on the client. Nothing left and the record stays; once
+  // the gate lets a write through again the owner reads the ID (M03) and offers the same send again.
+  | "paused";
 export type CommandOutcome = "accepted" | "rejected" | "not_applied";
 export type Pair = "ru-de" | "uk-de" | "en-de";
 export type LaneIntent = { command_id: string; kind: string; session_id: string };
@@ -124,6 +129,9 @@ export type LaneOptions<S extends LaneSpec> = {
   slotConflict?(): void;
   stateVersion?: string;
   minimumStateVersion?(): string | null;
+  /** The write gate of the page and this lane's family in its readback registry (P03 R1, M-P03-8). */
+  gate?: WriteGate;
+  family?: string;
 };
 /** Constant facts of a mode: its name in errors, its two lane names (the second is always Stop) and its canonical copy. */
 export type LaneMode<S extends LaneSpec> = {
@@ -134,6 +142,7 @@ export type LaneMode<S extends LaneSpec> = {
 
 /** A failed exchange keeps its intent. Only a local store failure or a denial is named; anything else is a lost reply. */
 export function failureProblem(error: unknown): CommandProblem {
+  if (pausedBeforeSend(error)) return "paused";
   if (error instanceof PendingStoreError) return error.kind === "invalid" ? "invalid_pending"
     : error.kind === "changed" ? "pending_changed" : "storage";
   if (error instanceof ApiError && (error.status === 401 || error.status === 403)) return error.status === 401 ? "expired" : "forbidden";
@@ -202,8 +211,13 @@ export abstract class LaneCore<I extends LaneIntent, Snapshot> {
   /** The raw error of the last step that failed, for automatic recovery to classify (CP2); null after a clean step. */
   private failure: unknown = null;
 
+  /** The owner's part in the readback registry of the write gate (P03 §4.11 R1–R9, M-P03-8); none without a gate. */
+  protected readonly registry: GatePending | null;
+
   constructor(private readonly core: { profileId: string; pendingStore: PendingSlot<LanePending<I>>; isLive(): boolean;
-    onUpdate(snapshot: Snapshot): void }) {}
+    onUpdate(snapshot: Snapshot): void; gate?: WriteGate; family?: string }) {
+    this.registry = core.gate ? new GatePending(core.gate, core.family ?? "lane") : null;
+  }
   abstract snapshot(): Snapshot;
   protected abstract clearCurrent(): void;
   protected live(): boolean { return !this.lifetime.signal.aborted && this.core.isLive(); }
@@ -232,6 +246,8 @@ export abstract class LaneCore<I extends LaneIntent, Snapshot> {
       this.pending = await this.core.pendingStore.load(this.core.profileId, this.lifetime.signal);
       if (!this.live()) return false;
       this.loaded = true; this.inherited = this.pending !== null;
+      // R1: a loaded record takes part in the readback registry of the gate.
+      if (this.pending) this.registry?.hold(this.pending.intent.command_id);
     }
     return true;
   }
@@ -260,6 +276,7 @@ export abstract class LaneCore<I extends LaneIntent, Snapshot> {
       await this.core.pendingStore.clear(pending, this.lifetime.signal);
       if (!this.live()) return;
       this.pending = null; this.problem = null; this.retryVerified = false; this.phase = "idle";
+      this.registry?.cleared();
     });
   }
   /**
@@ -275,9 +292,11 @@ export abstract class LaneCore<I extends LaneIntent, Snapshot> {
       await this.core.pendingStore.clearMarked(pending, this.lifetime.signal);
       if (!this.live()) return;
       this.pending = null; this.problem = null; this.retryVerified = false; this.phase = "idle";
+      this.registry?.cleared();
     });
   }
-  dispose(): void { this.lifetime.abort(); this.clearCurrent(); this.phase = "disposed"; }
+  /** R3: an ID without a definite answer stays locked to itself in the gate until a later owner reads it. */
+  dispose(): void { this.registry?.release(); this.lifetime.abort(); this.clearCurrent(); this.phase = "disposed"; }
 }
 
 /**
@@ -386,6 +405,7 @@ export abstract class CommandLane<S extends LaneSpec, O extends LaneOptions<S> =
     if (this.pending) await this.options.pendingStore.clear(this.pending, this.lifetime.signal);
     if (!this.live()) return;
     this.pending = null; this.problem = null; this.retryVerified = false; this.phase = "settled";
+    this.registry?.cleared();
   }
   private async settle(reply: LaneSettled<S>, restored = false, checked = false): Promise<void> {
     const intent = this.pending!.intent;
@@ -412,6 +432,7 @@ export abstract class CommandLane<S extends LaneSpec, O extends LaneOptions<S> =
     if (!this.live()) return;
     // Remember in memory first: a failed marker write must never allow this owner to retry another payload.
     this.pending = { ...pending, mismatch: true };
+    this.registry?.settled("mismatch");
     this.retryVerified = false; this.outcome = null; this.resolved = null; this.rejectionCode = null;
     this.clearCurrent(); this.problem = "mismatch"; this.phase = "unresolved";
     await this.options.pendingStore.markMismatch(this.pending, this.lifetime.signal);
@@ -437,6 +458,8 @@ export abstract class CommandLane<S extends LaneSpec, O extends LaneOptions<S> =
     }
     if (!this.live()) return;
     if (reply.outcome === "accepted") { await this.settle(reply as LaneSettled<S>, this.inherited, !this.inherited); return; }
+    // The server does not hold this ID: a definite answer about it (R5), whatever the target read says next.
+    this.registry?.settled("not_recorded");
     const missing = reply as MissingStatus;
     if (!this.observe(missing.state_version)) this.problem = "stale_response";
     else {
@@ -480,6 +503,8 @@ export abstract class CommandLane<S extends LaneSpec, O extends LaneOptions<S> =
     if (retry && (!this.retryVerified || !this.retryFresh())) return;
     this.phase = "sending"; this.problem = null; this.retryVerified = false; this.clearCurrent(); this.emit();
     if (!this.live() || retry && !this.retryFresh()) return;
+    // From now on a request of this ID may leave: its outcome is unknown until a definite answer (R1).
+    this.registry?.hold(pending.intent.command_id);
     try { await this.options.pendingStore.save(pending, this.lifetime.signal); }
     catch (error: unknown) {
       // Proof that this NEW intent never left: its save was refused over another record, so the transport below was not
@@ -488,6 +513,7 @@ export abstract class CommandLane<S extends LaneSpec, O extends LaneOptions<S> =
       // was stored, and may have been sent, before the slot changed under it.
       if (!retry && refusedUnsent(error)) {
         this.pending = null;
+        this.registry?.cleared();
         // Only a record of another window (X) can be checked; an unreadable one names no ID, so there is nothing to look for.
         if (error.kind === "changed") this.options.slotConflict?.();
       }

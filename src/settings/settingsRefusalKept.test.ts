@@ -8,6 +8,7 @@ import { SettingsController } from "./settingsController";
 import { SettingsPendingStore, settingsSlotOf, validSettingsPending, type SettingsPending } from "./settingsPending";
 import { SettingsResetPendingStore } from "./settingsResetPending";
 import { settingsResponse } from "./settingsRead.test-support";
+import { testGate } from "../commands/testGate.test-support";
 
 // R2-09 / K19-024 / P5-013 (C282): the 422 of an ordinary settings save is kept with its pending record between openings,
 // lifted only by a proven change of the server's state or by the user's explicit cancel of that earlier change.
@@ -44,7 +45,7 @@ function opening(disk: ReturnType<typeof storage>, document: string, read: () =>
     generation: 1, isLive: () => access === handle, onDenied: vi.fn() });
   access = handle;
   let sequence = 500;
-  const controller = new SettingsController({ api, pendingStore: new SettingsPendingStore(disk.backing),
+  const controller = new SettingsController({ gate: testGate(), api, pendingStore: new SettingsPendingStore(disk.backing),
     resetStore: new SettingsResetPendingStore(disk.backing), access: () => access, newId: () => id(sequence++), onUpdate: () => {} });
   return { controller, api };
 }

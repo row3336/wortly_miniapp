@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Profile, SessionCancelStartCommand } from "../api/generated";
 import { ApiError } from "../api/http";
 import { createStartCancelApi, startCancelIntent, startCancelIntentHash } from "./startCancelApi";
-import { testGate } from "./testGate.test-support";
+import { readWithTicket, testGate } from "./testGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const COMMAND: SessionCancelStartCommand = { command_id: id(5), client_instance_id: id(1), document_id: id(2),
@@ -53,7 +53,7 @@ describe("the cancel body and fingerprint (3.3.13)", () => {
       { ...COMMAND, command_id: COMMAND.session_id }];
     for (const command of wrong) {
       await expect(f.api.send("t", "p", command as SessionCancelStartCommand)).rejects.toThrow("invalid session.cancel_start");
-      await expect(f.api.status("t", "p", command as SessionCancelStartCommand)).rejects.toThrow("invalid session.cancel_start");
+      await expect(readWithTicket(command as SessionCancelStartCommand, (__command, __ticket) => f.api.status("t", "p", __command, __ticket))).rejects.toThrow("invalid session.cancel_start");
     }
     await expect(f.api.send("", "p", COMMAND)).rejects.toThrow();
     await expect(f.api.send("t", "", COMMAND)).rejects.toThrow();
@@ -74,7 +74,7 @@ describe("the cancel body and fingerprint (3.3.13)", () => {
 
   it("GET by the cancel's own ID with the origin, the session number and the expected fingerprint", async () => {
     const f = fixture(found());
-    const result = await f.api.status("synthetic-token", "synthetic-proof", COMMAND);
+    const result = await readWithTicket(COMMAND, (__command, __ticket) => f.api.status("synthetic-token", "synthetic-proof", __command, __ticket));
     expect(result).toMatchObject({ outcome: "accepted", current: { session_id: id(3), outcome: "cancelled" } });
     const [url, init] = f.fetcher.mock.calls[0];
     const parsed = new URL(String(url), "https://wortly.test");
@@ -87,10 +87,10 @@ describe("the cancel body and fingerprint (3.3.13)", () => {
 
   it("a fact without the same verified fingerprint is not this cancel", async () => {
     for (const value of [found(undefined, { verified_intent_hash: EMPTY_PAYLOAD_HASH }), found(undefined, { verified_intent_hash: null })]) {
-      await expect(fixture(value).api.status("t", "p", COMMAND)).rejects.toMatchObject({ kind: "invalid_response" });
+      await expect(readWithTicket(COMMAND, (__command, __ticket) => fixture(value).api.status("t", "p", __command, __ticket))).rejects.toMatchObject({ kind: "invalid_response" });
     }
     const { verified_intent_hash: _hash, ...without } = found();
-    await expect(fixture(without).api.status("t", "p", COMMAND)).rejects.toMatchObject({ kind: "invalid_response" });
+    await expect(readWithTicket(COMMAND, (__command, __ticket) => fixture(without).api.status("t", "p", __command, __ticket))).rejects.toMatchObject({ kind: "invalid_response" });
   });
 
   it("the intent helper builds exactly that cancel", () => {
@@ -145,24 +145,24 @@ describe("the cancel reply", () => {
 
 describe("the cancel status", () => {
   it("not_found: the locked profile observation, nothing else", async () => {
-    const result = await fixture(missing()).api.status("t", "p", COMMAND);
+    const result = await readWithTicket(COMMAND, (__command, __ticket) => fixture(missing()).api.status("t", "p", __command, __ticket));
     expect(result).toEqual({ outcome: "not_found", command: { id: id(5), status: "not_found" }, current: profile, state_version: "4" });
   });
 
   it("not_found with the closure of exactly this number is passed on as a fact", async () => {
     const closed = { session_id: id(3), status: "closed", close_reason: "stop" };
-    expect(await fixture(missing({ closed_session: closed })).api.status("t", "p", COMMAND)).toMatchObject({ closed_session: closed });
-    await expect(fixture(missing({ closed_session: { ...closed, session_id: id(9) } })).api.status("t", "p", COMMAND))
+    expect(await readWithTicket(COMMAND, (__command, __ticket) => fixture(missing({ closed_session: closed })).api.status("t", "p", __command, __ticket))).toMatchObject({ closed_session: closed });
+    await expect(readWithTicket(COMMAND, (__command, __ticket) => fixture(missing({ closed_session: { ...closed, session_id: id(9) } })).api.status("t", "p", __command, __ticket)))
       .rejects.toMatchObject({ kind: "invalid_response" });
   });
 
   it("closed_session: null (allowed by generated.ts) means no closure, like an absent field", async () => {
-    const result = await fixture(missing({ closed_session: null })).api.status("t", "p", COMMAND);
+    const result = await readWithTicket(COMMAND, (__command, __ticket) => fixture(missing({ closed_session: null })).api.status("t", "p", __command, __ticket));
     expect(result).toEqual({ outcome: "not_found", command: { id: id(5), status: "not_found" }, current: profile, state_version: "4" });
   });
 
   it("a found fact may hide its view altogether (no usable origin)", async () => {
-    expect(await fixture(found({ status: "unavailable" })).api.status("t", "p", COMMAND)).toMatchObject({ current: { status: "unavailable" } });
+    expect(await readWithTicket(COMMAND, (__command, __ticket) => fixture(found({ status: "unavailable" })).api.status("t", "p", __command, __ticket))).toMatchObject({ current: { status: "unavailable" } });
   });
 
   it.each([
@@ -174,12 +174,12 @@ describe("the cancel status", () => {
     ["not_found with an extra key", missing({ extra: true })],
     ["not_found without a profile", missing({ current: { status: "unavailable" } })],
   ])("3.3.14 %s is an invalid response", async (_name, value) => {
-    await expect(fixture(value).api.status("t", "p", COMMAND)).rejects.toMatchObject({ kind: "invalid_response" });
+    await expect(readWithTicket(COMMAND, (__command, __ticket) => fixture(value).api.status("t", "p", __command, __ticket))).rejects.toMatchObject({ kind: "invalid_response" });
   });
 
   it("HTTP refusals stay HTTP errors (mismatch, stale document, access)", async () => {
     for (const [status, code] of [[409, "COMMAND_PAYLOAD_MISMATCH"], [409, "DOCUMENT_STALE"], [401, "UNAUTHORIZED"]] as const) {
-      const error = await fixture({ error: { code } }, status).api.status("t", "p", COMMAND).catch((e: unknown) => e);
+      const error = await readWithTicket(COMMAND, (__command, __ticket) => fixture({ error: { code } }, status).api.status("t", "p", __command, __ticket)).catch((e: unknown) => e);
       expect(error).toBeInstanceOf(ApiError);
       expect(error).toMatchObject({ kind: "http", status, code });
     }

@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { LearningCurrentResponse, ManualSelectionCommand, SavedCommandFact } from "../api/generated";
 import { clientContractVersion } from "../api/http";
 import { createLearningApi } from "./learningApi";
-import { testGate } from "../commands/testGate.test-support";
+import { readWithTicket, testGate } from "../commands/testGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const time = "2026-09-30T00:00:00.123456Z";
@@ -201,7 +201,7 @@ describe("manual command exchange", () => {
   it("rejects malformed request IDs before any network operation", async () => {
     const { api, fetcher } = setup(reply());
     const request = command(); request.command_id = "../another-endpoint";
-    await expect(api.status("synthetic", request)).rejects.toThrow();
+    await expect(readWithTicket(request, (__command, __ticket) => api.status("synthetic", __command, __ticket))).rejects.toThrow();
     await expect(api.change("synthetic", "proof", request)).rejects.toThrow();
     expect(fetcher).not.toHaveBeenCalled();
   });
@@ -215,27 +215,27 @@ describe("checking the outcome of a manual command", () => {
   ])("does not resolve an outcome with a contradictory error %#", async outcome => {
     const { api, fetcher } = setup({ ...outcome, state_version: bigVersion,
       error: { code: "COMMAND_PAYLOAD_MISMATCH" } });
-    await expect(api.status("synthetic", command())).rejects.toMatchObject({ kind: "invalid_response" });
+    await expect(readWithTicket(command(), (__command, __ticket) => api.status("synthetic", __command, __ticket))).rejects.toMatchObject({ kind: "invalid_response" });
     expect(fetcher).toHaveBeenCalledOnce();
   });
 
   it.each([201, 202, 206])("requires HTTP 200 rather than unexpected successful status %s", async status => {
     const { api, fetcher } = setup({ command: { ...fact(), status: "already_applied" },
       current: current(), state_version: bigVersion }, status);
-    await expect(api.status("synthetic", command())).rejects.toMatchObject({ kind: "invalid_response" });
+    await expect(readWithTicket(command(), (__command, __ticket) => api.status("synthetic", __command, __ticket))).rejects.toMatchObject({ kind: "invalid_response" });
     expect(fetcher).toHaveBeenCalledOnce();
   });
 
   it("returns not_found with current profile, without resending or declaring rejection", async () => {
     const { api, fetcher } = setup({ command: { id: id(1), status: "not_found" }, current: profile(), state_version: bigVersion });
-    await expect(api.status("synthetic", command())).resolves.toMatchObject({ outcome: "not_found", current: profile() });
+    await expect(readWithTicket(command(), (__command, __ticket) => api.status("synthetic", __command, __ticket))).resolves.toMatchObject({ outcome: "not_found", current: profile() });
     expect(fetcher).toHaveBeenCalledOnce();
     expect(fetcher).toHaveBeenCalledWith(`/api/v1/commands/${id(1)}`, expect.objectContaining({ method: "GET", body: undefined }));
   });
 
   it.each([current(), { status: "unavailable" }])("keeps an accepted fact separate from current read permissions %#", async projection => {
     const body = { command: { ...fact(), status: "already_applied" }, current: projection, state_version: bigVersion };
-    await expect(setup(body).api.status("synthetic", command()))
+    await expect(readWithTicket(command(), (__command, __ticket) => setup(body).api.status("synthetic", __command, __ticket)))
       .resolves.toMatchObject({ outcome: "accepted", current: projection });
   });
 
@@ -247,7 +247,7 @@ describe("checking the outcome of a manual command", () => {
     { command: { id: id(1), status: "not_found" }, current: current() },
     { command: { ...fact(), status: "already_applied" }, current: profile() },
   ])("rejects the wrong outcome branch or address %#", async corrupt => {
-    await expect(setup({ ...corrupt, state_version: bigVersion }).api.status("synthetic", command()))
+    await expect(readWithTicket(command(), (__command, __ticket) => setup({ ...corrupt, state_version: bigVersion }).api.status("synthetic", __command, __ticket)))
       .rejects.toMatchObject({ kind: "invalid_response" });
   });
 });

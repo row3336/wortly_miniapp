@@ -53,7 +53,8 @@ describe("a check of the adapter", () => {
     [lane({ problem: "forbidden" }), null, { kind: "terminated", reason: "access_lost" }],
     [lane({ problem: "client_changed" }), null, { kind: "terminated", reason: "window_replaced" }],
     [lane({ problem: "network" }), new ApiError("network"), { kind: "unreachable" }],
-    [lane({ problem: "expired" }), new ApiError("http", 401), { kind: "terminated", reason: "access_lost" }],
+    // P03 M-P03-7: an expired sign-in asks for a new one (reauth), it does not end the access.
+    [lane({ problem: "expired" }), new ApiError("http", 401), { kind: "terminated", reason: "reauth" }],
     // The thrown form of a refused read; the lane names it window_stale (commandLane failureProblem, Р3).
     [lane({ problem: "window_stale" }), new ApiError("http", 409, "DOCUMENT_STALE"), { kind: "window_stale" }],
     [lane({ problem: "maintenance" }), new ApiError("http", 503, "MAINTENANCE", { waitSeconds: 60 }), { kind: "unreachable", pauseSeconds: 60 }],

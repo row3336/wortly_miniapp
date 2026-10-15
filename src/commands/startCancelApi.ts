@@ -4,6 +4,7 @@ import { validProfile } from "../api/entryApi";
 import { ApiError, createJsonTransport, errorCode, httpError, type HttpOptions } from "../api/http";
 import { eventTime, exactKeys, oneOf, record, sameId, uuid, validClosedSessionBoundary, version } from "../api/wireValidation";
 import { intentHash } from "./intentHash";
+import type { ReadbackTicket } from "./writeGate";
 
 export const CANCEL_START_KIND = "session.cancel_start";
 
@@ -24,7 +25,7 @@ export type StartCancelStatus = { state_version: string } & (
 
 export interface StartCancelApi {
   send(token: string, proof: string, command: SessionCancelStartCommand): Promise<StartCancelReply>;
-  status(token: string, proof: string, command: SessionCancelStartCommand): Promise<StartCancelStatus>;
+  status(token: string, proof: string, command: SessionCancelStartCommand, ticket: ReadbackTicket): Promise<StartCancelStatus>;
 }
 
 /**
@@ -95,12 +96,12 @@ export function createStartCancelApi(options: HttpOptions): StartCancelApi {
       if (!reply.ok) throw httpError(reply);
       throw new ApiError("invalid_response");
     },
-    async status(token, proof, original) {
+    async status(token, proof, original, ticket: ReadbackTicket) {
       const command = prepare(token, proof, original);
       const expectedHash = await startCancelIntentHash(command.session_id);
       const query = new URLSearchParams({ client_instance_id: command.client_instance_id, document_id: command.document_id,
         session_id: command.session_id, expected_intent_hash: expectedHash });
-      const reply = await request.readback(command.command_id, `/commands/${command.command_id}?${query}`, { method: "GET", token, proof });
+      const reply = await request(`/commands/${command.command_id}?${query}`, { method: "GET", token, proof, readbackTicket: ticket });
       // A 409 COMMAND_PAYLOAD_MISMATCH reaches the caller as an HTTP refusal of this exact ID.
       if (!reply.ok) throw httpError(reply);
       const value = reply.value;

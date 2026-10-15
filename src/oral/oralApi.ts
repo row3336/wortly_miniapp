@@ -8,6 +8,7 @@ import { record, uuid, sameId, exactKeys, version, eventTime, oneOf, validClosed
 import { copyOralIntent, oralIntentHash, validOralIntent, type OralCommand } from "./oralIntent";
 import { validOralCurrent } from "./oralProjection";
 import { createSessionReadApi } from "../study/sessionReadApi";
+import type { ReadbackTicket } from "../commands/writeGate";
 export { validOralCurrent } from "./oralProjection";
 export type { OralCommand, OralIntent } from "./oralIntent";
 
@@ -26,7 +27,7 @@ export type OralStatus = { state_version: string } & (
 export interface OralApi {
   read(token: string, proof: string, address: OralAddress): Promise<OralRead>;
   send(token: string, proof: string, command: OralCommand): Promise<OralReply>;
-  status(token: string, proof: string, command: OralCommand): Promise<OralStatus>;
+  status(token: string, proof: string, command: OralCommand, ticket: ReadbackTicket): Promise<OralStatus>;
 }
 
 function address(value: unknown): value is OralAddress {
@@ -94,14 +95,14 @@ export function createOralApi(options: HttpOptions): OralApi {
       if (!reply.ok) throw httpError(reply);
       throw new ApiError("invalid_response");
     },
-    async status(token, proof, original) {
+    async status(token, proof, original, ticket: ReadbackTicket) {
       const command = prepareCommand(token, proof, original);
       const { client_instance_id: _client, document_id: _document, ...intent } = command;
       const expectedHash = await oralIntentHash(intent);
       const parameters = query(command);
       parameters.set("session_id", command.session_id);
       parameters.set("expected_intent_hash", expectedHash);
-      const reply = await request.readback(command.command_id, `/commands/${command.command_id}?${parameters}`, { method: "GET", token, proof });
+      const reply = await request(`/commands/${command.command_id}?${parameters}`, { method: "GET", token, proof, readbackTicket: ticket });
       if (!reply.ok) throw httpError(reply);
       const value = reply.value;
       if (reply.status !== 200 || !record(value) || !record(value.command)

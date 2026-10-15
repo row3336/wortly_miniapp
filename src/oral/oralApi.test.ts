@@ -3,7 +3,7 @@ import type { OralSessionProjection, Profile } from "../api/generated";
 import { createOralApi, type OralCommand } from "./oralApi";
 import { copyOralIntent, validOralIntent } from "./oralIntent";
 import { recordedOralUnknownClosed } from "../api/realCoreStatusRecordings.test-support";
-import { testGate } from "../commands/testGate.test-support";
+import { readWithTicket, testGate } from "../commands/testGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const origin = { client_instance_id: id(1), document_id: id(2), session_id: id(3) };
@@ -84,7 +84,7 @@ describe("oral adapter command and addressed read interface", () => {
     const projection = current("presented", true);
     projection.assignment!.id = id(99); projection.capabilities.grade_target = id(99);
     const f = fixture(response(command, projection, "already_applied"));
-    const result = await f.api.status("token", "proof", command);
+    const result = await readWithTicket(command, (__command, __ticket) => f.api.status("token", "proof", __command, __ticket));
     expect(result).toMatchObject({ outcome: "accepted", current: projection });
     if (result.outcome !== "accepted") throw new Error("expected an accepted fact");
     expect(result.command.target_id).toBe("assignment_id" in command ? command.assignment_id : id(3));
@@ -245,7 +245,7 @@ describe("oral adapter facts, missing-command closure and transport failures", (
     { object_version: "2" }, { object_version: 1 }, { object_version: null }, { context_id: id(9) }, { target_id: id(3) }])(
     "rejects altered grade fact %j", async change => {
       const value = response(commands[4], current(), "already_applied"); Object.assign(value.command, change);
-      await expect(fixture(value).api.status("token", "proof", commands[4])).rejects.toMatchObject({ kind: "invalid_response" });
+      await expect(readWithTicket(commands[4], (__command, __ticket) => fixture(value).api.status("token", "proof", __command, __ticket))).rejects.toMatchObject({ kind: "invalid_response" });
     });
   it.each(["0", "01", "9223372036854775808", 3, null])("rejects non-int64 state version %j", async state_version => {
     await expect(fixture({ ...response(), state_version }).api.send("token", "proof", commands[0]))
@@ -253,30 +253,30 @@ describe("oral adapter facts, missing-command closure and transport failures", (
   });
   it("allows only exact unavailable current for an already accepted status", async () => {
     const value = response(commands[4], { status: "unavailable" }, "already_applied");
-    expect(await fixture(value).api.status("token", "proof", commands[4])).toMatchObject({ outcome: "accepted", current: { status: "unavailable" } });
-    await expect(fixture({ ...value, current: { status: "unavailable", assignment: {} } }).api.status("token", "proof", commands[4]))
+    expect(await readWithTicket(commands[4], (__command, __ticket) => fixture(value).api.status("token", "proof", __command, __ticket))).toMatchObject({ outcome: "accepted", current: { status: "unavailable" } });
+    await expect(readWithTicket(commands[4], (__command, __ticket) => fixture({ ...value, current: { status: "unavailable", assignment: {} } }).api.status("token", "proof", __command, __ticket)))
       .rejects.toMatchObject({ kind: "invalid_response" });
   });
   it.each([undefined, "stop", "midnight", "pair_changed", "timezone_date_changed", "remote_stop", "summary_home"])(
     "reads unresolved command with optional minimal closure %j", async close_reason => {
       const value = missing(close_reason && { session_id: id(3), status: "closed", close_reason });
-      expect(await fixture(value).api.status("token", "proof", commands[3])).toEqual({ ...value, outcome: "not_found" });
+      expect(await readWithTicket(commands[3], (__command, __ticket) => fixture(value).api.status("token", "proof", __command, __ticket))).toEqual({ ...value, outcome: "not_found" });
     });
   it.each([null, {}, { session_id: id(99), status: "closed", close_reason: "stop" },
     { session_id: id(3), status: "active", close_reason: "stop" }, { session_id: id(3), status: "closed", close_reason: null },
     { session_id: id(3), status: "closed", close_reason: "unknown" }, { session_id: id(3), status: "closed", close_reason: "stop", assignment: {} }])(
     "rejects malformed closed boundary %j", async closed => {
-      await expect(fixture(missing(closed)).api.status("token", "proof", commands[3])).rejects.toMatchObject({ kind: "invalid_response" });
+      await expect(readWithTicket(commands[3], (__command, __ticket) => fixture(missing(closed)).api.status("token", "proof", __command, __ticket))).rejects.toMatchObject({ kind: "invalid_response" });
     });
   it.each(["send", "status"] as const)("rejects acceptance with closed boundary or an error in %s", async method => {
     const value = response(commands[3], current(), method === "status" ? "already_applied" : "applied");
     for (const extra of [{ closed_session: { session_id: id(3), status: "closed", close_reason: "stop" } },
       { error: { code: "WRITE_UNAVAILABLE" } }, { unexpected_private_snapshot: {} }]) {
-      await expect(fixture({ ...value, ...extra }).api[method]("token", "proof", commands[3])).rejects.toMatchObject({ kind: "invalid_response" });
+      await expect((method === "status" ? readWithTicket(commands[3], (__command, __ticket) => fixture({ ...value, ...extra }).api.status("token", "proof", __command, __ticket)) : fixture({ ...value, ...extra }).api.send("token", "proof", commands[3]))).rejects.toMatchObject({ kind: "invalid_response" });
     }
   });
   it("rejects extra private profile fields during not_found", async () => {
-    await expect(fixture({ ...missing(), current: { ...profile, private: {} } }).api.status("token", "proof", commands[3]))
+    await expect(readWithTicket(commands[3], (__command, __ticket) => fixture({ ...missing(), current: { ...profile, private: {} } }).api.status("token", "proof", __command, __ticket)))
       .rejects.toMatchObject({ kind: "invalid_response" });
   });
   describe("not_found with the profile of the real core (reapply_closed present)", () => {
@@ -285,17 +285,17 @@ describe("oral adapter facts, missing-command closure and transport failures", (
     const lost: OralCommand = { ...commands[3], command_id: recorded.command.id, session_id: recorded.closed_session.session_id };
     it("accepts the recorded reply, reapply_closed included", async () => {
       expect(recorded.current).toHaveProperty("reapply_closed", false);
-      expect(await fixture(recorded).api.status("token", "proof", lost)).toEqual({ ...recorded, outcome: "not_found" });
+      expect(await readWithTicket(lost, (__command, __ticket) => fixture(recorded).api.status("token", "proof", __command, __ticket))).toEqual({ ...recorded, outcome: "not_found" });
     });
     it("accepts a closed reapply and a reply of an older core without the field", async () => {
-      expect(await fixture({ ...recorded, current: { ...recorded.current, reapply_closed: true } }).api.status("token", "proof", lost))
+      expect(await readWithTicket(lost, (__command, __ticket) => fixture({ ...recorded, current: { ...recorded.current, reapply_closed: true } }).api.status("token", "proof", __command, __ticket)))
         .toMatchObject({ outcome: "not_found", current: { reapply_closed: true } });
       const { reapply_closed: _omitted, ...older } = recorded.current;
-      expect(await fixture({ ...recorded, current: older }).api.status("token", "proof", lost)).toMatchObject({ outcome: "not_found" });
+      expect(await readWithTicket(lost, (__command, __ticket) => fixture({ ...recorded, current: older }).api.status("token", "proof", __command, __ticket))).toMatchObject({ outcome: "not_found" });
     });
     it.each([{ reapply_closed: "false" }, { reapply_closed: null }, { private: {} }, { reapply_closed: false, private: {} }])(
       "rejects a malformed or unknown profile key %j", async extra => {
-        await expect(fixture({ ...recorded, current: { ...recorded.current, ...extra } }).api.status("token", "proof", lost))
+        await expect(readWithTicket(lost, (__command, __ticket) => fixture({ ...recorded, current: { ...recorded.current, ...extra } }).api.status("token", "proof", __command, __ticket)))
           .rejects.toMatchObject({ kind: "invalid_response" });
       });
   });
@@ -304,23 +304,23 @@ describe("oral adapter facts, missing-command closure and transport failures", (
     { current: { ...profile, profile_id: "bad" } },
     { current: { ...profile, access: { ...profile.access, private: true } } }])(
     "rejects misaddressed or malformed not_found %j", async change => {
-      await expect(fixture({ ...missing(), ...change }).api.status("token", "proof", commands[3]))
+      await expect(readWithTicket(commands[3], (__command, __ticket) => fixture({ ...missing(), ...change }).api.status("token", "proof", __command, __ticket)))
         .rejects.toMatchObject({ kind: "invalid_response" });
     });
   it("status cannot confirm a newly applied fact", async () => {
-    await expect(fixture(response(commands[3])).api.status("token", "proof", commands[3]))
+    await expect(readWithTicket(commands[3], (__command, __ticket) => fixture(response(commands[3])).api.status("token", "proof", __command, __ticket)))
       .rejects.toMatchObject({ kind: "invalid_response" });
   });
   it.each(["read", "status"] as const)("keeps %s HTTP and network failures unresolved", async method => {
     const f = fixture({ error: { code: "WRITE_UNAVAILABLE" } }, 503);
-    const invoke = () => method === "read" ? f.api.read("token", "proof", origin) : f.api.status("token", "proof", commands[3]);
+    const invoke = () => method === "read" ? f.api.read("token", "proof", origin) : readWithTicket(commands[3], (__command, __ticket) => f.api.status("token", "proof", __command, __ticket));
     await expect(invoke()).rejects.toMatchObject({ kind: "http", status: 503 });
     f.fetcher.mockRejectedValueOnce(new TypeError("synthetic network"));
     await expect(invoke()).rejects.toMatchObject({ kind: "network" });
     expect(f.fetcher).toHaveBeenCalledTimes(2);
   });
   it.each([201, 202, 206])("requires HTTP200 for status, rejects HTTP%s", async status => {
-    await expect(fixture(response(commands[3], current(), "already_applied"), status).api.status("token", "proof", commands[3]))
+    await expect(readWithTicket(commands[3], (__command, __ticket) => fixture(response(commands[3], current(), "already_applied"), status).api.status("token", "proof", __command, __ticket)))
       .rejects.toMatchObject({ kind: "invalid_response" });
   });
   it.each([401, 403, 500, 503])("keeps HTTP%s failures as refusals", async status => {

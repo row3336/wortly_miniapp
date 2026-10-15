@@ -6,5 +6,7 @@ export default defineConfig({
   cacheDir: process.env.WORTLY_VITE_CACHE_DIR,
   test: {
     environment: "jsdom",
+    // The App tests' page gate: a real write gate on a fast clock (src/app/pageGate.test-support.ts).
+    setupFiles: ["src/test.setup.ts"],
   },
 });

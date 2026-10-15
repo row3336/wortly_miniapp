@@ -179,6 +179,15 @@ export class WriteGate {
 
   holdActive(): boolean { return this.holdUntil !== null && this.clock.now() < this.holdUntil; }
 
+  /**
+   * The button of a check by ID (a readback) — the narrower predicate of §4.13 and the rule of the button (C335):
+   * net=open ∧ hold over ∧ window not closed. Neither the identity lock nor familyLocks keep it: a readback is what
+   * settles them (Z4, R5). The «no recovery foreground in flight» part belongs to the entry (M-P03-10).
+   */
+  checkButtonActive(): boolean {
+    return !this.closedWindow && !this.disposed && this.net.kind === "open" && !this.holdActive();
+  }
+
   /** mayWrite(req) = net=open ∧ hold over ∧ no identity lock of gateDoc ∧ ID not family-locked ∧ window not closed. */
   mayWrite(commandId?: string): boolean {
     if (this.closedWindow || this.net.kind !== "open" || this.holdActive()) return false;

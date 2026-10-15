@@ -53,7 +53,7 @@ function fixture(read: () => SettingsResponse = settingsResponse, stored: Record
   access = handle;
   let sequence = 100;
   const states: SettingsSnapshot[] = [];
-  const controller = new SettingsController({ api, pendingStore: new SettingsPendingStore(storage),
+  const controller = new SettingsController({ gate: testGate(), api, pendingStore: new SettingsPendingStore(storage),
     resetStore: new SettingsResetPendingStore(storage), access: () => access, newId: () => id(sequence++),
     onUpdate: state => states.push(state) });
   return { controller, api, states, values };

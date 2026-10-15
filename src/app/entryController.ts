@@ -16,6 +16,8 @@ import { RemoteStopController } from "../study/remoteStopController";
 import type { TodayApi } from "../today/todayApi";
 import { createBusyAccess, type BusyAccess } from "./busyAccess";
 import { journalAccess, journalRecord } from "../journal/clientJournal";
+import { GatePending, pausedBeforeSend } from "../commands/gatePending";
+import type { WriteGate } from "../commands/writeGate";
 
 export type EntrySnapshot = { state: EntryState; profile?: Profile };
 
@@ -45,6 +47,11 @@ export type EntryControllerOptions = {
    * of sight meanwhile, so a replaced window closes without showing a module's refusal first (2.33).
    */
   onDocumentCheck?(checking: boolean): void;
+  /**
+   * The write gate of the page (P03 M-P03-8): the remote stop reads its status only with the gate's ticket (R6), and the
+   * reapply and the remote stop take part in its readback registry (R1).
+   */
+  gate: WriteGate;
 };
 
 export class EntryController {
@@ -85,7 +92,11 @@ export class EntryController {
   // compares it with the session now occupying the account: a different one is explained, not silently offered.
   private refusedTarget: string | null = null;
 
-  constructor(private readonly options: EntryControllerOptions) {}
+  private readonly reapplyRegistry: GatePending;
+
+  constructor(private readonly options: EntryControllerOptions) {
+    this.reapplyRegistry = new GatePending(options.gate, "reapply");
+  }
 
   private current(generation: number): boolean {
     return !this.disposed && generation === this.generation;
@@ -389,6 +400,8 @@ export class EntryController {
 
   /** Pending access means any earlier reapply was settled: its saved ID must not be resent later. */
   private async dropSettledReapplyIntent(profileId: string): Promise<void> {
+    this.reapplyRegistry.settled("recorded");
+    this.reapplyRegistry.release();
     this.reapplyIntent = null;
     try {
       await clearReapplyIntent(this.options.storage, profileId);
@@ -530,7 +543,8 @@ export class EntryController {
         profileId: installation.profileId, clientInstanceId: installation.clientInstanceId,
         pendingStore: remoteOptions.pendingStore, newId: this.options.newId,
         send: intent => remoteOptions.api.stop(token, proof, addressed(intent)),
-        check: intent => remoteOptions.api.status(token, proof, addressed(intent)),
+        check: (intent, ticket) => remoteOptions.api.status(token, proof, addressed(intent), ticket),
+        gate: this.options.gate,
         onUpdate: snapshot => {
           if (!this.current(generation) || this.remote !== remote) return;
           if (snapshot.stateVersion) this.observeStateVersion(snapshot.stateVersion);
@@ -649,6 +663,8 @@ export class EntryController {
         this.reapplyIntent = intent;
       }
       if (!this.current(generation)) return;
+      // From now on a request of this ID may leave: its outcome is unknown until a definite answer (R1).
+      this.reapplyRegistry.hold(intent.commandId);
       const response = await this.options.api.reapply(session.access_token, {
         command_id: intent.commandId,
         expected_access_version: intent.expectedAccessVersion,
@@ -658,10 +674,12 @@ export class EntryController {
         throw new EntryApiError("invalid_response");
       }
       confirmed = true;
+      this.reapplyRegistry.settled("recorded");
       this.session = { ...session, profile: response.current };
       await clearReapplyIntent(this.options.storage, session.profile.profile_id);
       if (!this.current(generation)) return;
       this.reapplyIntent = null;
+      this.reapplyRegistry.release();
       if (response.current.access.status === "pending") {
         this.emit({ kind: "pending" }, response.current);
       } else if (response.current.access.status === "admitted") {
@@ -671,8 +689,12 @@ export class EntryController {
       }
     })().catch(async (error: unknown) => {
       if (!this.current(generation)) return;
+      // PAUSED_BEFORE_SEND (K13): nothing left; the saved ID stays for the next press, the button comes back.
+      if (!confirmed && pausedBeforeSend(error)) { this.emit({ kind: "rejected", reason }); return; }
       if (!confirmed && error instanceof EntryApiError && error.kind === "http" && error.status === 403
         && error.code === "ACCESS_REJECTED") {
+        this.reapplyRegistry.settled("rejected");
+        this.reapplyRegistry.release();
         // The core refused a third application and wrote nothing (CT §6.3). The sign-in still works, so the
         // session stays; the screen is the closed refusal, not "unavailable" with a retry that leads back here.
         this.reapplyClosedFor = session.profile.profile_id;
@@ -688,6 +710,8 @@ export class EntryController {
       this.resetInvalidSession(error);
       if (error instanceof EntryApiError && error.kind === "http" && error.status === 409
         && error.code === "VERSION_CONFLICT") {
+        this.reapplyRegistry.settled("rejected");
+        this.reapplyRegistry.release();
         this.conflictedIntentId = this.reapplyIntent?.commandId ?? null;
         this.conflictedAccessVersion = this.reapplyIntent?.expectedAccessVersion ?? null;
         this.reapplyIntent = null;
@@ -728,6 +752,7 @@ export class EntryController {
   }
 
   dispose(): void {
+    this.reapplyRegistry.release();
     this.remote?.dispose();
     this.remote = null;
     this.disposed = true;

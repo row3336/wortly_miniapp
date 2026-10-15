@@ -6,6 +6,7 @@ import { createLearningResultApi, type LearningResultRead } from "./learningAnsw
 import { createLearningSessionApi, type LearningSessionRead } from "./learningSessionApi";
 import { LearningSessionPendingStore, LearningStopPendingStore } from "./learningSessionPending";
 import type { LearningPageStarts } from "./learningPageStarts";
+import { PausedBeforeSendError } from "../commands/writeGate";
 
 export type LearningDocumentSnapshot = DocumentLanesSnapshot<LearningCommandSnapshot>;
 /**
@@ -25,6 +26,7 @@ function resultCommand(intent: LearningCommandIntent): intent is LearningAnswerI
 export class LearningDocumentCommands extends DocumentLanes<LearningCommandSnapshot, LearningTransition, LearningSessionRead, LearningResultRead> {
   constructor(options: DocumentLanesOptions<LearningCommandSnapshot> & { page?: LearningPageStarts }) {
     const sessions = createLearningSessionApi(options.transport), results = createLearningResultApi(options.transport);
+    const gate = options.transport.gate;
     super(options, {
       label: "Learning",
       automatic: learningAutomaticKinds,
@@ -45,6 +47,9 @@ export class LearningDocumentCommands extends DocumentLanes<LearningCommandSnaps
           // sendStarted is told by the transport once the request is built, right before fetch.
           send: (intent, transmitted) => wiring.send(async credentials => {
             const address = wiring.origin(credentials), sendStarted = () => controller.sendStarted();
+            // L1 (P03 §4.1, M-P03-5), both branches (results.send and sessions.send): the gate is asked before the send
+            // is counted as gone; transmitted, the request and L2 follow in the same synchronous stretch (I3).
+            if (!gate.mayWrite(intent.command_id)) throw new PausedBeforeSendError("paused");
             transmitted?.();
             // The live open handle was checked by wiring.send (access.run) right before this; started is told by the
             // transport once the request is built, right before fetch (21.1-А, 33.1-А boundary). A start is always a
@@ -54,12 +59,14 @@ export class LearningDocumentCommands extends DocumentLanes<LearningCommandSnaps
               : sessions.send(credentials.token, credentials.proof, { ...intent, ...address },
                 () => { controller.requestStarted(); sendStarted(); });
           }),
-          check: intent => wiring.run(async credentials => {
+          // R6: the status of this ID is read only with the gate's ticket (after the identity check, if one is due).
+          check: intent => gate.runReadback(intent.command_id, ticket => wiring.run(async credentials => {
             const address = wiring.origin(credentials);
             return resultCommand(intent)
-              ? results.status(credentials.token, credentials.proof, { ...intent, ...address })
-              : sessions.status(credentials.token, credentials.proof, { ...intent, ...address });
-          }),
+              ? results.status(credentials.token, credentials.proof, { ...intent, ...address }, ticket)
+              : sessions.status(credentials.token, credentials.proof, { ...intent, ...address }, ticket);
+          })),
+          gate, family: "learning",
           read: reads.read, readResult: intent => reads.readResult(intent), onUpdate: wiring.onUpdate, page: options.page,
         });
         return controller;

@@ -5,6 +5,7 @@ import { EntryController } from "../app/entryController";
 import type { AsyncStorage } from "../platform/storage";
 import { screenDecision } from "../commands/laneRecovery";
 import { ClientJournal, installClientJournal, type ClientJournalOptions, type JournalClock } from "./clientJournal";
+import { testGate } from "../commands/testGate.test-support";
 
 const profileId = "11111111-1111-4111-8111-111111111111";
 const instanceId = "22222222-2222-4222-8222-222222222222";
@@ -40,7 +41,7 @@ function setup(status: "admitted" | "pending" | "rejected",
     register: vi.fn(async () => ({ client_instance_id: instanceId, status: "registered" as const, origin_proof: "MARKER-proof", proof_version: "1", activated: false })),
     open: options.open ?? vi.fn(async () => opened),
   };
-  const controller = new EntryController({ api, storage: storage(), lock: { acquire: vi.fn(async () => ({ release: vi.fn() })) },
+  const controller = new EntryController({ gate: testGate(), api, storage: storage(), lock: { acquire: vi.fn(async () => ({ release: vi.fn() })) },
     initData: "MARKER-initData", savedLanguage: "ru", browserLanguage: "ru-RU", clientVersion: "0.0.0", contractVersion: "1",
     timeZone: () => "Europe/Berlin", newId: () => ids.shift()!, onUpdate: () => undefined });
   return { controller, journal, send };

@@ -4,6 +4,7 @@ import type { RecoveryClock } from "./recoveryClock";
 import { FINAL_RECOVERY_STATES, RecoveryMachine, type KnownLoss, type RecoverySnapshot } from "./recoveryMachine";
 import { checkFailure, sendFailure, type CheckResult, type SendResult } from "./recoveryReplies";
 import { MemorySendCounter, type SendCounter } from "./sendCounter";
+import type { WriteGate } from "./writeGate";
 import { journalRecord } from "../journal/clientJournal";
 import { isErrorCode, type ScreenEvent } from "../journal/events";
 
@@ -71,6 +72,8 @@ export type LaneRecoveryHost = {
   maySend?(commandId: string): boolean;
   /** 14.8.8.1 А: the new action was dropped over another record in the slot and its machine is gone; check that record. */
   blocked?(): void;
+  /** The write gate of the page: the machine waits for it instead of probing (P03 M-P03-6). */
+  gate?: WriteGate;
 };
 
 /** A send class the lane proved for commandId; started says whether its request began (transmitted was told). */
@@ -97,7 +100,9 @@ export function laneCheckResult(state: RecoveryLaneState, failure: unknown, comm
   // canRetry: not found, same open step, own intent, fresh state — the only proof that allows a send (2.12).
   if (state.canRetry) return { kind: "not_recorded" };
   switch (state.problem) {
-    case "expired": case "forbidden": case "profile_changed": return { kind: "terminated", reason: "access_lost" };
+    // M-P03-7: an expired sign-in is no end of the action (reauth); a denial or another profile is.
+    case "expired": return { kind: "terminated", reason: "reauth" };
+    case "forbidden": case "profile_changed": return { kind: "terminated", reason: "access_lost" };
     case "closed": case "pair_changed": return { kind: "terminated", reason: "session_closed" };
     case "step_changed": return { kind: "terminated", reason: "step_stale" };
     case "client_changed": return { kind: "terminated", reason: "window_replaced" };
@@ -294,6 +299,7 @@ export class LaneRecovery {
         probe: () => Promise.resolve(true),
         isLive: () => this.host.isLive(),
         maySend: () => this.host.maySend?.(intent.command_id) ?? true,
+        ...(this.host.gate ? { gate: this.host.gate } : {}),
         windowCheck: () => new Promise<boolean>(resolve => {
           if (!this.host.isLive()) { resolve(false); return; }
           this.clock.schedule(() => resolve(this.host.isLive()), WINDOW_CHECK_MS);

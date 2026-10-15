@@ -8,7 +8,7 @@ import { conjugationIntentHash, type ConjugationIntent } from "./conjugationInte
 import { ConjugationCatalogPendingStore, ConjugationSessionPendingStore, ConjugationStopPendingStore,
   conjugationLane, type ConjugationPending } from "./conjugationPending";
 import { ConjugationCommandController, resultAddressed, type ConjugationCommandOptions, type ConjugationRead, type ConjugationTransition } from "./conjugationCommandController";
-import { testGate } from "../commands/testGate.test-support";
+import { readWithTicket, testGate } from "../commands/testGate.test-support";
 
 const id = (n: number) => `aaaaaaaa-bbbb-4000-8000-${String(n).padStart(12, "0")}`;
 const base = { command_id: id(10), session_id: id(3) };
@@ -146,7 +146,7 @@ function fixture(seed?: ConjugationPending, source = seed?.intent ?? intents[3])
   const isLive = vi.fn(() => true), newId = vi.fn(() => id(10));
   const command = (intent: ConjugationIntent) => ({ ...intent, client_instance_id: id(1), document_id: id(2) });
   const send = vi.fn((intent: ConjugationIntent) => api.send("synthetic-token", "synthetic-proof", command(intent)));
-  const check = vi.fn((intent: ConjugationIntent) => api.status("synthetic-token", "synthetic-proof", command(intent)));
+  const check = vi.fn((intent: ConjugationIntent) => readWithTicket(command(intent), (__command, __ticket) => api.status("synthetic-token", "synthetic-proof", __command, __ticket)));
   const read = vi.fn((intent: ConjugationIntent): Promise<ConjugationRead> => {
     if (intent.kind === "conjugation.schedule") return api.catalog("synthetic-token");
     const address = { session_id: intent.session_id, client_instance_id: id(1), document_id: id(2) };
@@ -452,7 +452,7 @@ describe("identity, tagged results and document/version lifetime", () => {
     f.model.intercept = async url => url.pathname.includes("/commands/") ? gate.promise : null;
     const c = f.make({ check: intent => access.run(async credentials => {
       try {
-        const response = await f.api.status(credentials.token, credentials.proof, { ...intent, client_instance_id: credentials.clientInstanceId, document_id: credentials.documentId });
+        const response = await readWithTicket({ ...intent, client_instance_id: credentials.clientInstanceId, document_id: credentials.documentId }, (__command, __ticket) => f.api.status(credentials.token, credentials.proof, __command, __ticket));
         if (c.snapshot().phase === "disposed") throw new ClosedAccessError();
         return response;
       } catch (error) {
@@ -472,7 +472,7 @@ describe("identity, tagged results and document/version lifetime", () => {
     f.model.intercept = async () => new Response(JSON.stringify({ error: { code: "ACCESS_DENIED" } }), { status: 403 });
     const c = f.make({ check: intent => access.run(async credentials => {
       try {
-        const response = await f.api.status(credentials.token, credentials.proof, { ...intent, client_instance_id: credentials.clientInstanceId, document_id: credentials.documentId });
+        const response = await readWithTicket({ ...intent, client_instance_id: credentials.clientInstanceId, document_id: credentials.documentId }, (__command, __ticket) => f.api.status(credentials.token, credentials.proof, __command, __ticket));
         if (c.snapshot().phase === "disposed") throw new ClosedAccessError();
         return response;
       } catch (error) {

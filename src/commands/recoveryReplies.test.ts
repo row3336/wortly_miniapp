@@ -6,7 +6,8 @@ import { checkFailure, sendFailure } from "./recoveryReplies";
 
 describe("recovery reply classes", () => {
   it("a POST failure names only the refusals the server proves; anything else is a lost reply", () => {
-    expect(sendFailure(new ApiError("http", 401))).toEqual({ kind: "terminated", reason: "access_lost" });
+    // P03 M-P03-7: 401 asks for a new sign-in (reauth); 403 ends the access.
+    expect(sendFailure(new ApiError("http", 401))).toEqual({ kind: "terminated", reason: "reauth" });
     expect(sendFailure(new ApiError("http", 403, "FORBIDDEN"))).toEqual({ kind: "terminated", reason: "access_lost" });
     expect(sendFailure(new ApiError("http", 409, "COMMAND_PAYLOAD_MISMATCH"))).toEqual({ kind: "mismatch" });
     expect(sendFailure(new ApiError("http", 409, "DOCUMENT_STALE"))).toEqual({ kind: "window_stale" });
@@ -24,7 +25,7 @@ describe("recovery reply classes", () => {
     }
   });
   it("a failed check never proves absence: anything unnamed is unreachable", () => {
-    expect(checkFailure(new ApiError("http", 401))).toEqual({ kind: "terminated", reason: "access_lost" });
+    expect(checkFailure(new ApiError("http", 401))).toEqual({ kind: "terminated", reason: "reauth" });
     expect(checkFailure(new ApiError("http", 409, "COMMAND_PAYLOAD_MISMATCH"))).toEqual({ kind: "mismatch" });
     expect(checkFailure(new ApiError("http", 409, "DOCUMENT_STALE"))).toEqual({ kind: "window_stale" });
     expect(checkFailure(new ApiError("http", 503, "MAINTENANCE", { waitSeconds: 30 }))).toEqual({ kind: "unreachable", pauseSeconds: 30 });

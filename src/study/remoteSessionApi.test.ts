@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { SessionStopRemoteCommand } from "../api/generated";
 import { createRemoteSessionApi } from "./remoteSessionApi";
-import { testGate } from "../commands/testGate.test-support";
+import { readWithTicket, testGate } from "../commands/testGate.test-support";
 
 const ids = {
   command: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
@@ -60,7 +60,7 @@ describe("addressed remote stop transport", () => {
       return new Response(JSON.stringify(body));
     });
     const api = createRemoteSessionApi({ fetcher: fetcher as typeof fetch, timeoutMs: 1000, maxResponseBytes: 10000, gate: testGate() });
-    expect(await api.status("synthetic-token", "synthetic-proof", command())).toMatchObject({ outcome: "accepted" });
+    expect(await readWithTicket(command(), (__command, __ticket) => api.status("synthetic-token", "synthetic-proof", __command, __ticket))).toMatchObject({ outcome: "accepted" });
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
@@ -76,7 +76,7 @@ describe("addressed remote stop transport", () => {
 
   it("does not turn a not-found status into refusal or resend", async () => {
     const { api, fetcher } = apiFor({ command: { id: ids.command, status: "not_found" }, current: profile(), state_version: "9" });
-    expect(await api.status("synthetic", "synthetic", command())).toMatchObject({ outcome: "not_found" });
+    expect(await readWithTicket(command(), (__command, __ticket) => api.status("synthetic", "synthetic", __command, __ticket))).toMatchObject({ outcome: "not_found" });
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
@@ -84,7 +84,7 @@ describe("addressed remote stop transport", () => {
     { session_id: ids.session, status: "not_found" }])("preserves an accepted fact with unavailable current %#", async (current) => {
     const body = accepted(); body.command.status = "already_applied";
     const { api } = apiFor({ ...body, current });
-    expect(await api.status("synthetic", "synthetic", command())).toMatchObject({ outcome: "accepted", current });
+    expect(await readWithTicket(command(), (__command, __ticket) => api.status("synthetic", "synthetic", __command, __ticket))).toMatchObject({ outcome: "accepted", current });
   });
 
   it.each([
@@ -127,7 +127,7 @@ describe("addressed remote stop transport", () => {
       const { api, fetcher } = apiFor(accepted());
       const bad = { ...command(), ...changes } as unknown as SessionStopRemoteCommand;
       await expect(api.stop("synthetic", "synthetic", bad)).rejects.toThrow();
-      await expect(api.status("synthetic", "synthetic", bad)).rejects.toThrow();
+      await expect(readWithTicket(bad, (__command, __ticket) => api.status("synthetic", "synthetic", __command, __ticket))).rejects.toThrow();
       expect(fetcher).not.toHaveBeenCalled();
     });
 
@@ -141,15 +141,15 @@ describe("addressed remote stop transport", () => {
     await expect(api.stop("synthetic", "synthetic", command())).rejects.toMatchObject({ kind: "invalid_response" });
     const body = accepted(); body.command.status = "already_applied";
     const recovered = apiFor({ ...body, error: { code: "SESSION_CLOSED" } });
-    await expect(recovered.api.status("synthetic", "synthetic", command())).rejects.toMatchObject({ kind: "invalid_response" });
+    await expect(readWithTicket(command(), (__command, __ticket) => recovered.api.status("synthetic", "synthetic", __command, __ticket))).rejects.toMatchObject({ kind: "invalid_response" });
   });
 
   it("requires a recovered fact rather than an unrelated command or POST status", async () => {
     const { api } = apiFor(accepted());
-    await expect(api.status("synthetic", "synthetic", command())).rejects.toMatchObject({ kind: "invalid_response" });
+    await expect(readWithTicket(command(), (__command, __ticket) => api.status("synthetic", "synthetic", __command, __ticket))).rejects.toMatchObject({ kind: "invalid_response" });
     const body = accepted(); body.command.status = "already_applied";
     const unrelated = apiFor({ ...body, command: { ...body.command, target_id: ids.command } });
-    await expect(unrelated.api.status("synthetic", "synthetic", command())).rejects.toMatchObject({ kind: "invalid_response" });
+    await expect(readWithTicket(command(), (__command, __ticket) => unrelated.api.status("synthetic", "synthetic", __command, __ticket))).rejects.toMatchObject({ kind: "invalid_response" });
   });
 
   it("keeps a network loss unresolved and never retries POST automatically", async () => {

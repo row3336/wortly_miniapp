@@ -2,7 +2,9 @@ import type { SettingsProjection, SettingsResponse } from "../api/generated";
 import { ApiError } from "../api/http";
 import { version as validVersion } from "../api/wireValidation";
 import { ClosedAccessError, type OpenedAccess } from "../app/openedAccess";
+import { GatePending, pausedBeforeSend } from "../commands/gatePending";
 import { PendingStoreError, validId } from "../commands/pendingSlot";
+import type { WriteGate } from "../commands/writeGate";
 import { allowedSettingValue, KnownRefusal, resetKeys, storedOnly, type IntentKey, type SettingKey, type SettingSaveReply,
   type SettingsApi } from "./settingsApi";
 import { SettingsPendingStore, type SettingsPending } from "./settingsPending";
@@ -18,7 +20,9 @@ export type SettingsDraft = Omit<Draft, "revision"> & {
 };
 type Problem = { reason: "network" | "storage" | "invalid_pending" | "pending_changed" | "expired" | "forbidden"
   | "context_closed" | "context_refreshed" | "client_changed" | "profile_changed" | "mismatch" | "not_found" | "stale_response"
-  | KnownRefusal["refusal"]; code?: string };
+  | KnownRefusal["refusal"]
+  /** PAUSED_BEFORE_SEND (P03 §4.2): the write gate kept the request on the client; the ID and the record stay. */
+  | "paused"; code?: string };
 /** `key` may name a stored-only key (R14-02): a stored intent of an earlier build, checked like any other. */
 type Outcome = { commandId: string; key: IntentKey; status: "accepted" | "rejected"; code?: string };
 /** The server's answer to a reset; shown only once the server reported it (TA 12.4). */
@@ -58,6 +62,8 @@ type Options = {
   newId(): string;
   minimumStateVersion?(): string | null;
   onUpdate(snapshot: SettingsSnapshot): void;
+  /** The write gate of the page (P03 M-P03-8): readback registry, status reads by ticket, the buttons (I9, M12). */
+  gate: WriteGate;
 };
 
 function integerInput(value: unknown): unknown {
@@ -133,6 +139,8 @@ export class SettingsController {
   private queuedRefresh: Promise<void> | null = null;
   /** The access handle through which a readback succeeded after the mismatch was established; any other state clears it. */
   private mismatchReadback: OpenedAccess | null = null;
+  private readonly registry: GatePending;
+  private readonly unsubscribe: () => void;
 
   constructor(private readonly options: Options) {
     const access = options.access();
@@ -141,7 +149,12 @@ export class SettingsController {
     this.scope = { key: access.key, profileId: access.profile.profile_id,
       clientId: access.document.clientInstanceId, documentId: access.document.documentId,
       document: JSON.stringify([access.profile.profile_id, access.document.clientInstanceId, access.document.documentId]) };
+    this.registry = new GatePending(options.gate, "settings");
+    // M12: the fields stay editable, «Сохранить» and the reset wait for the gate; its changes repaint them.
+    this.unsubscribe = options.gate.subscribe(() => this.emit());
   }
+  /** I9: a save, a reset or a retry of the sent ID is allowed by the write gate right now. */
+  private writable(): boolean { return this.registry.writable(this.sent()?.intent.command_id); }
 
   private live(): boolean { return !this.lifetime.signal.aborted; }
   private currentAccess(): OpenedAccess | null {
@@ -183,7 +196,8 @@ export class SettingsController {
     const sent = this.sent();
     return !!this.currentAccess() && !this.running && !this.writeBlocked && !this.settled && !!sent && !this.refused()
       && !sent.mismatch && sent.clientInstanceId === this.scope.clientId
-      && !!this.problem && ["network", "storage", "not_found", "context_refreshed", "stale_response"].includes(this.problem.reason);
+      && !!this.problem && ["network", "storage", "not_found", "context_refreshed", "stale_response", "paused"].includes(this.problem.reason)
+      && this.writable();
   }
 
   private continueAllowed(): boolean {
@@ -214,14 +228,14 @@ export class SettingsController {
       drafts[key] = { input: draft.input, fieldVersion: draft.fieldVersion,
         ...(Object.hasOwn(draft, "original") ? { original: draft.original } : {}), valid, conflict,
         error: !dataCurrent ? null : !valid ? "invalid" : exhausted ? "version_exhausted" : conflict ? "conflict" : rejected ? "rejected" : null,
-        canSave: this.editable() && !this.running && valid && !conflict && !exhausted,
-        canKeepMine: this.editable() && !this.running && valid && conflict && !exhausted };
+        canSave: this.editable() && !this.running && valid && !conflict && !exhausted && this.writable(),
+        canKeepMine: this.editable() && !this.running && valid && conflict && !exhausted && this.writable() };
     }
     return structuredClone({ phase: this.phase, data: available && !this.writeBlocked ? this.data : null, dataCurrent, drafts,
       pending: available ? this.pending : null, resetPending: available ? this.resetPending : null,
       outcome: available ? this.outcome : null, resetOutcome: available ? this.resetOutcome : null,
       problem: available ? this.problem : { reason: "context_closed" }, canEdit: this.editable(),
-      canReset: this.editable() && !this.running, canRetry: this.retryAllowed(),
+      canReset: this.editable() && !this.running && this.writable(), canRetry: this.retryAllowed(),
       canContinueWithServer: this.continueAllowed(), canCancelStored: this.cancelStoredAllowed() });
   }
   private emit(): void { if (this.live()) this.options.onUpdate(this.snapshot()); }
@@ -234,6 +248,9 @@ export class SettingsController {
       if (error instanceof PendingStoreError) {
         this.problem = { reason: error.kind === "invalid" ? "invalid_pending"
           : error.kind === "changed" ? "pending_changed" : "storage" };
+      } else if (pausedBeforeSend(error)) {
+        // Nothing left the client (a send) or nothing was read (a readback the gate holds or cancelled): no lost reply.
+        this.problem = { reason: "paused" };
       } else if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
         this.writeBlocked = error.status === 401 ? "expired" : "forbidden";
         this.data = null;
@@ -330,12 +347,14 @@ export class SettingsController {
     if (!this.live()) return;
     this.pending = null;
     this.resetPending = null;
+    this.registry.release();
     this.refusal = null;
     this.settled = false;
     this.submittedRevision = null;
     this.idle();
   }
   private async resolve(status: Outcome["status"], code?: string): Promise<void> {
+    this.registry.settled(status === "accepted" ? "recorded" : "rejected");
     if (this.resetPending) {
       this.outcome = null;
       this.resetOutcome = { commandId: this.resetPending.intent.command_id, status, ...(code ? { code } : {}) };
@@ -366,8 +385,10 @@ export class SettingsController {
 
   private async checkPending(): Promise<void> {
     const save = this.pending, reset = this.resetPending, pending = (save ?? reset)!;
-    const reply = await this.access().run(({ token }) => save ? this.options.api.status(token, this.scope.profileId, save.intent)
-      : this.options.api.resetStatus(token, this.scope.profileId, reset!.intent));
+    // R6: the status of the sent ID is read only with the gate's ticket (after the identity check, if one is due).
+    const reply = await this.registry.read(pending.intent.command_id, ticket => this.access().run(({ token }) => save
+      ? this.options.api.status(token, this.scope.profileId, save.intent, ticket)
+      : this.options.api.resetStatus(token, this.scope.profileId, reset!.intent, ticket)));
     if (!this.live()) return;
     this.access();
     if (reply.outcome === "accepted") {
@@ -376,6 +397,8 @@ export class SettingsController {
       await this.resolve("accepted");
       return;
     }
+    // Not on the server: a definite answer about this ID (its record stays until it is sent again or cancelled).
+    this.registry.settled("not_recorded");
     if (reply.current.profile_id !== this.scope.profileId) this.writeBlocked = "profile_changed";
     else if (reply.current.access.status !== "admitted") this.writeBlocked = "forbidden";
     if (this.writeBlocked) {
@@ -410,6 +433,7 @@ export class SettingsController {
     await this.options.pendingStore.clear(save, this.lifetime.signal);
     if (!this.live()) return true;
     this.pending = null;
+    this.registry.release();
     this.refusal = null;
     this.outcome = { commandId: save.intent.command_id, key, status: "rejected", code: "VALIDATION_FAILED" };
     this.settled = false;
@@ -450,6 +474,8 @@ export class SettingsController {
           code: "VALIDATION_FAILED", handle: handleNumber(this.access()) };
         this.resetPending = reset;
         this.loaded = true;
+        const loaded = save ?? reset;
+        if (loaded) this.registry.hold(loaded.intent.command_id);
         this.restoreDraft();
       }
       if (this.settled) { await this.clearSettled(); if (!this.live()) return; }
@@ -488,6 +514,7 @@ export class SettingsController {
   private async applyReply(reply: SettingSaveReply): Promise<void> {
     this.accept(reply.current, reply.state_version);
     if (reply.outcome === "mismatch") {
+      this.registry.settled("mismatch");
       this.phase = "unresolved";
       this.problem = { reason: "mismatch", code: reply.error.code };
       this.mismatchReadback = null;
@@ -515,6 +542,8 @@ export class SettingsController {
     this.phase = "sending";
     this.problem = null;
     this.emit();
+    // From now on a request of this ID may leave: its outcome is unknown until a definite answer (R1).
+    this.registry.hold((save ?? reset)!.intent.command_id);
     if (save) await this.options.pendingStore.save(save, this.lifetime.signal);
     else await this.options.resetStore.save(reset!, this.lifetime.signal);
     if (!this.live()) return;
@@ -602,6 +631,7 @@ export class SettingsController {
       const key = marked.intent.payload.key;
       if (!storedOnly(key)) delete this.drafts[key];
       this.pending = null;
+      this.registry.release();
       this.refusal = null;
       this.outcome = null;
       this.settled = false;
@@ -624,7 +654,8 @@ export class SettingsController {
     return this.run(async () => {
       this.phase = "checking";
       this.emit();
-      const reply = await source.run(({ token }) => this.options.api.status(token, this.scope.profileId, stored.intent));
+      const reply = await this.registry.read(stored.intent.command_id, ticket =>
+        source.run(({ token }) => this.options.api.status(token, this.scope.profileId, stored.intent, ticket)));
       if (!this.live()) return;
       if (this.access() !== source) throw new ClosedAccessError();
       if (reply.outcome === "accepted") {
@@ -633,12 +664,14 @@ export class SettingsController {
         await this.resolve("accepted");
         return;
       }
+      this.registry.settled("not_recorded");
       await this.options.pendingStore.clear(stored, this.lifetime.signal);
       if (!this.live()) return;
       if (this.access() !== source) throw new ClosedAccessError();
       const key = stored.intent.payload.key;
       if (!storedOnly(key)) delete this.drafts[key];
       this.pending = null;
+      this.registry.release();
       this.refusal = null;
       this.outcome = null;
       this.settled = false;
@@ -649,6 +682,10 @@ export class SettingsController {
     });
   }
   dispose(): void {
+    // R3: an ID without a definite answer stays locked to itself in the gate until a later owner reads it.
+    // Unsubscribed first: the release below changes the gate, and a disposed owner repaints nothing.
+    this.unsubscribe();
+    this.registry.release();
     this.lifetime.abort();
     this.phase = "disposed";
     this.data = null;

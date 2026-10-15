@@ -1,3 +1,4 @@
+import { pausedCopy } from "../commands/commandCopy";
 import type { Language } from "../i18n/language";
 import type { KnownRefusal, MainSettingKey, SettingKey } from "./settingsApi";
 import type { SettingsSnapshot } from "./settingsController";
@@ -117,6 +118,7 @@ export const settingsCopy: Record<Language, Copy> = {
       context_closed: "Этот экран больше не активен. Открой Wortly снова через бота.",
       context_refreshed: "Доступ обновился. Проверь состояние сохранения ещё раз.",
       stale_response: "Не удалось получить актуальные настройки. Обнови их.",
+      paused: pausedCopy.ru,
       client_changed: "Изменение отправлено из другого запуска приложения. Проверь его состояние.",
       profile_changed: "Профиль изменился. Открой Wortly снова через бота.",
       mismatch: "Не удалось подтвердить именно это изменение. Новые изменения пока недоступны.",
@@ -190,6 +192,7 @@ export const settingsCopy: Record<Language, Copy> = {
       context_closed: "Цей екран більше не активний. Відкрий Wortly знову через бота.",
       context_refreshed: "Доступ оновився. Перевір стан збереження ще раз.",
       stale_response: "Не вдалося отримати актуальні налаштування. Онови їх.",
+      paused: pausedCopy.uk,
       client_changed: "Зміну надіслано з іншого запуску застосунку. Перевір її стан.",
       profile_changed: "Профіль змінився. Відкрий Wortly знову через бота.",
       mismatch: "Не вдалося підтвердити саме цю зміну. Нові зміни поки недоступні.",
@@ -263,6 +266,7 @@ export const settingsCopy: Record<Language, Copy> = {
       context_closed: "This screen is no longer active. Open Wortly again from the bot.",
       context_refreshed: "Access was refreshed. Check the save status again.",
       stale_response: "Could not load current settings. Refresh them.",
+      paused: pausedCopy.en,
       client_changed: "This change was sent from another app launch. Check its status.",
       profile_changed: "The profile changed. Open Wortly again from the bot.",
       mismatch: "This particular change could not be confirmed. New changes are temporarily unavailable.",

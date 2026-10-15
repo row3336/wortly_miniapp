@@ -6,6 +6,9 @@ import { createLearningApi, type LearningApi, type ManualCommandReply, type Manu
 import { ManualPendingStore, type ManualPending } from "./manualPending";
 import { ManualSelectionController, type ManualContext, type ManualSelectionSnapshot } from "./manualSelectionController";
 import { testGate } from "../commands/testGate.test-support";
+import type { WriteGate } from "../commands/writeGate";
+import { WriteGate as RealWriteGate } from "../commands/writeGate";
+import { ManualClock } from "../commands/writeGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const context = (): ManualContext => ({ profileId: id(1), clientInstanceId: id(2), documentId: id(3),
@@ -32,14 +35,15 @@ function persisted() {
     set: vi.fn(async (key, value) => { values.set(key, value); }), remove: vi.fn(async key => { values.delete(key); }) };
   return { values, storage, store: new ManualPendingStore(storage) };
 }
-function fixture(options: { context?: Partial<ManualContext>; disk?: ReturnType<typeof persisted>; api?: LearningApi } = {}) {
+function fixture(options: { context?: Partial<ManualContext>; disk?: ReturnType<typeof persisted>; api?: LearningApi;
+  writeGate?: WriteGate } = {}) {
   const disk = options.disk ?? persisted();
   const api = options.api ?? { get: vi.fn(async () => current()),
     change: vi.fn(async () => accepted()), status: vi.fn(async () => missing()) } satisfies LearningApi;
   const states: ManualSelectionSnapshot[] = [];
   let sequence = 100;
   const newId = vi.fn(() => id(sequence++));
-  const controller = new ManualSelectionController({ api, pendingStore: disk.store,
+  const controller = new ManualSelectionController({ gate: options.writeGate ?? testGate(), api, pendingStore: disk.store,
     context: { ...context(), ...options.context }, newId, onUpdate: state => states.push(state) });
   return { controller, api, disk, states, newId };
 }
@@ -370,5 +374,33 @@ describe("manual selection controller", () => {
     const second = fixture({ disk, api, context: { documentId: id(30) } }); await second.controller.refresh();
     expect(second.controller.snapshot()).toMatchObject({ pending: null, outcome: { status: "accepted" }, canChange: true });
     expect(fetcher.mock.calls.filter(call => call[1]?.method === "POST")).toHaveLength(1);
+  });
+});
+
+describe("the buttons and the write gate (P03 M-P03-8, C335)", () => {
+  it("P2-1: after an unknown outcome «Повторить» reads the ID first, so a family lock never keeps it; it sends only after not_recorded", async () => {
+    const writeGate = new RealWriteGate({ clock: new ManualClock() });
+    writeGate.resolvePending(id(100), "stale");
+    const disk = persisted(); await seed(disk);
+    const f = fixture({ disk, writeGate });
+    (f.api.status as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new TypeError("network"));
+    await f.controller.refresh();
+    expect(f.controller.snapshot()).toMatchObject({ problem: { reason: "network" }, canRetry: true });
+    await f.controller.retry();
+    expect(f.api.status).toHaveBeenCalledTimes(2);
+    expect(f.api.change).toHaveBeenCalledOnce();
+    expect(writeGate.snapshot().familyLocks).toEqual([]);
+    f.controller.dispose();
+  });
+
+  it("the gate closed: neither a check-first repeat nor a new change is offered", async () => {
+    const writeGate = new RealWriteGate({ clock: new ManualClock() });
+    const disk = persisted(); await seed(disk);
+    const f = fixture({ disk, writeGate });
+    (f.api.status as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new TypeError("network"));
+    await f.controller.refresh();
+    writeGate.closeByFailure();
+    expect(f.controller.snapshot()).toMatchObject({ canRetry: false, canChange: false });
+    f.controller.dispose();
   });
 });

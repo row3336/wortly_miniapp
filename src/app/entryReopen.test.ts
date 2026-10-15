@@ -10,6 +10,7 @@ import type { DocumentLease, DocumentLock } from "./documentLock";
 import { EntryController } from "./entryController";
 import { keysOf, openDocument, openRequestKeys } from "./openRules.test-support";
 import type { EntryState } from "./entryState";
+import { testGate } from "../commands/testGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const compatibility = { compatible: true, contract_version: "1" };
@@ -68,7 +69,7 @@ function device(lock: DocumentLock, options: { remote?: boolean } = {}) {
     const states: EntryState[] = [];
     const closeWindow = vi.fn();
     const checks: boolean[] = [];
-    const controller = new EntryController({ api, storage, lock, initData: "signed", savedLanguage: "ru",
+    const controller = new EntryController({ gate: testGate(), api, storage, lock, initData: "signed", savedLanguage: "ru",
       browserLanguage: "ru", clientVersion: "0.0.0", contractVersion: "1", timeZone: () => "UTC",
       newId: () => id(next++), onUpdate: ({ state }) => { states.push(state); }, closeWindow,
       onDocumentCheck: checking => { checks.push(checking); }, ...remote });

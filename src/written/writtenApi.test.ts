@@ -3,7 +3,7 @@ import { ApiError } from "../api/http";
 import { createWrittenApi, validWrittenStep } from "./writtenApi";
 import type { WrittenCommand } from "./writtenIntent";
 import { id, response, writtenServer } from "./writtenFixtures.test-support";
-import { testGate } from "../commands/testGate.test-support";
+import { readWithTicket, testGate } from "../commands/testGate.test-support";
 
 const origin = { client_instance_id: id(1), document_id: id(2) };
 function harness(options: Parameters<typeof writtenServer>[0] = {}) {
@@ -139,7 +139,7 @@ describe("written HTTP adapter", () => {
       step: { status: "active", assignment: { id: id(10006), status: "prefetched" }, progress: { completed: 0 } } });
     expect(lastBody(h.fetcher)).toEqual({ ...undo, ...origin });
     expect(await h.send(undo)).toMatchObject({ outcome: "accepted", command: { status: "already_applied", object_version: "2" } });
-    expect(await h.api.status("token", "proof", { ...origin, ...undo } as WrittenCommand))
+    expect(await readWithTicket({ ...origin, ...undo } as WrittenCommand, (__command, __ticket) => h.api.status("token", "proof", __command, __ticket)))
       .toMatchObject({ outcome: "accepted", command: { kind: "result.undo" }, result: { status: "undone" } });
     // A fact that is not exactly this undo, or a result that is still live, is not accepted.
     type Body = Record<string, unknown> & { command: Record<string, unknown>; result: Record<string, unknown>; action: Record<string, unknown> };
@@ -182,7 +182,7 @@ describe("written HTTP adapter", () => {
     expect(lastBody(h.fetcher)).toEqual({ ...correct, ...origin });
     // The same ID replays its fact; its fingerprint (empty payload) is verified by status.
     expect(await h.send(correct)).toMatchObject({ outcome: "accepted", command: { status: "already_applied", object_version: "2" } });
-    expect(await h.api.status("token", "proof", { ...origin, ...correct } as WrittenCommand))
+    expect(await readWithTicket({ ...origin, ...correct } as WrittenCommand, (__command, __ticket) => h.api.status("token", "proof", __command, __ticket)))
       .toMatchObject({ outcome: "accepted", result: { grade: 4 } });
     // A fact that claims the same version for another grade, or no revision at all, is not this correction.
     type Body = { result: { grade: number }; command: { object_version: string } };
@@ -233,14 +233,14 @@ describe("written HTTP adapter", () => {
   it("checks status with the server fingerprint and treats a fingerprint mismatch as an HTTP 409 refusal", async () => {
     const h = harness(); await h.start();
     const command = { ...origin, command_id: id(10), session_id: id(3), kind: "session.start", payload: { mode: "written", bucket: "words" } } as WrittenCommand;
-    expect(await h.api.status("token", "proof", command)).toMatchObject({ outcome: "accepted", command: { status: "already_applied" } });
+    expect(await readWithTicket(command, (__command, __ticket) => h.api.status("token", "proof", __command, __ticket))).toMatchObject({ outcome: "accepted", command: { status: "already_applied" } });
     const url = new URL(String(h.fetcher.mock.calls.at(-1)![0]), "http://localhost");
     expect([...url.searchParams.keys()]).toEqual(["client_instance_id", "document_id", "session_id", "expected_intent_hash"]);
     expect(url.searchParams.get("expected_intent_hash")).toBe("e6c0dff823aa5a65ed5753bd18b697e9f618879af15aebdac5eaa863f7fdc347");
     const other = { ...command, payload: { mode: "written", bucket: "phrases" } } as WrittenCommand;
-    await expect(h.api.status("token", "proof", other)).rejects.toMatchObject({ kind: "http", status: 409, code: "COMMAND_PAYLOAD_MISMATCH" });
+    await expect(readWithTicket(other, (__command, __ticket) => h.api.status("token", "proof", __command, __ticket))).rejects.toMatchObject({ kind: "http", status: 409, code: "COMMAND_PAYLOAD_MISMATCH" });
     const missing = { ...command, command_id: id(99) } as WrittenCommand;
-    expect(await h.api.status("token", "proof", missing)).toMatchObject({ outcome: "not_found", current: { profile_id: id(50) } });
+    expect(await readWithTicket(missing, (__command, __ticket) => h.api.status("token", "proof", __command, __ticket))).toMatchObject({ outcome: "not_found", current: { profile_id: id(50) } });
   });
 
   it("rejects an accepted status whose verified fingerprint is absent", async () => {
@@ -248,7 +248,7 @@ describe("written HTTP adapter", () => {
     const command = { ...origin, command_id: id(10), session_id: id(3), kind: "session.start", payload: { mode: "written", bucket: "words" } } as WrittenCommand;
     h.fetcher.mockResolvedValueOnce(response({ command: { ...h.server.receipts.get(id(10))!.fact, status: "already_applied" },
       current: h.server.projection(), state_version: "2" }));
-    await expect(h.api.status("token", "proof", command)).rejects.toBeInstanceOf(ApiError);
+    await expect(readWithTicket(command, (__command, __ticket) => h.api.status("token", "proof", __command, __ticket))).rejects.toBeInstanceOf(ApiError);
   });
 
   it("reads one exact result with its written step and summary", async () => {

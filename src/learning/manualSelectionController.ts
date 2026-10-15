@@ -1,5 +1,7 @@
 import type { LearningCurrentProjection, LearningCurrentResponse, ManualSelectionCommand } from "../api/generated";
 import { ApiError } from "../api/http";
+import { GatePending, pausedBeforeSend } from "../commands/gatePending";
+import type { WriteGate } from "../commands/writeGate";
 import type { LearningApi, ManualCommandReply } from "./learningApi";
 import { ManualPendingStore, PendingStoreError, validId, type ManualPending } from "./manualPending";
 
@@ -15,7 +17,9 @@ export type ManualContext = {
 
 type Problem = {
   reason: "network" | "storage" | "invalid_pending" | "pending_changed" | "expired" | "forbidden"
-    | "pair_changed" | "client_changed" | "profile_changed" | "mismatch" | "not_found";
+    | "pair_changed" | "client_changed" | "profile_changed" | "mismatch" | "not_found"
+    /** PAUSED_BEFORE_SEND (P03 §4.2): the write gate kept the request on the client; the ID and the record stay. */
+    | "paused";
   code?: string;
 };
 type Outcome = { commandId: string; status: "accepted" | "rejected"; code?: string };
@@ -35,6 +39,8 @@ type Options = {
   context: ManualContext;
   newId(): string;
   onUpdate(snapshot: ManualSelectionSnapshot): void;
+  /** The write gate of the page (P03 M-P03-8): readback registry, status reads by ticket, the buttons (I9). */
+  gate: WriteGate;
 };
 
 /** One document's manual actions. No timers, automatic writes, or offline queue. */
@@ -51,6 +57,8 @@ export class ManualSelectionController {
   private loaded = false;
   private settled = false;
   private running: Promise<void> | null = null;
+  private readonly registry: GatePending;
+  private readonly unsubscribe: () => void;
 
   constructor(private readonly options: Options) {
     const context = options.context;
@@ -59,6 +67,8 @@ export class ManualSelectionController {
       throw new Error("invalid manual context");
     }
     this.context = { ...context };
+    this.registry = new GatePending(options.gate, "manual_selection");
+    this.unsubscribe = options.gate.subscribe(() => this.emit());
   }
 
   private live(): boolean { return !this.lifetime.signal.aborted; }
@@ -67,7 +77,10 @@ export class ManualSelectionController {
     return this.live() && !this.running && !this.writeBlocked && !this.settled && this.pending !== null && !this.pending.mismatch
       && this.pending.clientInstanceId === this.context.clientInstanceId
       && this.pending.intent.payload.expected_pair === this.context.pair
-      && this.problem !== null && ["network", "storage", "not_found"].includes(this.problem.reason);
+      && this.problem !== null && ["network", "storage", "not_found", "paused"].includes(this.problem.reason)
+      // After not_found the same ID is sent at once (mayWrite of the ID); otherwise «Повторить» reads it first and sends
+      // only after not_recorded, so it follows the check predicate (C335): a family lock of this ID never keeps it.
+      && (this.problem.reason === "not_found" ? this.registry.writable(this.pending.intent.command_id) : this.registry.checkable());
   }
 
   snapshot(): ManualSelectionSnapshot {
@@ -75,7 +88,7 @@ export class ManualSelectionController {
     return structuredClone({ phase: this.phase, data: this.data, pending: this.pending,
       outcome: this.outcome, problem: this.problem,
       canChange: this.live() && !this.running && !this.writeBlocked
-        && this.phase === "ready" && this.data !== null && this.pending === null,
+        && this.phase === "ready" && this.data !== null && this.pending === null && this.registry.writable(),
       canRetry: this.retryAllowed() });
   }
 
@@ -92,6 +105,8 @@ export class ManualSelectionController {
       if (error instanceof PendingStoreError) {
         this.problem = { reason: error.kind === "invalid" ? "invalid_pending"
           : error.kind === "changed" ? "pending_changed" : "storage" };
+      } else if (pausedBeforeSend(error)) {
+        this.problem = { reason: "paused" };
       } else if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
         this.writeBlocked = error.status === 401 ? "expired" : "forbidden";
         this.data = null;
@@ -139,6 +154,7 @@ export class ManualSelectionController {
     await this.options.pendingStore.clear(pending, this.lifetime.signal);
     if (!this.live()) return;
     this.pending = null;
+    this.registry.release();
     this.settled = false;
     this.idle();
   }
@@ -146,6 +162,7 @@ export class ManualSelectionController {
   private async resolve(status: Outcome["status"], code?: string): Promise<void> {
     if (!this.pending) return;
     this.outcome = { commandId: this.pending.intent.command_id, status, ...(code ? { code } : {}) };
+    this.registry.settled(status === "accepted" ? "recorded" : "rejected");
     this.settled = true;
     await this.clearSettled();
   }
@@ -153,8 +170,10 @@ export class ManualSelectionController {
   private async checkPending(): Promise<void> {
     const pending = this.pending;
     if (!pending) return;
-    const reply = await this.options.api.status(this.context.token, pending.intent);
+    // R6: the status of this ID is read only with the gate's ticket (after the identity check, if one is due).
+    const reply = await this.registry.read(pending.intent.command_id, ticket => this.options.api.status(this.context.token, pending.intent, ticket));
     if (!this.live()) return;
+    if (reply.outcome !== "accepted") this.registry.settled("not_recorded");
     if (reply.outcome === "accepted") {
       if ("pair" in reply.current) this.accept(reply.current, reply.state_version);
       else {
@@ -202,6 +221,7 @@ export class ManualSelectionController {
         this.pending = await this.options.pendingStore.load(this.context.profileId, this.lifetime.signal);
         this.loaded = true;
         if (!this.live()) return;
+        if (this.pending) this.registry.hold(this.pending.intent.command_id);
       }
       if (this.settled) {
         await this.clearSettled();
@@ -225,6 +245,7 @@ export class ManualSelectionController {
   private async applyReply(reply: ManualCommandReply): Promise<void> {
     this.accept(reply.current, reply.state_version);
     if (reply.outcome === "mismatch") {
+      this.registry.settled("mismatch");
       this.phase = "unresolved";
       this.problem = { reason: "mismatch", code: reply.error.code };
       if (this.pending) {
@@ -242,6 +263,7 @@ export class ManualSelectionController {
     this.phase = "sending";
     this.problem = null;
     this.emit();
+    this.registry.hold(pending.intent.command_id);
     await this.options.pendingStore.save(pending, this.lifetime.signal);
     if (!this.live()) return;
     const request: ManualSelectionCommand = { ...structuredClone(pending.intent),
@@ -269,10 +291,22 @@ export class ManualSelectionController {
   /** A user action, not a scheduler. Semantic payload and original client remain unchanged. */
   retry(): Promise<void> {
     if (!this.retryAllowed()) return this.running ?? Promise.resolve();
-    return this.run(() => this.sendPending());
+    return this.run(async () => {
+      // I9: the previous ID is sent again only after a readback that found it not recorded.
+      const reason = () => this.problem?.reason;
+      if (reason() !== "not_found") {
+        await this.checkPending();
+        if (!this.live() || reason() !== "not_found" || !this.pending) return;
+      }
+      await this.sendPending();
+    });
   }
 
   dispose(): void {
+    // R3: an ID without a definite answer stays locked to itself in the gate until a later owner reads it.
+    // Unsubscribed first: the release below changes the gate, and a disposed owner repaints nothing.
+    this.unsubscribe();
+    this.registry.release();
     this.lifetime.abort();
     this.phase = "disposed";
     this.data = null;

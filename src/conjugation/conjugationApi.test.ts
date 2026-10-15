@@ -6,7 +6,7 @@ import { recordedConjugationUnknownClosed } from "../api/realCoreStatusRecording
 import { createConjugationApi, type ConjugationResultAddress, type ConjugationSessionAddress } from "./conjugationApi";
 import { conjugationIntentHash, copyConjugationIntent, validConjugationIntent, type ConjugationCommand, type ConjugationResultCommand,
   type ConjugationScheduleTransportCommand, type ConjugationSessionCommand } from "./conjugationIntent";
-import { testGate } from "../commands/testGate.test-support";
+import { readWithTicket, testGate } from "../commands/testGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const origin = { client_instance_id: id(1), document_id: id(2) };
@@ -220,7 +220,7 @@ describe("conjugation transport contract", () => {
 
   it("keeps old addressed result A while fresh presented B owns only its answer target", async () => {
     const body = { ...result(), command: fact(submit(), "already_applied") };
-    const reply = await fixture(await withProof(submit(), body)).api.status("t", "p", submit());
+    const reply = await readWithTicket(submit(), async (__command, __ticket) => fixture(await withProof(submit(), body)).api.status("t", "p", __command, __ticket));
     expect(reply.outcome).toBe("accepted");
     if ("step" in reply) { expect(reply.result?.assignment_id).toBe(id(4)); expect(reply.capabilities.answer_target).toBe(id(5)); }
     const bad = result(); bad.capabilities.answer_target = id(4);
@@ -235,14 +235,14 @@ describe("conjugation transport contract", () => {
     for (const command of [grade, correct]) {
       const body = result(); body.action!.version = "3"; body.result!.version = "3"; body.result!.grade = 3;
       body.capabilities.grades!.expected_result_version = "3";
-      expect((await fixture(await withProof(command, { ...body, command: fact(command, "already_applied", "2") })).api.status("t", "p", command)).outcome).toBe("accepted");
+      expect((await readWithTicket(command, async (__command, __ticket) => fixture(await withProof(command, { ...body, command: fact(command, "already_applied", "2") })).api.status("t", "p", __command, __ticket))).outcome).toBe("accepted");
     }
     const sameVersion = result(); sameVersion.result!.grade = 5;
-    expect((await fixture(await withProof(grade, { ...sameVersion, command: fact(grade, "already_applied", "1") })).api.status("t", "p", grade)).outcome).toBe("accepted");
+    expect((await readWithTicket(grade, async (__command, __ticket) => fixture(await withProof(grade, { ...sameVersion, command: fact(grade, "already_applied", "1") })).api.status("t", "p", __command, __ticket))).outcome).toBe("accepted");
     for (const altered of [{ id: id(99) }, { kind: "session.start" }, { target_id: id(5) }, { result_id: id(99) }, { object_version: "4" }]) {
       await expect(fixture({ ...result(), command: { ...fact(submit()), ...altered } }).api.send("t", "p", submit())).rejects.toMatchObject(invalid);
     }
-    await expect(fixture(await withProof(grade, { ...result(), command: fact(grade, "already_applied", "2") })).api.status("t", "p", grade)).rejects.toMatchObject(invalid);
+    await expect(readWithTicket(grade, async (__command, __ticket) => fixture(await withProof(grade, { ...result(), command: fact(grade, "already_applied", "2") })).api.status("t", "p", __command, __ticket))).rejects.toMatchObject(invalid);
   });
 
   it("separates rejected/mismatch, unavailable acceptance and missing command lifecycle proof", async () => {
@@ -250,13 +250,13 @@ describe("conjugation transport contract", () => {
       const body = { ...unavailableResult(), command: { id: id(10), status: "rejected" }, error: { code } };
       expect((await fixture(body, 409).api.send("t", "p", submit())).outcome).toBe(outcome);
     }
-    expect((await fixture(await withProof(submit(), { ...unavailableResult(), command: fact(submit(), "already_applied") })).api.status("t", "p", submit())).outcome).toBe("accepted");
+    expect((await readWithTicket(submit(), async (__command, __ticket) => fixture(await withProof(submit(), { ...unavailableResult(), command: fact(submit(), "already_applied") })).api.status("t", "p", __command, __ticket))).outcome).toBe("accepted");
     const missing = { command: { id: start.command_id, status: "not_found" }, current: profile, state_version: "9",
       closed_session: { session_id: id(3), status: "closed", close_reason: "stop" } };
-    expect((await fixture(missing).api.status("t", "p", start)).outcome).toBe("not_found");
-    await expect(fixture({ ...missing, closed_session: { ...missing.closed_session, session_id: id(80) } }).api.status("t", "p", start)).rejects.toMatchObject(invalid);
+    expect((await readWithTicket(start, (__command, __ticket) => fixture(missing).api.status("t", "p", __command, __ticket))).outcome).toBe("not_found");
+    await expect(readWithTicket(start, (__command, __ticket) => fixture({ ...missing, closed_session: { ...missing.closed_session, session_id: id(80) } }).api.status("t", "p", __command, __ticket))).rejects.toMatchObject(invalid);
     for (const command of [schedule, start]) {
-      expect((await fixture(await withProof(command, { current: { status: "unavailable" }, command: fact(command, "already_applied"), state_version: "9" })).api.status("t", "p", command)).outcome).toBe("accepted");
+      expect((await readWithTicket(command, async (__command, __ticket) => fixture(await withProof(command, { current: { status: "unavailable" }, command: fact(command, "already_applied"), state_version: "9" })).api.status("t", "p", __command, __ticket))).outcome).toBe("accepted");
     }
   });
 
@@ -265,12 +265,12 @@ describe("conjugation transport contract", () => {
     const recorded = recordedConjugationUnknownClosed;
     const lost: ConjugationSessionCommand = { ...start, command_id: recorded.command.id, session_id: recorded.closed_session.session_id };
     expect(recorded.current).toHaveProperty("reapply_closed", false);
-    expect(await fixture(recorded).api.status("t", "p", lost)).toEqual({ ...recorded, outcome: "not_found" });
-    expect((await fixture({ ...recorded, current: { ...recorded.current, reapply_closed: true } }).api.status("t", "p", lost)).outcome).toBe("not_found");
+    expect(await readWithTicket(lost, (__command, __ticket) => fixture(recorded).api.status("t", "p", __command, __ticket))).toEqual({ ...recorded, outcome: "not_found" });
+    expect((await readWithTicket(lost, (__command, __ticket) => fixture({ ...recorded, current: { ...recorded.current, reapply_closed: true } }).api.status("t", "p", __command, __ticket))).outcome).toBe("not_found");
     const { reapply_closed: _omitted, ...older } = recorded.current;
-    expect((await fixture({ ...recorded, current: older }).api.status("t", "p", lost)).outcome).toBe("not_found");
+    expect((await readWithTicket(lost, (__command, __ticket) => fixture({ ...recorded, current: older }).api.status("t", "p", __command, __ticket))).outcome).toBe("not_found");
     for (const extra of [{ reapply_closed: "false" }, { reapply_closed: null }, { private: {} }, { reapply_closed: false, private: {} }]) {
-      await expect(fixture({ ...recorded, current: { ...recorded.current, ...extra } }).api.status("t", "p", lost)).rejects.toMatchObject(invalid);
+      await expect(readWithTicket(lost, (__command, __ticket) => fixture({ ...recorded, current: { ...recorded.current, ...extra } }).api.status("t", "p", __command, __ticket))).rejects.toMatchObject(invalid);
     }
   });
 
@@ -280,7 +280,7 @@ describe("conjugation transport contract", () => {
     const maximal = result(); maximal.action!.version = maximal.result!.version = "9223372036854775807";
     maximal.result!.grade = 5; maximal.capabilities.grades!.expected_result_version = "9223372036854775807";
     const maxGrade = { ...grade, expected_result_version: "9223372036854775807" };
-    expect((await fixture(await withProof(maxGrade, { ...maximal, command: fact(maxGrade, "already_applied", "9223372036854775807") })).api.status("t", "p", maxGrade)).outcome).toBe("accepted");
+    expect((await readWithTicket(maxGrade, async (__command, __ticket) => fixture(await withProof(maxGrade, { ...maximal, command: fact(maxGrade, "already_applied", "9223372036854775807") })).api.status("t", "p", __command, __ticket))).outcome).toBe("accepted");
     for (const version of ["0", "01", "9223372036854775808", 1]) {
       await expect(fixture({ current: session(), state_version: version }).api.read("t", "p", address)).rejects.toMatchObject(invalid);
     }
@@ -300,7 +300,7 @@ describe("conjugation transport contract", () => {
     expect(JSON.parse(String(f.fetcher.mock.calls[0][1]?.body))).toEqual(undo);
     // A repeated command and the status read tell the same truth.
     const proven = await withProof(undo, { ...undoneResult(), command: fact(undo, "already_applied", "2") });
-    expect((await fixture(proven).api.status("t", "p", undo)).outcome).toBe("accepted");
+    expect((await readWithTicket(undo, (__command, __ticket) => fixture(proven).api.status("t", "p", __command, __ticket))).outcome).toBe("accepted");
     const altered: ((r: any, f: any) => void)[] = [
       (_r, c) => { c.object_version = "1"; }, (_r, c) => { c.object_version = "3"; }, (_r, c) => { c.result_id = id(60); },
       (r) => { r.result.status = r.action.status = "active"; }, (r) => { r.result.version = r.action.version = "3"; },
@@ -326,9 +326,9 @@ describe("conjugation transport contract", () => {
       expect(await fixture(body, code === "FORBIDDEN" ? 403 : 409).api.send("t", "p", undo)).toMatchObject({ outcome: "rejected", error: { code } });
     }
     const gone = await withProof(undo, { ...unavailableResult(), command: fact(undo, "already_applied", "2") });
-    expect((await fixture(gone).api.status("t", "p", undo)).outcome).toBe("accepted");
+    expect((await readWithTicket(undo, (__command, __ticket) => fixture(gone).api.status("t", "p", __command, __ticket))).outcome).toBe("accepted");
     const f = fixture({ command: { id: undo.command_id, status: "not_found" }, current: profile, state_version: "9" });
-    expect((await f.api.status("t", "p", undo)).outcome).toBe("not_found");
+    expect((await readWithTicket(undo, (__command, __ticket) => f.api.status("t", "p", __command, __ticket))).outcome).toBe("not_found");
     const query = new URL(String(f.fetcher.mock.calls[0][0]), "https://synthetic.invalid").searchParams;
     const { client_instance_id: _c, document_id: _d, ...intent } = undo;
     expect(query.get("expected_intent_hash")).toBe(await conjugationIntentHash(intent));
@@ -356,7 +356,7 @@ describe("conjugation transport contract", () => {
     const offline = fixture({}); offline.fetcher.mockRejectedValueOnce(new TypeError("synthetic offline"));
     await expect(offline.api.send("t", "p", submit())).rejects.toMatchObject({ kind: "network" }); expect(offline.fetcher).toHaveBeenCalledOnce();
     const deadline = fixture({}, 200, 20000, 5); deadline.fetcher.mockImplementationOnce(() => new Promise(() => {}));
-    await expect(deadline.api.status("t", "p", submit())).rejects.toMatchObject({ kind: "timeout" }); expect(deadline.fetcher).toHaveBeenCalledOnce();
+    await expect(readWithTicket(submit(), (__command, __ticket) => deadline.api.status("t", "p", __command, __ticket))).rejects.toMatchObject({ kind: "timeout" }); expect(deadline.fetcher).toHaveBeenCalledOnce();
     for (const status of [401, 403, 409, 422, 503]) {
       const f = fixture({ error: { code: "WRITE_UNAVAILABLE" } }, status);
       await expect(f.api.send("t", "p", start)).rejects.toMatchObject({ kind: "http", status }); expect(f.fetcher).toHaveBeenCalledOnce();

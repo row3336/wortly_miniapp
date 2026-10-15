@@ -12,6 +12,7 @@ import { id, profile, response } from "../learning/learningFixtures.test-support
 import { learningViewFixture } from "../learning/learningView.test-support";
 import { settingsResponse } from "../settings/settingsRead.test-support";
 import { App } from "./App";
+import { pageGateOpen } from "./pageGate.test-support";
 
 type Fetch = (url: string | URL | Request, init?: RequestInit) => Promise<Response>;
 type Mode = "normal" | "accelerated";
@@ -258,7 +259,10 @@ describe("Learning result first shown after a full reload (decision 20.1-А)", (
     fireEvent.click(screen.getByRole("button", { name: "Проверить" }));
     await waitFor(() => expect(a.kinds()).toContain("answer.submit"));
     const command = a.posts().find(post => post.kind === "answer.submit")!, commandId = command.command_id as string;
-    fireEvent.click(await screen.findByRole("button", { name: "Попробовать ещё раз" }, { timeout: 10_000 }));
+    const again = await screen.findByRole("button", { name: "Попробовать ещё раз" }, { timeout: 10_000 });
+    // P03 (L2, M-P03-4): the lost reply closed the page gate; the new open of «Попробовать ещё раз» waits for ready.
+    await pageGateOpen();
+    fireEvent.click(again);
     await screen.findByRole("region", { name: "Верно" }, { timeout: 10_000 });
     const before = presents(a);
     await sleep(4500);

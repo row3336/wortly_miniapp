@@ -8,7 +8,7 @@ import { ACCESS_BOUND_MARKER, accessBoundLearningApi, accessBoundManualContext, 
 import { createLearningApi, type LearningApi, type ManualIntent } from "./learningApi";
 import { ManualPendingStore } from "./manualPending";
 import { ManualSelectionController, type ManualSelectionSnapshot } from "./manualSelectionController";
-import { testGate } from "../commands/testGate.test-support";
+import { readWithTicket, testGate } from "../commands/testGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const big = "9007199254740995";
@@ -33,7 +33,7 @@ const ok: Record<Path, () => Response> = {
 };
 type Path = "get" | "change" | "status";
 const call = (api: LearningApi, path: Path, token = "argument-token", proof = "argument-proof") =>
-  path === "get" ? api.get(token) : path === "change" ? api.change(token, proof, command()) : api.status(token, intent());
+  path === "get" ? api.get(token) : path === "change" ? api.change(token, proof, command()) : readWithTicket(intent(), (__command, __ticket) => api.status(token, __command, __ticket));
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; }
 
 function fixture() {
@@ -60,7 +60,7 @@ describe("access-bound Learning API with real OpenedAccess and Learning transpor
     f.fetcher.mockResolvedValueOnce(ok.get()).mockResolvedValueOnce(ok.change()).mockResolvedValueOnce(ok.status());
     await expect(f.api.get(ACCESS_BOUND_MARKER)).resolves.toEqual(current());
     await expect(f.api.change(ACCESS_BOUND_MARKER, ACCESS_BOUND_MARKER, command())).resolves.toMatchObject({ outcome: "accepted", state_version: big });
-    await expect(f.api.status(ACCESS_BOUND_MARKER, intent())).resolves.toMatchObject({ outcome: "accepted" });
+    await expect(readWithTicket(intent(), (__command, __ticket) => f.api.status(ACCESS_BOUND_MARKER, __command, __ticket))).resolves.toMatchObject({ outcome: "accepted" });
     expect(f.fetcher.mock.calls.map(([url, init]) => [url, init!.method])).toEqual([
       ["/api/v1/learning/current", "GET"], ["/api/v1/commands", "POST"], [`/api/v1/commands/${id(100)}`, "GET"]]);
     expect(headers(f, 0)).toEqual(withTrace({ Authorization: "Bearer synthetic-manual-token-1" }));
@@ -138,7 +138,7 @@ describe("accepted ManualSelectionController over the access-bound API", () => {
     const storage: AsyncStorage = { get: async key => values.get(key) ?? null,
       set: async (key, value) => { values.set(key, value); }, remove: async key => { values.delete(key); } };
     const states: ManualSelectionSnapshot[] = [];
-    const controller = new ManualSelectionController({ api: f.api, pendingStore: new ManualPendingStore(storage),
+    const controller = new ManualSelectionController({ gate: testGate(), api: f.api, pendingStore: new ManualPendingStore(storage),
       context: accessBoundManualContext(f.first), newId: () => id(100), onUpdate: state => states.push(state) });
     return { controller, values, states };
   }

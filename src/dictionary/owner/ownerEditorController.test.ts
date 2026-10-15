@@ -4,6 +4,7 @@ import type { CommonTranslationsResponse } from "../../api/generated";
 import type { CommonCommand, CommonCommandReply, CommonCommandStatus } from "./commonFieldApi";
 import { OwnerEditorController, grammarValueOf, type CommonSource, type OwnerEditorSnapshot } from "./ownerEditorController";
 import { CARD_ID, CONTEXT, NOUN_GRAMMAR, commonCurrent, commonFact, fid, origin } from "./ownerTestData.test-support";
+import { testGate } from "../../commands/testGate.test-support";
 
 function source(change: Partial<CommonSource> = {}): CommonSource {
   return { cardId: CARD_ID, cardType: "noun", language: "ru", revision: "1", stateVersion: "10", translations: ["дом", "жилище"],
@@ -29,7 +30,7 @@ function harness(options: { replies?: Reply[]; statuses?: (CommonCommandStatus |
   const sent: CommonCommand[] = [], checked: CommonCommand[] = [];
   let next = 100, last: OwnerEditorSnapshot | null = null;
   const onChanged = vi.fn();
-  const controller = new OwnerEditorController({
+  const controller = new OwnerEditorController({ gate: testGate(),
     port: {
       origin: () => origin,
       send: async command => {
@@ -241,7 +242,7 @@ describe("owner common editor (R12-04…06, R14-01)", () => {
     const h = harness({ replies: [command => { void command; throw new Error("unused"); }] });
     const pending = new Promise<CommonCommandReply>(resolve => { release = resolve; });
     const send = vi.fn(() => pending);
-    const controller = new OwnerEditorController({ port: { origin: () => origin, send, status: vi.fn(),
+    const controller = new OwnerEditorController({ gate: testGate(), port: { origin: () => origin, send, status: vi.fn(),
       readTranslations: vi.fn(async () => translationsRead()) }, newId: () => fid(200),
       onUpdate: () => {}, onChanged: () => {} });
     controller.setCard(source()); controller.setContext(CONTEXT);

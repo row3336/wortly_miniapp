@@ -11,6 +11,7 @@ import { RemoteStopPendingStore } from "../study/remoteStopPending";
 import type { TodayApi } from "../today/todayApi";
 import { EntryController, type EntrySnapshot } from "./entryController";
 import { keysOf, openDocument, openRequestKeys } from "./openRules.test-support";
+import { testGate } from "../commands/testGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const PROFILE = id(1);
@@ -65,7 +66,7 @@ let next = 100;
 function launch(api: EntryApi, storage: AsyncStorage, extra: Partial<ConstructorParameters<typeof EntryController>[0]> = {}) {
   const updates: EntrySnapshot[] = [];
   const release = vi.fn();
-  const controller = new EntryController({ api, storage, lock: { acquire: vi.fn(async () => ({ release })) },
+  const controller = new EntryController({ gate: testGate(), api, storage, lock: { acquire: vi.fn(async () => ({ release })) },
     initData: "signed", savedLanguage: "ru", browserLanguage: "ru", clientVersion: "0.0.0", contractVersion: "1",
     timeZone: () => "Europe/Berlin", newId: () => id(next++), onUpdate: snapshot => updates.push(snapshot), ...extra });
   return { controller, updates, release, kinds: () => updates.map(update => update.state.kind),

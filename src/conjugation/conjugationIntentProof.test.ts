@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createConjugationApi } from "./conjugationApi";
 import { conjugationIntentHash, type ConjugationIntent, type ConjugationCommand } from "./conjugationIntent";
-import { testGate } from "../commands/testGate.test-support";
+import { readWithTicket, testGate } from "../commands/testGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const session_id = "abcdefab-abcd-4abc-8abc-abcdefabcdef", assignment_id = "fedcbafe-dcba-4fed-8fed-fedcbafedcba";
@@ -48,7 +48,7 @@ describe("conjugation exact intent status proof", () => {
   });
   it.each(vectors.filter(([intent]) => intent.kind !== "result.correct"))("requires exact proof even without current/detail for %j", async (intent, expected) => {
     const fetcher = vi.fn<typeof fetch>(async () => wire(receipt(intent, expected)));
-    expect((await api(fetcher).status("synthetic", "synthetic", command(intent))).outcome).toBe("accepted");
+    expect((await readWithTicket(command(intent), (__command, __ticket) => api(fetcher).status("synthetic", "synthetic", __command, __ticket))).outcome).toBe("accepted");
     const url = new URL(String(fetcher.mock.calls[0][0]), "https://model.invalid");
     expect(url.searchParams.get("expected_intent_hash")).toBe(expected);
     expect(url.searchParams.get("session_id")).toBe(intent.kind === "conjugation.schedule" ? null : intent.session_id);
@@ -56,7 +56,7 @@ describe("conjugation exact intent status proof", () => {
   });
   it.each([undefined, null, "a".repeat(64), false, { hash: "a".repeat(64) }])("refuses missing/wrong proof %j without a fallback request", async proof => {
     const [intent] = vectors[4], fetcher = vi.fn<typeof fetch>(async () => wire(receipt(intent, proof)));
-    await expect(api(fetcher).status("synthetic", "synthetic", command(intent))).rejects.toMatchObject({ kind: "invalid_response" });
+    await expect(readWithTicket(command(intent), (__command, __ticket) => api(fetcher).status("synthetic", "synthetic", __command, __ticket))).rejects.toMatchObject({ kind: "invalid_response" });
     expect(fetcher).toHaveBeenCalledOnce();
   });
   it("does not confuse same UUID/target with another payload after a restart", async () => {
@@ -64,20 +64,20 @@ describe("conjugation exact intent status proof", () => {
     const fetcher = vi.fn<typeof fetch>(async url => new URL(String(url), "https://model.invalid").searchParams.get("expected_intent_hash") === savedHash
       ? wire(receipt(saved, savedHash)) : wire({ error: { code: "COMMAND_PAYLOAD_MISMATCH" } }, 409));
     for (let restart = 0; restart < 2; restart++) {
-      await expect(api(fetcher).status("synthetic", "synthetic", command(local))).rejects.toMatchObject({ status: 409, code: "COMMAND_PAYLOAD_MISMATCH" });
+      await expect(readWithTicket(command(local), (__command, __ticket) => api(fetcher).status("synthetic", "synthetic", __command, __ticket))).rejects.toMatchObject({ status: 409, code: "COMMAND_PAYLOAD_MISMATCH" });
     }
     expect(localHash).not.toBe(savedHash); expect(fetcher).toHaveBeenCalledTimes(2);
-    expect((await api(fetcher).status("synthetic", "synthetic", command(saved))).outcome).toBe("accepted");
+    expect((await readWithTicket(command(saved), (__command, __ticket) => api(fetcher).status("synthetic", "synthetic", __command, __ticket))).outcome).toBe("accepted");
   });
   it("copies the whole intent before asynchronous hashing and fails closed if hashing is unavailable", async () => {
     const [intent, hash] = vectors[4], original = command(structuredClone(intent));
     const fetcher = vi.fn<typeof fetch>(async () => wire(receipt(intent, hash)));
-    const pending = api(fetcher).status("synthetic", "synthetic", original);
+    const pending = readWithTicket(original, (__command, __ticket) => api(fetcher).status("synthetic", "synthetic", __command, __ticket));
     Object.assign(original, { command_id: id(90), session_id: id(91), payload: { text: "changed" } });
     expect((await pending).outcome).toBe("accepted");
     expect(String(fetcher.mock.calls[0][0])).toContain(`/commands/${intent.command_id}?`);
     const fail = vi.spyOn(globalThis.crypto.subtle, "digest").mockRejectedValueOnce(Error("synthetic unavailable"));
-    try { await expect(api(fetcher).status("synthetic", "synthetic", command(intent))).rejects.toThrow(); }
+    try { await expect(readWithTicket(command(intent), (__command, __ticket) => api(fetcher).status("synthetic", "synthetic", __command, __ticket))).rejects.toThrow(); }
     finally { fail.mockRestore(); }
     expect(fetcher).toHaveBeenCalledOnce();
   });

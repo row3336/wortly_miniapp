@@ -186,9 +186,23 @@ export class DocumentLanes<C extends LaneState, T extends { kind: string; sessio
       onUpdate: () => this.emit(),
       maySend: commandId => createdHere(options.storage, commandId),
       blocked: () => { if (this.live()) this.adoptBlocked(); },
+      gate: options.transport.gate,
     }, pageSendCounter(options.storage), systemRecoveryClock,
     `${this.profileId}:${this.clientInstanceId}:${access.document.documentId}:${access.document.epoch}`);
     this.controllers = { primary: controller("primary"), stop: controller("stop") };
+    // M03 (P03 §5.2): once the gate lets a write through again, a manual intent the gate kept on the client is read by
+    // its ID; the lane then offers the same send again («Повторить отправку»). Nothing is sent by this.
+    this.unsubscribeGate = options.transport.gate.subscribe(() => this.readPausedLanes());
+  }
+  private readonly unsubscribeGate: () => void;
+  private readPausedLanes(): void {
+    if (!this.live()) return;
+    for (const lane of ["primary", "stop"] as const) {
+      const state = this.controllers[lane].snapshot(), id = state.pendingIntent?.command_id;
+      if (state.problem !== "paused" || !id || this.work[lane] || lane === "primary" && this.recovery.drives(id)) continue;
+      if (!this.options.transport.gate.mayWrite(id)) continue;
+      void this.track(lane, () => this.controllers[lane].refresh());
+    }
   }
 
   private live(): boolean {
@@ -428,6 +442,7 @@ export class DocumentLanes<C extends LaneState, T extends { kind: string; sessio
   }
   dispose(): void {
     this.disposed = true;
+    this.unsubscribeGate();
     this.sendSources.primary = this.sendSources.stop = null;
     this.recovery.dispose();
     this.controllers.primary.dispose();

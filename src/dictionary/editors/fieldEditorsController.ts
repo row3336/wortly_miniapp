@@ -1,6 +1,8 @@
 import type { FieldUndoTarget } from "../../api/generated";
 import { version } from "../../api/wireValidation";
 import { commandOutcomeUnknown } from "../../commands/commandOutcome";
+import { GatePending, pausedBeforeSend } from "../../commands/gatePending";
+import type { ReadbackTicket, WriteGate } from "../../commands/writeGate";
 import {
   caseRoles, copyFieldIntent,
   type CaseRole, type FieldCommand, type FieldCommandReply, type FieldCommandStatus, type FieldCurrent, type FieldIntent,
@@ -11,7 +13,8 @@ import {
 export type FieldEditorsPort = {
   origin(): FieldOrigin | null;
   send(command: FieldCommand): Promise<FieldCommandReply>;
-  status(command: FieldCommand): Promise<FieldCommandStatus>;
+  /** The status read by ID; the ticket comes from the write gate (R6). */
+  status(command: FieldCommand, ticket: ReadbackTicket): Promise<FieldCommandStatus>;
 };
 
 /** The server's own value of one field and the version the next save expects (null value: no own value). */
@@ -32,8 +35,11 @@ export const groupKeys: Record<FieldGroup, readonly FieldKey[]> = {
 
 export type EditorPhase = "editing" | "saving" | "failed" | "conflict" | "saved";
 export type EditorProblem = {
-  /** unknown: no reply, the same command can be repeated; refused: proven not saved; unavailable: the field is gone. */
-  reason: "unknown" | "refused" | "unavailable" | "mismatch";
+  /**
+   * unknown: no reply, the same command can be repeated; refused: proven not saved; unavailable: the field is gone;
+   * paused: the write gate kept the request on the client (PAUSED_BEFORE_SEND, P03 §4.1 K11) — nothing left, the ID stays.
+   */
+  reason: "unknown" | "refused" | "unavailable" | "mismatch" | "paused";
   code?: string;
 };
 /** TA §7: the editor keeps original/current/draft/field_version. */
@@ -81,14 +87,20 @@ type Options = {
   onUpdate(snapshot: FieldEditorsSnapshot): void;
   /** An accepted or refused command changed what the card shows: the host reads the card (and its context) again. */
   onChanged(): void;
+  /** The write gate of the page (P03 M-P03-8): readback registry, status reads by ticket, the buttons (I9, M01). */
+  gate: WriteGate;
 };
 type Known = FieldSource & { stateVersion: string };
 type Session = {
   key: FieldKey; phase: EditorPhase; original: string; current: FieldSource; draft: string; fieldVersion: string;
   problem: EditorProblem | null; saved?: string | null;
 };
-/** The one command of this card in flight or unresolved; its intent never changes until it settles. */
-type Entry = { intent: FieldIntent; key: FieldKey; status: "sending" | "unknown"; busy: boolean; notFound: boolean };
+/**
+ * The one command of this card in flight or unresolved; its intent never changes until it settles. paused: the gate kept
+ * its request on the client; maySend says no earlier request of this ID may have left (its new press sends directly).
+ */
+type Entry = { intent: FieldIntent; key: FieldKey; status: "sending" | "unknown" | "paused"; busy: boolean; notFound: boolean;
+  maySend: boolean };
 type Undo = {
   target: FieldUndoTarget; fieldVersion: string; stateVersion: string; save: FieldSaveIntent;
   status: UndoSnapshot["status"]; problem: EditorProblem | null; checking: boolean;
@@ -115,8 +127,16 @@ export class FieldEditorsController {
   private entry: Entry | null = null;
   private undoState: Undo | null = null;
   private disposed = false;
+  private readonly registry: GatePending;
+  private readonly unsubscribe: () => void;
 
-  constructor(private readonly options: Options) {}
+  constructor(private readonly options: Options) {
+    this.registry = new GatePending(options.gate, "field");
+    // M01: the save, retry and undo buttons follow the gate; a change of net, hold or locks repaints them.
+    this.unsubscribe = options.gate.subscribe(() => this.notify());
+  }
+  /** I9: a send of the unresolved command (or of a new one) is allowed by the write gate right now. */
+  private writable(): boolean { return this.registry.writable(this.entry?.intent.command_id); }
 
   // ---- inputs from the host ----
 
@@ -171,6 +191,10 @@ export class FieldEditorsController {
   }
 
   dispose(): void {
+    // R3: an ID without a definite answer stays locked to itself in the gate.
+    // Unsubscribed first: the release below changes the gate, and a disposed owner repaints nothing.
+    this.unsubscribe();
+    this.registry.release();
     this.disposed = true;
     this.entry = null;
     this.undoState = null;
@@ -250,7 +274,9 @@ export class FieldEditorsController {
     const session = this.sessions.get(key), entry = this.entry;
     if (!session || session.phase !== "failed") return Promise.resolve();
     if (entry && entry.key === key && entry.intent.kind === "field.save") {
-      return entry.status === "unknown" && !entry.busy ? this.execute(entry) : Promise.resolve();
+      if (entry.busy || !this.writable()) return Promise.resolve();
+      if (entry.status === "paused") return this.resumePaused(entry);
+      return entry.status === "unknown" ? this.execute(entry) : Promise.resolve();
     }
     return this.save(key);
   }
@@ -267,6 +293,8 @@ export class FieldEditorsController {
     if (entry && groupKeys[group].includes(entry.key)) {
       if (entry.busy) return;
       this.entry = null;
+      // The forgotten command is never sent again; without a definite answer it stays locked to itself (R3).
+      this.registry.release();
       this.options.onChanged();
     }
     this.sessions.clear();
@@ -286,8 +314,8 @@ export class FieldEditorsController {
 
   retryUndo(): Promise<void> {
     const entry = this.entry, undo = this.undoState;
-    if (!undo || undo.status !== "unknown" || !entry || entry.intent.kind !== "field.undo" || entry.busy) return Promise.resolve();
-    return this.execute(entry);
+    if (!undo || undo.status !== "unknown" || !entry || entry.intent.kind !== "field.undo" || entry.busy || !this.writable()) return Promise.resolve();
+    return entry.status === "paused" ? this.resumePaused(entry) : this.execute(entry);
   }
 
   // ---- snapshot ----
@@ -306,8 +334,8 @@ export class FieldEditorsController {
         key: session.key, phase: session.phase, original: session.original, current: { ...session.current },
         draft: session.draft, fieldVersion: session.fieldVersion, dirty: session.draft !== session.original,
         checking: entry?.busy ?? false, canEdit: this.editable(session), canSave: this.canSave(session),
-        canRetry: session.phase === "failed" && (entry ? entry.status === "unknown" && !entry.busy : this.contextId !== null && this.entry === null
-          && session.problem?.reason !== "unavailable"),
+        canRetry: session.phase === "failed" && this.writable() && (entry ? entry.status !== "sending" && !entry.busy
+          : this.contextId !== null && this.entry === null && session.problem?.reason !== "unavailable"),
         canCancel: !groupBusy,
         problem: session.problem ? { ...session.problem } : null,
         ...(session.phase === "saved" ? { saved: session.saved } : {}),
@@ -318,7 +346,7 @@ export class FieldEditorsController {
     return {
       open: this.openGroup, editors,
       undo: undo ? { status: undo.status, canUndo: this.undoAllowed(undo),
-        canRetry: undo.status === "unknown" && undoEntry !== null && !undoEntry.busy,
+        canRetry: undo.status === "unknown" && undoEntry !== null && !undoEntry.busy && this.writable(),
         problem: undo.problem ? { ...undo.problem } : null } : null,
       commonTranslations: [...(this.card?.commonTranslations ?? [])],
       canOpen: this.canOpen(),
@@ -340,7 +368,7 @@ export class FieldEditorsController {
   }
   /** root decision, pending owner (M-EDIT Р4): an unchanged text is not saved (substituting the common one is a change). */
   private canSave(session: Session): boolean {
-    return this.contextId !== null && this.entry === null && this.editable(session)
+    return this.contextId !== null && this.entry === null && this.editable(session) && this.writable()
       && (session.phase === "editing" || session.phase === "failed" && session.problem?.reason !== "unavailable")
       && session.draft !== session.original;
   }
@@ -352,7 +380,7 @@ export class FieldEditorsController {
   }
   private undoAllowed(undo: Undo): boolean {
     // Hidden while the translation editor is open or any command is under way; the server still checks the right.
-    return undo.status === "offered" && this.entry === null && this.contextId !== null
+    return undo.status === "offered" && this.entry === null && this.contextId !== null && this.writable()
       && same(undo.target.context_id, this.contextId) && this.openGroup !== "translation";
   }
 
@@ -370,7 +398,7 @@ export class FieldEditorsController {
   }
 
   private start(key: FieldKey, intent: FieldIntent): Promise<void> {
-    const entry: Entry = { intent: copyFieldIntent(intent), key, status: "sending", busy: false, notFound: false };
+    const entry: Entry = { intent: copyFieldIntent(intent), key, status: "sending", busy: false, notFound: false, maySend: true };
     this.entry = entry;
     const session = this.sessions.get(key);
     if (session && intent.kind === "field.save") { session.phase = "saving"; session.problem = null; }
@@ -390,10 +418,20 @@ export class FieldEditorsController {
     try {
       const command = this.command(entry);
       if (!command) throw new Error("no live document");
+      // From now on a request of this ID may leave: its outcome is unknown until a definite answer (R1).
+      this.registry.hold(entry.intent.command_id);
       reply = await this.options.port.send(command);
     } catch (error) {
       if (this.disposed || this.entry !== entry) return;
       entry.busy = false;
+      // K11: PAUSED_BEFORE_SEND comes before commandOutcomeUnknown — nothing left, no check, the entry and its ID stay.
+      if (pausedBeforeSend(error)) {
+        entry.status = "paused";
+        this.marking(entry, "paused");
+        this.notify();
+        return;
+      }
+      entry.maySend = false;
       if (commandOutcomeUnknown(error)) {
         entry.status = "unknown";
         this.marking(entry, "unknown");
@@ -403,6 +441,8 @@ export class FieldEditorsController {
       }
       // An HTTP refusal without a fact: nothing was saved.
       this.entry = null;
+      this.registry.settled("rejected");
+      this.registry.release();
       const code = (error as { code?: string }).code;
       this.marking(entry, "refused", { reason: "refused", ...(code ? { code } : {}) });
       this.notify();
@@ -410,7 +450,20 @@ export class FieldEditorsController {
     }
     if (this.disposed || this.entry !== entry) return;
     this.entry = null;
+    this.registry.settled(reply.outcome === "accepted" ? "recorded" : reply.outcome === "mismatch" ? "mismatch" : "rejected");
+    this.registry.release();
     this.settle(entry, reply);
+  }
+
+  /**
+   * A new press of a paused command (P03 §4.1 K11, M03/M04): the same ID. If an earlier request of it may have left, its
+   * status is read first and only a missing command is sent; otherwise it is sent directly.
+   */
+  private async resumePaused(entry: Entry): Promise<void> {
+    if (entry.maySend) { await this.execute(entry); return; }
+    entry.status = "unknown";
+    await this.check(entry);
+    if (this.entry === entry && entry.notFound) await this.execute(entry);
   }
 
   /** One status request for an unknown outcome: accepted settles, not_found allows the same command again. */
@@ -422,8 +475,10 @@ export class FieldEditorsController {
     try {
       const command = this.command(entry);
       if (!command) throw new Error("no live document");
-      status = await this.options.port.status(command);
+      // R6: the status of this ID is read only with the gate's ticket.
+      status = await this.registry.read(command.command_id, ticket => this.options.port.status(command, ticket));
     } catch {
+      // A failed read, a gate that held or cancelled it: nothing is decided, the entry stays unknown.
       if (this.disposed || this.entry !== entry) return;
       entry.busy = false;
       this.notify();
@@ -433,12 +488,16 @@ export class FieldEditorsController {
     entry.busy = false;
     if (status.outcome === "accepted") {
       this.entry = null;
+      this.registry.settled("recorded");
+      this.registry.release();
       this.accepted(entry, status.current, status.state_version, status.command.action_id);
       return;
     }
-    if (status.outcome === "not_found") { entry.notFound = true; this.notify(); return; }
+    if (status.outcome === "not_found") { this.registry.settled("not_recorded"); entry.notFound = true; this.notify(); return; }
     // Another payload under this ID: this intent can never be confirmed; a new command is needed.
     this.entry = null;
+    this.registry.settled("mismatch");
+    this.registry.release();
     this.marking(entry, "refused", { reason: "mismatch", code: status.error.code });
     this.notify();
   }
@@ -504,19 +563,24 @@ export class FieldEditorsController {
     session.phase = "conflict"; session.problem = null; session.current = own; session.fieldVersion = own.version;
   }
 
-  private marking(entry: Entry, status: "sending" | "unknown" | "refused", problem?: EditorProblem): void {
+  private marking(entry: Entry, status: "sending" | "unknown" | "refused" | "paused", problem?: EditorProblem): void {
     if (entry.intent.kind === "field.undo") {
       const undo = this.undoState;
       if (!undo) return;
       if (status === "sending") { undo.status = "undoing"; undo.problem = null; }
       else if (status === "unknown") { undo.status = "unknown"; undo.problem = { reason: "unknown" }; }
+      // The undo keeps its ID; its retry repeats it once the gate lets a write through.
+      else if (status === "paused") { undo.status = "unknown"; undo.problem = { reason: "paused" }; }
       else { undo.status = "failed"; undo.problem = problem ?? { reason: "refused" }; }
       return;
     }
     const session = this.sessions.get(entry.key);
     if (!session) return;
     if (status === "sending") { session.phase = "saving"; session.problem = null; }
-    else { session.phase = "failed"; session.problem = status === "unknown" ? { reason: "unknown" } : problem ?? { reason: "refused" }; }
+    else {
+      session.phase = "failed";
+      session.problem = status === "unknown" ? { reason: "unknown" } : status === "paused" ? { reason: "paused" } : problem ?? { reason: "refused" };
+    }
   }
 
   private remember(key: FieldKey, source: FieldSource, stateVersion: string): void {
@@ -529,7 +593,9 @@ export class FieldEditorsController {
     let status: FieldCommandStatus | null = null;
     try {
       const origin = this.options.port.origin();
-      if (origin) status = await this.options.port.status({ ...copyFieldIntent(undo.save), ...origin });
+      // R6: even the status of the settled save is read only with the gate's ticket.
+      if (origin) status = await this.registry.read(undo.save.command_id,
+        ticket => this.options.port.status({ ...copyFieldIntent(undo.save), ...origin }, ticket));
     } catch {
       status = null;
     }

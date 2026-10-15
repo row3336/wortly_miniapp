@@ -8,7 +8,7 @@ import { SettingsController, type SettingsSnapshot } from "./settingsController"
 import { SettingsPendingStore, type SettingsPending } from "./settingsPending";
 import { settingsResponse } from "./settingsRead.test-support";
 import { SettingsResetPendingStore } from "./settingsResetPending";
-import { testGate } from "../commands/testGate.test-support";
+import { readWithTicket, testGate } from "../commands/testGate.test-support";
 
 /**
  * Core CP2 of the dictionary language lock (19.2-А, C150) against the existing client, without changing it: once the
@@ -62,7 +62,7 @@ function fixture(initial: SettingsResponse) {
   access = handle;
   let sequence = 100;
   const states: SettingsSnapshot[] = [];
-  const controller = new SettingsController({ api, pendingStore: store, resetStore: new SettingsResetPendingStore(storage),
+  const controller = new SettingsController({ gate: testGate(), api, pendingStore: store, resetStore: new SettingsResetPendingStore(storage),
     access: () => access, newId: () => id(sequence++), onUpdate: state => states.push(state) });
   return { controller, api, values, store };
 }
@@ -118,8 +118,8 @@ describe("the narrowed dictionary language constraint in the existing settings r
     const data = settings("uk", "2") as unknown as { constraints: Record<string, Record<string, unknown>> };
     for (const rule of Object.values(data.constraints)) for (const field of ["values", "minimum", "maximum", "nonempty",
       "item_minimum", "item_maximum", "modes"]) if (!Object.hasOwn(rule, field)) rule[field] = null;
-    const status = await reply({ command: { ...fact(first), status: "already_applied" }, current: data, state_version: "20" })
-      .status("synthetic", subject, first);
+    const status = await readWithTicket(first, (__command, __ticket) => reply({ command: { ...fact(first), status: "already_applied" }, current: data, state_version: "20" })
+      .status("synthetic", subject, __command, __ticket));
     expect(status).toMatchObject({ outcome: "accepted", current: { constraints: { dictionary_language: { values: ["uk"] } } } });
   });
 });

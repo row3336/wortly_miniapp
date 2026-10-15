@@ -16,6 +16,7 @@ function problemText(phase: OwnerPhase, problem: OwnerProblem | null, checking: 
   if (checking) return t.checking;
   return problem.reason === "unknown" ? t.unknown : problem.reason === "unavailable" ? t.unavailable
     : problem.reason === "mismatch" ? t.mismatch : problem.reason === "forbidden" ? t.forbidden
+      : problem.reason === "paused" ? t.paused
       : problem.reason === "invalid" ? t.invalid : t.failed;
 }
 

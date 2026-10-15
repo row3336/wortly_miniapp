@@ -467,7 +467,9 @@ describe("F2: an outcome carries the top-level state_version of its own reply, n
     expect(state(ui)).toMatchObject({ phase: "unresolved", canRetry: true });
     elsewhere(f);
     await act(() => path === "retry" ? ui.result.current.actions.retry(A) : ui.result.current.actions.refresh());
-    expect(posts(f)).toHaveLength(path === "retry" ? 2 : 1);
+    // P03 I9 (M-P03-8): «Повторить» reads the same ID before any second POST; the committed first one is found there,
+    // so neither path sends again.
+    expect(posts(f)).toHaveLength(1);
     expect(state(ui)).toMatchObject({ pending: null, problem: { reason: "pair_changed" },
       outcome: { commandId: id(100), cardId: A, status: "accepted", stateVersion: "9007199254740997" } });
   });

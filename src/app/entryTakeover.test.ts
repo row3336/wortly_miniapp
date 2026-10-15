@@ -85,7 +85,7 @@ function device(options: { otherSession?: string; locks?: boolean } = {}) {
     let controller: EntryController | null = null;
     const http: HttpOptions = { fetcher: fetcher as unknown as typeof fetch, timeoutMs: 1000, maxResponseBytes: 100000, gate: testGate(),
       onDocumentStale: () => controller?.documentStale() };
-    controller = new EntryController({ api: createEntryApi(http), storage, lock: browserDocumentLock(nav),
+    controller = new EntryController({ gate: testGate(), api: createEntryApi(http), storage, lock: browserDocumentLock(nav),
       remote: { api: createRemoteSessionApi(http), pendingStore: new RemoteStopPendingStore(storage) },
       initData: "signed", savedLanguage: "ru", browserLanguage: "ru", clientVersion: "0.0.0", contractVersion: "1",
       timeZone: () => "UTC", newId: () => id(next++), onUpdate: ({ state }) => { states.push(state); }, closeWindow });

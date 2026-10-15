@@ -3,6 +3,8 @@ import { MAX_SENDS, PROBE_DELAYS_MS, RETRY_PAUSES_MS } from "./recoveryLimits";
 import { checkFailure, sendFailure, type CheckResult, type SendResult, type TerminationReason } from "./recoveryReplies";
 import { copyMarks, validMarks, type SendCounter, type SendMarks } from "./sendCounter";
 import { journalNoteAttempt, journalRecord } from "../journal/clientJournal";
+import type { WriteGate } from "./writeGate";
+import { RETRY_AFTER_MAX_S } from "../api/http";
 
 export { MAX_SENDS, PROBE_DELAYS_MS, RETRY_PAUSES_MS };
 
@@ -90,6 +92,13 @@ export interface RecoveryPorts<I> {
    * before the reservation, so a refusal reserves, releases and writes nothing (C081 Н2). Absent = allowed (start cancel).
    */
   maySend?(): boolean;
+  /**
+   * The write gate of the page (P03 M-P03-6). When given, it replaces the light probe and the machine's own send_hold:
+   * the machine never probes by itself, waits for the gate (its ready and the end of send_hold, then a fresh probe when
+   * the ready is older than 10 s), and reserves and sends only while gate.mayWrite(command_id) (I5). A refusal of the
+   * gate before the request (PAUSED_BEFORE_SEND) is not_sent: the reservation goes back and the machine waits again.
+   */
+  gate?: WriteGate;
 }
 
 /**
@@ -179,6 +188,8 @@ export class RecoveryMachine<I extends { command_id: string }> {
   /** Inside a planned pause until a probe answers; survives the background. */
   private paused = false;
   private pauseSeconds: number | null = null;
+  /** The subscription to the write gate while the machine waits for it (gate mode only). */
+  private gateWait: (() => void) | null = null;
 
   constructor(options: RecoveryOptions<I>) {
     this.intent = structuredClone(options.intent);
@@ -277,6 +288,8 @@ export class RecoveryMachine<I extends { command_id: string }> {
     this.generation++;
     if (this.timer !== null) this.clock.cancel(this.timer);
     this.timer = null;
+    this.gateWait?.();
+    this.gateWait = null;
   }
   /** Leave the current state: older replies and timers are silenced. */
   private enter(state: RecoveryState): void {
@@ -286,8 +299,9 @@ export class RecoveryMachine<I extends { command_id: string }> {
     this.state = state;
     // The client journal (events TZ §4.5 c.recovery): a change of state, never a step inside one (a probe, a check).
     if (from !== state.name) {
+      // The journal's closed list has no reauth (P04): it is told as the access_lost it was before M-P03-7.
       journalRecord({ ev: "c.recovery", cmd: this.intent.command_id, from, to: state.name,
-        ...(state.name === "terminated" ? { reason: state.reason } : {}) });
+        ...(state.name === "terminated" ? { reason: state.reason === "reauth" ? "access_lost" : state.reason } : {}) });
     }
     this.emit();
   }
@@ -318,6 +332,8 @@ export class RecoveryMachine<I extends { command_id: string }> {
     if (!this.liveOrTerminate()) return;
     // 2.3 А: the last gate before the reservation and the network; no await between it and the reservation below.
     if (!this.mayResend()) { this.originElsewhere(); return; }
+    // I5 (M-P03-6): no reservation while the write gate holds writes; the send waits for it and a new check.
+    if (!this.writable()) { this.waitForGate(); return; }
     this.enter({ name: "sending", attempt });
     const generation = this.generation;
     const reserved = copyMarks({ ...before, reserved: attempt });
@@ -394,7 +410,8 @@ export class RecoveryMachine<I extends { command_id: string }> {
         return;
       case "lost": this.lose(); void this.check("checking"); return;
       // Nothing went out (e.g. a closed access handle): wait on the probe schedule, then check; never a tight loop.
-      case "not_sent": this.unreachable(null, false); return;
+      // A refusal of the write gate (L1/L2) waits for the gate instead (M-P03-6).
+      case "not_sent": if (!this.writable()) this.waitForGate(); else this.unreachable(null, false); return;
     }
   }
 
@@ -408,7 +425,10 @@ export class RecoveryMachine<I extends { command_id: string }> {
 
   private hold(waitSeconds: number | null | undefined): void {
     if (waitSeconds === null || waitSeconds === undefined) return;
-    const until = this.clock.now() + waitSeconds * 1_000;
+    // With the write gate the gate's send_hold governs (§3.5, RD-4); the machine keeps its own copy of the estimate only
+    // within the same bound of 900 s, so a misconfigured estimate never holds it longer than the gate would.
+    const seconds = this.ports.gate ? Math.min(waitSeconds, RETRY_AFTER_MAX_S) : waitSeconds;
+    const until = this.clock.now() + seconds * 1_000;
     if (this.holdUntil === null || until > this.holdUntil) this.holdUntil = until;
     this.remember();
   }
@@ -461,6 +481,13 @@ export class RecoveryMachine<I extends { command_id: string }> {
       // An answer older than the known state proves nothing: wait and check again, never send (2.13).
       case "stale": this.unreachable(null, afterProbe); return;
       case "not_recorded": this.notRecorded(); return;
+      // R8 п.2: a read the gate refused is no lost reply. cancelled: the document or the owner went away — nothing is
+      // decided here (the machine is about to be disposed); a closed window ends the work; anything else waits.
+      case "gate_refused":
+        if (result.reason === "cancelled") return;
+        if (result.reason === "closed_window") { this.enter({ name: "terminated", reason: "window_replaced" }); return; }
+        this.unreachable(null, afterProbe);
+        return;
     }
   }
 
@@ -487,9 +514,14 @@ export class RecoveryMachine<I extends { command_id: string }> {
     if (marks === null) { this.counterUnknown(); return; }
     // 2.3 А: a known count never lets another window send this action (C119): checks only, nothing written.
     if (!this.mayResend()) { this.originElsewhere(); return; }
+    // I5 (M-P03-6): absence seen while the gate holds writes decides nothing yet (T10); after ready, the end of
+    // send_hold and a fresh probe the ID is read again, and only that answer counts.
+    if (!this.writable()) { this.waitForGate(); return; }
     if (marks.reserved >= MAX_SENDS) {
-      // A planned pause must not close the quiz: the last send met it, so wait in the pause instead (TC §11).
-      if (marks.lastMaintenance) this.pause(this.pauseSeconds, true);
+      // A planned pause must not close the quiz: the last send met it, so wait in the pause instead (TC §11). With the
+      // write gate the end of the pause is proven (ready, send_hold, then this readback): six provable sends are an
+      // exhaustion even when the last met the pause (P03 §4.5, R2-08 Б, T18) — the endless pause ends here (M-P03-6).
+      if (marks.lastMaintenance && !this.ports.gate) this.pause(this.pauseSeconds, true);
       // Only six sends that provably went out make the budget truly spent (Я15.8).
       else if (marks.transmitted >= MAX_SENDS) this.exhausted();
       else this.counterUnknown();
@@ -526,6 +558,9 @@ export class RecoveryMachine<I extends { command_id: string }> {
 
   /** inSeries false: a probe outside the schedule (a return in a pause); it does not move the series on. */
   private probeAfter(delayMs: number, pauseSeconds = this.pauseSeconds, inSeries = true): void {
+    // M-P03-6: the gate owns the series (RD-5); a closed gate is waited for, never probed from here, and a return from
+    // the background starts no probe of its own (RD-3).
+    if (!this.writable()) { this.waitForGate(); return; }
     const probe = this.probes + 1;
     this.enter(this.paused
       ? { name: "maintenance", probe, pauseSeconds, budgetSpent: (this.marks?.reserved ?? 0) >= MAX_SENDS }
@@ -539,6 +574,12 @@ export class RecoveryMachine<I extends { command_id: string }> {
     if (!this.liveOrTerminate()) return;
     const generation = this.generation;
     this.probes = probe;
+    // M-P03-6: with the gate this pacing only spaces the checks of an open gate; the gate itself is never probed here.
+    if (this.ports.gate) {
+      if (!this.writable()) this.waitForGate();
+      else void this.afterGate(generation);
+      return;
+    }
     let reachable: boolean;
     try { reachable = await this.ports.probe(); } catch { reachable = false; }
     if (generation !== this.generation) return;
@@ -549,6 +590,43 @@ export class RecoveryMachine<I extends { command_id: string }> {
   }
 
   private mayResend(): boolean { return this.ports.maySend?.() ?? true; }
+
+  /** I5 п.1–2: the gate lets a write of this ID through now (ready after the last closure, send_hold over, no lock). */
+  private writable(): boolean { return !this.ports.gate || this.ports.gate.mayWrite(this.intent.command_id); }
+
+  /**
+   * Wait for the write gate (M-P03-6): the screen state follows its cause (a planned pause or an announced hold:
+   * maintenance; otherwise unreachable); nothing is probed, checked or sent until it lets a write through again.
+   */
+  private waitForGate(): void {
+    const gate = this.ports.gate;
+    if (!gate) { this.unreachable(null, false); return; }
+    const snapshot = gate.snapshot();
+    const planned = snapshot.net.kind === "closed" && snapshot.net.cause === "maintenance" || gate.holdActive();
+    this.enter(planned
+      ? { name: "maintenance", probe: this.probes + 1, pauseSeconds: this.pauseSeconds, budgetSpent: (this.marks?.reserved ?? 0) >= MAX_SENDS }
+      : { name: "unreachable", probe: this.probes + 1, pauseSeconds: null });
+    const generation = this.generation;
+    const resume = () => {
+      if (generation !== this.generation || !this.active || !this.writable()) return;
+      this.gateWait?.();
+      this.gateWait = null;
+      void this.afterGate(generation);
+    };
+    this.gateWait = gate.subscribe(resume);
+    resume();
+  }
+
+  /** The gate let writes through: a fresh probe if its ready is older than 10 s (R-12), then the check by ID (I5 п.3). */
+  private async afterGate(generation: number): Promise<void> {
+    const gate = this.ports.gate!;
+    let fresh: boolean;
+    try { fresh = await gate.ensureFresh(); } catch { fresh = false; }
+    if (generation !== this.generation) return;
+    if (!fresh) { this.waitForGate(); return; }
+    this.paused = false;
+    void this.check("checking", true);
+  }
   /** 2.3 А: only checks on the probe schedule; the count, the ban and the record are left untouched. */
   private originElsewhere(): void { this.quiet(check => ({ name: "origin_elsewhere", check })); }
 

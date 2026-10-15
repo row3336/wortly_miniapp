@@ -82,7 +82,10 @@ describe("structure of the write path (RD-7 п.5, AC-42)", () => {
     }
     const app = sources.find(source => source.file === join("app", "App.tsx"))!.code;
     expect(app).toMatch(/const options: HttpOptions = \{[^}]*\bgate,/);
-    expect(app).toMatch(/new WriteGate\(/);
+    expect(app).toMatch(/const gate = pageGate\.make\(\);/);
+    const page = sources.find(source => source.file === join("app", "pageGate.ts"))!.code;
+    expect(page).toMatch(/make\(\): WriteGate \{ return new WriteGate\(\); \}/);
+    expect(page).toMatch(/createAvailabilityClient\(options\)\.probe/);
   });
 
   it("(б) gate is a required field of HttpOptions (RD-7 п.1)", () => {
@@ -101,13 +104,13 @@ describe("structure of the write path (RD-7 п.5, AC-42)", () => {
     expect(() => createJsonTransport({ ...base, gate: new WriteGate({ clock: new ManualClock() }) })).not.toThrow();
   });
 
-  it("(г) AC-54: no command status read in production code goes around gate.runReadback", () => {
-    const reads = sources.flatMap(source => Array(count(source.code, /`\/commands\/\$\{/g)).fill(source.file));
-    const throughReadback = sources.flatMap(source =>
-      Array(count(source.code, /\.readback\(\s*([\w.]+)\s*,\s*`\/commands\/\$\{\1\}/g)).fill(source.file));
+  it("(г) AC-54: every command status read in production code carries the ticket its caller got from gate.runReadback", () => {
+    const reads = sources.flatMap(source => [...source.code.matchAll(/request\(`\/commands\/\$\{[\w.]+\}[^`]*`, \{([^}]*)\}\)/g)]
+      .map(match => ({ file: source.file, options: match[1] })));
     expect(reads.length).toBeGreaterThanOrEqual(15);
-    expect(throughReadback).toEqual(reads);
-    // No other way to build the status path.
+    expect(reads.filter(read => !/readbackTicket: ticket/.test(read.options))).toEqual([]);
+    // Every status path is built only in these reads.
+    expect(sources.flatMap(source => Array(Math.max(0, count(source.code, /`\/commands\/\$\{/g) - count(source.code, /request\(`\/commands\/\$\{/g))).fill(source.file))).toEqual([]);
     expect(sources.filter(source => /["']\/commands\/["']/.test(source.code)).map(source => source.file)).toEqual([]);
   });
 });

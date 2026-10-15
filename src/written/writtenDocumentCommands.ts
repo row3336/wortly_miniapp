@@ -2,6 +2,7 @@ import { DocumentLanes, type DocumentLanesOptions, type DocumentLanesSnapshot } 
 import { createWrittenApi, type WrittenResultRead, type WrittenSessionRead } from "./writtenApi";
 import { WrittenCommandController, type WrittenCommandSnapshot, type WrittenTransition } from "./writtenCommandController";
 import { writtenStores } from "./writtenPending";
+import { PausedBeforeSendError } from "../commands/writeGate";
 
 export type WrittenDocumentSnapshot = DocumentLanesSnapshot<WrittenCommandSnapshot>;
 export type WrittenDocumentOptions = DocumentLanesOptions<WrittenCommandSnapshot>;
@@ -16,7 +17,7 @@ export const writtenAutomaticKinds = ["answer.submit", "result.grade", "result.c
 /** Both durable command lanes of one opened document; views and drafts belong to the caller. */
 export class WrittenDocumentCommands extends DocumentLanes<WrittenCommandSnapshot, WrittenTransition, WrittenSessionRead, WrittenResultRead> {
   constructor(options: WrittenDocumentOptions) {
-    const api = createWrittenApi(options.transport), stores = writtenStores(options.storage);
+    const api = createWrittenApi(options.transport), stores = writtenStores(options.storage), gate = options.transport.gate;
     super(options, {
       label: "written",
       automatic: writtenAutomaticKinds,
@@ -32,10 +33,16 @@ export class WrittenDocumentCommands extends DocumentLanes<WrittenCommandSnapsho
           // transmitted is told inside the open handle, right before the request: a refusal before it sent nothing.
           // sendStarted is told by the transport once the request is built, right before fetch.
           send: (intent, transmitted) => wiring.send(credentials => {
+            // L1 (P03 §4.1, M-P03-5): the gate is asked before the send is counted as gone; transmitted, the request
+            // and L2 follow in the same synchronous stretch, so a refusal here returns the reservation (I3).
+            if (!gate.mayWrite(intent.command_id)) throw new PausedBeforeSendError("paused");
             transmitted?.();
             return api.send(credentials.token, credentials.proof, { ...intent, ...wiring.origin(credentials) }, () => controller.sendStarted());
           }),
-          check: intent => wiring.run(credentials => api.status(credentials.token, credentials.proof, { ...intent, ...wiring.origin(credentials) })),
+          // R6: the status of this ID is read only with the gate's ticket (after the identity check, if one is due).
+          check: intent => gate.runReadback(intent.command_id, ticket => wiring.run(credentials =>
+            api.status(credentials.token, credentials.proof, { ...intent, ...wiring.origin(credentials) }, ticket))),
+          gate, family: "written",
           read: reads.read, readResult: intent => reads.readResult(intent), onUpdate: wiring.onUpdate,
           slotConflict: wiring.slotConflict,
         });

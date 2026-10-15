@@ -8,6 +8,7 @@ import { RemoteStopPendingStore } from "../study/remoteStopPending";
 import { EntryController, type EntrySnapshot } from "./entryController";
 import type { TodayApi } from "../today/todayApi";
 import { ClosedAccessError } from "./openedAccess";
+import { testGate } from "../commands/testGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const profile = (version = "1"): Profile => ({ profile_id: id(1), role: "user", ui_language: "ru",
@@ -51,7 +52,7 @@ function fixture() {
   const updates: EntrySnapshot[] = [];
   const release = vi.fn();
   const todayApi: TodayApi = { get: vi.fn() };
-  const make = () => new EntryController({ api, today: todayApi, remote: { api: remoteApi, pendingStore }, storage,
+  const make = () => new EntryController({ gate: testGate(), api, today: todayApi, remote: { api: remoteApi, pendingStore }, storage,
     lock: { acquire: vi.fn(async () => ({ release })) }, initData: "synthetic-init", savedLanguage: "ru", browserLanguage: "ru",
     clientVersion: "0.0.0", contractVersion: "1", timeZone: () => "UTC", newId: () => id(nextId++),
     onUpdate: snapshot => updates.push(snapshot) });

@@ -11,6 +11,7 @@ import { gate, replaceDocument, watchFlash } from "./flashWatch.test-support";
 import { commandPosts, enabledExits, foregroundOpen, loseReply as loseStudyReply, moveWithout, noLandings, pairMoved,
   settle as pause, watchCommits } from "./pairMoved.test-support";
 import { besidesContext, launch, serveLaunchCard } from "./launchCard.test-support";
+import { pageGateOpen } from "./pageGate.test-support";
 
 /** The mode matrix below runs every suite plain and under StrictMode, as src/main.tsx does in development. */
 let strict = false;
@@ -396,7 +397,13 @@ describe("conjugation R1: the window refreshes itself into the session of the ne
     render(<App />); const start = await startButton(); const opens = world.opens.length, mark = a.fetcher.mock.calls.length;
     if (lose) loseStudyReply(a.fetcher, "session.start");
     fireEvent.click(start);
-    if (lose) fireEvent.click(await screen.findByRole("button", { name: "Проверить статус" }, exchange));
+    if (lose) {
+      const check = await screen.findByRole("button", { name: "Проверить статус" }, exchange);
+      // P03 (L2, M-P03-4): the lost reply closed the page gate; the check comes once the connection is back, so the
+      // presentation that follows it is not kept on the client.
+      await pageGateOpen();
+      fireEvent.click(check);
+    }
     const field = await screen.findByRole("textbox", undefined, exchange) as HTMLTextAreaElement;
     await waitFor(() => expect(field.readOnly).toBe(false)); await pause(2500);
     expect(world.opens.slice(opens)).toEqual([]);

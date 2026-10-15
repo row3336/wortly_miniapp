@@ -11,6 +11,7 @@ import { copyLearningCommandIntent, copyLearningResultIntent, isLearningResultIn
 import type { LearningAnswerReply, LearningAnswerStatus, LearningResultRead } from "./learningAnswerApi";
 import type { LearningSessionPending } from "./learningSessionPending";
 import { documentLearningStarts, type LearningPageStarts } from "./learningPageStarts";
+import type { WriteGate } from "../commands/writeGate";
 
 export type LearningTransition = WithoutId<LearningCommandIntent>;
 type Current = LearningSessionRead["current"] | UnavailableCurrent;
@@ -52,6 +53,9 @@ type Options = {
   onUpdate(snapshot: LearningCommandSnapshot): void;
   /** The starts this page created (35.1-А); the page of this JS document unless a test models another one. */
   page?: LearningPageStarts;
+  /** The write gate of the page and this lane's family in its readback registry (P03 R1, M-P03-8). */
+  gate?: WriteGate;
+  family?: string;
 };
 
 /**
@@ -126,6 +130,7 @@ export class LearningCommandController extends LaneCore<LearningCommandIntent, L
     if (cleared) this.page.forget(cleared.intent.command_id);
     if (!this.live()) return;
     this.pending = null; this.problem = null; this.retryVerified = false; this.phase = "settled";
+    this.registry?.cleared();
   }
   private async settle(outcome: "accepted" | "rejected", reply: Settled, restored = false): Promise<void> {
     this.outcome = outcome;
@@ -161,6 +166,7 @@ export class LearningCommandController extends LaneCore<LearningCommandIntent, L
       if (this.outcome) { await this.clearSettled(); return; }
       if (!this.pending) { this.phase = "idle"; return; }
       if (this.pending.mismatch) {
+        this.registry?.settled("mismatch");
         await this.options.pendingStore.markMismatch(this.pending, this.lifetime.signal);
         if (!this.live()) return;
         this.problem = "mismatch"; this.phase = "unresolved"; return;
@@ -175,6 +181,8 @@ export class LearningCommandController extends LaneCore<LearningCommandIntent, L
         if (!this.observe(reply.state_version)) { this.problem = "stale_response"; this.phase = "unresolved"; return; }
         await this.settle("rejected", reply); return;
       }
+      // The server does not hold this ID: a definite answer about it (R5), whatever the target read says next.
+      this.registry?.settled("not_recorded");
       const missing: MissingStatus = reply, problem = missingProblem(missing, pending, this.options);
       if (!this.observe(reply.state_version)) this.problem = "stale_response";
       else if (problem === "not_applied") {
@@ -211,6 +219,7 @@ export class LearningCommandController extends LaneCore<LearningCommandIntent, L
           this.page.forget(pending.intent.command_id);
           if (!this.live()) return;
           this.storedUnsent = null; this.pending = null; this.retryVerified = false; this.phase = "idle";
+          this.registry?.cleared();
           return;
         }
         else {
@@ -229,11 +238,13 @@ export class LearningCommandController extends LaneCore<LearningCommandIntent, L
     if (!pending || !this.live() || !sendableIntent(pending.intent)) return;
     this.phase = "sending"; this.problem = null; this.retryVerified = false; this.clearCurrent(); this.emit();
     if (!this.live()) return;
+    // From now on a request of this ID may leave: its outcome is unknown until a definite answer (R1).
+    this.registry?.hold(pending.intent.command_id);
     try { await this.options.pendingStore.save(pending, this.lifetime.signal); }
     catch (error: unknown) {
       // A new intent the shared slot refused (another record, or one it cannot read) was neither stored nor sent: it is no
       // unknown outcome to check or retry, and the record in the slot stays exactly as it is. A retained intent keeps its record.
-      if (first && refusedUnsent(error)) this.pending = null;
+      if (first && refusedUnsent(error)) { this.pending = null; this.registry?.cleared(); }
       throw error;
     }
     if (!this.live()) return;
@@ -244,6 +255,7 @@ export class LearningCommandController extends LaneCore<LearningCommandIntent, L
     if (!this.live()) return;
     if (reply.outcome === "mismatch") {
       this.observe(reply.state_version);
+      this.registry?.settled("mismatch");
       this.pending = { ...pending, mismatch: true }; this.problem = "mismatch"; this.phase = "unresolved";
       await this.options.pendingStore.markMismatch(this.pending, this.lifetime.signal);
     } else await this.settle(reply.outcome, reply);

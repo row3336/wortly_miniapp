@@ -75,7 +75,7 @@ export function useSettingsDocument(options: Options): SettingsDocument {
     };
     const controller = new SettingsController({ api: createSettingsApi(current.transport), pendingStore: current.pendingStore,
       resetStore: resetStoreOf(current.pendingStore), access: () => latest.current.access, newId: () => window.crypto.randomUUID(),
-      minimumStateVersion: () => latest.current.minimumStateVersion ?? null, onUpdate: publish });
+      minimumStateVersion: () => latest.current.minimumStateVersion ?? null, onUpdate: publish, gate: current.transport.gate });
     const bound: Owner = { key: current.access.key, transport: current.transport, store: current.pendingStore, controller,
       source: null, lastAccess: current.access, minimum: current.minimumStateVersion ?? current.access.profile.state_version,
       async run(action) {

@@ -1,10 +1,14 @@
 import { ApiError } from "../api/http";
 import { ClosedAccessError, type OpenedAccess } from "../app/openedAccess";
+import { GatePending, pausedBeforeSend } from "../commands/gatePending";
 import { PendingStoreError, validId } from "../commands/pendingSlot";
+import type { WriteGate } from "../commands/writeGate";
 import { blankText, overFeedbackLimit, validFeedbackIntent, type FeedbackApi, type FeedbackIntent, type FeedbackSendReply } from "./feedbackApi";
 import type { FeedbackPending, FeedbackPendingStore } from "./feedbackPending";
 
-export type FeedbackProblem = "network" | "not_sent" | "storage" | "invalid_pending" | "pending_changed" | "expired" | "forbidden";
+/** paused: the write gate kept the request on the client (PAUSED_BEFORE_SEND, P03 §4.2): nothing left, the text stays. */
+export type FeedbackProblem = "network" | "not_sent" | "storage" | "invalid_pending" | "pending_changed" | "expired" | "forbidden"
+  | "paused";
 export type FeedbackSnapshot = {
   phase: "loading" | "idle" | "sending" | "checking" | "unresolved" | "blocked" | "disposed";
   /** The field: the unsent text, or the text of the sent intent while its outcome is unknown. */
@@ -26,6 +30,8 @@ type Options = {
   access(): OpenedAccess | null;
   newId(): string;
   onUpdate(snapshot: FeedbackSnapshot): void;
+  /** The write gate of the page (P03 M-P03-8): readback registry, status reads by ticket, the send button (I9). */
+  gate: WriteGate;
 };
 
 /**
@@ -45,11 +51,16 @@ export class FeedbackController {
   /** The server confirmed the pending intent; only the local cleanup of its record remains. */
   private settled = false;
   private running: Promise<void> | null = null;
+  private readonly registry: GatePending;
+  private readonly unsubscribe: () => void;
 
   constructor(private readonly options: Options) {
     const access = options.access();
     if (!access?.isLive() || !validId(access.profile.profile_id)) throw new Error("invalid feedback access");
     this.scope = { key: access.key, profileId: access.profile.profile_id };
+    this.registry = new GatePending(options.gate, "feedback");
+    // The buttons follow the gate (M01): a change of net, hold or locks repaints them.
+    this.unsubscribe = options.gate.subscribe(() => this.emit());
   }
 
   private live(): boolean { return !this.lifetime.signal.aborted; }
@@ -67,11 +78,16 @@ export class FeedbackController {
   snapshot(): FeedbackSnapshot {
     const available = !!this.currentAccess();
     const idle = available && this.loaded && !this.pending && !this.running;
-    const retryable = this.pending ? this.settled || ["network", "not_sent", "storage"].includes(this.problem ?? "")
+    const retryable = this.pending ? this.settled || ["network", "not_sent", "storage", "paused"].includes(this.problem ?? "")
       : !this.loaded && this.problem === "storage";
+    // I9/M01: while the gate does not let a write through, the send button waits (nothing is queued). «Повторить» reads
+    // the same ID first and sends only after not_recorded, so it follows the narrower check predicate (C335): a family
+    // lock of this ID (R3) never keeps it — that read is what lifts the lock (R5); the send itself still passes L2.
+    const writable = this.registry.writable();
     return { phase: available ? this.phase : "disposed", text: this.text, confirmed: this.confirmed,
       refusal: this.refusal ? { ...this.refusal } : null, problem: this.problem,
-      canEdit: idle, canSend: idle && !blankText(this.text) && !overFeedbackLimit(this.text), canRetry: available && !this.running && retryable };
+      canEdit: idle, canSend: idle && writable && !blankText(this.text) && !overFeedbackLimit(this.text),
+      canRetry: available && !this.running && retryable && (this.settled || this.registry.checkable()) };
   }
   private emit(): void { if (this.live()) this.options.onUpdate(this.snapshot()); }
 
@@ -82,6 +98,9 @@ export class FeedbackController {
       if (!this.live()) return;
       if (error instanceof PendingStoreError) {
         this.problem = error.kind === "invalid" ? "invalid_pending" : error.kind === "changed" ? "pending_changed" : "storage";
+      } else if (pausedBeforeSend(error)) {
+        // Nothing left the client (a send) or nothing was read (a readback the gate holds or cancelled): not a lost reply.
+        this.problem = "paused";
       } else if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
         this.problem = error.status === 401 ? "expired" : "forbidden";
       } else this.problem = "network"; // a lost reply or a closed handle: the outcome stays unknown, never a new command
@@ -114,6 +133,7 @@ export class FeedbackController {
     await this.options.pendingStore.clear(this.pending, this.lifetime.signal);
     if (!this.live()) return;
     this.pending = null;
+    this.registry.release();
     this.settled = false;
     // Only a cleared record shows the success: a failed cleanup must not say "accepted" and "storage error" at once.
     this.confirmed = true;
@@ -127,9 +147,11 @@ export class FeedbackController {
    */
   private async refuse(refusal: { code: string | null } | null, problem: FeedbackProblem | null = null): Promise<void> {
     if (!this.pending) return;
+    this.registry.settled("rejected");
     await this.options.pendingStore.clear(this.pending, this.lifetime.signal);
     if (!this.live()) return;
     this.pending = null;
+    this.registry.release();
     this.refusal = refusal;
     this.problem = problem;
     this.phase = "idle";
@@ -145,15 +167,18 @@ export class FeedbackController {
       if (!this.live()) return;
       this.access();
       this.loaded = true;
-      if (this.pending) this.text = this.pending.intent.payload.text;
+      if (this.pending) { this.text = this.pending.intent.payload.text; this.registry.hold(this.pending.intent.command_id); }
     }
     if (this.settled) { await this.clearSettled(); return; }
     const pending = this.pending;
     if (!pending) { this.phase = "idle"; return; }
-    const reply = await this.access().run(({ token }) => this.options.api.status(token, this.scope.profileId, pending.intent));
+    // R6: the status of this ID is read only with the gate's ticket (after the identity check, if one is due).
+    const reply = await this.registry.read(pending.intent.command_id, ticket =>
+      this.access().run(({ token }) => this.options.api.status(token, this.scope.profileId, pending.intent, ticket)));
     if (!this.live()) return;
     this.access();
-    if (reply.outcome === "accepted") { await this.settle(); return; }
+    if (reply.outcome === "accepted") { this.registry.settled("recorded"); await this.settle(); return; }
+    this.registry.settled("not_recorded");
     this.problem = "not_sent";
     this.phase = "unresolved";
   }
@@ -171,6 +196,8 @@ export class FeedbackController {
     this.problem = null;
     this.refusal = null;
     this.emit();
+    // From now on a request of this ID may leave: its outcome is unknown until a definite answer (R1).
+    this.registry.hold(pending.intent.command_id);
     await this.options.pendingStore.save(pending, this.lifetime.signal);
     if (!this.live()) return;
     // A foreground replaced the handle: finishing a storage write cannot move a send onto the new one.
@@ -189,7 +216,7 @@ export class FeedbackController {
     }
     if (!this.live()) return;
     if (this.access() !== source) throw new ClosedAccessError();
-    if (reply.outcome === "accepted") await this.settle();
+    if (reply.outcome === "accepted") { this.registry.settled("recorded"); await this.settle(); }
     else await this.refuse({ code: reply.code });
   }
 
@@ -215,6 +242,10 @@ export class FeedbackController {
     });
   }
   dispose(): void {
+    // R3: an ID without a definite answer stays locked to itself in the gate until a later owner reads it.
+    // Unsubscribed first: the release below changes the gate, and a disposed owner repaints nothing.
+    this.unsubscribe();
+    this.registry.release();
     this.lifetime.abort();
     this.phase = "disposed";
     this.text = "";

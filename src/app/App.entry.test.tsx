@@ -7,6 +7,7 @@ import type { TodayResponse } from "../api/generated";
 import { settingsResponse } from "../settings/settingsRead.test-support";
 import { App } from "./App";
 import { keysOf, openDocument, openRequestKeys, staleRefusal } from "./openRules.test-support";
+import { pageGateOpen } from "./pageGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status });
@@ -174,7 +175,10 @@ describe("QA screens before a successful server answer (п.4, RA:344)", () => {
     const f = fixture("uk", { auth: "network" }); render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: "Спробувати ще раз" }));
     f.server.auth = "ok";
-    fireEvent.click(await screen.findByRole("button", { name: "Спробувати ще раз" }));
+    const retry = await screen.findByRole("button", { name: "Спробувати ще раз" });
+    // P03 (L2, M-P03-4): the lost connection closed the page gate; the open of the retry is a write and waits for ready.
+    await pageGateOpen();
+    fireEvent.click(retry);
     await screen.findByRole("heading", { name: "Сьогодні", level: 1 });
     expect(f.calls("/auth/telegram")).toHaveLength(3);
   });
@@ -297,8 +301,10 @@ describe("M-COMPAT-HDR: the contract version on the wire and the new refusals th
     await screen.findByRole("heading", { name: "Идёт плановое обновление" });
     expect(screen.getByText(/около 40 с/)).toBeTruthy();
     expect(document.body.textContent).not.toMatch(/Не удалось открыть|MAINTENANCE|503/);
-    // The pause is over: the same button sends the same saved command and it goes through.
+    // The pause is over: the same button sends the same saved command and it goes through. P03 (L2, K13): the 503 closed
+    // the page gate with the announced hold, so the press comes after ready and the end of the hold.
     paused = false;
+    await pageGateOpen();
     fireEvent.click(screen.getByRole("button", { name: "Подать заявку ещё раз" }));
     await screen.findByRole("heading", { name: "Заявка отправлена" });
     const sent = f.calls("/access/reapply").map(call => JSON.parse(String((call[1] as RequestInit).body)).command_id);

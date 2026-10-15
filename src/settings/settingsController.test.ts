@@ -8,6 +8,10 @@ import { type EditableSettingIntent, type SettingIntent, type SettingKey, type S
 import { SettingsController, type SettingsSnapshot } from "./settingsController";
 import { SettingsPendingStore, type SettingsPending } from "./settingsPending";
 import { SettingsResetPendingStore, type SettingsResetPending } from "./settingsResetPending";
+import { testGate } from "../commands/testGate.test-support";
+import type { WriteGate } from "../commands/writeGate";
+import { WriteGate as RealWriteGate } from "../commands/writeGate";
+import { ManualClock } from "../commands/writeGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const big = "9007199254740995";
@@ -105,7 +109,8 @@ function persisted() {
     set: vi.fn(async (key, value) => { values.set(key, value); }), remove: vi.fn(async key => { values.delete(key); }) };
   return { values, storage, store: new SettingsPendingStore(storage), resetStore: new SettingsResetPendingStore(storage) };
 }
-function fixture(options: { disk?: ReturnType<typeof persisted>; opened?: OpenedClient; minimumStateVersion?(): string | null } = {}) {
+function fixture(options: { disk?: ReturnType<typeof persisted>; opened?: OpenedClient; minimumStateVersion?(): string | null;
+  writeGate?: WriteGate } = {}) {
   const disk = options.disk ?? persisted();
   const api = { get: vi.fn<SettingsApi["get"]>(async () => current()),
     save: vi.fn<SettingsApi["save"]>(async (_token, _proof, _profile, request) => accepted(request)),
@@ -125,7 +130,7 @@ function fixture(options: { disk?: ReturnType<typeof persisted>; opened?: Opened
   replace();
   let sequence = 100;
   const newId = vi.fn(() => id(sequence++));
-  const controller = new SettingsController({ api, pendingStore: disk.store, resetStore: disk.resetStore, access: () => access,
+  const controller = new SettingsController({ gate: options.writeGate ?? testGate(), api, pendingStore: disk.store, resetStore: disk.resetStore, access: () => access,
     newId, minimumStateVersion: options.minimumStateVersion, onUpdate: state => states.push(state) });
   return { controller, api, disk, states, onDenied, newId, replace, close: () => { access = null; } };
 }
@@ -319,7 +324,7 @@ describe("settings command lifecycle", () => {
   it("restores only the sent intent; not_found reads current without automatically sending", async () => {
     const disk = persisted(); await seed(disk); const data = opened(); data.document_id = id(30);
     const f = fixture({ disk, opened: data }); await f.controller.refresh();
-    expect(f.api.status).toHaveBeenCalledExactlyOnceWith("synthetic-token-initial", id(1), intent());
+    expect(f.api.status).toHaveBeenCalledExactlyOnceWith("synthetic-token-initial", id(1), intent(), expect.anything());
     expect(f.api.get).toHaveBeenCalledOnce(); expect(f.api.save).not.toHaveBeenCalled();
     expect(f.controller.snapshot()).toMatchObject({ pending: pending(), canRetry: true, outcome: null,
       problem: { reason: "not_found" }, drafts: { retry_count: { input: 4, fieldVersion: big } } });
@@ -575,7 +580,7 @@ describe("settings access and document lifetime", () => {
     expect(JSON.parse(f.disk.values.get(slot)!)).toEqual(pending());
     expect(f.controller.snapshot().problem?.reason).toBe("context_refreshed");
     await f.controller.refresh();
-    expect(f.api.status).toHaveBeenCalledExactlyOnceWith("synthetic-token-foreground", id(1), intent());
+    expect(f.api.status).toHaveBeenCalledExactlyOnceWith("synthetic-token-foreground", id(1), intent(), expect.anything());
     expect(f.api.save).not.toHaveBeenCalled();
     await f.controller.retry();
     expect(f.api.save).toHaveBeenCalledOnce();
@@ -627,7 +632,7 @@ describe("settings access and document lifetime", () => {
     const saving = f.controller.save("retry_count"); await vi.waitFor(() => expect(f.api.save).toHaveBeenCalledOnce());
     f.replace(opened(), 1, "foreground"); f.api.status.mockResolvedValueOnce(applied());
     const refreshing = f.controller.refresh(); sending.resolve(accepted()); await Promise.all([saving, refreshing]);
-    expect(f.api.status).toHaveBeenCalledExactlyOnceWith("synthetic-token-foreground", id(1), intent());
+    expect(f.api.status).toHaveBeenCalledExactlyOnceWith("synthetic-token-foreground", id(1), intent(), expect.anything());
     expect(f.api.save).toHaveBeenCalledOnce(); expect(f.controller.snapshot().outcome?.status).toBe("accepted");
   });
 
@@ -807,7 +812,7 @@ describe("settings reset (M-SET-RESET, D-SET-RESET 4.2, owner answers R11/R12)",
     const disk = persisted(); await seedReset(disk); const f = fixture({ disk }); const data = resetData();
     f.api.resetStatus.mockResolvedValueOnce(resetApplied(data));
     await f.controller.refresh();
-    expect(f.api.resetStatus).toHaveBeenCalledExactlyOnceWith("synthetic-token-initial", id(1), resetIntent());
+    expect(f.api.resetStatus).toHaveBeenCalledExactlyOnceWith("synthetic-token-initial", id(1), resetIntent(), expect.anything());
     expect(f.api.reset).not.toHaveBeenCalled(); expect(f.api.get).not.toHaveBeenCalled(); expect(f.api.status).not.toHaveBeenCalled();
     expect(f.controller.snapshot()).toMatchObject({ phase: "ready", resetPending: null, data, resetOutcome: { status: "accepted" } });
     expect(f.disk.values.size).toBe(0);
@@ -828,7 +833,7 @@ describe("settings reset (M-SET-RESET, D-SET-RESET 4.2, owner answers R11/R12)",
   it("a refresh while unresolved checks the status before anything can be repeated", async () => {
     const f = await ready(); f.api.reset.mockRejectedValueOnce(new ApiError("network")); await f.controller.reset();
     await f.controller.refresh();
-    expect(f.api.resetStatus).toHaveBeenCalledExactlyOnceWith("synthetic-token-initial", id(1), resetIntent());
+    expect(f.api.resetStatus).toHaveBeenCalledExactlyOnceWith("synthetic-token-initial", id(1), resetIntent(), expect.anything());
     expect(f.api.reset).toHaveBeenCalledOnce();
     expect(f.controller.snapshot()).toMatchObject({ problem: { reason: "not_found" }, canRetry: true });
   });
@@ -1172,5 +1177,38 @@ describe("Q36: leaving a mismatched setting.save with the server's current setti
     const f = fixture({ disk }); f.api.get.mockResolvedValue(serverData()); await f.controller.refresh();
     expect(f.controller.snapshot()).toMatchObject({ problem: { reason: "mismatch" }, canContinueWithServer: false });
     await f.controller.continueWithServer(); expect(disk.values.get(resetSlot)).toContain('"mismatch":true');
+  });
+});
+
+describe("the buttons and the write gate (P03 M-P03-8, C335)", () => {
+  it("P2-1: a family-locked ID (R3) keeps «Повторить» (a send) off; «Обновить» reads it, the definite answer lifts the lock", async () => {
+    const writeGate = new RealWriteGate({ clock: new ManualClock() });
+    writeGate.resolvePending(id(100), "stale");
+    const disk = persisted(); await disk.store.save(pending(), new AbortController().signal);
+    const f = fixture({ disk, writeGate });
+    f.api.status.mockRejectedValueOnce(new TypeError("network"));
+    await f.controller.refresh();
+    expect(f.controller.snapshot()).toMatchObject({ problem: { reason: "network" }, canRetry: false });
+    expect(writeGate.snapshot().familyLocks).toEqual([id(100)]);
+    await f.controller.refresh();
+    expect(writeGate.snapshot().familyLocks).toEqual([]);
+    expect(f.controller.snapshot()).toMatchObject({ problem: { reason: "not_found" }, canRetry: true });
+    f.controller.dispose();
+  });
+
+  it("R19/M12: while the gate holds writes the field stays editable, «Сохранить» and the reset are off", async () => {
+    const clock = new ManualClock();
+    const writeGate = new RealWriteGate({ clock, probe: async () => ({ status: "ready" }) });
+    const f = fixture({ writeGate });
+    await f.controller.refresh();
+    f.controller.edit("retry_count", "4");
+    expect(f.controller.snapshot()).toMatchObject({ canEdit: true, canReset: true, drafts: { retry_count: { canSave: true } } });
+    writeGate.closeByFailure();
+    expect(f.controller.snapshot()).toMatchObject({ canEdit: true, canReset: false, drafts: { retry_count: { canSave: false } } });
+    await f.controller.save("retry_count");
+    expect(f.api.save).not.toHaveBeenCalled();
+    await clock.advanceTo(5_000);
+    expect(f.controller.snapshot().drafts.retry_count?.canSave).toBe(true);
+    f.controller.dispose();
   });
 });

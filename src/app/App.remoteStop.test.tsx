@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionStopRemoteCommand, TodayResponse } from "../api/generated";
 import { App } from "./App";
 import { settingsResponse } from "../settings/settingsRead.test-support";
+import { pageGateOpen } from "./pageGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const json = (value: unknown) => new Response(JSON.stringify(value));
@@ -189,6 +190,9 @@ describe("remote stop through the actual App and HTTP client", () => {
     const f = fixture(); f.state.lose = "after"; render(<App />);
     await confirm(); await screen.findByRole("heading", { name: "Завершение пока не подтверждено" });
     expect(localStorage.getItem("wortly.pending.remote_stop")).toContain(f.commands[0].command_id);
+    // P03 (L2, M-P03-4): the lost reply closed the page gate; the reopening that follows a confirmed stop is an open
+    // (a write until M-P03-10 makes it a foreground), so the check comes once the connection is back.
+    await pageGateOpen();
     fireEvent.click(screen.getByRole("button", { name: "Проверить результат" }));
     await screen.findByRole("heading", { name: "Сегодня", level: 1 });
     expect(f.commands).toHaveLength(1);

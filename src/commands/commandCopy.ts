@@ -40,3 +40,14 @@ export const recoveryCopy = {
     endSession: "End session",
     conflict: "We couldn't confirm this action. It can't be repeated. End the session to continue." },
 } as const;
+
+/**
+ * PAUSED_BEFORE_SEND of a manual action (P03 §4.8 «Ручные K01s, K03–K14», M-P03-8): the write gate kept the request on
+ * the client. Until M-P03-9 sets the texts of §4.8 by cause, it reuses the approved 9.2.2 line of the recovery status
+ * (no new wording; the cause-specific 9.2.4 with the estimate comes with M-P03-9).
+ */
+export const pausedCopy = {
+  ru: recoveryCopy.ru.offline,
+  uk: recoveryCopy.uk.offline,
+  en: recoveryCopy.en.offline,
+} as const;

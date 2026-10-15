@@ -10,6 +10,7 @@ import { copyLearningSessionIntent, readableLearningSessionIntent, validLearning
 import { intentHash } from "../commands/intentHash";
 import { validLearningSessionCurrent } from "../study/sessionProjection";
 import { createSessionReadApi } from "../study/sessionReadApi";
+import type { ReadbackTicket } from "../commands/writeGate";
 export { validLearningSessionCurrent } from "../study/sessionProjection";
 export type { LearningSessionCommand } from "./learningSessionIntent";
 
@@ -46,7 +47,7 @@ export interface LearningSessionApi {
   read(token: string, proof: string, address: LearningSessionAddress): Promise<LearningSessionRead>;
   /** started, when given, is told right before the built request goes to fetch (after every local check). */
   send(token: string, proof: string, command: LearningSessionCommand, started?: () => void): Promise<LearningSessionReply>;
-  status(token: string, proof: string, command: LearningSessionCommand): Promise<LearningSessionStatus>;
+  status(token: string, proof: string, command: LearningSessionCommand, ticket: ReadbackTicket): Promise<LearningSessionStatus>;
 }
 
 function address(value: unknown): value is LearningSessionAddress {
@@ -132,7 +133,7 @@ export function createLearningSessionApi(options: HttpOptions): LearningSessionA
       if (!reply.ok) throw httpError(reply);
       throw new ApiError("invalid_response");
     },
-    async status(token, proof, original) {
+    async status(token, proof, original, ticket: ReadbackTicket) {
       const command = prepareCommand(token, proof, original, "status");
       const parameters = query(command);
       parameters.set("session_id", command.session_id);
@@ -141,7 +142,7 @@ export function createLearningSessionApi(options: HttpOptions): LearningSessionA
       if (expectedHash !== null) {
         parameters.set("include_refusal", "true"); parameters.set("expected_intent_hash", expectedHash);
       }
-      const reply = await request.readback(command.command_id, `/commands/${command.command_id}?${parameters}`, { method: "GET", token, proof });
+      const reply = await request(`/commands/${command.command_id}?${parameters}`, { method: "GET", token, proof, readbackTicket: ticket });
       if (!reply.ok) throw httpError(reply);
       const value = reply.value;
       if (reply.status === 200 && expectedHash !== null && record(value) && record(value.command)

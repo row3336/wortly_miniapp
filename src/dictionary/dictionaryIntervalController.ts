@@ -3,6 +3,8 @@ import type {
 } from "../api/generated";
 import { ApiError } from "../api/http";
 import { uuid, version } from "../api/wireValidation";
+import { GatePending, pausedBeforeSend } from "../commands/gatePending";
+import type { ReadbackTicket, WriteGate } from "../commands/writeGate";
 import {
   commandOutcomeUnknown, dictionaryIncreaseIntent, dictionaryUndoIntent, dictionaryUndoOfferIntent,
   type DictionaryCommandReply, type DictionaryCommandStatus, type DictionaryContextAddress, type DictionaryContextCurrent,
@@ -18,7 +20,8 @@ export type DictionaryIntervalPort = {
   readonly origin: DictionaryOrigin;
   send(command: DictionaryIntervalCommand): Promise<DictionaryCommandReply>;
   read(address: DictionaryContextAddress): Promise<DictionaryContextRead>;
-  status(command: DictionaryIntervalCommand): Promise<DictionaryCommandStatus>;
+  /** The status read by ID; the ticket comes from the write gate (R6). */
+  status(command: DictionaryIntervalCommand, ticket: ReadbackTicket): Promise<DictionaryCommandStatus>;
 };
 
 export function sendDictionaryIntervalCommand(
@@ -41,13 +44,15 @@ export function dictionaryIntervalPort(api: DictionaryIntervalApi, token: string
     origin: fixed,
     send: command => sendDictionaryIntervalCommand(api, token, proof, command),
     read: address => api.readContext(token, proof, address),
-    status: command => api.commandStatus(token, proof, command),
+    status: (command, ticket) => api.commandStatus(token, proof, command, ticket),
   };
 }
 
 export type DictionaryIntervalProblem = {
   reason: "network" | "not_found" | "rejected" | "mismatch" | "setup_required" | "expired" | "forbidden"
-    | "invalid" | "load" | "stale_response";
+    | "invalid" | "load" | "stale_response"
+    /** PAUSED_BEFORE_SEND (P03 §4.1 K12, M13): the write gate kept the request on the client; the same ID is retried by hand. */
+    | "paused";
   code?: string;
 };
 /** CT 2.1.2 p.3, К07-122: the visible window of the one undo offer, counted from the first confirmed open. */
@@ -118,6 +123,8 @@ type Options = {
   minimumStateVersion?(): string | null;
   onUpdate(snapshot: DictionaryIntervalSnapshot): void;
   clock?: IntervalClock;
+  /** The write gate of the page (P03 M-P03-8): readback registry, status reads by ticket, the buttons (I9, M11–M14). */
+  gate: WriteGate;
 };
 type Entry = { command: DictionaryIntervalCommand; status: "sending" | "unknown"; busy: boolean };
 type Closing = Entry & { contextId: string; done: boolean };
@@ -158,9 +165,18 @@ export class DictionaryIntervalController {
   private timer: { handle: unknown } | null = null;
   private applied: DictionaryIntervalApplied | null = null;
   private readonly clock: IntervalClock;
+  private readonly registry: GatePending;
+  private readonly unsubscribe: () => void;
 
   constructor(private readonly options: Options) {
     this.clock = options.clock ?? systemClock;
+    this.registry = new GatePending(options.gate, "interval");
+    // The increase, undo and retry buttons follow the gate (M01); its changes repaint them.
+    this.unsubscribe = options.gate.subscribe(() => this.notify());
+  }
+  /** The status of a command of this context, read only with the gate's ticket (R6). */
+  private readStatus(command: DictionaryIntervalCommand): Promise<DictionaryCommandStatus> {
+    return this.registry.read(command.command_id, ticket => this.options.port.status(command, ticket));
   }
 
   private live(): boolean { return !this.disposed && this.options.isLive(); }
@@ -210,7 +226,8 @@ export class DictionaryIntervalController {
     const offer = this.offer();
     const open = offer.status === "open" ? offer : null;
     const shown = current !== null && current.status !== "unavailable" ? current : null;
-    const free = pending === null && phase === "ready";
+    const writable = this.registry.writable(pending?.command.command_id);
+    const free = pending === null && phase === "ready" && writable;
     const strip = this.visibleOffer();
     const snapshot: DictionaryIntervalSnapshot = {
       phase, cardId: this.cardId,
@@ -224,7 +241,7 @@ export class DictionaryIntervalController {
       stateVersion: this.currentVersion,
       canIncrease: free && open !== null && open.interval !== null && open.capabilities.interval_increase !== null,
       canUndo: free && strip !== null,
-      canRetry: pending !== null && pending.status === "unknown" && !pending.busy && !this.closeRequested,
+      canRetry: pending !== null && pending.status === "unknown" && !pending.busy && !this.closeRequested && writable,
       undoOffer: strip,
       applied: this.applied,
     };
@@ -300,6 +317,7 @@ export class DictionaryIntervalController {
     if (handoff.pending) {
       const entry: Entry = { command: structuredClone(handoff.pending), status: "unknown", busy: false };
       this.pending = entry;
+      this.registry.hold(entry.command.command_id);
       await this.check(entry);
     }
     await this.read();
@@ -345,7 +363,8 @@ export class DictionaryIntervalController {
   /** Repeat exactly the unresolved command: same ID and payload (K10-054, K10-086). */
   retry(): Promise<void> {
     const entry = this.pending;
-    if (!this.live() || !entry || entry.status !== "unknown" || entry.busy || this.closeRequested) return Promise.resolve();
+    if (!this.live() || !entry || entry.status !== "unknown" || entry.busy || this.closeRequested
+      || !this.registry.writable(entry.command.command_id)) return Promise.resolve();
     return this.execute(entry);
   }
 
@@ -371,6 +390,10 @@ export class DictionaryIntervalController {
 
   /** No request: an open context stays on the server until close or the next open. */
   dispose(): void {
+    // R3: an ID without a definite answer stays locked to itself in the gate.
+    // Unsubscribed first: the release below changes the gate, and a disposed owner repaints nothing.
+    this.unsubscribe();
+    this.registry.release();
     this.disposed = true;
     this.cancelTimer();
     this.reads += 1;
@@ -393,10 +416,20 @@ export class DictionaryIntervalController {
     this.notify();
     let reply: DictionaryCommandReply;
     try {
+      // From now on a request of this ID may leave: its outcome is unknown until a definite answer (R1).
+      this.registry.hold(entry.command.command_id);
       reply = await this.options.port.send(entry.command);
     } catch (error) {
       if (!this.live() || this.pending !== entry) return;
       entry.busy = false;
+      // K12/M13: PAUSED_BEFORE_SEND comes before commandOutcomeUnknown — nothing left, no check; only an explicit retry
+      // (or a new opening of the card) repeats the same command, never the gate's ready by itself.
+      if (pausedBeforeSend(error)) {
+        entry.status = "unknown";
+        this.problem = { reason: "paused" };
+        this.notify();
+        return;
+      }
       if (commandOutcomeUnknown(error)) {
         entry.status = "unknown";
         this.problem = { reason: "network" };
@@ -406,12 +439,16 @@ export class DictionaryIntervalController {
       }
       // An HTTP refusal without a fact: nothing was saved.
       this.pending = null;
+      this.registry.settled("rejected");
+      this.registry.release();
       this.problem = refusal(error);
       this.notify();
       return;
     }
     if (!this.live() || this.pending !== entry) return;
     this.pending = null;
+    this.registry.settled(reply.outcome === "accepted" ? "recorded" : reply.outcome === "mismatch" ? "mismatch" : "rejected");
+    this.registry.release();
     await this.settle(entry.command, reply);
   }
 
@@ -456,11 +493,13 @@ export class DictionaryIntervalController {
     this.notify();
     let status: DictionaryCommandStatus;
     try {
-      status = await this.options.port.status(entry.command);
+      status = await this.readStatus(entry.command);
     } catch (error) {
       if (!this.live() || this.pending !== entry) return;
       entry.busy = false;
-      this.problem = error instanceof ApiError && (error.status === 401 || error.status === 403) ? refusal(error) : { reason: "network" };
+      // A read the gate held or cancelled is not a network failure (R8 п.2): nothing is decided.
+      this.problem = pausedBeforeSend(error) ? { reason: "paused" }
+        : error instanceof ApiError && (error.status === 401 || error.status === 403) ? refusal(error) : { reason: "network" };
       this.notify();
       return;
     }
@@ -468,6 +507,8 @@ export class DictionaryIntervalController {
     entry.busy = false;
     if (status.outcome === "accepted") {
       this.pending = null;
+      this.registry.settled("recorded");
+      this.registry.release();
       if (entry.command.kind === "context.open") this.contextId = status.command.context_id;
       this.accepted(entry.command, status.command.action_id, status.state_version);
       this.problem = this.unadopted(this.adopt(status));
@@ -479,12 +520,15 @@ export class DictionaryIntervalController {
     }
     if (status.outcome === "not_found") {
       // Not saved; the current is a profile, not this context. Only retry() repeats the command.
+      this.registry.settled("not_recorded");
       this.raise(status.state_version);
       this.problem = { reason: "not_found" };
       this.notify();
       return;
     }
     this.pending = null;
+    this.registry.settled("mismatch");
+    this.registry.release();
     this.problem = { reason: "mismatch", code: status.error.code };
     this.notify();
     await this.read();
@@ -530,11 +574,12 @@ export class DictionaryIntervalController {
       this.adopt(reply);
     } catch (error) {
       if (!this.live() || this.closing !== closing) return;
-      if (!commandOutcomeUnknown(error)) {
+      // M14: a close the gate kept on the client is neither sent nor deferred; the server ends the right by itself.
+      if (!commandOutcomeUnknown(error) || pausedBeforeSend(error)) {
         closing.done = true;
       } else {
         try {
-          const status = await this.options.port.status(closing.command);
+          const status = await this.readStatus(closing.command);
           if (!this.live() || this.closing !== closing) return;
           if (status.outcome === "accepted") { closing.done = true; this.adopt(status); }
           else if (status.outcome === "mismatch") closing.done = true;
@@ -672,7 +717,8 @@ export class DictionaryIntervalController {
     } catch (error) {
       if (!this.serviceLive(offer, entry)) return;
       entry.busy = false;
-      if (commandOutcomeUnknown(error)) {
+      // M11: an offer the gate kept on the client is not shown (or closed) by it any more; its 3 s are never extended.
+      if (commandOutcomeUnknown(error) && !pausedBeforeSend(error)) {
         entry.status = "unknown";
         await this.checkService(offer, entry);
         return;
@@ -696,7 +742,7 @@ export class DictionaryIntervalController {
     entry.busy = true;
     let status: DictionaryCommandStatus;
     try {
-      status = await this.options.port.status(entry.command);
+      status = await this.readStatus(entry.command);
     } catch {
       // Still unknown: the strip stays hidden; the next refresh or a new handle checks the same ID again.
       if (this.serviceLive(offer, entry)) entry.busy = false;

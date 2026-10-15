@@ -3,6 +3,10 @@ import { ApiError } from "../../api/http";
 import type { FieldCommand, FieldCommandReply, FieldCommandStatus } from "./fieldEditorApi";
 import { FieldEditorsController, type CardFields, type FieldEditorsPort } from "./fieldEditorsController";
 import { ACTION, CARD_ID, CONTEXT, fid, fieldFact, origin, pairOf, roleCurrent, scalarCurrent } from "./fieldTestData.test-support";
+import { testGate } from "../../commands/testGate.test-support";
+import type { WriteGate } from "../../commands/writeGate";
+import { WriteGate as RealWriteGate } from "../../commands/writeGate";
+import { ManualClock } from "../../commands/writeGate.test-support";
 
 type Step = (command: FieldCommand) => FieldCommandReply | Promise<FieldCommandReply>;
 type Check = (command: FieldCommand) => FieldCommandStatus | Promise<FieldCommandStatus>;
@@ -29,7 +33,7 @@ function rejected(command: FieldCommand, code: string, current: object, stateVer
     state_version: stateVersion };
 }
 
-function setup(options: { send?: Step[]; status?: Check[]; card?: CardFields; context?: string | null } = {}) {
+function setup(options: { send?: Step[]; status?: Check[]; card?: CardFields; context?: string | null; writeGate?: WriteGate } = {}) {
   const sends = [...(options.send ?? [])], checks = [...(options.status ?? [])];
   let next = 100, live = { ...origin };
   const sent: FieldCommand[] = [], checked: FieldCommand[] = [];
@@ -39,7 +43,7 @@ function setup(options: { send?: Step[]; status?: Check[]; card?: CardFields; co
     status: vi.fn(async command => { checked.push(structuredClone(command)); const step = checks.shift(); if (!step) throw new ApiError("network"); return step(command); }),
   };
   const onChanged = vi.fn();
-  const controller = new FieldEditorsController({ port, newId: () => fid(next++), onUpdate: () => {}, onChanged });
+  const controller = new FieldEditorsController({ gate: options.writeGate ?? testGate(), port, newId: () => fid(next++), onUpdate: () => {}, onChanged });
   controller.setCard(options.card ?? card());
   controller.setContext(options.context === undefined ? CONTEXT : options.context);
   return { controller, sent, checked, onChanged, port, moveDocument: (documentId: string) => { live = { ...live, document_id: documentId }; } };
@@ -317,5 +321,36 @@ describe("own-field editors of one card (TA §7)", () => {
     controller.setCard(card({ stateVersion: "11", fields: { ...card().fields, translation: { value: "старый", version: "4" } } }));
     controller.open("translation");
     expect(controller.snapshot().editors.translation).toMatchObject({ original: "дом", fieldVersion: "5" });
+  });
+});
+
+describe("the buttons and the write gate (P03 M-P03-8, C335)", () => {
+  it("«Повторить» after the check found nothing sends the same command at once: it follows mayWrite of that ID", async () => {
+    const clock = new ManualClock();
+    const writeGate = new RealWriteGate({ clock, probe: async () => ({ status: "ready" }) });
+    const { controller, sent } = setup({ writeGate,
+      send: [() => { throw new ApiError("network"); }, command => accepted(command)],
+      status: [command => ({ outcome: "not_found", command: { id: command.command_id, status: "not_found" }, current: {} as never, state_version: "10" })],
+    });
+    controller.open("association"); controller.edit("association", "Haus am See");
+    await controller.save("association");
+    await flush();
+    const retryOn = () => controller.snapshot().editors.association!.canRetry;
+    expect(retryOn()).toBe(true);
+    writeGate.closeByFailure();
+    expect(retryOn()).toBe(false);
+    await controller.retry("association");
+    expect(sent).toHaveLength(1);
+    await clock.advanceTo(5_000);
+    expect(retryOn()).toBe(true);
+    // A family lock of this very ID (an indefinite answer) keeps the send off until a definite one lifts it (R5).
+    writeGate.resolvePending(sent[0].command_id, "stale");
+    expect(retryOn()).toBe(false);
+    writeGate.resolvePending(sent[0].command_id, "not_recorded");
+    expect(retryOn()).toBe(true);
+    await controller.retry("association");
+    expect(sent).toHaveLength(2);
+    expect(sent[1]).toEqual(sent[0]);
+    controller.dispose();
   });
 });

@@ -1,3 +1,4 @@
+import { pausedCopy } from "../../commands/commandCopy";
 import type { Language } from "../../i18n/language";
 import type { GrammarFieldName } from "./commonFieldApi";
 
@@ -26,6 +27,7 @@ const copy = {
     unknown: "Нет подтверждения сохранения. Изменения остались в редакторе.",
     unavailable: "Карточка изменилась или больше недоступна. Откройте её снова.",
     mismatch: "Это сохранение нельзя повторить. Изменения остались в редакторе.",
+    paused: pausedCopy.ru,
     forbidden: "Общие данные меняет только владелец.",
     invalid: "Сервер не принял изменение: проверьте значения.",
     conflict: "Общий перевод уже изменён в другом месте.",
@@ -68,6 +70,7 @@ const copy = {
     unknown: "Немає підтвердження збереження. Зміни залишилися в редакторі.",
     unavailable: "Картка змінилася або більше недоступна. Відкрийте її знову.",
     mismatch: "Це збереження не можна повторити. Зміни залишилися в редакторі.",
+    paused: pausedCopy.uk,
     forbidden: "Загальні дані змінює лише власник.",
     invalid: "Сервер не прийняв зміну: перевірте значення.",
     conflict: "Загальний переклад уже змінено в іншому місці.",
@@ -110,6 +113,7 @@ const copy = {
     unknown: "The save is not confirmed. The changes stay in the editor.",
     unavailable: "The card has changed or is no longer available. Open it again.",
     mismatch: "This save cannot be repeated. The changes stay in the editor.",
+    paused: pausedCopy.en,
     forbidden: "Only the owner changes common data.",
     invalid: "The server did not accept the change: check the values.",
     conflict: "The common translation was already changed elsewhere.",

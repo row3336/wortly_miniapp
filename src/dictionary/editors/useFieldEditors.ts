@@ -95,7 +95,7 @@ function accessPort(latest: { current: FieldEditorsOptions }, api: () => FieldEd
         ? { client_instance_id: access.document.clientInstanceId, document_id: access.document.documentId } : null;
     },
     send: command => bound((api, token, proof) => api.send(token, proof, command)),
-    status: command => bound((api, token, proof) => api.status(token, proof, command)),
+    status: (command, ticket) => bound((api, token, proof) => api.status(token, proof, command, ticket)),
   };
 }
 
@@ -118,6 +118,7 @@ export function useFieldEditors(options: FieldEditorsOptions): { state: FieldEdi
       newId: () => latest.current.newId?.() ?? window.crypto.randomUUID(),
       onUpdate: () => { if (mounted.current) repaint(); },
       onChanged: () => { if (mounted.current) latest.current.onChanged(); },
+      gate: options.transport.gate,
     });
   }
   const controller = owner.current;

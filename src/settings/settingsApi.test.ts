@@ -6,7 +6,7 @@ import {
   allowedSettingValue, createSettingsApi, resetKeys, validSettingIntent, validSettingsResetIntent,
   type EditableSettingIntent, type SettingIntent, type SettingKey, type SettingSaveCommand, type SettingsResetIntent,
 } from "./settingsApi";
-import { testGate } from "../commands/testGate.test-support";
+import { readWithTicket, testGate } from "../commands/testGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const subject = id(4);
@@ -145,8 +145,8 @@ describe("Settings current and constraints", () => {
     const saved = await setup({ command: fact(), current: recorded, state_version: big })
       .api.save("synthetic", "proof", subject, command());
     expect(saved).toMatchObject({ outcome: "accepted", current: { settings: { learning_content: { value: "words" } } } });
-    const status = await setup({ command: { ...fact(), status: "already_applied" }, current: recorded, state_version: big })
-      .api.status("synthetic", subject, intent());
+    const status = await readWithTicket(intent(), (__command, __ticket) => setup({ command: { ...fact(), status: "already_applied" }, current: recorded, state_version: big })
+      .api.status("synthetic", subject, __command, __ticket));
     expect(status).toMatchObject({ outcome: "accepted", current: { settings: { learning_content: { value: "words" } } } });
   });
 
@@ -174,8 +174,8 @@ describe("Settings current and constraints", () => {
     const saved = await setup({ command: fact(), current: withRetired(plain), state_version: big })
       .api.save("synthetic", "proof", subject, command());
     expect(saved).toMatchObject({ outcome: "accepted", current: plain });
-    const status = await setup({ command: { ...fact(), status: "already_applied" }, current: withRetired(plain), state_version: big })
-      .api.status("synthetic", subject, intent());
+    const status = await readWithTicket(intent(), (__command, __ticket) => setup({ command: { ...fact(), status: "already_applied" }, current: withRetired(plain), state_version: big })
+      .api.status("synthetic", subject, __command, __ticket));
     expect(status).toMatchObject({ outcome: "accepted", current: plain });
   });
 
@@ -402,7 +402,7 @@ describe("Settings command exchange", () => {
     for (const request of candidates) await expect(api.save("synthetic", "proof", subject, request as SettingCommand)).rejects.toThrow();
     await expect(api.save("synthetic", "", subject, command())).rejects.toThrow();
     await expect(api.save("", "proof", subject, command())).rejects.toThrow();
-    await expect(api.status("synthetic", "bad", intent())).rejects.toThrow();
+    await expect(readWithTicket(intent(), (__command, __ticket) => api.status("synthetic", "bad", __command, __ticket))).rejects.toThrow();
     expect(fetcher).not.toHaveBeenCalled();
     expect(validSettingIntent({ ...intent(), extra: true })).toBe(false);
     // review_error_mode and learning_content became editable (M-SET): each accepts exactly its enum values.
@@ -448,13 +448,13 @@ describe("Settings command exchange", () => {
 describe("Settings recovery status", () => {
   it("not_found keeps the same profile and never posts a new command", async () => {
     const { api, fetcher } = setup({ command: { id: id(1), status: "not_found" }, current: profile(), state_version: big });
-    await expect(api.status("synthetic", subject, intent())).resolves.toMatchObject({ outcome: "not_found", current: profile() });
+    await expect(readWithTicket(intent(), (__command, __ticket) => api.status("synthetic", subject, __command, __ticket))).resolves.toMatchObject({ outcome: "not_found", current: profile() });
     expect(fetcher).toHaveBeenCalledExactlyOnceWith(`/api/v1/commands/${id(1)}`, expect.objectContaining({ method: "GET", body: undefined }));
   });
 
   it.each([current(), { status: "unavailable" }])("accepted history does not grant current access %#", async projection => {
     const body = { command: { ...fact(), status: "already_applied" }, current: projection, state_version: big };
-    await expect(setup(body).api.status("synthetic", subject, intent())).resolves.toMatchObject({ outcome: "accepted", current: projection });
+    await expect(readWithTicket(intent(), (__command, __ticket) => setup(body).api.status("synthetic", subject, __command, __ticket))).resolves.toMatchObject({ outcome: "accepted", current: projection });
   });
 
   it.each([
@@ -467,7 +467,7 @@ describe("Settings recovery status", () => {
     { command: { id: id(1), status: "not_found" }, current: current() },
     { command: { ...fact(), status: "already_applied" }, current: { status: "unavailable", settings: {} } },
   ])("rejects conflicting status addresses and branches %#", async body => {
-    await expect(setup({ ...body, state_version: big }).api.status("synthetic", subject, intent()))
+    await expect(readWithTicket(intent(), (__command, __ticket) => setup({ ...body, state_version: big }).api.status("synthetic", subject, __command, __ticket)))
       .rejects.toMatchObject({ kind: "invalid_response" });
   });
 });
@@ -557,17 +557,17 @@ describe("Settings reset exchange (M-SET-RESET, D-SET-RESET 4.3.3)", () => {
 
   it("status: accepted only for the reset fact, not_found keeps the same profile", async () => {
     const accepted = { command: { ...resetFact(), status: "already_applied" }, current: current(), state_version: big };
-    await expect(setup(accepted).api.resetStatus("synthetic", subject, resetIntent())).resolves.toMatchObject({ outcome: "accepted" });
+    await expect(readWithTicket(resetIntent(), (__command, __ticket) => setup(accepted).api.resetStatus("synthetic", subject, __command, __ticket))).resolves.toMatchObject({ outcome: "accepted" });
     const missing = setup({ command: { id: id(1), status: "not_found" }, current: profile(), state_version: big });
-    await expect(missing.api.resetStatus("synthetic", subject, resetIntent())).resolves.toMatchObject({ outcome: "not_found" });
+    await expect(readWithTicket(resetIntent(), (__command, __ticket) => missing.api.resetStatus("synthetic", subject, __command, __ticket))).resolves.toMatchObject({ outcome: "not_found" });
     expect(missing.fetcher).toHaveBeenCalledExactlyOnceWith(`/api/v1/commands/${id(1)}`, expect.objectContaining({ method: "GET" }));
     for (const command of [{ ...fact(), status: "already_applied" }, { ...resetFact(), status: "already_applied", target_id: id(99) },
       resetFact()]) {
-      await expect(setup({ command, current: current(), state_version: big }).api.resetStatus("synthetic", subject, resetIntent()))
+      await expect(readWithTicket(resetIntent(), (__command, __ticket) => setup({ command, current: current(), state_version: big }).api.resetStatus("synthetic", subject, __command, __ticket)))
         .rejects.toMatchObject({ kind: "invalid_response" });
     }
     const partial = current(); delete (partial.settings as Partial<SettingsResponse["settings"]>).strict_case;
-    await expect(setup({ ...accepted, current: partial }).api.resetStatus("synthetic", subject, resetIntent()))
+    await expect(readWithTicket(resetIntent(), (__command, __ticket) => setup({ ...accepted, current: partial }).api.resetStatus("synthetic", subject, __command, __ticket)))
       .rejects.toMatchObject({ kind: "invalid_response" });
   });
 });

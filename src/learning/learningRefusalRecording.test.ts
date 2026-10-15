@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createLearningSessionApi, type LearningSessionCommand } from "./learningSessionApi";
 import recording from "./learningRefusalRecording.json";
-import { testGate } from "../commands/testGate.test-support";
+import { readWithTicket, testGate } from "../commands/testGate.test-support";
 
 /**
  * A stored final refusal of a Learning start, recorded from core's own ASGI app by core/tools/record_learning_refusal.py
@@ -38,7 +38,7 @@ describe("Learning start refusal against a recorded core reply (C232)", () => {
   });
   it("its status, asked with include_refusal and the start's hash, passes the strict RefusedStartFact decoder", async () => {
     const fetcher = replay(exchange("busy_refused_status"));
-    expect(await api(fetcher).status("token", "proof", command())).toMatchObject({ outcome: "rejected", error: { code: "SESSION_BUSY" },
+    expect(await readWithTicket(command(), (__command, __ticket) => api(fetcher).status("token", "proof", __command, __ticket))).toMatchObject({ outcome: "rejected", error: { code: "SESSION_BUSY" },
       command: { id: command().command_id, kind: "session.start", status: "rejected" } });
     expect(fetcher).toHaveBeenCalledOnce();
   });

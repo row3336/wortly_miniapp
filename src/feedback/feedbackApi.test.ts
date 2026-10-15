@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { ApiError } from "../api/http";
 import { id, profile, response } from "../learning/learningFixtures.test-support";
 import { blankText, createFeedbackApi, validFeedbackIntent, type FeedbackIntent } from "./feedbackApi";
-import { testGate } from "../commands/testGate.test-support";
+import { readWithTicket, testGate } from "../commands/testGate.test-support";
 
 const intent: FeedbackIntent = { command_id: id(100), kind: "feedback.send", payload: { text: "Das Wort ist falsch" } };
 const origin = { clientInstanceId: id(1), documentId: id(2) };
@@ -100,7 +100,7 @@ describe("send", () => {
 });
 
 describe("status", () => {
-  const status = (body: unknown, code = 200) => api(() => response(body, code)).api.status("token", id(50), intent);
+  const status = (body: unknown, code = 200) => readWithTicket(intent, (__command, __ticket) => api(() => response(body, code)).api.status("token", id(50), __command, __ticket));
   it("names an applied command by reference", async () => {
     expect(await status({ command: fact({}, "already_applied"), current: { inbox_id: id(900), card_id: null }, state_version: "5" }))
       .toEqual({ outcome: "accepted", inboxId: id(900) });

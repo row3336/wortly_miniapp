@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createCardActionApi } from "./cardActionApi";
 import { CardActionsController, type CardActionApplied, type CardActionsCard } from "./cardActionsController";
 import { aid, CARD, cardActionServer, origin, rights, type Fate } from "./actionTestData.test-support";
-import { testGate } from "../../commands/testGate.test-support";
+import { readWithTicket, testGate } from "../../commands/testGate.test-support";
 
 function setup(fates: Fate[] = [], live = { current: true }) {
   const server = cardActionServer(fates);
@@ -10,9 +10,9 @@ function setup(fates: Fate[] = [], live = { current: true }) {
   const applied = vi.fn<(event: CardActionApplied) => void>();
   const refused = vi.fn<(code: string) => void>();
   let next = 100;
-  const controller = new CardActionsController({
+  const controller = new CardActionsController({ gate: testGate(),
     port: { origin: () => live.current ? origin : null, send: command => api.send("token", "proof", command),
-      status: command => api.status("token", "proof", command) },
+      status: command => readWithTicket(command, (__command, __ticket) => api.status("token", "proof", __command, __ticket)) },
     newId: () => aid(next++), onUpdate: () => {}, onApplied: applied, onRefused: refused });
   const show = (change: Partial<CardActionsCard> = {}) => controller.setCard({ cardId: CARD, stateVersion: String(server.state.stateVersion),
     exclusionVersion: server.state.version, actions: rights(server.state.excluded), ...change });

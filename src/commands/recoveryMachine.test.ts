@@ -450,7 +450,8 @@ describe("automatic recovery of one action", () => {
     const post = rig({ send: () => new ApiError("http", 401) });
     post.machine.begin();
     await pass(600_000);
-    expect(post.machine.snapshot().state).toEqual({ name: "terminated", reason: "access_lost" });
+    // P03 M-P03-7: 401 asks for a new sign-in (reauth) instead of ending the access; nothing more is sent either way.
+    expect(post.machine.snapshot().state).toEqual({ name: "terminated", reason: "reauth" });
     expect(post.ops()).toEqual(["send"]);
   });
 

@@ -12,6 +12,7 @@ import { copyLearningRevisionIntent, validLearningRevisionIntent } from "./learn
 import { validConjunctionHint } from "../study/questionContext";
 import { validCardExamples } from "./learningPreviewContent";
 import { personal } from "../study/referenceCardContent";
+import type { ReadbackTicket } from "../commands/writeGate";
 
 export type LearningResultCommand = AnswerSubmitCommand | ResultCorrectCommand | ResultGradeCommand | ResultUndoCommand;
 export type LearningResultAddress = Pick<ResultCorrectCommand,
@@ -29,13 +30,13 @@ export type LearningAnswerStatus = { state_version: string } & (
 );
 export interface LearningAnswerApi {
   send(token: string, proof: string, command: AnswerSubmitCommand): Promise<LearningAnswerReply>;
-  status(token: string, proof: string, command: AnswerSubmitCommand): Promise<LearningAnswerStatus>;
+  status(token: string, proof: string, command: AnswerSubmitCommand, ticket: ReadbackTicket): Promise<LearningAnswerStatus>;
 }
 export interface LearningResultApi {
   read(token: string, proof: string, address: LearningResultAddress): Promise<LearningResultRead>;
   /** started, when given, is told right before the built request goes to fetch (after every local check). */
   send(token: string, proof: string, command: LearningResultCommand, started?: () => void): Promise<LearningAnswerReply>;
-  status(token: string, proof: string, command: LearningResultCommand): Promise<LearningAnswerStatus>;
+  status(token: string, proof: string, command: LearningResultCommand, ticket: ReadbackTicket): Promise<LearningAnswerStatus>;
 }
 
 function prepare(token: string, proof: string, value: LearningResultCommand): LearningResultCommand {
@@ -239,11 +240,11 @@ export function createLearningResultApi(options: HttpOptions): LearningResultApi
       if (!reply.ok) throw httpError(reply);
       throw new ApiError("invalid_response");
     },
-    async status(token, proof, original) {
+    async status(token, proof, original, ticket: ReadbackTicket) {
       const command = prepare(token, proof, original);
       const query = new URLSearchParams({ client_instance_id: command.client_instance_id,
         document_id: command.document_id, session_id: command.session_id });
-      const reply = await request.readback(command.command_id, `/commands/${command.command_id}?${query}`, { method: "GET", token, proof });
+      const reply = await request(`/commands/${command.command_id}?${query}`, { method: "GET", token, proof, readbackTicket: ticket });
       if (!reply.ok) throw httpError(reply);
       if (reply.status !== 200) throw new ApiError("invalid_response");
       const value = reply.value;
@@ -278,9 +279,9 @@ export function createLearningAnswerApi(options: HttpOptions): LearningAnswerApi
       if (!record(command) || command.kind !== "answer.submit") throw new Error("invalid Learning answer");
       return api.send(token, proof, command);
     },
-    async status(token, proof, command) {
+    async status(token, proof, command, ticket: ReadbackTicket) {
       if (!record(command) || command.kind !== "answer.submit") throw new Error("invalid Learning answer");
-      return api.status(token, proof, command);
+      return api.status(token, proof, command, ticket);
     },
   };
 }

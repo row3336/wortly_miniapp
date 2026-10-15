@@ -40,7 +40,7 @@ function fixture(profile: Profile) {
     open: vi.fn(async () => { throw new Error("not expected"); }),
   };
   let id = 0;
-  const controller = new EntryController({
+  const controller = new EntryController({ gate: testGate(),
     api, storage, lock: { acquire: vi.fn(async () => ({ release: vi.fn() })) },
     initData: "signed-Telegram-data", savedLanguage: "ru", browserLanguage: "ru-RU",
     clientVersion: "0.0.0", contractVersion: "1", timeZone: () => "Europe/Berlin",

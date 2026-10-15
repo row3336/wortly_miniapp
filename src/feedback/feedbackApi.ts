@@ -2,6 +2,7 @@ import type { FeedbackCommand } from "../api/generated";
 import { validProfile } from "../api/entryApi";
 import { ApiError, createJsonTransport, errorCode, httpError, type HttpOptions } from "../api/http";
 import { eventTime, exactKeys, oneOf, record, sameId, uuid, version } from "../api/wireValidation";
+import type { ReadbackTicket } from "../commands/writeGate";
 
 /** One message to the developer. A complaint about a card adds card_id; a general message has none (К07-099). */
 export type FeedbackIntent = {
@@ -18,7 +19,7 @@ export type FeedbackStatusReply = { outcome: "accepted"; inboxId: string } | { o
 
 export interface FeedbackApi {
   send(token: string, proof: string, origin: { clientInstanceId: string; documentId: string }, intent: FeedbackIntent): Promise<FeedbackSendReply>;
-  status(token: string, profileId: string, intent: FeedbackIntent): Promise<FeedbackStatusReply>;
+  status(token: string, profileId: string, intent: FeedbackIntent, ticket: ReadbackTicket): Promise<FeedbackStatusReply>;
 }
 
 /** The server rejects an empty or blank text (422), so the client never sends one. */
@@ -91,10 +92,10 @@ export function createFeedbackApi(options: HttpOptions): FeedbackApi {
       if (!reply.ok) throw httpError(reply);
       throw new ApiError("invalid_response");
     },
-    async status(token, profileId, original) {
+    async status(token, profileId, original, ticket: ReadbackTicket) {
       if (!token || !uuid(profileId)) throw new Error("invalid feedback subject");
       const intent = snapshot(original);
-      const reply = await request.readback(intent.command_id, `/commands/${intent.command_id}`, { method: "GET", token });
+      const reply = await request(`/commands/${intent.command_id}`, { method: "GET", token, readbackTicket: ticket });
       if (!reply.ok) throw httpError(reply);
       const value = reply.value;
       if (reply.status !== 200 || !record(value) || !record(value.command) || !version(value.state_version) || value.error != null) {

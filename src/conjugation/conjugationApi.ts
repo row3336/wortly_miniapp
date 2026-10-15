@@ -9,6 +9,7 @@ import { validUndoFact } from "../commands/resultUndo";
 import { conjugationIntentHash, copyConjugationIntent, validConjugationIntent, type ConjugationCommand,
   type ConjugationResultCommand, type ConjugationScheduleTransportCommand, type ConjugationSessionCommand } from "./conjugationIntent";
 import { conjugationResultCurrent, validConjugationCatalog, validConjugationCurrent, type ConjugationResultCurrent } from "./conjugationProjection";
+import type { ReadbackTicket } from "../commands/writeGate";
 export type { ConjugationCommand, ConjugationIntent, ConjugationResultCommand,
   ConjugationScheduleTransportCommand, ConjugationSessionCommand } from "./conjugationIntent";
 
@@ -41,10 +42,10 @@ export interface ConjugationApi {
   send(token: string, proof: string, command: ConjugationSessionCommand): Promise<ConjugationSessionReply>;
   send(token: string, proof: string, command: ConjugationResultCommand): Promise<ConjugationResultReply>;
   send(token: string, proof: string, command: ConjugationCommand): Promise<ConjugationReply>;
-  status(token: string, proof: string, command: ConjugationScheduleTransportCommand): Promise<ConjugationCatalogStatus>;
-  status(token: string, proof: string, command: ConjugationSessionCommand): Promise<ConjugationSessionStatus>;
-  status(token: string, proof: string, command: ConjugationResultCommand): Promise<ConjugationResultStatus>;
-  status(token: string, proof: string, command: ConjugationCommand): Promise<ConjugationStatus>;
+  status(token: string, proof: string, command: ConjugationScheduleTransportCommand, ticket: ReadbackTicket): Promise<ConjugationCatalogStatus>;
+  status(token: string, proof: string, command: ConjugationSessionCommand, ticket: ReadbackTicket): Promise<ConjugationSessionStatus>;
+  status(token: string, proof: string, command: ConjugationResultCommand, ticket: ReadbackTicket): Promise<ConjugationResultStatus>;
+  status(token: string, proof: string, command: ConjugationCommand, ticket: ReadbackTicket): Promise<ConjugationStatus>;
 }
 
 function prepare(token: string, proof: string, original: ConjugationCommand): ConjugationCommand {
@@ -175,14 +176,14 @@ export function createConjugationApi(options: HttpOptions): ConjugationApi {
       if (!reply.ok) throw httpError(reply);
       throw new ApiError("invalid_response");
     },
-    async status(token: string, proof: string, original: ConjugationCommand): Promise<ConjugationStatus> {
+    async status(token: string, proof: string, original: ConjugationCommand, ticket: ReadbackTicket): Promise<ConjugationStatus> {
       const command = prepare(token, proof, original);
       const { client_instance_id: _client, document_id: _document, ...intent } = command;
       const expectedHash = await conjugationIntentHash(intent);
       const query = new URLSearchParams({ client_instance_id: command.client_instance_id, document_id: command.document_id });
       if (command.kind !== "conjugation.schedule") query.set("session_id", command.session_id);
       query.set("expected_intent_hash", expectedHash);
-      const reply = await request.readback(command.command_id, `/commands/${command.command_id}?${query}`, { method: "GET", token, proof });
+      const reply = await request(`/commands/${command.command_id}?${query}`, { method: "GET", token, proof, readbackTicket: ticket });
       if (!reply.ok) throw httpError(reply);
       if (reply.status !== 200) throw new ApiError("invalid_response");
       const absent = missing(reply.value, command);

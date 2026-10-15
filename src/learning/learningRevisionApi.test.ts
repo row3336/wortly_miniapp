@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { LearningAnswerResponse, ResultCorrectCommand, ResultGradeCommand } from "../api/generated";
 import { createLearningResultApi } from "./learningAnswerApi";
-import { testGate } from "../commands/testGate.test-support";
+import { readWithTicket, testGate } from "../commands/testGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 type Command = ResultCorrectCommand | ResultGradeCommand;
@@ -30,7 +30,7 @@ function fixture(value: unknown = response(), status = 200) {
 describe("Learning revision transport", () => {
   it.each([201, 202, 206])("rejects HTTP%s as revision status confirmation", async status => {
     const value = response(); Object.assign(value.command, { status: "already_applied" });
-    await expect(fixture(value, status).api.status("token", "proof", command()))
+    await expect(readWithTicket(command(), (__command, __ticket) => fixture(value, status).api.status("token", "proof", __command, __ticket)))
       .rejects.toMatchObject({ kind: "invalid_response" });
   });
   it.each(["result.correct", "result.grade"] as const)("sends exact %s once with no new answer input", async kind => {
@@ -44,7 +44,7 @@ describe("Learning revision transport", () => {
   });
   it.each(["result.correct", "result.grade"] as const)("recovers %s using only its original ID", async kind => {
     const original = command(kind), value = response(original); Object.assign(value.command, { status: "already_applied" });
-    const f = fixture(value), parsed = await f.api.status("token", "proof", original);
+    const f = fixture(value), parsed = await readWithTicket(original, (__command, __ticket) => f.api.status("token", "proof", __command, __ticket));
     expect(parsed).toEqual({ ...value, outcome: "accepted" });
     expect(f.fetcher).toHaveBeenCalledOnce(); const [url, options] = f.fetcher.mock.calls[0];
     const address = new URL(String(url), "http://localhost");
@@ -56,7 +56,7 @@ describe("Learning revision transport", () => {
     const value = response(); Object.assign(value.command, { status: "already_applied" });
     value.result!.version = value.action!.version = value.capabilities.grades!.expected_result_version = "3";
     value.result!.grade = 3;
-    const parsed = await fixture(value).api.status("token", "proof", command());
+    const parsed = await readWithTicket(command(), (__command, __ticket) => fixture(value).api.status("token", "proof", __command, __ticket));
     expect(parsed.command).toMatchObject({ kind: "result.correct", object_version: "2" });
     if (parsed.outcome === "accepted") expect(parsed.result).toMatchObject({ grade: 3, version: "3" });
   });
@@ -70,9 +70,9 @@ describe("Learning revision transport", () => {
     const original = command(kind), value = response(original); Object.assign(value.command, { status: "already_applied" });
     value.result = value.action = null; value.step = { status: "unavailable" };
     value.capabilities = { answer_target: null, grades: null, correct_target: null, undo_target: null, stop: false, summary_home: false };
-    expect((await fixture(value).api.status("token", "proof", original)).outcome).toBe("accepted");
+    expect((await readWithTicket(original, (__command, __ticket) => fixture(value).api.status("token", "proof", __command, __ticket))).outcome).toBe("accepted");
     Object.assign(value.command, { result_id: id(99) });
-    await expect(fixture(value).api.status("token", "proof", original)).rejects.toMatchObject({ kind: "invalid_response" });
+    await expect(readWithTicket(original, (__command, __ticket) => fixture(value).api.status("token", "proof", __command, __ticket))).rejects.toMatchObject({ kind: "invalid_response" });
   });
   const damages: [string, (value: LearningAnswerResponse) => void][] = [
     ["command ID", value => { value.command.id = id(99); }],
@@ -102,7 +102,7 @@ describe("Learning revision transport", () => {
       const value = { command: { id: id(1), status: "not_found" }, state_version: "8",
         current: { profile_id: id(50), role: "user", ui_language: "ru", dictionary_language: "ru", time_zone: "UTC",
           state_version: "8", access: { status: "admitted", version: "1", reason: null } }, ...extra };
-      const f = fixture(value); expect(await f.api.status("token", "proof", command())).toEqual({ ...value, outcome: "not_found" });
+      const f = fixture(value); expect(await readWithTicket(command(), (__command, __ticket) => f.api.status("token", "proof", __command, __ticket))).toEqual({ ...value, outcome: "not_found" });
       expect(f.fetcher).toHaveBeenCalledOnce();
     });
   it.each(["VERSION_CONFLICT", "FORBIDDEN", "COMMAND_PAYLOAD_MISMATCH"])("does not claim %s as acceptance", async code => {

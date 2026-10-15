@@ -132,8 +132,8 @@ describe("atomicity of L2 and fetch (AC-44)", () => {
 
 describe("R6 in the transport (AC-48)", () => {
   it("a status read goes only through readback: the ticket never reaches the wire", async () => {
-    const { fetcher, request } = setup();
-    await expect(request.readback("A", "/commands/A?expected_intent_hash=h", { method: "GET", token: "t" })).resolves.toMatchObject({ status: 200 });
+    const { gate, fetcher, request } = setup();
+    await expect(gate.runReadback("A", ticket => request("/commands/A?expected_intent_hash=h", { method: "GET", token: "t", readbackTicket: ticket }))).resolves.toMatchObject({ status: 200 });
     expect(fetcher).toHaveBeenCalledOnce();
     const [url, init] = fetcher.mock.calls[0];
     expect(url).toBe("/api/v1/commands/A?expected_intent_hash=h");
@@ -142,8 +142,8 @@ describe("R6 in the transport (AC-48)", () => {
   });
 
   it("a readback of another ID than its path is refused", async () => {
-    const { fetcher, request } = setup();
-    await expect(request.readback("A", "/commands/B", { method: "GET", token: "t" })).rejects.toMatchObject({ reason: "no_ticket" });
+    const { gate, fetcher, request } = setup();
+    await expect(gate.runReadback("A", ticket => request("/commands/B", { method: "GET", token: "t", readbackTicket: ticket }))).rejects.toMatchObject({ reason: "no_ticket" });
     expect(fetcher).not.toHaveBeenCalled();
   });
 
@@ -151,7 +151,7 @@ describe("R6 in the transport (AC-48)", () => {
     const { gate, fetcher, request } = setup();
     gate.noteOpened(DOC_A);
     gate.lockIdentity(DOC_A);
-    const read = request.readback("A", "/commands/A", { method: "GET", token: "t" });
+    const read = gate.runReadback("A", ticket => request("/commands/A", { method: "GET", token: "t", readbackTicket: ticket }));
     await Promise.resolve();
     expect(fetcher).not.toHaveBeenCalled();
     gate.identityVerified(DOC_A);

@@ -1,7 +1,9 @@
 import { ApiError } from "../api/http";
 import type { ClosedSessionBoundary, ConjugationCatalog, ConjugationSessionProjection, UnavailableCurrent } from "../api/generated";
 import { oneOf, sameId, uuid, version } from "../api/wireValidation";
+import { GatePending, pausedBeforeSend } from "../commands/gatePending";
 import { PendingStoreError, refusedUnsent, type PendingSlot } from "../commands/pendingSlot";
+import type { WriteGate } from "../commands/writeGate";
 import type { ConjugationCatalogRead, ConjugationSessionRead, ConjugationResultRead, ConjugationReply, ConjugationStatus } from "./conjugationApi";
 import { validConjugationIntent, type ConjugationIntent } from "./conjugationIntent";
 import { canonicalConjugationIntent, conjugationLane, type ConjugationCommandLane, type ConjugationPending } from "./conjugationPending";
@@ -26,7 +28,9 @@ export type ConjugationCommandSnapshot = {
   rejectionCode: string | null;
   problem: "network" | "invalid_response" | "storage" | "invalid_pending" | "pending_changed" | "mismatch" | "not_found"
     | "expired" | "forbidden" | "profile_changed" | "client_changed" | "pair_changed" | "step_changed"
-    | "closed" | "stale_response" | "window_stale" | null;
+    | "closed" | "stale_response" | "window_stale"
+    // PAUSED_BEFORE_SEND (P03 §4.2): the write gate kept the request on the client; nothing left, the record stays.
+    | "paused" | null;
   canRetry: boolean;
   stateVersion: string | null;
   closedSession: ClosedSessionBoundary | null;
@@ -49,6 +53,8 @@ export type ConjugationCommandOptions = {
   onUpdate(snapshot: ConjugationCommandSnapshot): void;
   stateVersion?: string;
   minimumStateVersion?(): string | null;
+  /** The write gate of the page (P03 M-P03-8): the readback registry; the status read itself goes through check. */
+  gate?: WriteGate;
 };
 
 /** Owns one durable intent, never screen navigation. Dependencies are copied once.
@@ -74,6 +80,7 @@ export class ConjugationCommandController {
   private retryVerified = false;
   private ownIdentity = true;
   private changedSlot = false;
+  private readonly registry: GatePending | null;
 
   constructor(options: ConjugationCommandOptions) {
     if (!uuid(options.profileId) || !uuid(options.clientInstanceId) || !oneOf(options.pair, ["ru-de", "uk-de", "en-de"])
@@ -81,6 +88,7 @@ export class ConjugationCommandController {
       || options.stateVersion !== undefined && !version(options.stateVersion)) throw new Error("invalid conjugation context");
     this.options = { ...options, profileId: options.profileId.toLowerCase(), clientInstanceId: options.clientInstanceId.toLowerCase() };
     this.floor = options.stateVersion ?? null;
+    this.registry = options.gate ? new GatePending(options.gate, "conjugation") : null;
   }
   private live(): boolean {
     if (this.lifetime.signal.aborted) return false;
@@ -121,7 +129,8 @@ export class ConjugationCommandController {
       if (error instanceof PendingStoreError) {
         this.problem = error.kind === "invalid" ? "invalid_pending" : error.kind === "changed" ? "pending_changed" : "storage";
         if (error.kind === "changed") this.changedSlot = true;
-      } else if (error instanceof ApiError && [401, 403].includes(error.status ?? 0)) this.problem = error.status === 401 ? "expired" : "forbidden";
+      } else if (pausedBeforeSend(error)) this.problem = "paused";
+      else if (error instanceof ApiError && [401, 403].includes(error.status ?? 0)) this.problem = error.status === 401 ? "expired" : "forbidden";
       // A reply that failed strict parsing leaves the outcome unknown like a lost one, but it is not a lost connection.
       else if (error instanceof ApiError && error.kind === "invalid_response") this.problem = "invalid_response";
       // The same class as failureProblem (commandLane.ts): the record stays, a live window checks it.
@@ -164,6 +173,7 @@ export class ConjugationCommandController {
     if (this.pending) await this.options.pendingStore.clear(this.pending, this.lifetime.signal);
     if (!this.live()) return;
     this.pending = null; this.problem = null; this.retryVerified = false; this.phase = "settled";
+    this.registry?.cleared();
   }
   private address(intent: ConjugationIntent): NonNullable<ConjugationCommandSnapshot["resolved"]> {
     return { commandId: intent.command_id, kind: intent.kind, sessionId: "session_id" in intent ? intent.session_id : null,
@@ -187,6 +197,7 @@ export class ConjugationCommandController {
   private async markMismatch(pending: ConjugationPending): Promise<void> {
     if (!this.live()) return;
     this.pending = { ...pending, mismatch: true };
+    this.registry?.settled("mismatch");
     this.retryVerified = false; this.outcome = null; this.resolved = null; this.rejectionCode = null;
     this.clearView(); this.problem = "mismatch"; this.phase = "unresolved";
     await this.options.pendingStore.markMismatch(this.pending, this.lifetime.signal);
@@ -202,6 +213,7 @@ export class ConjugationCommandController {
       const pending = await this.options.pendingStore.load(this.options.profileId, this.lifetime.signal);
       if (!this.live()) return;
       this.pending = pending; this.loaded = true;
+      if (pending) this.registry?.hold(pending.intent.command_id);
       this.ownIdentity = !pending || sameId(pending.clientInstanceId, this.options.clientInstanceId) && pending.pair === this.options.pair;
     }
     if (this.outcome) { await this.clearSettled(); return; }
@@ -220,6 +232,8 @@ export class ConjugationCommandController {
     }
     if (!this.live()) return;
     if (reply.outcome === "accepted") { await this.settle(reply); return; }
+    // The server does not hold this ID: a definite answer about it (R5), whatever the target read says next.
+    this.registry?.settled("not_recorded");
     if (!this.observe(reply.state_version)) this.problem = "stale_response";
     else if (!sameId(reply.current.profile_id, this.options.profileId)) this.problem = "profile_changed";
     else if (reply.current.access.status !== "admitted") this.problem = "forbidden";
@@ -256,12 +270,14 @@ export class ConjugationCommandController {
     if (!pending || !this.live() || !this.freshForSend() || retry && !this.retryVerified) return;
     this.phase = "sending"; this.problem = null; this.retryVerified = false; this.clearView(); this.emit();
     if (!this.live() || !this.freshForSend()) return;
+    // From now on a request of this ID may leave: its outcome is unknown until a definite answer (R1).
+    this.registry?.hold(pending.intent.command_id);
     try { await this.options.pendingStore.save(pending, this.lifetime.signal); }
     catch (error: unknown) {
       // A new intent the shared slot refused (another record, or one it cannot read) was neither stored nor sent: it is no
       // unknown outcome to check or retry, and the record in the slot stays exactly as it is. A retained intent (retry) keeps its record.
       // The slot stays marked changed, so this owner neither checks nor takes over the other record.
-      if (!retry && refusedUnsent(error)) this.pending = null;
+      if (!retry && refusedUnsent(error)) { this.pending = null; this.registry?.cleared(); }
       throw error;
     }
     if (!this.live() || !this.freshForSend()) return;
@@ -303,7 +319,8 @@ export class ConjugationCommandController {
       if (this.retryVerified && this.pending && !this.pending.mismatch && !this.outcome) await this.sendPending(true);
     });
   }
-  dispose(): void { this.lifetime.abort(); this.clearView(); this.phase = "disposed"; }
+  /** R3: an ID without a definite answer stays locked to itself in the gate until a later owner reads it. */
+  dispose(): void { this.registry?.release(); this.lifetime.abort(); this.clearView(); this.phase = "disposed"; }
 }
 
 /** The intents addressed to one saved result: their reply and their retry check are that result's view. */

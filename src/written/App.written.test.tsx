@@ -1,7 +1,8 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { OpenRequest } from "../api/generated";
 import { App } from "../app/App";
+import { pageGateOpen, setPageProbe } from "../app/pageGate.test-support";
 import { staleCommand, staleRefusal } from "../app/openRules.test-support";
 import { gate, replaceDocument, watchFlash } from "../app/flashWatch.test-support";
 import { app, answer, settingsRefusalText, compatibility, exchange, field, loseReply, offlineStudy, pairText, requests, row, startWords,
@@ -229,6 +230,37 @@ describe("Written quiz through the actual App document", () => {
     fireEvent.click(screen.getByRole("button", { name: "Далее" }));
     await screen.findByText("Занятие завершено.");
     const base = a.fetcher.getMockImplementation()!;
+    // The reply of the undo is lost and its status reads come back unreadable (a proxy page): the outcome stays unknown.
+    // P03: the lost reply closes the page gate until ready; an unreadable 4xx is an ordinary loss and keeps it open.
+    a.fetcher.mockImplementation(async (url, init) => {
+      const body = init?.method === "POST" ? JSON.parse(String(init.body)) : null;
+      if (body?.kind === "result.undo") throw new TypeError("network");
+      if ((init?.method ?? "GET") === "GET" && String(url).includes("/commands/")) return new Response("<html>not found</html>", { status: 404 });
+      return base(url, init);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Шаг назад" }));
+    await waitFor(() => expect(screen.queryByText("Занятие завершено.")).toBeNull(), exchange);
+    Object.assign(a.server.state, { status: "closed", closeReason: "midnight", assignment: null, version: a.server.state.version + 1 });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Выйти" })).toBeTruthy(), exchange);
+    await pageGateOpen();
+    fireEvent.click(screen.getByRole("button", { name: "Выйти" }));
+    await screen.findByText("Проверяем, сохранилось ли действие.", undefined, exchange);
+    await settle();
+    expect(screen.queryByText("Занятие завершено.")).toBeNull();
+    expect(screen.queryByText("Занятие прервано.")).toBeNull();
+    expect(screen.queryByText(reasons.midnight)).toBeNull();
+    // The way out stays; the unresolved undo itself is still recovered by its ID before Today (own receipts first).
+    expect(screen.getByRole("button", { name: "На Сегодня" })).toBeTruthy();
+  }, 30_000);
+  it("W15a (P03) the same, offline: «Выйти» is kept on the client while the gate holds writes — no Stop is sent, no summary", async () => {
+    // The server stays unreachable: the availability probe never says ready, so the page gate stays closed.
+    setPageProbe({ status: "unknown" });
+    onTestFinished(() => setPageProbe({ status: "ready" }));
+    const a = app({ cards: [6], undo: true }); render(<App />);
+    await startWords(); await answer("Haus");
+    fireEvent.click(screen.getByRole("button", { name: "Далее" }));
+    await screen.findByText("Занятие завершено.");
+    const base = a.fetcher.getMockImplementation()!;
     a.fetcher.mockImplementation(async (url, init) => {
       const body = init?.method === "POST" ? JSON.parse(String(init.body)) : null;
       if (body?.kind === "result.undo" || (init?.method ?? "GET") === "GET" && String(url).includes("/commands/")) throw new TypeError("network");
@@ -239,14 +271,15 @@ describe("Written quiz through the actual App document", () => {
     Object.assign(a.server.state, { status: "closed", closeReason: "midnight", assignment: null, version: a.server.state.version + 1 });
     await waitFor(() => expect(screen.getByRole("button", { name: "Выйти" })).toBeTruthy(), exchange);
     fireEvent.click(screen.getByRole("button", { name: "Выйти" }));
-    await screen.findByText("Проверяем, сохранилось ли действие.", undefined, exchange);
+    // P03 (L2, M10, §4.8): every read fails, so the page gate stays closed; Stop is kept on the client and the screen
+    // says it waits for the connection (9.2.2).
+    await screen.findByText("Нет связи с сервером. Ждём, когда связь восстановится…", undefined, exchange);
     await settle();
+    expect(a.posts().filter(post => post.kind === "session.stop")).toEqual([]);
     expect(screen.queryByText("Занятие завершено.")).toBeNull();
     expect(screen.queryByText("Занятие прервано.")).toBeNull();
     expect(screen.queryByText(reasons.midnight)).toBeNull();
-    // The way out stays; the unresolved undo itself is still recovered by its ID before Today (own receipts first).
-    expect(screen.getByRole("button", { name: "На Сегодня" })).toBeTruthy();
-  });
+  }, 30_000);
   it("W7 the own «Выйти» shows the interrupted summary without a closure reason", async () => {
     const a = app({ cards: [6, 7, 8] }); render(<App />);
     await startWords(); await answer("Haus");

@@ -37,7 +37,7 @@ export function useFeedbackDocument(options: Options): FeedbackDocument {
     let live = true;
     const controller = new FeedbackController({ api: createFeedbackApi(current.transport), pendingStore: current.pendingStore,
       cardId: current.cardId, access: () => latest.current.access, newId: () => window.crypto.randomUUID(),
-      onUpdate: () => { if (live && owner.current === bound) repaint(); } });
+      onUpdate: () => { if (live && owner.current === bound) repaint(); }, gate: current.transport.gate });
     const bound: Owner = { key: current.access.key, transport: current.transport, store: current.pendingStore, controller };
     owner.current = bound;
     lastAccess.current = current.access;

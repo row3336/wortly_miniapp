@@ -62,7 +62,7 @@ function world(storage = memory()) {
   }
   open();
   const newId = vi.fn(() => id(sequence++));
-  const make = () => new SettingsController({ api, pendingStore: new SettingsPendingStore(storage),
+  const make = () => new SettingsController({ gate: testGate(), api, pendingStore: new SettingsPendingStore(storage),
     resetStore: new SettingsResetPendingStore(storage), access: () => access, newId, onUpdate: () => {} });
   return { posts, postAnswers, statusAnswers, open, make, newId, storage };
 }

@@ -66,7 +66,7 @@ export function accessBoundIntervalPort(options: { access: OpenedAccess; api: Di
     origin: { client_instance_id: access.document.clientInstanceId, document_id: access.document.documentId },
     send: command => bound(({ token, proof }) => sendDictionaryIntervalCommand(api, token, proof, command)),
     read: address => bound(({ token, proof }) => api.readContext(token, proof, address)),
-    status: command => bound(({ token, proof }) => api.commandStatus(token, proof, command)),
+    status: (command, ticket) => bound(({ token, proof }) => api.commandStatus(token, proof, command, ticket)),
   };
 }
 
@@ -139,6 +139,7 @@ export function useDictionaryIntervalContext(options: DictionaryIntervalContextO
       newId: () => latest.current.newId?.() ?? window.crypto.randomUUID(),
       minimumStateVersion: () => floors.current.get(profileId) ?? null,
       clock: current.clock,
+      gate: current.transport.gate,
       onUpdate(snapshot) {
         if (!live()) return;
         raise(floors.current, profileId, snapshot.stateVersion);

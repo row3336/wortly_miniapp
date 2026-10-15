@@ -3,7 +3,7 @@ import { createFieldEditorApi, fieldIntentHash, type FieldCommand } from "./fiel
 import {
   ACTION, CARD_ID, CONTEXT, fid, fieldFact, json, origin, pairOf, roleCurrent, saveIntent, scalarCurrent, undoIntent,
 } from "./fieldTestData.test-support";
-import { testGate } from "../../commands/testGate.test-support";
+import { readWithTicket, testGate } from "../../commands/testGate.test-support";
 
 function api(...replies: Response[]) {
   const fetcher = vi.fn<typeof fetch>(async () => replies.shift() ?? json({}, 500));
@@ -118,13 +118,13 @@ describe("field command wire (core personal_fields, result_undo)", () => {
       json({ error: { code: "COMMAND_PAYLOAD_MISMATCH" } }, 409),
       json({ command: fieldFact(save, "already_applied"), current: scalarCurrent("translation", "мой дом", "2"), state_version: "11",
         verified_intent_hash: "0".repeat(64) }));
-    expect((await client.status("token", "proof", save)).outcome).toBe("accepted");
+    expect((await readWithTicket(save, (__command, __ticket) => client.status("token", "proof", __command, __ticket))).outcome).toBe("accepted");
     const url = new URL(String(fetcher.mock.calls[0][0]), "http://local");
     expect(url.pathname).toBe(`/api/v1/commands/${fid(10)}`);
     expect(Object.fromEntries(url.searchParams)).toEqual({ ...origin, expected_intent_hash: hash });
-    expect((await client.status("token", "proof", save)).outcome).toBe("not_found");
-    expect((await client.status("token", "proof", save)).outcome).toBe("mismatch");
-    await expect(client.status("token", "proof", save)).rejects.toMatchObject({ kind: "invalid_response" });
+    expect((await readWithTicket(save, (__command, __ticket) => client.status("token", "proof", __command, __ticket))).outcome).toBe("not_found");
+    expect((await readWithTicket(save, (__command, __ticket) => client.status("token", "proof", __command, __ticket))).outcome).toBe("mismatch");
+    await expect(readWithTicket(save, (__command, __ticket) => client.status("token", "proof", __command, __ticket))).rejects.toMatchObject({ kind: "invalid_response" });
   });
 
   it("A9 invalid intents fail before any request", async () => {

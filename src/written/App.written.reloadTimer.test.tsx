@@ -7,6 +7,7 @@ import { StrictMode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { App } from "../app/App";
 import { app, exchange, field, loseReply, offlineStudy, requests, startWords, useWrittenAppEnvironment } from "./writtenApp.test-support";
+import { pageGateOpen } from "../app/pageGate.test-support";
 
 useWrittenAppEnvironment();
 type Mode = "normal" | "accelerated";
@@ -107,7 +108,10 @@ describe("Written correct result first shown after a full reload (decision 20.1-
     fireEvent.click(screen.getByRole("button", { name: "Проверить" }));
     await waitFor(() => expect(a.kinds()).toContain("answer.submit"));
     const commandId = a.posts().find(post => post.kind === "answer.submit")!.command_id as string;
-    fireEvent.click(await screen.findByRole("button", { name: "Попробовать ещё раз" }, { timeout: 10_000 }));
+    const again = await screen.findByRole("button", { name: "Попробовать ещё раз" }, { timeout: 10_000 });
+    // P03 (L2, M-P03-4): the lost reply closed the page gate; the new open of «Попробовать ещё раз» waits for ready.
+    await pageGateOpen();
+    fireEvent.click(again);
     await screen.findByText("Верно", undefined, { timeout: 10_000 });
     const before = presents(a);
     await sleep(4500);

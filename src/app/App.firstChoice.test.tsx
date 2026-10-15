@@ -238,7 +238,8 @@ describe("an unresolved or conflicting first choice", () => {
     expect(page.getAllByRole("radio").every(radio => (radio as HTMLInputElement).disabled)).toBe(true);
     expect((page.getByRole("radio", { name: "Немецко-английский" }) as HTMLInputElement).checked).toBe(true);
     expect(page.getByRole("button", { name: "Продолжить" }).hasAttribute("disabled")).toBe(true);
-    fireEvent.click(page.getByRole("button", { name: "Повторить отправку" }));
+    // P03 (I9, M01): the retry button is offered once the page gate lets a write through again.
+    fireEvent.click(await page.findByRole("button", { name: "Повторить отправку" }, exchange));
     await screen.findByText(todayPair("en"), undefined, exchange);
     expect(languageSaves(f)).toHaveLength(2);
     expect(languageSaves(f)[1]).toEqual(languageSaves(f)[0]);
@@ -360,7 +361,8 @@ describe("the bot's card button before the first choice (29.1-А)", () => {
     render(<App />); await choose("Немецко-украинский");
     await screen.findByText("Пока не удалось подтвердить сохранение. Проверь состояние или повтори отправку.", undefined, exchange);
     expect(f.views()).toEqual([]);
-    fireEvent.click(screen.getByRole("button", { name: "Повторить отправку" }));
+    // P03 (I9, M01): the retry button is offered once the page gate lets a write through again.
+    fireEvent.click(await screen.findByRole("button", { name: "Повторить отправку" }, exchange));
     await screen.findByText("В очереди на изучение", undefined, exchange);
     expect(languageSaves(f)).toHaveLength(2); expect(languageSaves(f)[1]).toEqual(languageSaves(f)[0]);
   });
@@ -522,7 +524,8 @@ describe("QA: confirmation paths", () => {
     render(<App />); await choose("Немецко-английский");
     await screen.findByText(pendingText, undefined, exchange);
     f.chooseElsewhere("ru");
-    fireEvent.click(screen.getByRole("button", { name: "Повторить отправку" }));
+    // P03 (I9, M01): the retry button is offered once the page gate lets a write through again.
+    fireEvent.click(await screen.findByRole("button", { name: "Повторить отправку" }, exchange));
     await screen.findByText("Язык словаря уже подтверждён. Сейчас выбрано: Немецко-русский.", undefined, exchange);
     expect(f.data.settings.dictionary_language).toEqual({ value: "ru", version: "2" });
     expect(screen.queryByRole("button", { name: "Сохранить моё значение" })).toBeNull();

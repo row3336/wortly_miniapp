@@ -3,7 +3,7 @@ import { commonIntentHash, createCommonFieldApi, validCommonCurrent } from "./co
 import {
   CARD_ID, CONTEXT, command, commonCurrent, commonFact, fid, grammarIntent, json, origin, translationIntent,
 } from "./ownerTestData.test-support";
-import { testGate } from "../../commands/testGate.test-support";
+import { readWithTicket, testGate } from "../../commands/testGate.test-support";
 
 function api(...replies: Response[]) {
   const fetcher = vi.fn<typeof fetch>(async () => replies.shift() ?? json({}, 500));
@@ -106,13 +106,13 @@ describe("common field.save wire (core CommonFieldSavePayload, C-FIELDS-3)", () 
       json({ error: { code: "COMMAND_PAYLOAD_MISMATCH" } }, 409),
       json({ command: commonFact(save, "already_applied"), current: commonCurrent(), state_version: "11",
         verified_intent_hash: "0".repeat(64) }));
-    expect((await client.status("token", "proof", save)).outcome).toBe("accepted");
+    expect((await readWithTicket(save, (__command, __ticket) => client.status("token", "proof", __command, __ticket))).outcome).toBe("accepted");
     const url = new URL(String(fetcher.mock.calls[0][0]), "http://local");
     expect(url.pathname).toBe(`/api/v1/commands/${fid(10)}`);
     expect(Object.fromEntries(url.searchParams)).toEqual({ ...origin, expected_intent_hash: hash });
-    expect((await client.status("token", "proof", save)).outcome).toBe("not_found");
-    expect((await client.status("token", "proof", save)).outcome).toBe("mismatch");
-    await expect(client.status("token", "proof", save)).rejects.toMatchObject({ kind: "invalid_response" });
+    expect((await readWithTicket(save, (__command, __ticket) => client.status("token", "proof", __command, __ticket))).outcome).toBe("not_found");
+    expect((await readWithTicket(save, (__command, __ticket) => client.status("token", "proof", __command, __ticket))).outcome).toBe("mismatch");
+    await expect(readWithTicket(save, (__command, __ticket) => client.status("token", "proof", __command, __ticket))).rejects.toMatchObject({ kind: "invalid_response" });
   });
 
   it("C7 invalid intents fail before any request: an empty list (R12-06), a language on grammar, an unknown field", async () => {

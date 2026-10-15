@@ -3,7 +3,7 @@ import { conformsToGenerated } from "./generatedContract.test-support";
 import { createWrittenApi } from "./writtenApi";
 import type { WrittenCommand } from "./writtenIntent";
 import recording from "./writtenCoreRecording.json";
-import { testGate } from "../commands/testGate.test-support";
+import { readWithTicket, testGate } from "../commands/testGate.test-support";
 
 /**
  * Bridge to the real API: replies recorded from core's own ASGI app (TestClient over a disposable wortly_test
@@ -71,7 +71,7 @@ describe("written adapter against recorded core replies", () => {
     expect(answered).toMatchObject({ capabilities: { undo_target: { session_id: sessionId(), assignment_id: exchange("answer_first").body!.assignment_id,
       result_id: exchange("read_first").query.result_id, expected_result_version: "1", action_id: expect.any(String), kind: "answer.submit" } } });
     // The client computes the same intent fingerprint as core identity.intent_hash on real data.
-    expect(await api.status("token", "proof", command("answer_first"))).toMatchObject({ outcome: "accepted",
+    expect(await readWithTicket(command("answer_first"), (__command, __ticket) => api.status("token", "proof", __command, __ticket))).toMatchObject({ outcome: "accepted",
       command: { status: "already_applied" } });
     expect(await api.send("token", "proof", command("present_second"))).toMatchObject({ outcome: "accepted" });
     expect(await api.readResult("token", "proof", resultAddress("read_first")))
@@ -93,7 +93,7 @@ describe("written adapter against recorded core replies", () => {
       capabilities: { correct_target: null, grades: { values: [3, 4, 5], expected_result_version: "2" } },
       step: { status: "summary", assignment: null, summary: { completed: 2, correct: 2, wrong: 0, ratio: { numerator: 2, denominator: 2 } } } });
     // The fingerprint of a correction (empty payload) equals core's.
-    expect(await api.status("token", "proof", command("correct_second"))).toMatchObject({ outcome: "accepted",
+    expect(await readWithTicket(command("correct_second"), (__command, __ticket) => api.status("token", "proof", __command, __ticket))).toMatchObject({ outcome: "accepted",
       command: { status: "already_applied", kind: "result.correct" }, result: { grade: 4 } });
     expect(await api.read("token", "proof", { session_id: sessionId(), ...origin() })).toMatchObject({ current: { status: "summary",
       summary: { completed: 2, correct: 2, wrong: 0, ratio: { numerator: 2, denominator: 2 } } } });
@@ -102,7 +102,7 @@ describe("written adapter against recorded core replies", () => {
     expect(await api.readResult("token", "proof", resultAddress("read_closed"))).toMatchObject({ result: { detail: null },
       step: { status: "closed", summary: { completed: 2, correct: 2, wrong: 0, ratio: { numerator: 2, denominator: 2 } } } });
     const missing = exchange("status_missing").path.split("/").at(-1)!;
-    expect(await api.status("token", "proof", { ...command("stop"), command_id: missing })).toMatchObject({ outcome: "not_found",
+    expect(await readWithTicket({ ...command("stop"), command_id: missing }, (__command, __ticket) => api.status("token", "proof", __command, __ticket))).toMatchObject({ outcome: "not_found",
       closed_session: { status: "closed", close_reason: "summary_home" } });
     expect(await api.send("token", "proof", command("start_again"))).toMatchObject({ outcome: "rejected", error: { code: "SESSION_CLOSED" } });
     expect(fetcher).toHaveBeenCalledTimes(undoPart);
@@ -134,7 +134,7 @@ describe("written adapter against recorded core replies", () => {
     expect(again).toBeTruthy();
     expect(again).not.toBe(right.assignment_id);
     // The client fingerprint of an undo equals core's on real data.
-    expect(await api.status("token", "proof", command("undo"))).toMatchObject({ outcome: "accepted",
+    expect(await readWithTicket(command("undo"), (__command, __ticket) => api.status("token", "proof", __command, __ticket))).toMatchObject({ outcome: "accepted",
       command: { status: "already_applied", kind: "result.undo" }, result: { status: "undone" } });
     expect(command("undo_present_again")).toMatchObject({ kind: "assignment.present", assignment_id: again });
     expect(await api.send("token", "proof", command("undo_present_again"))).toMatchObject({ outcome: "accepted",

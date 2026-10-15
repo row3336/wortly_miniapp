@@ -7,6 +7,7 @@ import { ApiError, createJsonTransport, errorCode, httpError, type HttpOptions }
 import { eventTime, exactKeys, oneOf, record, sameId, uuid, version } from "../../api/wireValidation";
 import { intentHash } from "../../commands/intentHash";
 import { validCardExamples } from "../../study/referenceCardContent";
+import type { ReadbackTicket } from "../../commands/writeGate";
 
 export type FieldName = "translation" | "example" | "association";
 export type CaseRole = "akkusativ" | "dativ";
@@ -47,7 +48,7 @@ export type FieldCommandStatus =
  */
 export interface FieldEditorApi {
   send(token: string, proof: string, command: FieldCommand): Promise<FieldCommandReply>;
-  status(token: string, proof: string, command: FieldCommand): Promise<FieldCommandStatus>;
+  status(token: string, proof: string, command: FieldCommand, ticket: ReadbackTicket): Promise<FieldCommandStatus>;
 }
 
 export function fieldKeyOf(intent: FieldIntent): FieldKey {
@@ -241,13 +242,13 @@ export function createFieldEditorApi(options: HttpOptions): FieldEditorApi {
       throw new ApiError("invalid_response");
     },
 
-    async status(token, proof, original) {
+    async status(token, proof, original, ticket: ReadbackTicket) {
       const command = prepareCommand(token, proof, original);
       const { client_instance_id: clientId, document_id: documentId, ...intent } = command as Record<string, unknown>;
       const expectedHash = await fieldIntentHash(intent as FieldIntent);
       const parameters = new URLSearchParams({ client_instance_id: clientId as string, document_id: documentId as string,
         expected_intent_hash: expectedHash });
-      const reply = await request.readback(command.command_id, `/commands/${command.command_id}?${parameters}`, { method: "GET", token, proof });
+      const reply = await request(`/commands/${command.command_id}?${parameters}`, { method: "GET", token, proof, readbackTicket: ticket });
       const value = reply.value;
       if (reply.status === 409 && record(value) && exactKeys(value, ["error"]) && record(value.error)
         && exactKeys(value.error, ["code"]) && value.error.code === "COMMAND_PAYLOAD_MISMATCH") {

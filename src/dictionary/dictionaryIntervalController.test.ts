@@ -5,6 +5,9 @@ import {
 } from "./dictionaryIntervalController";
 import { createDictionaryIntervalApi } from "./intervalApi";
 import { testGate } from "../commands/testGate.test-support";
+import type { WriteGate } from "../commands/writeGate";
+import { WriteGate as RealWriteGate } from "../commands/writeGate";
+import { ManualClock } from "../commands/writeGate.test-support";
 
 // Synthetic server shaped after core dictionary_interval.py / coordinator.py (fact fields, refusal codes,
 // state bump only on acceptance, version+1 on undo, A01 row insert/delete). Steps: CORE_HANDOFF_CP2 §5.
@@ -189,15 +192,15 @@ function manualClock() {
   return { clock, advance, pending: () => timers.size };
 }
 
-function fixture(start?: bigint, minimum?: () => string | null, written?: Written) {
+function fixture(start?: bigint, minimum?: () => string | null, written?: Written, writeGate?: WriteGate) {
   const srv = server(start, written);
   let next = 100;
   const newId = vi.fn(() => id(next++));
   const seen: DictionaryIntervalSnapshot[] = [];
   let live = true;
   const time = manualClock();
-  const api = createDictionaryIntervalApi({ fetcher: srv.fetcher, timeoutMs: 5000, maxResponseBytes: 1_000_000, gate: testGate() });
-  const controller = new DictionaryIntervalController({
+  const api = createDictionaryIntervalApi({ fetcher: srv.fetcher, timeoutMs: 5000, maxResponseBytes: 1_000_000, gate: writeGate ?? testGate() });
+  const controller = new DictionaryIntervalController({ gate: writeGate ?? testGate(),
     port: dictionaryIntervalPort(api, "synthetic-token", "synthetic-proof", { client_instance_id: CLIENT, document_id: DOCUMENT }),
     isLive: () => live, newId, minimumStateVersion: minimum, onUpdate: snapshot => { seen.push(snapshot); }, clock: time.clock,
   });
@@ -502,7 +505,7 @@ describe("CP6 Q1: an unresolved initial open continues as the same command after
   /** The next binding of the same document: a new controller over a new handle, same origin. */
   function rebound(f: ReturnType<typeof fixture>) {
     const api = createDictionaryIntervalApi({ fetcher: f.srv.fetcher, timeoutMs: 5000, maxResponseBytes: 1_000_000, gate: testGate() });
-    return new DictionaryIntervalController({
+    return new DictionaryIntervalController({ gate: testGate(),
       port: dictionaryIntervalPort(api, "synthetic-token-2", "synthetic-proof-2", { client_instance_id: CLIENT, document_id: DOCUMENT }),
       isLive: () => true, newId: f.newId, onUpdate: () => undefined,
     });
@@ -571,7 +574,7 @@ describe("M-INTV: the one undo offer of an increase (CT 2.1.2, К07-122, Т83)",
   /** The next binding of the same live document: same origin, server, IDs and monotonic clock. */
   function rebound(f: ReturnType<typeof fixture>) {
     const api = createDictionaryIntervalApi({ fetcher: f.srv.fetcher, timeoutMs: 5000, maxResponseBytes: 1_000_000, gate: testGate() });
-    return new DictionaryIntervalController({
+    return new DictionaryIntervalController({ gate: testGate(),
       port: dictionaryIntervalPort(api, "synthetic-token-2", "synthetic-proof-2", { client_instance_id: CLIENT, document_id: DOCUMENT }),
       isLive: () => true, newId: f.newId, onUpdate: () => undefined, clock: f.time.clock,
     });
@@ -858,7 +861,7 @@ describe("M-INTV after QA (M-INTV-QA REPORT: QA-O, QA-O2, QA-T, QA-L, QA-U)", ()
     const handoff = f.controller.handoff()!;
     f.end(); f.controller.dispose();
     const api = createDictionaryIntervalApi({ fetcher: f.srv.fetcher, timeoutMs: 5000, maxResponseBytes: 1_000_000, gate: testGate() });
-    const next = new DictionaryIntervalController({
+    const next = new DictionaryIntervalController({ gate: testGate(),
       port: dictionaryIntervalPort(api, "synthetic-token-2", "synthetic-proof-2", { client_instance_id: CLIENT, document_id: DOCUMENT }),
       isLive: () => true, newId: f.newId, onUpdate: () => undefined, clock: f.time.clock });
     await next.resume(handoff); await settle();
@@ -983,5 +986,58 @@ describe("D-CONTEXT-LATE-OPEN: an accepted open answered below a version seen me
     await late.deliver();
     expect(f.posts().map(body => body.kind)).toEqual(["context.open", "context.close"]);
     expect(contextGets(f)).toEqual([]);
+  });
+});
+
+describe("AC-31 (M13/M14) and the buttons with the write gate (P03 M-P03-8)", () => {
+  function gated() {
+    const clock = new ManualClock();
+    const writeGate = new RealWriteGate({ clock, probe: async () => ({ status: "ready" }) });
+    return { clock, writeGate };
+  }
+  it("M13: the automatic context.open the gate keeps is paused; ready sends nothing by itself; the explicit retry repeats the same ID", async () => {
+    const { clock, writeGate } = gated();
+    const f = fixture(undefined, undefined, undefined, writeGate);
+    writeGate.closeByFailure();
+    await f.controller.open(CARD);
+    const paused = f.controller.snapshot();
+    expect(paused).toMatchObject({ problem: { reason: "paused" }, pending: { kind: "context.open", status: "unknown" }, canRetry: false });
+    expect(f.posts()).toEqual([]);
+    await clock.advanceTo(5_000); await settle();
+    expect(f.posts()).toEqual([]);
+    expect(f.controller.snapshot().canRetry).toBe(true);
+    await f.controller.retry(); await settle();
+    expect(f.posts().map(post => [post.kind, post.command_id])).toEqual([["context.open", paused.pending!.commandId]]);
+    f.controller.dispose();
+  });
+
+  it("M14: a close the gate keeps is neither sent nor deferred; ready later sends nothing", async () => {
+    const { clock, writeGate } = gated();
+    const f = fixture(undefined, undefined, undefined, writeGate);
+    await ready(f);
+    const before = f.posts().length;
+    writeGate.closeByFailure();
+    await f.controller.close(); await settle();
+    expect(f.posts().slice(before)).toEqual([]);
+    await clock.advanceTo(5_000); await settle();
+    await f.controller.close(); await settle();
+    expect(f.posts().slice(before)).toEqual([]);
+    expect(f.controller.snapshot().phase).toBe("closed");
+    f.controller.dispose();
+  });
+
+  it("«Повторить» of an unresolved increase sends the same command: it follows mayWrite of that ID", async () => {
+    const { clock, writeGate } = gated();
+    const f = fixture(undefined, undefined, undefined, writeGate);
+    await ready(f);
+    writeGate.closeByFailure();
+    await f.controller.increase({ option_id: 2 }); await settle();
+    expect(f.controller.snapshot()).toMatchObject({ problem: { reason: "paused" }, canRetry: false, canIncrease: false });
+    await clock.advanceTo(5_000); await settle();
+    const id = f.controller.snapshot().pending!.commandId;
+    expect(f.controller.snapshot().canRetry).toBe(true);
+    writeGate.resolvePending(id, "stale");
+    expect(f.controller.snapshot().canRetry).toBe(false);
+    f.controller.dispose();
   });
 });

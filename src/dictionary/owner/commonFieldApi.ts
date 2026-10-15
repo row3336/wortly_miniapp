@@ -7,6 +7,7 @@ import { ApiError, createJsonTransport, errorCode, httpError, type HttpOptions }
 import { eventTime, exactKeys, oneOf, record, sameId, uuid, version } from "../../api/wireValidation";
 import { intentHash } from "../../commands/intentHash";
 import { validCardGrammar } from "../../study/referenceCardContent";
+import type { ReadbackTicket } from "../../commands/writeGate";
 
 export type CommonLanguage = "ru" | "uk" | "en";
 export type CardType = CommonFieldsCurrent["card_type"];
@@ -56,7 +57,7 @@ export type CommonCommandStatus =
 /** One request per call, never repeated; a thrown local Error means nothing was sent (as fieldEditorApi). */
 export interface CommonFieldApi {
   send(token: string, proof: string, command: CommonCommand): Promise<CommonCommandReply>;
-  status(token: string, proof: string, command: CommonCommand): Promise<CommonCommandStatus>;
+  status(token: string, proof: string, command: CommonCommand, ticket: ReadbackTicket): Promise<CommonCommandStatus>;
   /** R12-04: the owner's common translations of every L1, read when «Изменить перевод для всех» opens. */
   readTranslations(token: string, cardId: string): Promise<CommonTranslationsResponse>;
 }
@@ -200,13 +201,13 @@ export function createCommonFieldApi(options: HttpOptions): CommonFieldApi {
       throw new ApiError("invalid_response");
     },
 
-    async status(token, proof, original) {
+    async status(token, proof, original, ticket: ReadbackTicket) {
       const command = prepareCommand(token, proof, original);
       const { client_instance_id: clientId, document_id: documentId, ...intent } = command as Record<string, unknown>;
       const expectedHash = await commonIntentHash(intent as CommonSaveIntent);
       const parameters = new URLSearchParams({ client_instance_id: clientId as string, document_id: documentId as string,
         expected_intent_hash: expectedHash });
-      const reply = await request.readback(command.command_id, `/commands/${command.command_id}?${parameters}`, { method: "GET", token, proof });
+      const reply = await request(`/commands/${command.command_id}?${parameters}`, { method: "GET", token, proof, readbackTicket: ticket });
       const value = reply.value;
       if (reply.status === 409 && record(value) && exactKeys(value, ["error"]) && record(value.error)
         && exactKeys(value.error, ["code"]) && value.error.code === "COMMAND_PAYLOAD_MISMATCH") {

@@ -5,6 +5,7 @@ import { validProfile } from "../../api/entryApi";
 import { ApiError, createJsonTransport, errorCode, httpError, type HttpOptions } from "../../api/http";
 import { eventTime, exactKeys, oneOf, record, sameId, uuid, version } from "../../api/wireValidation";
 import { intentHash } from "../../commands/intentHash";
+import type { ReadbackTicket } from "../../commands/writeGate";
 
 /**
  * «Не повторять» / «Вернуть в повторы» compare-and-set the card's own study state: the expected version is
@@ -36,7 +37,7 @@ export type CardActionStatus =
  */
 export interface CardActionApi {
   send(token: string, proof: string, command: CardActionCommand): Promise<CardActionReply>;
-  status(token: string, proof: string, command: CardActionCommand): Promise<CardActionStatus>;
+  status(token: string, proof: string, command: CardActionCommand, ticket: ReadbackTicket): Promise<CardActionStatus>;
 }
 
 const kinds: readonly CardActionKind[] = ["card.exclude", "card.return", "card.relearn"];
@@ -144,13 +145,13 @@ export function createCardActionApi(options: HttpOptions): CardActionApi {
       throw new ApiError("invalid_response");
     },
 
-    async status(token, proof, original) {
+    async status(token, proof, original, ticket: ReadbackTicket) {
       const command = prepareCommand(token, proof, original);
       const { client_instance_id: clientId, document_id: documentId, ...intent } = command as Record<string, unknown>;
       const expectedHash = await cardActionIntentHash(intent as CardActionIntent);
       const parameters = new URLSearchParams({ client_instance_id: clientId as string, document_id: documentId as string,
         expected_intent_hash: expectedHash });
-      const reply = await request.readback(command.command_id, `/commands/${command.command_id}?${parameters}`, { method: "GET", token, proof });
+      const reply = await request(`/commands/${command.command_id}?${parameters}`, { method: "GET", token, proof, readbackTicket: ticket });
       const value = reply.value;
       if (reply.status === 409 && record(value) && exactKeys(value, ["error"]) && record(value.error)
         && exactKeys(value.error, ["code"]) && value.error.code === "COMMAND_PAYLOAD_MISMATCH") return { outcome: "mismatch" };

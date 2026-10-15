@@ -1,3 +1,4 @@
+import { pausedCopy } from "../commands/commandCopy";
 import type { Language } from "../i18n/language";
 import type { FeedbackProblem } from "../feedback/feedbackController";
 
@@ -30,6 +31,7 @@ export const settingsFeedbackCopy: Record<Language, Copy> = {
       pending_changed: "Сохранённая отправка изменилась в другом окне. Закрой лишние окна и открой приложение заново.",
       expired: "Сеанс истёк. Текст сохранён: открой приложение заново.",
       forbidden: "Нет доступа к отправке сообщений. Текст сохранён.",
+      paused: pausedCopy.ru,
     },
   },
   uk: {
@@ -50,6 +52,7 @@ export const settingsFeedbackCopy: Record<Language, Copy> = {
       pending_changed: "Збережене надсилання змінилося в іншому вікні. Закрий зайві вікна й відкрий застосунок знову.",
       expired: "Сеанс завершився. Текст збережено: відкрий застосунок знову.",
       forbidden: "Немає доступу до надсилання повідомлень. Текст збережено.",
+      paused: pausedCopy.uk,
     },
   },
   en: {
@@ -70,6 +73,7 @@ export const settingsFeedbackCopy: Record<Language, Copy> = {
       pending_changed: "The saved message changed in another window. Close extra windows and reopen the app.",
       expired: "The session expired. The text is kept: reopen the app.",
       forbidden: "Sending messages is not allowed. The text is kept.",
+      paused: pausedCopy.en,
     },
   },
 };

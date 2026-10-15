@@ -10,6 +10,7 @@ import { App } from "./App";
 import { commandPosts, enabledExits, foregroundOpen, loseReply, moveWithout, noLandings, pairMoved, settle as pause,
   watchCommits } from "./pairMoved.test-support";
 import { windows } from "./twoWindows.test-support";
+import { pageGateOpen } from "./pageGate.test-support";
 
 /**
  * Card actions reported to the written owner. The written quiz itself shows nothing while the oral one runs, so the report
@@ -343,7 +344,13 @@ describe("oral R1: the window refreshes itself into the session of the new pair 
     render(<App />); const start = await todayReady(); const opens = world.opens.length, mark = a.fetcher.mock.calls.length;
     if (lose) loseReply(a.fetcher, "session.start");
     fireEvent.click(start);
-    if (lose) fireEvent.click(await screen.findByRole("button", { name: "Проверить состояние" }, { timeout: 5000 }));
+    if (lose) {
+      const check = await screen.findByRole("button", { name: "Проверить состояние" }, { timeout: 5000 });
+      // P03 (L2, M-P03-4): the lost reply closed the page gate; the check comes once the connection is back, so the
+      // presentation that follows it is not kept on the client.
+      await pageGateOpen();
+      fireEvent.click(check);
+    }
     expect(await screen.findByText("das Haus", undefined, { timeout: 5000 })).toBeTruthy();
     await pause(2500);
     expect(world.opens.slice(opens)).toEqual([]);

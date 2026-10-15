@@ -1,6 +1,8 @@
 import type { DictionaryCardActions } from "../../api/generated";
 import { version } from "../../api/wireValidation";
 import { commandOutcomeUnknown } from "../../commands/commandOutcome";
+import { GatePending, pausedBeforeSend } from "../../commands/gatePending";
+import type { ReadbackTicket, WriteGate } from "../../commands/writeGate";
 import {
   copyCardActionIntent,
   type CardActionCommand, type CardActionIntent, type CardActionKind, type CardActionOrigin, type CardActionReply,
@@ -11,7 +13,8 @@ import {
 export type CardActionsPort = {
   origin(): CardActionOrigin | null;
   send(command: CardActionCommand): Promise<CardActionReply>;
-  status(command: CardActionCommand): Promise<CardActionStatus>;
+  /** The status read by ID; the ticket comes from the write gate (R6). */
+  status(command: CardActionCommand, ticket: ReadbackTicket): Promise<CardActionStatus>;
 };
 
 /** What the shown card read says: the server's hint of allowed actions and the version exclude/return compare against. */
@@ -22,12 +25,15 @@ export type CardActionsCard = {
   actions: DictionaryCardActions;
 };
 export type CardActionsProblem = {
-  /** unknown: no reply, the same command can be repeated; refused: proven not applied; mismatch: this ID holds other content. */
-  reason: "unknown" | "refused" | "mismatch";
+  /**
+   * unknown: no reply, the same command can be repeated; refused: proven not applied; mismatch: this ID holds other content;
+   * paused: the write gate kept the request on the client (PAUSED_BEFORE_SEND, P03 §4.1 K10) — nothing left, the ID stays.
+   */
+  reason: "unknown" | "refused" | "mismatch" | "paused";
   code?: string;
 };
 export type CardActionsSnapshot = {
-  status: "idle" | "sending" | "unknown" | "refused" | "applied";
+  status: "idle" | "sending" | "unknown" | "refused" | "applied" | "paused";
   /** The command in flight or unresolved, or the one the status describes. */
   kind: CardActionKind | null;
   /** «Изучить заново» waits for its separate confirmation (К07-077); nothing is sent yet. */
@@ -50,9 +56,14 @@ type Options = {
   onApplied(event: CardActionApplied): void;
   /** A definite refusal may mean the shown card is outdated: the host reads it again, the client never guesses (К07-074). */
   onRefused(code: string): void;
+  /** The write gate of the page (P03 M-P03-8): readback registry, status reads by ticket, the buttons (I9, M01). */
+  gate: WriteGate;
 };
-/** The one command of this card in flight or unresolved; its intent never changes until it settles. */
-type Entry = { intent: CardActionIntent; status: "sending" | "unknown"; busy: boolean; notFound: boolean };
+/**
+ * The one command of this card in flight or unresolved; its intent never changes until it settles. paused: the gate kept
+ * its request on the client; maySend says no earlier request of this ID may have left (its new press sends directly).
+ */
+type Entry = { intent: CardActionIntent; status: "sending" | "unknown" | "paused"; busy: boolean; notFound: boolean; maySend: boolean };
 
 const none: DictionaryCardActions = { exclude: false, return: false, relearn: false };
 const newer = (left: string, right: string) => BigInt(left) > BigInt(right);
@@ -74,8 +85,14 @@ export class CardActionsController {
   /** After an accepted command the buttons wait for a card read at least this new: the old hint is spent. */
   private appliedVersion: string | null = null;
   private disposed = false;
+  private readonly registry: GatePending;
+  private readonly unsubscribe: () => void;
 
-  constructor(private readonly options: Options) {}
+  constructor(private readonly options: Options) {
+    this.registry = new GatePending(options.gate, "card");
+    // M01: the buttons follow the gate; a change of net, hold or locks repaints them.
+    this.unsubscribe = options.gate.subscribe(() => this.notify());
+  }
 
   /** A card read; another card starts over, an older read of the same card adds nothing. */
   setCard(card: CardActionsCard): void {
@@ -95,6 +112,10 @@ export class CardActionsController {
   }
 
   dispose(): void {
+    // R3: an ID without a definite answer stays locked to itself in the gate.
+    // Unsubscribed first: the release below changes the gate, and a disposed owner repaints nothing.
+    this.unsubscribe();
+    this.registry.release();
     this.disposed = true;
     this.entry = null;
     this.confirming = false;
@@ -103,10 +124,18 @@ export class CardActionsController {
   snapshot(): CardActionsSnapshot {
     const entry = this.entry, card = this.card;
     const current = card !== null && (this.appliedVersion === null || !newer(this.appliedVersion, card.stateVersion));
-    const offered = !this.disposed && entry === null && !this.confirming && current ? { ...card.actions } : { ...none };
+    // I9/M01: while the gate does not let a write through, no button is offered (nothing is queued). A paused command
+    // offers only its own button again, which repeats the same ID (P03 §4.1 K10).
+    const writable = this.registry.writable(entry?.intent.command_id);
+    const offered = this.disposed || this.confirming || !current || !writable ? { ...none }
+      : entry === null ? { ...card.actions }
+      : entry.status === "paused" && !entry.busy ? { ...none, [actionOf(entry.intent.kind)]: card.actions[actionOf(entry.intent.kind)] }
+      : { ...none };
     return { status: this.status, kind: this.kind, confirming: this.confirming && !this.disposed,
       checking: entry?.busy === true && entry.status === "unknown", problem: this.problem ? { ...this.problem } : null,
-      offered, canRetry: !this.disposed && entry !== null && entry.status === "unknown" && !entry.busy, disposed: this.disposed };
+      // «Повторить»: after not_found it sends at once (mayWrite of its ID); otherwise it reads the ID first (C335).
+      offered, canRetry: !this.disposed && entry !== null && entry.status === "unknown" && !entry.busy
+        && (entry.notFound ? writable : this.registry.checkable()), disposed: this.disposed };
   }
 
   // ---- user actions ----
@@ -127,8 +156,10 @@ export class CardActionsController {
     this.notify();
   }
   confirmRelearn(): Promise<void> {
-    const card = this.card;
-    if (this.disposed || !this.confirming || this.entry !== null || !card?.actions.relearn) return Promise.resolve();
+    const card = this.card, entry = this.entry;
+    if (this.disposed || !this.confirming || !card?.actions.relearn) return Promise.resolve();
+    if (entry?.status === "paused" && entry.intent.kind === "card.relearn") { this.confirming = false; return this.resumePaused(entry); }
+    if (entry !== null) return Promise.resolve();
     this.confirming = false;
     return this.start({ kind: "card.relearn", command_id: this.options.newId(), card_id: card.cardId, confirmed: true });
   }
@@ -137,6 +168,7 @@ export class CardActionsController {
   async retry(): Promise<void> {
     const entry = this.entry;
     if (this.disposed || !entry || entry.status !== "unknown" || entry.busy) return;
+    if (entry.notFound ? !this.registry.writable(entry.intent.command_id) : !this.registry.checkable()) return;
     if (entry.notFound) { await this.execute(entry); return; }
     await this.check(entry);
     if (this.entry === entry && entry.notFound) await this.execute(entry);
@@ -145,6 +177,8 @@ export class CardActionsController {
   private changeState(kind: "card.exclude" | "card.return"): Promise<void> {
     const card = this.card, offered = this.snapshot().offered;
     if (!card || !(kind === "card.exclude" ? offered.exclude : offered.return)) return Promise.resolve();
+    const entry = this.entry;
+    if (entry?.status === "paused" && entry.intent.kind === kind) return this.resumePaused(entry);
     return this.start({ kind, command_id: this.options.newId(), card_id: card.cardId,
       expected_card_state_version: card.exclusionVersion });
   }
@@ -160,8 +194,19 @@ export class CardActionsController {
     this.appliedVersion = null;
   }
 
+  /**
+   * A new press of a paused command (P03 §4.1 K10, M03/M04): the same ID. If an earlier request of it may have left, its
+   * status is read first and only a missing command is sent; otherwise it is sent directly.
+   */
+  private async resumePaused(entry: Entry): Promise<void> {
+    if (entry.maySend) { await this.execute(entry); return; }
+    entry.status = "unknown";
+    await this.check(entry);
+    if (this.entry === entry && entry.notFound) await this.execute(entry);
+  }
+
   private start(intent: CardActionIntent): Promise<void> {
-    const entry: Entry = { intent: copyCardActionIntent(intent), status: "sending", busy: false, notFound: false };
+    const entry: Entry = { intent: copyCardActionIntent(intent), status: "sending", busy: false, notFound: false, maySend: true };
     this.entry = entry;
     this.kind = intent.kind;
     this.problem = null;
@@ -181,10 +226,21 @@ export class CardActionsController {
     try {
       const command = this.command(entry);
       if (!command) throw new Error("no live document");
+      // From now on a request of this ID may leave: its outcome is unknown until a definite answer (R1).
+      this.registry.hold(entry.intent.command_id);
       reply = await this.options.port.send(command);
     } catch (error) {
       if (this.disposed || this.entry !== entry) return;
       entry.busy = false;
+      // K10: PAUSED_BEFORE_SEND comes before commandOutcomeUnknown — nothing left, no check, the entry and its ID stay.
+      if (pausedBeforeSend(error)) {
+        entry.status = "paused";
+        this.status = "paused";
+        this.problem = { reason: "paused" };
+        this.notify();
+        return;
+      }
+      entry.maySend = false;
       if (commandOutcomeUnknown(error)) {
         entry.status = "unknown";
         this.status = "unknown";
@@ -212,8 +268,10 @@ export class CardActionsController {
     try {
       const command = this.command(entry);
       if (!command) throw new Error("no live document");
-      status = await this.options.port.status(command);
+      // R6: the status of this ID is read only with the gate's ticket.
+      status = await this.registry.read(command.command_id, ticket => this.options.port.status(command, ticket));
     } catch {
+      // A failed read, a gate that held or cancelled it: nothing is decided, the entry stays unknown.
       if (this.disposed || this.entry !== entry) return;
       entry.busy = false;
       this.notify();
@@ -222,12 +280,14 @@ export class CardActionsController {
     if (this.disposed || this.entry !== entry) return;
     entry.busy = false;
     if (status.outcome === "accepted") { this.accepted(entry, status.state_version); return; }
-    if (status.outcome === "not_found") { entry.notFound = true; this.notify(); return; }
+    if (status.outcome === "not_found") { this.registry.settled("not_recorded"); entry.notFound = true; this.notify(); return; }
     // Another payload under this ID: this intent can never be confirmed; a new tap is a new command.
     this.refused({ reason: "mismatch", code: "COMMAND_PAYLOAD_MISMATCH" });
   }
 
   private accepted(entry: Entry, stateVersion: string): void {
+    this.registry.settled("recorded");
+    this.registry.release();
     this.entry = null;
     this.status = "applied";
     this.problem = null;
@@ -237,10 +297,17 @@ export class CardActionsController {
   }
 
   private refused(problem: CardActionsProblem): void {
+    this.registry.settled(problem.reason === "mismatch" ? "mismatch" : "rejected");
+    this.registry.release();
     this.entry = null;
     this.status = "refused";
     this.problem = problem;
     this.notify();
     if (problem.code) this.options.onRefused(problem.code);
   }
+}
+
+/** The button of a command kind in the card's hint of allowed actions. */
+function actionOf(kind: CardActionKind): keyof DictionaryCardActions {
+  return kind === "card.exclude" ? "exclude" : kind === "card.return" ? "return" : "relearn";
 }

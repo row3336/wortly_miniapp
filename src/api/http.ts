@@ -66,10 +66,11 @@ type Request = {
   readbackTicket?: ReadbackTicket;
 };
 
-/** The transport of one module: a request, and a command status read that goes only through gate.runReadback (R6). */
-export type JsonTransport = ((path: string, request: Request) => Promise<JsonReply>) & {
-  readback(commandId: string, path: string, request: Request): Promise<JsonReply>;
-};
+/**
+ * The transport of one module. A command status read carries the ticket that gate.runReadback gave its caller (R6): the
+ * API modules take it as an explicit parameter of their status functions (M-P03-8).
+ */
+export type JsonTransport = (path: string, request: Request) => Promise<JsonReply>;
 
 /**
  * retryAfter: whole seconds of a numeric Retry-After header, when the reply carried one. retryAfterRaw: the header as
@@ -249,11 +250,18 @@ export function createJsonTransport(options: HttpOptions): JsonTransport {
       // Nothing left: no journal, no refusal status, the caller sees PAUSED_BEFORE_SEND as it is.
       if (error instanceof PausedBeforeSendError) throw error;
       // A stalled body cannot erase a refusal already received in the headers.
-      if (refusalStatus !== undefined) { journal?.answered({ status: refusalStatus, ok: false, value: undefined }); throw new ApiError("http", refusalStatus); }
+      if (refusalStatus !== undefined) {
+        journal?.answered({ status: refusalStatus, ok: false, value: undefined });
+        observeFailure(gate, path, request, refusalStatus >= 500 ? "unreadable_5xx" : "unreadable_4xx");
+        throw new ApiError("http", refusalStatus);
+      }
       journal?.failed(timedOut ? "timeout" : error instanceof ApiError && error.kind === "invalid_response" ? "unknown" : "network");
+      observeFailure(gate, path, request, timedOut ? "timeout"
+        : error instanceof ApiError && error.kind === "invalid_response" ? "unreadable_2xx" : "network");
       if (error instanceof ApiError) throw error;
       throw new ApiError("network");
     } finally { clearTimeout(timer); }
+    observeReply(gate, path, reply);
     journal?.answered(reply);
     // A lost admission or a deleted profile, seen on any route, ends the client journal at once (P04 r9 §8).
     journalRefusal(reply.status, errorCode(reply.value));
@@ -261,11 +269,37 @@ export function createJsonTransport(options: HttpOptions): JsonTransport {
     if (reply.status === 409 && errorCode(reply.value) === "DOCUMENT_STALE") options.onDocumentStale?.();
     return reply;
   };
-  // R6: a command status read carries the ticket of gate.runReadback, which may first wait for the identity check.
-  const readback = (commandId: string, path: string, request: Request): Promise<JsonReply> => gate
-    ? gate.runReadback(commandId, ticket => send(path, { ...request, readbackTicket: ticket }))
-    : send(path, request);
-  return Object.assign(send, { readback });
+  return send;
+}
+
+/**
+ * The observer of the write gate (P03 §4.1 «Наблюдатель в транспорте», M-P03-4): a 503 of any kind or a broken exchange
+ * on any real request closes `net`; an ordinary loss does not. The availability probe is no real request: the gate reads
+ * its answers itself. Nothing here ends an episode: definiteness is told by the module decoders (§2 п.3, M-P03-10).
+ */
+function observeReply(gate: WriteGate | undefined, path: string, reply: JsonReply): void {
+  if (!gate || probeRoute(path) || reply.status < 500) return;
+  const code = errorCode(reply.value);
+  if (reply.status === 503 && code === "MAINTENANCE") gate.closeByMaintenance(readRetryAfter(reply).seconds);
+  else gate.closeByFailure(reply.status === 503 && code === "WRITE_UNAVAILABLE" ? "unavailable" : "unknown");
+}
+
+/**
+ * A failed exchange: a refused connection or an unreadable answer ≥500 closes `net`. The client's own timeout and an
+ * unreadable answer <500 are an ordinary loss (RD-2, in force once M-P03-2 tells the timeout apart): `net` stays as it
+ * is. The one exception is the entry's foreground open: its timeout closes `net` (K-11 ВР-1 ahead of RD-2, §4.4).
+ */
+function observeFailure(gate: WriteGate | undefined, path: string, request: Request,
+  failure: "network" | "timeout" | "unreadable_5xx" | "unreadable_4xx" | "unreadable_2xx"): void {
+  if (!gate || probeRoute(path)) return;
+  if (failure === "network" || failure === "unreadable_5xx") { gate.closeByFailure("unknown"); return; }
+  if (failure === "timeout" && foregroundOpen(path, request)) gate.closeByFailure("unknown");
+}
+
+function probeRoute(path: string): boolean { return path.split(/[?#]/, 1)[0] === "/availability"; }
+
+function foregroundOpen(path: string, request: Request): boolean {
+  return request.method === "POST" && path.split(/[?#]/, 1)[0] === "/client/open" && record(request.body) && request.body.event === "foreground";
 }
 
 /** The outcome of an answered command attempt as the journal names it (events TZ §4.5 c.cmd.reply). */

@@ -7,6 +7,7 @@ import { OwnerCommonSlot } from "./OwnerEditor";
 import { OwnerEditorController, type CommonSource } from "./ownerEditorController";
 import type { OwnerEditorActions, OwnerEditorState } from "./useOwnerEditor";
 import { CARD_ID, CONTEXT, NOUN_GRAMMAR, origin } from "./ownerTestData.test-support";
+import { testGate } from "../../commands/testGate.test-support";
 
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
@@ -15,7 +16,7 @@ function source(translations = ["дом", "жилище", "здание"]): Comm
 }
 
 function controllerOf(onUpdate: (state: OwnerEditorState) => void = () => {}) {
-  return new OwnerEditorController({
+  return new OwnerEditorController({ gate: testGate(),
     port: { origin: () => origin, send: async () => { throw new Error("no send"); }, status: async () => { throw new Error("no status"); },
       readTranslations: async () => ({ state_version: "10", current: { status: "unavailable" } }) },
     newId: () => "00000000-0000-4000-8000-000000000777", onUpdate: snapshot => onUpdate({ ...snapshot, leaveAsked: false }),

@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type { LearningSessionProjection, Profile } from "../api/generated";
 import { createLearningSessionApi, type LearningSessionCommand } from "./learningSessionApi";
-import { testGate } from "../commands/testGate.test-support";
+import { readWithTicket, testGate } from "../commands/testGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const origin = { client_instance_id: id(1), document_id: id(2), session_id: id(3) };
@@ -44,11 +44,11 @@ describe("Learning session HTTP adapter", () => {
   it.each(["send", "status"] as const)("rejects extra envelope data during %s", async method => {
     const value = response(commands[0], preview(), method === "status" ? "already_applied" : "applied");
     const f = fixture({ ...value, unexpected_private_snapshot: { variants: ["hidden"] } });
-    await expect(f.api[method]("token", "proof", commands[0])).rejects.toMatchObject({ kind: "invalid_response" });
+    await expect((method === "status" ? readWithTicket(commands[0], (__command, __ticket) => f.api.status("token", "proof", __command, __ticket)) : f.api.send("token", "proof", commands[0]))).rejects.toMatchObject({ kind: "invalid_response" });
   });
   it.each([201, 202, 206])("rejects HTTP%s as command status confirmation", async status => {
     const f = fixture(response(commands[0], preview(), "already_applied"), status);
-    await expect(f.api.status("token", "proof", commands[0])).rejects.toMatchObject({ kind: "invalid_response" });
+    await expect(readWithTicket(commands[0], (__command, __ticket) => f.api.status("token", "proof", __command, __ticket))).rejects.toMatchObject({ kind: "invalid_response" });
   });
   it.each(commands)("sends $kind once and confirms the exact fact separately from current", async command => {
     const current = { ...preview(), preview: { ...preview().preview!, id: id(99) } };
@@ -79,7 +79,7 @@ describe("Learning session HTTP adapter", () => {
 
   it.each(commands)("recovers $kind through GET without repeating the mutation", async command => {
     const value = response(command, preview(), "already_applied"), f = fixture(value);
-    const result = await f.api.status("token", "proof", command);
+    const result = await readWithTicket(command, (__command, __ticket) => f.api.status("token", "proof", __command, __ticket));
     expect(result.outcome).toBe("accepted"); expect(result.command).toEqual(value.command);
     expect(f.fetcher).toHaveBeenCalledOnce();
     expect(String(f.fetcher.mock.calls[0][0])).toContain(`/commands/${command.command_id}?`);
@@ -89,11 +89,11 @@ describe("Learning session HTTP adapter", () => {
 
   it("an accepted fact without current rights does not restore a step", async () => {
     const f = fixture(response(commands[0], { status: "unavailable" }, "already_applied"));
-    expect(await f.api.status("token", "proof", commands[0])).toMatchObject({ outcome: "accepted", current: { status: "unavailable" } });
+    expect(await readWithTicket(commands[0], (__command, __ticket) => f.api.status("token", "proof", __command, __ticket))).toMatchObject({ outcome: "accepted", current: { status: "unavailable" } });
   });
   it("not-found remains unresolved and keeps the admitted profile separate", async () => {
     const f = fixture({ command: { id: id(4), status: "not_found" }, current: profile, state_version: "3" });
-    expect(await f.api.status("token", "proof", commands[0])).toEqual({ outcome: "not_found",
+    expect(await readWithTicket(commands[0], (__command, __ticket) => f.api.status("token", "proof", __command, __ticket))).toEqual({ outcome: "not_found",
       command: { id: id(4), status: "not_found" }, current: profile, state_version: "3" });
     expect(f.fetcher).toHaveBeenCalledOnce();
   });
@@ -159,7 +159,7 @@ describe("Learning session HTTP adapter", () => {
   it.each(["send", "status"] as const)("HTTP200 with an error never establishes success in %s", async method => {
     const f = fixture({ ...response(commands[0], preview(), method === "status" ? "already_applied" : "applied"),
       error: { code: "WRITE_UNAVAILABLE" } });
-    await expect(f.api[method]("token", "proof", commands[0])).rejects.toMatchObject({ kind: "invalid_response" });
+    await expect((method === "status" ? readWithTicket(commands[0], (__command, __ticket) => f.api.status("token", "proof", __command, __ticket)) : f.api.send("token", "proof", commands[0]))).rejects.toMatchObject({ kind: "invalid_response" });
   });
   it.each([401, 403, 500, 503])("HTTP%s without a trusted outcome stays a transport refusal", async status => {
     const f = fixture({ error: { code: "WRITE_UNAVAILABLE" } }, status);
@@ -202,7 +202,7 @@ describe("Learning session missing-command closure", () => {
   it.each(["stop", "midnight", "pair_changed", "timezone_date_changed", "remote_stop", "summary_home"])(
     "reads a minimal exact-session closure after %s", async reason => {
       const value = missing({ session_id: id(3), status: "closed", close_reason: reason }), f = fixture(value);
-      expect(await f.api.status("token", "proof", commands[1])).toEqual({ ...value, outcome: "not_found" });
+      expect(await readWithTicket(commands[1], (__command, __ticket) => f.api.status("token", "proof", __command, __ticket))).toEqual({ ...value, outcome: "not_found" });
       const parsed = new URL(String(f.fetcher.mock.calls[0][0]), "http://localhost");
       expect(Object.fromEntries(parsed.searchParams)).toEqual({ client_instance_id: id(1), document_id: id(2), session_id: id(3) });
       expect(f.fetcher).toHaveBeenCalledOnce(); expect(f.fetcher.mock.calls[0][1]?.method).toBe("GET");
@@ -214,7 +214,7 @@ describe("Learning session missing-command closure", () => {
     { session_id: id(3), status: "closed", close_reason: "stop", assignment: {} }])(
     "rejects malformed or foreign closure %j", async closed => {
       const f = fixture(missing(closed));
-      await expect(f.api.status("token", "proof", commands[1])).rejects.toMatchObject({ kind: "invalid_response" });
+      await expect(readWithTicket(commands[1], (__command, __ticket) => f.api.status("token", "proof", __command, __ticket))).rejects.toMatchObject({ kind: "invalid_response" });
     });
 });
 
@@ -227,25 +227,25 @@ const refusal = (code = "SETUP_REQUIRED", current: unknown = { session_id: id(3)
 describe("Learning start status with its stored final refusal (C197)", () => {
   it("asks only a start for its refusal, with the core's intent hash of that start", async () => {
     const f = fixture(missing(undefined));
-    await f.api.status("token", "proof", commands[0]);
+    await readWithTicket(commands[0], (__command, __ticket) => f.api.status("token", "proof", __command, __ticket));
     const query = Object.fromEntries(new URL(String(f.fetcher.mock.calls[0][0]), "http://localhost").searchParams);
     expect(query).toEqual({ client_instance_id: id(1), document_id: id(2), session_id: id(3), include_refusal: "true",
       expected_intent_hash: startHash });
   });
   it.each(commands.slice(1))("sends no refusal request for $kind and reads a rejected status as invalid", async command => {
     const f = fixture(refusal());
-    await expect(f.api.status("token", "proof", command)).rejects.toMatchObject({ kind: "invalid_response" });
+    await expect(readWithTicket(command, (__command, __ticket) => f.api.status("token", "proof", __command, __ticket))).rejects.toMatchObject({ kind: "invalid_response" });
     const query = Object.fromEntries(new URL(String(f.fetcher.mock.calls[0][0]), "http://localhost").searchParams);
     expect(query).toEqual({ client_instance_id: id(1), document_id: id(2), session_id: id(3) });
   });
   it("a core that does not read include_refusal keeps answering not_found, as before", async () => {
     const f = fixture(missing(undefined));
-    expect(await f.api.status("token", "proof", commands[0])).toMatchObject({ outcome: "not_found" });
+    expect(await readWithTicket(commands[0], (__command, __ticket) => f.api.status("token", "proof", __command, __ticket))).toMatchObject({ outcome: "not_found" });
   });
   it.each([["SETUP_REQUIRED", { session_id: id(3), status: "not_found" }], ["NO_MATERIAL", { session_id: id(3), status: "unavailable" }],
     ["SESSION_BUSY", { status: "unavailable" }]] as const)("reads a stored %s refusal of this start (current %j)", async (code, current) => {
     const f = fixture(refusal(code, current));
-    expect(await f.api.status("token", "proof", commands[0])).toEqual({ outcome: "rejected",
+    expect(await readWithTicket(commands[0], (__command, __ticket) => f.api.status("token", "proof", __command, __ticket))).toEqual({ outcome: "rejected",
       command: { id: id(4), kind: "session.start", status: "rejected", refused_at: "2026-09-30T12:00:00Z" },
       error: { code }, current, state_version: "3" });
   });
@@ -272,21 +272,21 @@ describe("Learning start status with its stored final refusal (C197)", () => {
     ["SETUP_REQUIRED", preview()]] as const)("reads every final code the core stores, with this number's real current too: %s %j",
     async (code, current) => {
       const f = fixture(refusal(code, current));
-      expect(await f.api.status("token", "proof", commands[0])).toMatchObject({ outcome: "rejected", error: { code }, current });
+      expect(await readWithTicket(commands[0], (__command, __ticket) => f.api.status("token", "proof", __command, __ticket))).toMatchObject({ outcome: "rejected", error: { code }, current });
     });
   it.each(broken)("proves no refusal with %s", async (_name, mutate) => {
     const value = refusal(); mutate(value);
     const f = fixture(value);
-    await expect(f.api.status("token", "proof", commands[0])).rejects.toThrow();
+    await expect(readWithTicket(commands[0], (__command, __ticket) => f.api.status("token", "proof", __command, __ticket))).rejects.toThrow();
   });
   it("a refusal with an error status stays a transport refusal", async () => {
     const f = fixture(refusal(), 409);
-    await expect(f.api.status("token", "proof", commands[0])).rejects.toMatchObject({ kind: "http", status: 409 });
+    await expect(readWithTicket(commands[0], (__command, __ticket) => f.api.status("token", "proof", __command, __ticket))).rejects.toMatchObject({ kind: "http", status: 409 });
   });
   it("a fact of the start keeps its precedence; its echoed hash must be this start's", async () => {
     const fact = { ...response(commands[0], preview(), "already_applied"), verified_intent_hash: startHash };
-    expect(await fixture(fact).api.status("token", "proof", commands[0])).toMatchObject({ outcome: "accepted" });
-    await expect(fixture({ ...fact, verified_intent_hash: "0".repeat(64) }).api.status("token", "proof", commands[0]))
+    expect(await readWithTicket(commands[0], (__command, __ticket) => fixture(fact).api.status("token", "proof", __command, __ticket))).toMatchObject({ outcome: "accepted" });
+    await expect(readWithTicket(commands[0], (__command, __ticket) => fixture({ ...fact, verified_intent_hash: "0".repeat(64) }).api.status("token", "proof", __command, __ticket)))
       .rejects.toMatchObject({ kind: "invalid_response" });
   });
 });

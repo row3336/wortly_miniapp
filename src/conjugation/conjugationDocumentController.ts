@@ -171,8 +171,11 @@ export class ConjugationDocumentController implements ConjugationDocumentActions
       profileId: profile.profile_id, clientInstanceId: options.access.document.clientInstanceId, pair: this.pair, lane,
       pendingStore: lane === "study" ? options.studyStore : options.stopStore,
       stateVersion, minimumStateVersion: () => this.minimum(), newId: options.newId, isLive: () => this.live(),
-      check: intent => this.exchange(({ token, proof, clientInstanceId, documentId }) =>
-        api.status(token, proof, { ...intent, client_instance_id: clientInstanceId, document_id: documentId })),
+      // R6: the status of this ID is read only with the gate's ticket (after the identity check, if one is due).
+      check: intent => options.transport.gate.runReadback(intent.command_id, ticket =>
+        this.exchange(({ token, proof, clientInstanceId, documentId }) =>
+          api.status(token, proof, { ...intent, client_instance_id: clientInstanceId, document_id: documentId }, ticket))),
+      gate: options.transport.gate,
       // Revisions read their original triple; start/present/unknown answer/stop read only the original session.
       read: intent => this.exchange<ConjugationRead>(({ token, proof, clientInstanceId, documentId }) => {
         if (intent.kind === "conjugation.schedule") throw new Error("catalog lane is not owned here");
@@ -196,6 +199,7 @@ export class ConjugationDocumentController implements ConjugationDocumentActions
     };
     this.makeOwner = make;
     this.commands = { study: make("study", this.floor), stop: make("stop", this.floor) };
+    this.unsubscribeGate = options.transport.gate.subscribe(() => this.readPausedLanes());
     this.minimum();
   }
 
@@ -720,7 +724,23 @@ export class ConjugationDocumentController implements ConjugationDocumentActions
     if (!this.snapshot().canRetry[lane]) return Promise.resolve();
     return this.begin(lane, null, null);
   }
+
+  /**
+   * M03 (P03 §5.2): once the gate lets a write through again, an intent the gate kept on the client is read by its ID
+   * (refresh reads only, never POSTs); the lane then offers the same send again.
+   */
+  private readPausedLanes(): void {
+    if (!this.live()) return;
+    const gate = this.options.transport.gate;
+    const paused = (["study", "stop"] as const).some(lane => {
+      const state = this.commands[lane].snapshot(), id = state.pendingIntent?.command_id;
+      return state.problem === "paused" && !!id && gate.mayWrite(id);
+    });
+    if (paused) void this.refresh();
+  }
+  private unsubscribeGate: () => void = () => undefined;
   dispose(): void {
+    this.unsubscribeGate();
     this.disposed = true; this.activityEpoch++; this.startJoin = null; this.shownJoin = null;
     this.step = null; this.resultA = null; this.stopRight = null; this.stepTicket = null; this.presentationTicket = null;
     this.commands.study.dispose(); this.commands.stop.dispose();

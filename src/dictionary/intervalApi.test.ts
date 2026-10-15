@@ -8,7 +8,7 @@ import {
   dictionaryUndoIntent, dictionaryUndoOfferIntent, validDictionaryContextCurrent, type DictionaryIntervalCommand,
   type DictionaryIntervalIntent,
 } from "./intervalApi";
-import { testGate } from "../commands/testGate.test-support";
+import { readWithTicket, testGate } from "../commands/testGate.test-support";
 
 // Wire forms follow core api/models.py (Dictionary*Context*, *CommandFact), coordinator._fact and
 // dictionary_interval.context_projection. Literal steps: CORE_HANDOFF_CP2 §5 (D = 2026-09-29).
@@ -545,35 +545,35 @@ describe("command status", () => {
       { status: 200, body: reply(stored, afterInitialIncrease(), { verified_intent_hash: hash }) },
       { status: 200, body: reply(stored, afterInitialIncrease()) },
     );
-    expect(await api.commandStatus(token, proof, command(intent)))
+    expect(await readWithTicket(command(intent), (__command, __ticket) => api.commandStatus(token, proof, __command, __ticket)))
       .toEqual({ outcome: "accepted", command: stored, current: afterInitialIncrease(), state_version: stateVersion });
     const { url, init } = sent(fetcher);
     expect(url).toBe(`/api/v1/commands/${commandId}?client_instance_id=${clientId}&document_id=${documentId}&expected_intent_hash=${hash}`);
     expect(init.method).toBe("GET");
     expect(init.headers).toEqual(withTrace({ Authorization: `Bearer ${token}`, "X-Origin-Proof": proof }));
-    await expect(api.commandStatus(token, proof, command(intent))).rejects.toMatchObject({ kind: "invalid_response" });
+    await expect(readWithTicket(command(intent), (__command, __ticket) => api.commandStatus(token, proof, __command, __ticket))).rejects.toMatchObject({ kind: "invalid_response" });
   });
 
   it("returns not_found with the profile for an explicit retry of the same command", async () => {
     const { api } = transport({ status: 200, body: reply({ id: commandId, status: "not_found" }, profile()) });
-    expect(await api.commandStatus(token, proof, command(increaseIntent())))
+    expect(await readWithTicket(command(increaseIntent()), (__command, __ticket) => api.commandStatus(token, proof, __command, __ticket)))
       .toEqual({ outcome: "not_found", command: { id: commandId, status: "not_found" }, current: profile(), state_version: stateVersion });
   });
 
   it("returns not_found for the real core's profile (reapply_closed present) and rejects unknown profile keys", async () => {
     const real = recordedOralUnknownClosed.current;
     const { api } = transport({ status: 200, body: reply({ id: commandId, status: "not_found" }, real) });
-    expect(await api.commandStatus(token, proof, command(increaseIntent())))
+    expect(await readWithTicket(command(increaseIntent()), (__command, __ticket) => api.commandStatus(token, proof, __command, __ticket)))
       .toEqual({ outcome: "not_found", command: { id: commandId, status: "not_found" }, current: real, state_version: stateVersion });
     for (const extra of [{ reapply_closed: "false" }, { private: {} }, { reapply_closed: false, private: {} }]) {
       const rejecting = transport({ status: 200, body: reply({ id: commandId, status: "not_found" }, { ...real, ...extra }) });
-      await expect(rejecting.api.commandStatus(token, proof, command(increaseIntent()))).rejects.toMatchObject({ kind: "invalid_response" });
+      await expect(readWithTicket(command(increaseIntent()), (__command, __ticket) => rejecting.api.commandStatus(token, proof, __command, __ticket))).rejects.toMatchObject({ kind: "invalid_response" });
     }
   });
 
   it("returns a typed mismatch for another payload under the same ID", async () => {
     const { api } = transport({ status: 409, body: { error: { code: "COMMAND_PAYLOAD_MISMATCH" } } });
-    expect(await api.commandStatus(token, proof, command(closeIntent)))
+    expect(await readWithTicket(command(closeIntent), (__command, __ticket) => api.commandStatus(token, proof, __command, __ticket)))
       .toEqual({ outcome: "mismatch", error: { code: "COMMAND_PAYLOAD_MISMATCH" } });
   });
 
@@ -581,7 +581,7 @@ describe("command status", () => {
     const hash = await dictionaryIntervalIntentHash(closeIntent);
     const stored = fact("context.close", { status: "already_applied" });
     const { api } = transport({ status: 200, body: reply(stored, { status: "unavailable" }, { verified_intent_hash: hash }) });
-    expect(await api.commandStatus(token, proof, command(closeIntent)))
+    expect(await readWithTicket(command(closeIntent), (__command, __ticket) => api.commandStatus(token, proof, __command, __ticket)))
       .toMatchObject({ outcome: "accepted", current: { status: "unavailable" } });
   });
 
@@ -596,7 +596,7 @@ describe("command status", () => {
   ])("rejects %s", async (_name, build) => {
     const hash = await dictionaryIntervalIntentHash(openIntent);
     const { api } = transport({ status: 200, body: build(hash) });
-    await expect(api.commandStatus(token, proof, command(openIntent))).rejects.toMatchObject({ kind: "invalid_response" });
+    await expect(readWithTicket(command(openIntent), (__command, __ticket) => api.commandStatus(token, proof, __command, __ticket))).rejects.toMatchObject({ kind: "invalid_response" });
   });
 });
 
@@ -732,7 +732,7 @@ describe("M-INTV: action.undo_offer.open / close (core C-INTV-OFFER, CT 2.1.2)",
     const hash = await dictionaryIntervalIntentHash(intent);
     const { api } = transport({ status: 200, body: reply(offerFact("action.undo_offer.open", { status: "already_applied" }),
       afterInitialIncrease(), { verified_intent_hash: hash }) });
-    expect(await api.commandStatus(token, proof, command(intent))).toMatchObject({ outcome: "accepted" });
+    expect(await readWithTicket(command(intent), (__command, __ticket) => api.commandStatus(token, proof, __command, __ticket))).toMatchObject({ outcome: "accepted" });
   });
 
   it("literal hashes of core intent_hash for open v1 and close v2, upper-case IDs normalised (M-INTV-QA probes/core_offer_hash.py)", async () => {

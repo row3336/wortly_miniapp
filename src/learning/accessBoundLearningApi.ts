@@ -49,6 +49,6 @@ export function accessBoundLearningApi(options: { access: OpenedAccess; api: Lea
       }
       return api.change(token, proof, command);
     }),
-    status: (_token, intent) => bound(({ token }) => api.status(token, intent)),
+    status: (_token, intent, ticket) => bound(({ token }) => api.status(token, intent, ticket)),
   };
 }

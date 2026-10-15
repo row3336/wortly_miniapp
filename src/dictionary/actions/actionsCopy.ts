@@ -1,3 +1,4 @@
+import { pausedCopy } from "../../commands/commandCopy";
 import type { FeedbackProblem } from "../../feedback/feedbackController";
 import type { Language } from "../../i18n/language";
 
@@ -41,6 +42,7 @@ export const actionsCopy: Record<Language, Copy> = {
       pending_changed: "Запись отправки изменилась. Закрой окно и открой карточку заново.",
       expired: "Сеанс истёк. Текст сохранён: открой приложение заново.",
       forbidden: "Нет доступа к отправке сообщений. Текст сохранён.",
+      paused: pausedCopy.ru,
     },
   },
   uk: {
@@ -67,6 +69,7 @@ export const actionsCopy: Record<Language, Copy> = {
       pending_changed: "Запис надсилання змінився. Закрий вікно й відкрий картку знову.",
       expired: "Сеанс завершився. Текст збережено: відкрий застосунок знову.",
       forbidden: "Немає доступу до надсилання повідомлень. Текст збережено.",
+      paused: pausedCopy.uk,
     },
   },
   en: {
@@ -93,6 +96,7 @@ export const actionsCopy: Record<Language, Copy> = {
       pending_changed: "The message record changed. Close the window and open the card again.",
       expired: "The session expired. The text is kept: reopen the app.",
       forbidden: "No access to sending messages. The text is kept.",
+      paused: pausedCopy.en,
     },
   },
 };

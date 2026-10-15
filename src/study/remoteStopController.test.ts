@@ -4,6 +4,10 @@ import type { AsyncStorage } from "../platform/storage";
 import type { RemoteStopReply, RemoteStopStatus } from "./remoteSessionApi";
 import { RemoteStopPendingStore, type RemoteStopPending } from "./remoteStopPending";
 import { RemoteStopController, type RemoteStopSnapshot } from "./remoteStopController";
+import { testGate } from "../commands/testGate.test-support";
+import type { WriteGate } from "../commands/writeGate";
+import { WriteGate as RealWriteGate } from "../commands/writeGate";
+import { ManualClock } from "../commands/writeGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const pending = (): RemoteStopPending => ({ schemaVersion: 1, profileId: id(1), clientInstanceId: id(2),
@@ -22,7 +26,7 @@ const notFound = (): RemoteStopStatus => ({ outcome: "not_found", state_version:
     status: "admitted", version: "1", reason: null }, role: "user", ui_language: "ru",
     dictionary_language: "ru", time_zone: "UTC", state_version: "8" } });
 
-function fixture(raw?: RemoteStopPending) {
+function fixture(raw?: RemoteStopPending, writeGate?: WriteGate) {
   const values = new Map<string, string>();
   if (raw) values.set("wortly.pending.remote_stop", JSON.stringify(raw));
   const storage: AsyncStorage = {
@@ -35,7 +39,7 @@ function fixture(raw?: RemoteStopPending) {
   const check = vi.fn(async (): Promise<RemoteStopStatus> => recovered());
   const updates: RemoteStopSnapshot[] = [];
   const newId = vi.fn(() => id(3));
-  const make = (clientInstanceId = id(2)) => new RemoteStopController({ profileId: id(1), clientInstanceId,
+  const make = (clientInstanceId = id(2)) => new RemoteStopController({ gate: writeGate ?? testGate(), profileId: id(1), clientInstanceId,
     pendingStore, send, check, newId, onUpdate: snapshot => updates.push(snapshot) });
   return { controller: make(), make, send, check, storage, pendingStore, values, updates, newId };
 }
@@ -75,7 +79,7 @@ describe("remote stop confirmation and recovery", () => {
     expect(f.controller.snapshot()).toMatchObject({ phase: "unresolved", problem: "network", canRetry: true });
     f.controller.dispose(); const next = f.make();
     await next.refresh();
-    expect(f.send).toHaveBeenCalledOnce(); expect(f.check).toHaveBeenCalledExactlyOnceWith(pending().intent);
+    expect(f.send).toHaveBeenCalledOnce(); expect(f.check).toHaveBeenCalledExactlyOnceWith(pending().intent, expect.anything());
     expect(next.snapshot()).toMatchObject({ phase: "settled", outcome: "accepted", pending: false });
   });
 
@@ -181,5 +185,23 @@ describe("remote stop confirmation and recovery", () => {
     expect(f.controller.snapshot()).toMatchObject({ phase: "blocked", problem: "invalid_pending", canRetry: false });
     expect(f.send).not.toHaveBeenCalled(); expect(f.check).not.toHaveBeenCalled();
     expect(f.values.get("wortly.pending.remote_stop")).toBe("damaged");
+  });
+});
+
+describe("the buttons and the write gate (P03 M-P03-8, C335)", () => {
+  it("P2-1: a family-locked ID keeps «Повторить» (a send) off; the check (refresh, always on screen) reads it and lifts the lock", async () => {
+    const writeGate = new RealWriteGate({ clock: new ManualClock() });
+    writeGate.resolvePending(id(3), "stale");
+    const f = fixture(pending(), writeGate);
+    f.check.mockRejectedValueOnce(new TypeError("network"));
+    await f.controller.refresh();
+    expect(f.controller.snapshot()).toMatchObject({ problem: "network", canRetry: false });
+    f.check.mockResolvedValueOnce(notFound());
+    await f.controller.refresh();
+    expect(writeGate.snapshot().familyLocks).toEqual([]);
+    expect(f.controller.snapshot()).toMatchObject({ problem: "not_found", canRetry: true });
+    writeGate.closeByFailure();
+    expect(f.controller.snapshot().canRetry).toBe(false);
+    f.controller.dispose();
   });
 });

@@ -12,7 +12,7 @@ import { cancelDue, noFurtherCancel, StartCancelRecovery, type StartCancelHost }
 import { createStartCancelApi, type StartCancelIntent, type StartCancelReply, type StartCancelStatus } from "./startCancelApi";
 import { startCancelKey, StartCancelPendingStore, type StartCancelPending } from "./startCancelPending";
 import type { AsyncStorage } from "../platform/storage";
-import { testGate } from "./testGate.test-support";
+import { readWithTicket, testGate } from "./testGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const PROFILE = id(50), CLIENT = id(1), SESSION = id(3), START = id(4), CANCEL = id(5);
@@ -616,7 +616,7 @@ describe("the cancel over the real HTTP adapter (3.3.13)", () => {
     const origin = { client_instance_id: CLIENT, document_id: id(2) };
     const host: StartCancelHost = {
       send: (intent, transmitted) => { transmitted(); return api.send("t", "p", { ...intent, ...origin }); },
-      status: intent => api.status("t", "p", { ...intent, ...origin }),
+      status: intent => readWithTicket({ ...intent, ...origin }, (__command, __ticket) => api.status("t", "p", __command, __ticket)),
       isLive: () => true, windowCheck: () => Promise.resolve(true), onUpdate: () => undefined,
     };
     const recovery = new StartCancelRecovery({ host, store: new StartCancelPendingStore(memory(), "written"), counter: new MemorySendCounter(),

@@ -5,6 +5,7 @@ import type {
 import { validProfile } from "../api/entryApi";
 import { ApiError, createJsonTransport, errorCode, httpError, type HttpOptions } from "../api/http";
 import { record, uuid, sameId, exactKeys, version, eventTime, oneOf, CLOSE_REASONS } from "../api/wireValidation";
+import type { ReadbackTicket } from "../commands/writeGate";
 
 export type RemoteStopIntent = Pick<SessionStopRemoteCommand, "command_id" | "kind" | "session_id" | "payload">;
 type Current = RemoteSessionProjection | UnavailableSession;
@@ -19,7 +20,7 @@ export type RemoteStopStatus = { state_version: string } & (
 
 export interface RemoteSessionApi {
   stop(token: string, proof: string, command: SessionStopRemoteCommand): Promise<RemoteStopReply>;
-  status(token: string, proof: string, command: SessionStopRemoteCommand): Promise<RemoteStopStatus>;
+  status(token: string, proof: string, command: SessionStopRemoteCommand, ticket: ReadbackTicket): Promise<RemoteStopStatus>;
 }
 
 export function validRemoteStopIntent(value: unknown): value is RemoteStopIntent {
@@ -79,11 +80,11 @@ export function createRemoteSessionApi(options: HttpOptions): RemoteSessionApi {
       if (!reply.ok) throw httpError(reply);
       throw new ApiError("invalid_response");
     },
-    async status(token, proof, original) {
+    async status(token, proof, original, ticket: ReadbackTicket) {
       const command = prepare(token, proof, original);
       const query = new URLSearchParams({ client_instance_id: command.client_instance_id,
         document_id: command.document_id });
-      const reply = await request.readback(command.command_id, `/commands/${command.command_id}?${query}`, { method: "GET", token, proof });
+      const reply = await request(`/commands/${command.command_id}?${query}`, { method: "GET", token, proof, readbackTicket: ticket });
       if (!reply.ok) throw httpError(reply);
       const value = reply.value;
       if (!record(value) || !record(value.command) || !version(value.state_version) || value.error != null) {

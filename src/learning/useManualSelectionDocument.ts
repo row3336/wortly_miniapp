@@ -132,7 +132,7 @@ export function useManualSelectionDocument(options: ManualSelectionDocumentOptio
     const api: LearningApi = {
       get: token => gated.get(token),
       change: async (token, proof, command) => { remember(command); return record(command.command_id, await gated.change(token, proof, command)); },
-      status: async (token, intent) => { remember(intent); return record(intent.command_id, await gated.status(token, intent)); },
+      status: async (token, intent, ticket) => { remember(intent); return record(intent.command_id, await gated.status(token, intent, ticket)); },
     };
     const controller = new ManualSelectionController({ api, pendingStore: current.pendingStore,
       context: accessBoundManualContext(access),
@@ -143,7 +143,7 @@ export function useManualSelectionDocument(options: ManualSelectionDocumentOptio
         raise(floors.current, profileId, snapshot.data?.state_version);
         if (snapshot.outcome) raise(floors.current, profileId, bound.versions.get(snapshot.outcome.commandId));
         repaint();
-      } });
+      }, gate: current.transport.gate });
     const bound: Owner = { access, transport: current.transport, store: current.pendingStore, controller, cards: new Map(), versions: new Map() };
     owner.current = bound;
     // Opening and a foreground handle only read; a stored intent is checked by status, never re-sent.

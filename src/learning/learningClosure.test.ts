@@ -7,7 +7,7 @@ import { tick } from "../commands/recoveryTime.test-support";
 import { closed, current, fact, id, missing, pending, primaryKey, response, stopKey } from "./learningFixtures.test-support";
 import { learningViewFixture } from "./learningView.test-support";
 import { LearningViewController } from "./learningViewController";
-import { testGate } from "../commands/testGate.test-support";
+import { readWithTicket, testGate } from "../commands/testGate.test-support";
 
 type Request = { method: string; path: string; kind: string | null; commandId: string | null };
 /** undefined: the synthetic server answers; "drop": fails before the server; "lose": the server applies, the reply is lost. */
@@ -351,7 +351,7 @@ describe("a closure record is never sent by any path", () => {
       payload: { reason: "save_failed" as const, unsaved_command_id: id(100) }, client_instance_id: id(1), document_id: id(2) };
     await expect(api.send("token", "proof", command)).rejects.toThrow("invalid Learning command");
     expect(fetcher).not.toHaveBeenCalled();
-    await expect(api.status("token", "proof", command)).resolves.toMatchObject({ outcome: "not_found" });
+    await expect(readWithTicket(command, (__command, __ticket) => api.status("token", "proof", __command, __ticket))).resolves.toMatchObject({ outcome: "not_found" });
     expect(fetcher).toHaveBeenCalledOnce();
   });
 });

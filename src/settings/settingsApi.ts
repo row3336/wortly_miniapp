@@ -4,6 +4,7 @@ import type {
 } from "../api/generated";
 import { validProfile } from "../api/entryApi";
 import { ApiError, createJsonTransport, errorCode, httpError, type HttpOptions, type JsonReply } from "../api/http";
+import type { ReadbackTicket } from "../commands/writeGate";
 
 // root decision (C+M-SET-READINESS-FIELDS, P12/P14): the server may still carry these two keys while an older
 // build is deployed. They are skipped when decoding and never edited or sent from here.
@@ -55,9 +56,9 @@ export type SettingStatusReply = { state_version: string } & (
 export interface SettingsApi {
   get(token: string): Promise<SettingsResponse>;
   save(token: string, proof: string, profileId: string, command: SettingSaveCommand): Promise<SettingSaveReply>;
-  status(token: string, profileId: string, intent: SettingIntent): Promise<SettingStatusReply>;
+  status(token: string, profileId: string, intent: SettingIntent, ticket: ReadbackTicket): Promise<SettingStatusReply>;
   reset(token: string, proof: string, profileId: string, command: SettingsResetCommand): Promise<SettingSaveReply>;
-  resetStatus(token: string, profileId: string, intent: SettingsResetIntent): Promise<SettingStatusReply>;
+  resetStatus(token: string, profileId: string, intent: SettingsResetIntent, ticket: ReadbackTicket): Promise<SettingStatusReply>;
 }
 
 /**
@@ -337,10 +338,10 @@ export function createSettingsApi(options: HttpOptions): SettingsApi {
       const reply = await request("/commands", { method: "POST", token, proof, body });
       return commandReply(reply, intent.command_id, (fact): fact is SavedCommandFact => acceptedFact(fact, profileId, intent));
     },
-    async status(token, profileId, original) {
+    async status(token, profileId, original, ticket: ReadbackTicket) {
       requireSubject(token, profileId);
       const intent = snapshot(original);
-      const reply = await request.readback(intent.command_id, `/commands/${intent.command_id}`, { method: "GET", token });
+      const reply = await request(`/commands/${intent.command_id}`, { method: "GET", token, readbackTicket: ticket });
       return statusReply(reply, profileId, intent.command_id, (fact): fact is SavedCommandFact => acceptedFact(fact, profileId, intent));
     },
     async reset(token, proof, profileId, command) {
@@ -352,10 +353,10 @@ export function createSettingsApi(options: HttpOptions): SettingsApi {
       const reply = await request("/commands", { method: "POST", token, proof, body });
       return commandReply(reply, intent.command_id, (fact): fact is SavedCommandFact => resetFact(fact, profileId, intent));
     },
-    async resetStatus(token, profileId, original) {
+    async resetStatus(token, profileId, original, ticket: ReadbackTicket) {
       requireSubject(token, profileId);
       const intent = resetSnapshot(original);
-      const reply = await request.readback(intent.command_id, `/commands/${intent.command_id}`, { method: "GET", token });
+      const reply = await request(`/commands/${intent.command_id}`, { method: "GET", token, readbackTicket: ticket });
       return statusReply(reply, profileId, intent.command_id, (fact): fact is SavedCommandFact => resetFact(fact, profileId, intent));
     },
   };

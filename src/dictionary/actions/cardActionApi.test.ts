@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { cardActionIntentHash, createCardActionApi, type CardActionIntent } from "./cardActionApi";
 import { actionFact, aid, CARD, command, current, excludeIntent, json, origin, profileCurrent, relearnIntent } from "./actionTestData.test-support";
-import { testGate } from "../../commands/testGate.test-support";
+import { readWithTicket, testGate } from "../../commands/testGate.test-support";
 
 function api(...replies: Response[]) {
   const fetcher = vi.fn<typeof fetch>(async () => replies.shift() ?? json({}, 500));
@@ -75,13 +75,13 @@ describe("card action wire (core card_exclusion, C-EXCL §9)", () => {
       json({ command: { id: exclude.command_id, status: "not_found" }, current: profileCurrent(), state_version: "11" }),
       json({ error: { code: "COMMAND_PAYLOAD_MISMATCH" } }, 409),
       json({ command: stored, current: current(true, "1"), state_version: "11", verified_intent_hash: "0".repeat(64) }));
-    expect((await client.status("token", "proof", exclude)).outcome).toBe("accepted");
+    expect((await readWithTicket(exclude, (__command, __ticket) => client.status("token", "proof", __command, __ticket))).outcome).toBe("accepted");
     const url = new URL(String(fetcher.mock.calls[0][0]), "http://local");
     expect(url.pathname).toBe(`/api/v1/commands/${exclude.command_id}`);
     expect(Object.fromEntries(url.searchParams)).toEqual({ ...origin, expected_intent_hash: hash });
-    expect((await client.status("token", "proof", exclude)).outcome).toBe("not_found");
-    expect((await client.status("token", "proof", exclude)).outcome).toBe("mismatch");
-    await expect(client.status("token", "proof", exclude)).rejects.toMatchObject({ kind: "invalid_response" });
+    expect((await readWithTicket(exclude, (__command, __ticket) => client.status("token", "proof", __command, __ticket))).outcome).toBe("not_found");
+    expect((await readWithTicket(exclude, (__command, __ticket) => client.status("token", "proof", __command, __ticket))).outcome).toBe("mismatch");
+    await expect(readWithTicket(exclude, (__command, __ticket) => client.status("token", "proof", __command, __ticket))).rejects.toMatchObject({ kind: "invalid_response" });
   });
 
   it("B6 object_version is not the client's: any version (or none) of an accepted fact is a success (C-EXCL §9)", async () => {

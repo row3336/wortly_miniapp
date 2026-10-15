@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AnswerSubmitCommand, LearningAnswerResponse, LearningSessionProjection } from "../api/generated";
 import { createLearningAnswerApi, validAnswerCapabilities } from "./learningAnswerApi";
-import { testGate } from "../commands/testGate.test-support";
+import { readWithTicket, testGate } from "../commands/testGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const command = (): AnswerSubmitCommand => ({ command_id: id(1), client_instance_id: id(2), document_id: id(3),
@@ -37,7 +37,7 @@ describe("Learning answer HTTP boundary", () => {
     const examples = { common: [{ id: id(40), text: "Falls es regnet…", role: "general" as const,
       highlighted_parts: ["Falls", { legacy: [0, true, null] }] }], personal: { value: "Mein Beispiel.", version: "2" } };
     value.result!.detail!.examples = examples;
-    const reply = await fixture(value).api[method]("token", "proof", command());
+    const reply = await (method === "status" ? readWithTicket(command(), (__command, __ticket) => fixture(value).api.status("token", "proof", __command, __ticket)) : fixture(value).api.send("token", "proof", command()));
     expect("result" in reply && reply.result?.detail?.examples).toEqual(examples);
     expect((value.step as LearningSessionProjection).assignment).not.toHaveProperty("examples");
   });
@@ -54,10 +54,10 @@ describe("Learning answer HTTP boundary", () => {
     const value = recovered();
     Object.assign(value.command, { object_version: "3" });
     value.result!.version = value.action!.version = "3";
-    await expect(fixture(value).api[method]("token", "proof", command())).rejects.toMatchObject({ kind: "invalid_response" });
+    await expect((method === "status" ? readWithTicket(command(), (__command, __ticket) => fixture(value).api.status("token", "proof", __command, __ticket)) : fixture(value).api.send("token", "proof", command()))).rejects.toMatchObject({ kind: "invalid_response" });
   });
   it.each([201, 202, 206])("rejects HTTP%s as answer status confirmation", async status => {
-    await expect(fixture(recovered(), status).api.status("token", "proof", command()))
+    await expect(readWithTicket(command(), (__command, __ticket) => fixture(recovered(), status).api.status("token", "proof", __command, __ticket)))
       .rejects.toMatchObject({ kind: "invalid_response" });
   });
   it("keeps diagnostic code-point ranges separate from the original correctness decision", async () => {
@@ -119,7 +119,7 @@ describe("Learning answer HTTP boundary", () => {
   });
 
   it("status uses the original command ID in a GET without sending answer text or proof in its URL", async () => {
-    const f = fixture(recovered()); const reply = await f.api.status("token", "proof", command());
+    const f = fixture(recovered()); const reply = await readWithTicket(command(), (__command, __ticket) => f.api.status("token", "proof", __command, __ticket));
     expect(reply.outcome).toBe("accepted"); expect(reply.command.status).toBe("already_applied");
     const [url, init] = f.fetcher.mock.calls[0], parsed = new URL(String(url), "http://localhost");
     expect(parsed.pathname).toBe(`/api/v1/commands/${id(1)}`);
@@ -130,7 +130,7 @@ describe("Learning answer HTTP boundary", () => {
 
   it("original acceptance version and newer current grade are both preserved", async () => {
     const value = recovered(); value.result!.version = value.action!.version = "9007199254740993"; value.result!.grade = 5;
-    const f = fixture(value), reply = await f.api.status("token", "proof", command());
+    const f = fixture(value), reply = await readWithTicket(command(), (__command, __ticket) => f.api.status("token", "proof", __command, __ticket));
     expect(reply).toMatchObject({ outcome: "accepted", command: { object_version: "1" },
       result: { grade: 5, version: "9007199254740993" } });
   });
@@ -140,7 +140,7 @@ describe("Learning answer HTTP boundary", () => {
     const value = recovered(); value.result!.version = value.action!.version = "2";
     value.result!.detail!.input = { kind: "text", text: "wrong" };
     Object.assign(value.result!.detail!.initial_check, { correct: false, variant_index: null, matched_spans: [] });
-    expect(await fixture(value).api.status("token", "proof", original)).toMatchObject({
+    expect(await readWithTicket(original, (__command, __ticket) => fixture(value).api.status("token", "proof", __command, __ticket))).toMatchObject({
       outcome: "accepted", result: { grade: 4, correct: true, detail: { initial_check: { correct: false } } } });
   });
 
@@ -153,7 +153,7 @@ describe("Learning answer HTTP boundary", () => {
       value.step = { ...step(), status: "closed", close_reason: "midnight", assignment: null };
       value.result!.detail = null; value.capabilities.stop = false;
     } else value.result!.detail = null;
-    const f = fixture(value), reply = await f.api.status("token", "proof", command());
+    const f = fixture(value), reply = await readWithTicket(command(), (__command, __ticket) => f.api.status("token", "proof", __command, __ticket));
     expect(reply.outcome).toBe("accepted");
     if (reply.outcome === "accepted") expect(reply.result?.detail ?? null).toBeNull();
   });
@@ -162,7 +162,7 @@ describe("Learning answer HTTP boundary", () => {
     const value = { command: { id: id(1), status: "not_found" }, state_version: "8",
       current: { profile_id: id(50), role: "user", ui_language: "ru", dictionary_language: "ru", time_zone: "UTC",
         state_version: "8", access: { status: "admitted", version: "1", reason: null } } };
-    const f = fixture(value); expect(await f.api.status("token", "proof", command())).toEqual({ ...value, outcome: "not_found" });
+    const f = fixture(value); expect(await readWithTicket(command(), (__command, __ticket) => f.api.status("token", "proof", __command, __ticket))).toEqual({ ...value, outcome: "not_found" });
     expect(f.fetcher).toHaveBeenCalledOnce();
   });
 
@@ -284,7 +284,7 @@ describe("Learning answer HTTP boundary", () => {
 
   it.each(["send", "status"] as const)("HTTP200 with an error is not acceptance in %s", async method => {
     const value = method === "status" ? recovered() : response(); value.error = { code: "WRITE_UNAVAILABLE" };
-    await expect(fixture(value).api[method]("token", "proof", command())).rejects.toMatchObject({ kind: "invalid_response" });
+    await expect((method === "status" ? readWithTicket(command(), (__command, __ticket) => fixture(value).api.status("token", "proof", __command, __ticket)) : fixture(value).api.send("token", "proof", command()))).rejects.toMatchObject({ kind: "invalid_response" });
   });
 
   it.each([401, 403, 500, 503])("HTTP%s without a valid outcome never establishes acceptance", async status => {
@@ -340,7 +340,7 @@ describe("Learning answer missing-command closure", () => {
   it.each(["stop", "midnight", "pair_changed", "timezone_date_changed", "remote_stop", "summary_home"])(
     "preserves missing fact and final closure after %s", async reason => {
       const value = missing({ session_id: id(4), status: "closed", close_reason: reason }), f = fixture(value);
-      expect(await f.api.status("token", "proof", command())).toEqual({ ...value, outcome: "not_found" });
+      expect(await readWithTicket(command(), (__command, __ticket) => f.api.status("token", "proof", __command, __ticket))).toEqual({ ...value, outcome: "not_found" });
       expect(f.fetcher).toHaveBeenCalledOnce(); expect(f.fetcher.mock.calls[0][1]?.method).toBe("GET");
     });
   it.each([null, {}, { session_id: id(99), status: "closed", close_reason: "stop" },
@@ -350,11 +350,11 @@ describe("Learning answer missing-command closure", () => {
     { session_id: id(4), status: "closed", close_reason: "stop", assignment: {} }])(
     "rejects malformed or foreign closure %j", async closed => {
       const f = fixture(missing(closed));
-      await expect(f.api.status("token", "proof", command())).rejects.toMatchObject({ kind: "invalid_response" });
+      await expect(readWithTicket(command(), (__command, __ticket) => f.api.status("token", "proof", __command, __ticket))).rejects.toMatchObject({ kind: "invalid_response" });
     });
   it("a failing HTTP reply cannot establish non-application", async () => {
     const f = fixture(missing({ session_id: id(4), status: "closed", close_reason: "stop" }), 503);
-    await expect(f.api.status("token", "proof", command())).rejects.toMatchObject({ status: 503 });
+    await expect(readWithTicket(command(), (__command, __ticket) => f.api.status("token", "proof", __command, __ticket))).rejects.toMatchObject({ status: 503 });
   });
 });
 
@@ -380,7 +380,7 @@ describe("Learning addressed result capabilities", () => {
   it("accepts current-version grade rights with an older stored command fact", async () => {
     const value = withRevisionRight(); Object.assign(value.command, { status: "already_applied" });
     value.result!.version = value.action!.version = value.capabilities.grades!.expected_result_version = "3";
-    const parsed = await fixture(value).api.status("token", "proof", command());
+    const parsed = await readWithTicket(command(), (__command, __ticket) => fixture(value).api.status("token", "proof", __command, __ticket));
     expect(parsed.command).toMatchObject({ object_version: "1" });
     if (parsed.outcome === "accepted") expect(parsed.capabilities.grades?.expected_result_version).toBe("3");
   });
@@ -417,7 +417,7 @@ describe("Learning addressed result capabilities", () => {
 it.each(["send", "status"] as const)("the submit-only interface refuses a revision passed to %s", async method => {
   const f = fixture();
   const revision = { ...command(), kind: "result.correct", result_id: id(10), expected_result_version: "1", payload: {} };
-  await expect(f.api[method]("token", "proof", revision as unknown as AnswerSubmitCommand)).rejects.toThrow();
+  await expect((method === "status" ? readWithTicket(revision as unknown as AnswerSubmitCommand, (__command, __ticket) => f.api.status("token", "proof", __command, __ticket)) : f.api.send("token", "proof", revision as unknown as AnswerSubmitCommand))).rejects.toThrow();
   expect(f.fetcher).not.toHaveBeenCalled();
 });
 

@@ -8,6 +8,7 @@ import { ApiError, createJsonTransport, errorCode, httpError, type HttpOptions }
 import { count, date, eventTime, exactKeys, oneOf, record, sameId, uuid, version } from "../api/wireValidation";
 import { intentHash } from "../commands/intentHash";
 import { validDictionaryView } from "./viewApi";
+import type { ReadbackTicket } from "../commands/writeGate";
 
 // Only the main written L1->De of a word is increased (core C-INTV, CON:94, K07-062).
 type Direction = "l1-de";
@@ -65,7 +66,7 @@ export interface DictionaryIntervalApi {
   undo(token: string, proof: string, command: DictionaryIntervalCommand<ActionUndoIntent>): Promise<DictionaryCommandReply>;
   undoOffer(token: string, proof: string, command: DictionaryIntervalCommand<UndoOfferIntent>): Promise<DictionaryCommandReply>;
   readContext(token: string, proof: string, address: DictionaryContextAddress): Promise<DictionaryContextRead>;
-  commandStatus(token: string, proof: string, command: DictionaryIntervalCommand): Promise<DictionaryCommandStatus>;
+  commandStatus(token: string, proof: string, command: DictionaryIntervalCommand, ticket: ReadbackTicket): Promise<DictionaryCommandStatus>;
 }
 
 function calendarDate(value: unknown): value is string {
@@ -441,13 +442,13 @@ export function createDictionaryIntervalApi(options: HttpOptions): DictionaryInt
       return { current: value.current, state_version: value.state_version };
     },
 
-    async commandStatus(token, proof, original) {
+    async commandStatus(token, proof, original, ticket: ReadbackTicket) {
       const command = prepareCommand(token, proof, original);
       const { client_instance_id: clientId, document_id: documentId, ...intent } = command as Record<string, unknown>;
       const expectedHash = await dictionaryIntervalIntentHash(intent as DictionaryIntervalIntent);
       const parameters = new URLSearchParams({ client_instance_id: clientId as string, document_id: documentId as string,
         expected_intent_hash: expectedHash });
-      const reply = await request.readback(command.command_id, `/commands/${command.command_id}?${parameters}`, { method: "GET", token, proof });
+      const reply = await request(`/commands/${command.command_id}?${parameters}`, { method: "GET", token, proof, readbackTicket: ticket });
       const value = reply.value;
       if (reply.status === 409 && record(value) && exactKeys(value, ["error"]) && record(value.error)
         && exactKeys(value.error, ["code"]) && value.error.code === "COMMAND_PAYLOAD_MISMATCH") {

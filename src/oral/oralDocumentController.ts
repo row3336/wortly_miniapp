@@ -119,9 +119,11 @@ export class OralDocumentController {
       newId: options.newId, isLive: () => this.live(), read,
       // 14.8.8.1 А: the seam of fixB; the check of the other window's record follows the end of this step (begin).
       slotConflict: () => { this.slotBlocked[lane] = true; },
-      check: intent => this.exchange(({ token, proof, clientInstanceId, documentId }) => {
-        return api.status(token, proof, { ...intent, client_instance_id: clientInstanceId, document_id: documentId });
-      }),
+      // R6: the status of this ID is read only with the gate's ticket (after the identity check, if one is due).
+      check: intent => options.transport.gate.runReadback(intent.command_id, ticket =>
+        this.exchange(({ token, proof, clientInstanceId, documentId }) =>
+          api.status(token, proof, { ...intent, client_instance_id: clientInstanceId, document_id: documentId }, ticket))),
+      gate: options.transport.gate, family: "oral",
       send: intent => this.exchange(({ token, proof, clientInstanceId, documentId }) => {
         if (!this.active(lane) || this.sendEpoch[lane] !== this.activityEpoch) throw new ClosedAccessError();
         return api.send(token, proof, { ...intent, client_instance_id: clientInstanceId, document_id: documentId });
@@ -133,6 +135,7 @@ export class OralDocumentController {
       },
     });
     this.commands = { study: make("study"), stop: make("stop") };
+    this.unsubscribeGate = options.transport.gate.subscribe(() => this.readPausedLanes());
   }
   private live(): boolean {
     return !this.disposed && (this.options.isLive?.() ?? true) && this.options.access.isLive()
@@ -490,7 +493,23 @@ export class OralDocumentController {
       if (this.sessionId && !this.terminal.has(this.sessionId.toLowerCase())) await this.readCurrent();
     } finally { this.busy[lane] = false; this.emit(); }
   }
+
+  /**
+   * M03 (P03 §5.2): once the gate lets a write through again, an intent the gate kept on the client is read by its ID
+   * (refresh reads only, never POSTs); the lane then offers the same send again.
+   */
+  private readPausedLanes(): void {
+    if (!this.live()) return;
+    const gate = this.options.transport.gate;
+    const paused = (["study", "stop"] as const).some(lane => {
+      const state = this.commands[lane].snapshot(), id = state.pendingIntent?.command_id;
+      return state.problem === "paused" && !!id && gate.mayWrite(id);
+    });
+    if (paused) void this.refresh();
+  }
+  private unsubscribeGate: () => void = () => undefined;
   dispose(): void {
+    this.unsubscribeGate();
     this.disposed = true; this.activityEpoch++; this.ticket = null; this.current = null; this.stopRight = null;
     this.closedFacts = null;
     this.commands.study.dispose(); this.commands.stop.dispose();

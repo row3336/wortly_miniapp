@@ -1,10 +1,17 @@
 import { ApiError } from "../api/http";
 import { ClosedAccessError } from "../app/openedAccess";
+import { PausedBeforeSendError } from "./writeGate";
 
 /** Why automatic recovery stops sending for good (CT §6.1 п. 7); the screen then shows the actual server state. */
 export type TerminationReason =
-  /** 401/403, a changed profile or a lost admission. */
+  /** 403, a changed profile or a lost admission. */
   | "access_lost"
+  /**
+   * 401 (P03 §4.6, M-P03-7): the sign-in expired. Unlike access_lost it is no end of the action: the ID, the envelope and
+   * the count stay, and after a new sign-in the owner of the new document reads the ID before any send (К19-001). The
+   * route of that new sign-in is P01's; until then this machine sends and checks nothing more.
+   */
+  | "reauth"
   /** The session of the action was closed (stop, midnight, pair change, remote end) and the action was not applied. */
   | "session_closed"
   /** The step the action belongs to is no longer the open step of this session. */
@@ -59,7 +66,12 @@ export type CheckResult =
   /** 2.6 / 2.7: no usable answer. pauseSeconds when a planned pause answered. */
   | { kind: "unreachable"; pauseSeconds?: number | null }
   /** 2.13: an answer older than the known state; the outcome stays unknown. */
-  | { kind: "stale" };
+  | { kind: "stale" }
+  /**
+   * The write gate refused the read itself (P03 R6/R8 п.2): cancelled (the document or its owner went away: nothing is
+   * decided), closed_window (the window is closed for good), no_ticket (a defect of the code). Never a lost reply.
+   */
+  | { kind: "gate_refused"; reason: "cancelled" | "closed_window" | "no_ticket" | "paused" | "k5_denied" };
 
 function httpCode(error: unknown, status: number, code: string): boolean {
   return error instanceof ApiError && error.kind === "http" && error.status === status && error.code === code;
@@ -67,14 +79,19 @@ function httpCode(error: unknown, status: number, code: string): boolean {
 function accessLost(error: unknown): boolean {
   return error instanceof ApiError && (error.status === 401 || error.status === 403);
 }
+/** M-P03-7: 401 asks for a new sign-in (reauth); 403 ends the access (access_lost). */
+function accessReason(error: unknown): "reauth" | "access_lost" {
+  return error instanceof ApiError && error.status === 401 ? "reauth" : "access_lost";
+}
 
 /** HTTP refusals that the server answers before any write and that a retry of the same payload repeats. */
 const DEFINITE_REFUSALS: readonly (readonly [number, string])[] = [[422, "VALIDATION_FAILED"], [409, "VERSION_CONFLICT"]];
 
 /** The class of a failed POST. Anything not named below is a lost reply: the write may have happened. */
 export function sendFailure(error: unknown): SendResult {
-  if (error instanceof ClosedAccessError) return { kind: "not_sent" };
-  if (accessLost(error)) return { kind: "terminated", reason: "access_lost" };
+  // PAUSED_BEFORE_SEND (L1/L2): fetch never started, so nothing went out and the reservation goes back (I3).
+  if (error instanceof ClosedAccessError || error instanceof PausedBeforeSendError) return { kind: "not_sent" };
+  if (accessLost(error)) return { kind: "terminated", reason: accessReason(error) };
   if (httpCode(error, 409, "COMMAND_PAYLOAD_MISMATCH")) return { kind: "mismatch" };
   if (httpCode(error, 409, "DOCUMENT_STALE")) return { kind: "window_stale" };
   if (httpCode(error, 409, "CLIENT_INCOMPATIBLE")) return { kind: "incompatible" };
@@ -87,7 +104,8 @@ export function sendFailure(error: unknown): SendResult {
 
 /** The class of a failed fact check. A check never proves absence by failing: anything unnamed is unreachable. */
 export function checkFailure(error: unknown): CheckResult {
-  if (accessLost(error)) return { kind: "terminated", reason: "access_lost" };
+  if (error instanceof PausedBeforeSendError) return { kind: "gate_refused", reason: error.reason };
+  if (accessLost(error)) return { kind: "terminated", reason: accessReason(error) };
   if (httpCode(error, 409, "COMMAND_PAYLOAD_MISMATCH")) return { kind: "mismatch" };
   if (httpCode(error, 409, "DOCUMENT_STALE")) return { kind: "window_stale" };
   if (httpCode(error, 503, "MAINTENANCE")) return { kind: "unreachable", pauseSeconds: (error as ApiError).pause?.waitSeconds ?? null };

@@ -10,8 +10,7 @@ import { EntryController } from "./entryController";
 import { EntryScreen } from "./EntryScreen";
 import type { EntryState } from "./entryState";
 import { clientContractVersion, type HttpOptions } from "../api/http";
-import { createAvailabilityClient } from "../api/availability";
-import { WriteGate } from "../commands/writeGate";
+import { pageGate } from "./pageGate";
 import type { OpenedAccess } from "./openedAccess";
 import type { LearningPageStarts } from "../learning/learningPageStarts";
 import type { BusyAccess } from "./busyAccess";
@@ -90,7 +89,11 @@ export function App({ learningPage }: { learningPage?: LearningPageStarts } = {}
     let enteredDocument: string | null = null;
     let journal: ReturnType<typeof createPageJournal> | null = null;
     // The write gate of this page (P03 M-P03-3): every request of every module passes it (RD-7); it owns the probes.
-    const gate = new WriteGate();
+    const gate = pageGate.make();
+    // The series of probes runs only in a visible window: hidden, its timers stop; shown, it starts again at 5 s (Q35.3).
+    const visibility = () => gate.setVisible(document.visibilityState !== "hidden");
+    visibility();
+    document.addEventListener("visibilitychange", visibility);
     try {
       storage = browserStorage(window.localStorage);
     } catch {
@@ -98,7 +101,11 @@ export function App({ learningPage }: { learningPage?: LearningPageStarts } = {}
       document.documentElement.lang = fallback;
       setLanguage(fallback);
       setEntryState({ kind: "unavailable" });
-      return () => { active = false; };
+      return () => {
+        active = false;
+        document.removeEventListener("visibilitychange", visibility);
+        gate.dispose();
+      };
     }
     const readyStorage = storage;
     storageRef.current = readyStorage;
@@ -125,7 +132,7 @@ export function App({ learningPage }: { learningPage?: LearningPageStarts } = {}
           onDocumentStale: () => currentController?.documentStale(),
           gate,
         };
-        gate.attachProbe(createAvailabilityClient(options).probe);
+        gate.attachProbe(pageGate.probe(options));
         const api = createEntryApi(options);
         setTransport(options);
         const clientVersion = import.meta.env.VITE_WORTLY_CLIENT_VERSION || packageJson.version;
@@ -150,6 +157,7 @@ export function App({ learningPage }: { learningPage?: LearningPageStarts } = {}
           timeZone: () => Intl.DateTimeFormat().resolvedOptions().timeZone || null,
           newId,
           closeWindow: () => closeMiniApp(window),
+          gate,
           onDocumentCheck(checking) { if (active) setDocumentCheck(checking); },
           onUpdate(snapshot) {
             if (!active) return;
@@ -181,6 +189,7 @@ export function App({ learningPage }: { learningPage?: LearningPageStarts } = {}
       if (journal && clientJournal() === journal) installClientJournal(null);
       journal?.dispose();
       currentController?.dispose();
+      document.removeEventListener("visibilitychange", visibility);
       gate.dispose();
       openedRef.current = null;
       if (storageRef.current === readyStorage) storageRef.current = null;

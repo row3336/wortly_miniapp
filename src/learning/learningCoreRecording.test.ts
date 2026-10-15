@@ -5,7 +5,7 @@ import { fixture } from "./learningFixtures.test-support";
 import { createLearningSessionApi, type LearningSessionCommand } from "./learningSessionApi";
 import { LearningViewController } from "./learningViewController";
 import recording from "./learningCoreRecording.json";
-import { testGate } from "../commands/testGate.test-support";
+import { readWithTicket, testGate } from "../commands/testGate.test-support";
 
 /**
  * Bridge to the real API: replies recorded from core's own ASGI app (TestClient over a disposable wortly_test
@@ -67,8 +67,9 @@ function adapters(fetcher: typeof fetch) {
   const isResult = (name: string) => resultKinds.includes(command(name).kind);
   const send = (name: string) => isResult(name) ? results.send("token", "proof", command(name) as unknown as LearningResultCommand)
     : sessions.send("token", "proof", command(name) as unknown as LearningSessionCommand);
-  const status = (original: string) => isResult(original) ? results.status("token", "proof", command(original) as unknown as LearningResultCommand)
-    : sessions.status("token", "proof", command(original) as unknown as LearningSessionCommand);
+  const status = (original: string) => isResult(original)
+    ? readWithTicket(command(original) as unknown as LearningResultCommand, (__command, __ticket) => results.status("token", "proof", __command, __ticket))
+    : readWithTicket(command(original) as unknown as LearningSessionCommand, (__command, __ticket) => sessions.status("token", "proof", __command, __ticket));
   const origin = (name: string) => ({ client_instance_id: exchange(name).query.client_instance_id,
     document_id: exchange(name).query.document_id });
   const readSession = (name: string) => sessions.read("token", "proof", { session_id: exchange(name).path.split("/").at(-1)!, ...origin(name) });
@@ -166,7 +167,7 @@ describe("Learning adapters against recorded core replies", () => {
     expect(await api.send("stop")).toMatchObject({ outcome: "accepted", current: { status: "closed", close_reason: "stop", assignment: null } });
     expect(await api.readResult("read_closed")).toMatchObject({ result: { status: "undone", detail: null }, step: { status: "closed" } });
     const missing = exchange("status_missing").path.split("/").at(-1)!;
-    expect(await api.sessions.status("token", "proof", { ...api.command("stop"), command_id: missing } as unknown as LearningSessionCommand)).toMatchObject({ outcome: "not_found",
+    expect(await readWithTicket({ ...api.command("stop"), command_id: missing } as unknown as LearningSessionCommand, (__command, __ticket) => api.sessions.status("token", "proof", __command, __ticket))).toMatchObject({ outcome: "not_found",
       closed_session: { status: "closed", close_reason: "stop" } });
     expect(await api.send("start_again")).toMatchObject({ outcome: "rejected", error: { code: "SESSION_CLOSED" } });
     expect(problems).toEqual([]);
