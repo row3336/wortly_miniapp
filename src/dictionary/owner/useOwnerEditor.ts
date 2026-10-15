@@ -42,16 +42,17 @@ export type OwnerEditorActions = {
   openTranslations(): void;
   openGrammar(): void;
   cancel(): void;
-  editTranslation(index: number, text: string): void;
-  addTranslation(): void;
-  removeTranslation(index: number): void;
-  moveTranslation(from: number, to: number): void;
-  moveTranslationUp(index: number): void;
-  moveTranslationDown(index: number): void;
-  saveTranslations(): void;
-  keepMineTranslations(): void;
-  acceptCurrentTranslations(): void;
-  retryTranslations(): void;
+  /** `language`: another language's list under its badge (R17-02); left out, the dictionary's own. */
+  editTranslation(index: number, text: string, language?: CommonLanguage): void;
+  addTranslation(language?: CommonLanguage): void;
+  removeTranslation(index: number, language?: CommonLanguage): void;
+  moveTranslation(from: number, to: number, language?: CommonLanguage): void;
+  moveTranslationUp(index: number, language?: CommonLanguage): void;
+  moveTranslationDown(index: number, language?: CommonLanguage): void;
+  saveTranslations(language?: CommonLanguage): void;
+  keepMineTranslations(language?: CommonLanguage): void;
+  acceptCurrentTranslations(language?: CommonLanguage): void;
+  retryTranslations(language?: CommonLanguage): void;
   /** R12-04: open or fold one other language under its badge; repeat a failed read of them. */
   toggleLanguage(language: CommonLanguage): void;
   retryOthers(): void;
@@ -101,12 +102,23 @@ function accessPort(latest: { current: OwnerEditorOptions }, api: () => CommonFi
   };
 }
 
+function oneLanguage(value: unknown): CommonLanguage | null {
+  return value === "ru" || value === "uk" || value === "en" ? value : null;
+}
+
+/** A button handler passes its click event where a language may stand: only a language names another list (R17-02). */
+function languageArg(value: unknown): CommonLanguage | undefined {
+  return typeof value === "string" ? value as CommonLanguage : undefined;
+}
+
 /** The owner's common editors of one open card (R12-04…06, R14-01). One controller per mounted card host; memory only. */
 export function useOwnerEditor(options: OwnerEditorOptions): { state: OwnerEditorState; actions: OwnerEditorActions } {
   const latest = useRef(options);
   useInsertionEffect(() => { latest.current = options; });
   const [, repaint] = useReducer((value: number) => value + 1, 0);
-  const api = useMemo(() => createCommonFieldApi(options.transport), [options.transport]);
+  // A translation save's current shows the profile's dictionary language (R17-02: whatever language was saved).
+  const api = useMemo(() => createCommonFieldApi(options.transport,
+    () => oneLanguage(latest.current.access.profile.dictionary_language)), [options.transport]);
   const currentApi = useRef(api); currentApi.current = api;
   // Mounted, not disposed: StrictMode's synchronous unmount and remount must keep the same editors and texts.
   const mounted = useRef(false);
@@ -146,16 +158,16 @@ export function useOwnerEditor(options: OwnerEditorOptions): { state: OwnerEdito
     openTranslations: () => controller.openTranslations(),
     openGrammar: () => controller.openGrammar(),
     cancel: () => controller.cancel(),
-    editTranslation: (index, text) => controller.editTranslation(index, text),
-    addTranslation: () => controller.addTranslation(),
-    removeTranslation: index => controller.removeTranslation(index),
-    moveTranslation: (from, to) => controller.moveTranslation(from, to),
-    moveTranslationUp: index => controller.moveTranslationUp(index),
-    moveTranslationDown: index => controller.moveTranslationDown(index),
-    saveTranslations: () => { void controller.saveTranslations(); },
-    keepMineTranslations: () => { void controller.keepMineTranslations(); },
-    acceptCurrentTranslations: () => controller.acceptCurrentTranslations(),
-    retryTranslations: () => { void controller.retryTranslations(); },
+    editTranslation: (index, text, language) => controller.editTranslation(index, text, languageArg(language)),
+    addTranslation: language => controller.addTranslation(languageArg(language)),
+    removeTranslation: (index, language) => controller.removeTranslation(index, languageArg(language)),
+    moveTranslation: (from, to, language) => controller.moveTranslation(from, to, languageArg(language)),
+    moveTranslationUp: (index, language) => controller.moveTranslationUp(index, languageArg(language)),
+    moveTranslationDown: (index, language) => controller.moveTranslationDown(index, languageArg(language)),
+    saveTranslations: language => { void controller.saveTranslations(languageArg(language)); },
+    keepMineTranslations: language => { void controller.keepMineTranslations(languageArg(language)); },
+    acceptCurrentTranslations: language => controller.acceptCurrentTranslations(languageArg(language)),
+    retryTranslations: language => { void controller.retryTranslations(languageArg(language)); },
     toggleLanguage: language => controller.toggleLanguage(language),
     retryOthers: () => { void controller.retryOthers(); },
     editGrammar: (name, draft) => controller.editGrammar(name, draft),

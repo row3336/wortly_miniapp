@@ -63,7 +63,8 @@
   background: var(--surface); color: var(--text); font: inherit; font-size: .875rem;
 }
 .owner-badge[aria-expanded="true"] { border-color: var(--text); }
-.owner-other-texts ol { display: grid; gap: 2px; margin: 0; padding-left: 20px; }
+/* R17-02: an opened badge holds the fields of its language, set off from the dictionary's list by a quiet rule. */
+.owner-other-editor { display: grid; gap: 8px; min-width: 0; padding-left: 10px; border-left: 2px solid var(--line); }
 @media (prefers-reduced-motion: reduce) {
   .owner-translation { transition: none; }
 }

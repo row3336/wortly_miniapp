@@ -265,11 +265,11 @@ describe("owner common editor (R12-04…06, R14-01)", () => {
   it("K13 R12-04: the other languages are read on opening, folded under badges and opened by a tap; never the dictionary's own", async () => {
     const h = harness({ reads: [new ApiError("network"), translationsRead()] });
     h.controller.openTranslations();
-    expect(h.snapshot().translations!.others).toEqual({ status: "loading", languages: [] });
+    expect(h.snapshot().translations!.others).toEqual({ status: "loading", languages: [], refresh: "idle" });
     await vi.waitFor(() => expect(h.snapshot().translations!.others.status).toBe("failed"));
     expect(h.read).toHaveBeenCalledWith(CARD_ID);
     await h.controller.retryOthers();
-    expect(h.snapshot().translations!.others).toEqual({ status: "ready", languages: [
+    expect(h.snapshot().translations!.others).toMatchObject({ status: "ready", refresh: "idle", languages: [
       { language: "uk", texts: ["будинок"], expanded: false }, { language: "en", texts: [], expanded: false }] });
     h.controller.toggleLanguage("uk");
     h.controller.toggleLanguage("ru");

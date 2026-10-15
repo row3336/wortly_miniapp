@@ -138,7 +138,7 @@ function wireBody(command: CommonCommand): object {
       value: command.value } };
 }
 
-/** The binding of a reply's current: the card, and the L1 of a translation save (grammar has no language of its own). */
+/** The binding of a reply's current: the card, and (when given) the owner's dictionary language it must show. */
 export type CommonBinding = { card_id: string; language: CommonLanguage | null };
 
 const currentKeys = ["status", "scope", "card_id", "card_type", "card_revision", "language", "translations", "grammar"];
@@ -169,8 +169,15 @@ function acceptedFact(value: unknown, intent: CommonSaveIntent, statuses: string
 }
 
 
-export function createCommonFieldApi(options: HttpOptions): CommonFieldApi {
+/**
+ * `dictionaryLanguage`: the owner's dictionary language of the profile now. A translation save's current must show it,
+ * whatever language was saved (core 5b14780, R17-02 вар.1: any of ru, uk, en is saved in place); without it the current
+ * must show the saved language itself. Grammar has no L1 of its own: any L1 of the owner's current fits.
+ */
+export function createCommonFieldApi(options: HttpOptions, dictionaryLanguage?: () => CommonLanguage | null): CommonFieldApi {
   const request = createJsonTransport(options);
+  const bindingOf = (command: CommonCommand): CommonBinding => ({ card_id: command.card_id,
+    language: command.field_name !== "translation" ? null : dictionaryLanguage?.() ?? command.language });
   return {
     async send(token, proof, original) {
       // Detached before the first await: later caller mutation cannot change the sent intent.
@@ -182,7 +189,8 @@ export function createCommonFieldApi(options: HttpOptions): CommonFieldApi {
         const stateVersion = value.state_version;
         if (reply.status === 200 && value.error == null
           && exactKeys(value, ["command", "current", "state_version", ...(Object.hasOwn(value, "error") ? ["error"] : [])])
-          && acceptedFact(value.command, command, ["applied", "already_applied"]) && validCommonCurrent(value.current, binding)) {
+          && acceptedFact(value.command, command, ["applied", "already_applied"]) && validCommonCurrent(value.current, binding)
+          && notOlder(value.current, command)) {
           return { outcome: "accepted", command: value.command, current: value.current, state_version: stateVersion };
         }
         const code = errorCode(value);
@@ -229,7 +237,7 @@ export function createCommonFieldApi(options: HttpOptions): CommonFieldApi {
       // The ID alone cannot tell this intent from another payload; the server echoes the verified hash.
       if (exactKeys(value, ["command", "current", "state_version", "verified_intent_hash"])
         && value.verified_intent_hash === expectedHash && acceptedFact(fact, command, ["already_applied"])
-        && validCommonCurrent(value.current, bindingOf(command))) {
+        && validCommonCurrent(value.current, bindingOf(command)) && notOlder(value.current, command)) {
         return { outcome: "accepted", command: fact as StoredCommandFact, current: value.current, state_version: value.state_version };
       }
       throw new ApiError("invalid_response");
@@ -245,7 +253,7 @@ export function createCommonFieldApi(options: HttpOptions): CommonFieldApi {
   };
 }
 
-/** The card and L1 of a command; a grammar save has no L1 of its own, so any L1 of the owner's current fits. */
-function bindingOf(command: CommonCommand): CommonBinding {
-  return { card_id: command.card_id, language: command.language };
+/** The current of an accepted save is at least the revision its fact made (expected + 1), never an older card. */
+function notOlder(current: CommonCurrent, command: CommonCommand): boolean {
+  return current.status !== "available" || BigInt(current.card_revision) > BigInt(command.expected_field_version);
 }

@@ -36,7 +36,7 @@ export type CommonSource = {
 
 /** One grammar field as the editor holds it: a form (status and text; "" is no form) or the separability. */
 export type GrammarDraft = { status: CommonGrammarForm["status"]; value: string } | Separability;
-export type OwnerTarget = "translations" | GrammarFieldName;
+export type OwnerTarget = "translations" | `translations:${CommonLanguage}` | GrammarFieldName;
 export type OwnerPhase = "editing" | "saving" | "failed" | "conflict" | "saved";
 export type OwnerProblem = {
   /** unknown: no reply, the same command can be repeated; invalid: 422; forbidden: not the owner; unavailable: card gone. */
@@ -48,9 +48,19 @@ export type OwnerProblem = {
 /** R12-04: the other languages under badges, folded until tapped; for viewing only. */
 export type OtherLanguagesSnapshot = {
   status: "loading" | "ready" | "failed" | "unavailable";
-  languages: { language: CommonLanguage; texts: string[]; expanded: boolean }[];
+  /**
+   * R17-02 (вар.1, П5-026): an opened badge edits its language in place, with the same fields as the dictionary's own.
+   * texts: the list saved now; editor: the editable list of that language.
+   */
+  languages: { language: CommonLanguage; texts: string[]; expanded: boolean; editor: TranslationListSnapshot }[];
+  /**
+   * A read again after a save or a conflict (C333/A-1): the lists stay meanwhile; a failure, or a card no longer available
+   * to this editor, keeps them and their drafts, and is repeated only by a tap.
+   */
+  refresh: "idle" | "loading" | "failed" | "unavailable";
 };
-export type TranslationsSnapshot = {
+/** One language's editable list of common translations (R14-01). */
+export type TranslationListSnapshot = {
   items: TranslationItem[];
   /** The server's list the editor started from (after a conflict: the list saved elsewhere). */
   current: string[];
@@ -64,9 +74,16 @@ export type TranslationsSnapshot = {
   canEdit: boolean;
   canSave: boolean;
   canRetry: boolean;
-  canCancel: boolean;
   canRemove: boolean;
   checking: boolean;
+  /**
+   * Another language after a conflict: the list saved elsewhere is not known until its read succeeds; meanwhile it is not
+   * shown as saved and «Взять сохранённое» / «Сохранить моё» wait (only the read is repeated).
+   */
+  reading: boolean;
+};
+export type TranslationsSnapshot = TranslationListSnapshot & {
+  canCancel: boolean;
   others: OtherLanguagesSnapshot;
 };
 export type GrammarFieldSnapshot = {
@@ -117,11 +134,24 @@ type GrammarField = {
   name: GrammarFieldName; draft: GrammarDraft; original: GrammarDraft; current: GrammarDraft; phase: OwnerPhase;
   problem: OwnerProblem | null;
 };
-type Others = { status: OtherLanguagesSnapshot["status"]; byLanguage: Partial<Record<CommonLanguage, string[]>>;
-  expanded: Set<CommonLanguage>; read: number };
+/**
+ * The other languages of the open translations editor (R12-04, R17-02): one editable list each, from the owner's read of
+ * every language (GET /common). `revision` is the card revision of the read the lists stand on: their saves expect it.
+ */
+type Others = { status: OtherLanguagesSnapshot["status"]; sessions: Map<CommonLanguage, Translations>;
+  revision: string | null; refresh: OtherLanguagesSnapshot["refresh"]; expanded: Set<CommonLanguage>; read: number;
+  /** Languages whose list saved elsewhere is unknown since a conflict: only a successful read tells it. */
+  stale: Set<CommonLanguage>;
+  /** The card revision a read again was already started for: a newer card read starts at most one read per revision. */
+  followed: string | null };
 type Entry = { intent: CommonSaveIntent; target: OwnerTarget; status: "sending" | "unknown"; busy: boolean; notFound: boolean };
+/** The target of a save of another language than the dictionary's (R17-02); "translations" is the dictionary's own. */
+type OtherTarget = `translations:${CommonLanguage}`;
 
 const commonLanguages: readonly CommonLanguage[] = ["ru", "uk", "en"];
+const otherTarget = (language: CommonLanguage): OtherTarget => `translations:${language}`;
+const isOtherTarget = (target: OwnerTarget): target is OtherTarget => target.startsWith("translations:");
+const otherLanguageOf = (target: OtherTarget) => target.slice("translations:".length) as CommonLanguage;
 const newer = (left: string, right: string) => BigInt(left) > BigInt(right);
 const same = (left: string, right: string) => left.toLowerCase() === right.toLowerCase();
 /** Codes after which the shown card may be outdated: it is read again, never guessed. */
@@ -202,6 +232,7 @@ export class OwnerEditorController {
     } else if (previous && newer(previous.stateVersion, source.stateVersion)) return; // an older read adds nothing
     this.source = structuredClone(source);
     this.rebase();
+    this.followOthers();
     this.notify();
   }
 
@@ -245,12 +276,13 @@ export class OwnerEditorController {
       phase: "editing", problem: null, lastRefused: false };
     this.base = source.revision;
     this.openEditor = "translations";
-    this.others = { status: "loading", byLanguage: {}, expanded: new Set(), read: 0 };
+    this.others = { status: "loading", sessions: new Map(), revision: null, refresh: "idle", expanded: new Set(), read: 0,
+      stale: new Set(), followed: null };
     this.notify();
     void this.loadOthers();
   }
 
-  /** R12-04: a badge opens or folds the translations of one other language. */
+  /** R12-04: a badge opens or folds the translations of one other language; folding keeps its unsaved list. */
   toggleLanguage(language: CommonLanguage): void {
     const others = this.others;
     if (!others || others.status !== "ready" || this.openEditor !== "translations" || language === this.source?.language) return;
@@ -258,10 +290,13 @@ export class OwnerEditorController {
     this.notify();
   }
 
-  /** A failed read of the other languages is repeated only by the owner's tap. */
+  /** A failed read of the other languages (the first one or a read again) is repeated only by the owner's tap. */
   retryOthers(): Promise<void> {
-    if (this.others?.status !== "failed" || this.openEditor !== "translations") return Promise.resolve();
-    this.others.status = "loading";
+    const others = this.others;
+    if (!others || this.openEditor !== "translations") return Promise.resolve();
+    if (others.status === "failed") others.status = "loading";
+    else if (others.status === "ready" && (others.refresh === "failed" || others.refresh === "unavailable")) others.refresh = "loading";
+    else return Promise.resolve();
     this.notify();
     return this.loadOthers();
   }
@@ -293,35 +328,36 @@ export class OwnerEditorController {
     this.notify();
   }
 
-  // ---- user actions: translations (R14-01) ----
+  // ---- user actions: translations (R14-01; another language: R17-02) ----
+  // `language`: the list of that language; left out or the dictionary's own, the dictionary's list.
 
-  editTranslation(index: number, text: string): void {
-    const session = this.translations;
-    if (!session || typeof text !== "string" || !this.translationsEditable() || !session.items[index]) return;
+  editTranslation(index: number, text: string, language?: CommonLanguage): void {
+    const session = this.sessionOf(language);
+    if (!session || typeof text !== "string" || !this.translationsEditable(session) || !session.items[index]) return;
     session.items = session.items.map((item, position) => position === index ? { ...item, text } : item);
     this.touched(session);
   }
 
-  addTranslation(): void {
-    const session = this.translations;
-    if (!session || !this.translationsEditable()) return;
+  addTranslation(language?: CommonLanguage): void {
+    const session = this.sessionOf(language);
+    if (!session || !this.translationsEditable(session)) return;
     session.items = addItem(session.items, this.newKey());
     this.touched(session);
   }
 
   /** R12-06: removing the last field is refused with an explanation, the list stays. */
-  removeTranslation(index: number): void {
-    const session = this.translations;
-    if (!session || !this.translationsEditable() || !session.items[index]) return;
+  removeTranslation(index: number, language?: CommonLanguage): void {
+    const session = this.sessionOf(language);
+    if (!session || !this.translationsEditable(session) || !session.items[index]) return;
     if (!canRemove(session.items)) { session.lastRefused = true; this.notify(); return; }
     session.items = removeItem(session.items, index);
     this.touched(session);
   }
 
   /** Drag and drop (R14-01): the field from `from` takes the place `to`; it can become the first. */
-  moveTranslation(from: number, to: number): void {
-    const session = this.translations;
-    if (!session || !this.translationsEditable()) return;
+  moveTranslation(from: number, to: number, language?: CommonLanguage): void {
+    const session = this.sessionOf(language);
+    if (!session || !this.translationsEditable(session)) return;
     const items = moveItem(session.items, from, to);
     if (items.every((item, index) => item === session.items[index])) return;
     session.items = items;
@@ -329,37 +365,38 @@ export class OwnerEditorController {
   }
 
   /** «Выше» / «Ниже» for the keyboard and the screen reader (R14-01). */
-  moveTranslationUp(index: number): void {
-    const session = this.translations;
-    if (!session || !this.translationsEditable() || index <= 0) return;
+  moveTranslationUp(index: number, language?: CommonLanguage): void {
+    const session = this.sessionOf(language);
+    if (!session || !this.translationsEditable(session) || index <= 0) return;
     session.items = moveUp(session.items, index);
     this.touched(session);
   }
 
-  moveTranslationDown(index: number): void {
-    const session = this.translations;
-    if (!session || !this.translationsEditable() || index >= session.items.length - 1) return;
+  moveTranslationDown(index: number, language?: CommonLanguage): void {
+    const session = this.sessionOf(language);
+    if (!session || !this.translationsEditable(session) || index >= session.items.length - 1) return;
     session.items = moveDown(session.items, index);
     this.touched(session);
   }
 
-  saveTranslations(): Promise<void> {
-    const session = this.translations;
+  saveTranslations(language?: CommonLanguage): Promise<void> {
+    const session = this.sessionOf(language);
     if (!session || !this.canSaveTranslations(session)) return Promise.resolve();
-    return this.start("translations", this.translationsIntent(session));
+    return this.start(this.targetOf(session), this.translationsIntent(session));
   }
 
   /** Conflict: keep my list and save it against the revision just reported (the server checks again). */
-  keepMineTranslations(): Promise<void> {
-    const session = this.translations;
-    if (!session || session.phase !== "conflict" || this.entry || !this.contextId || hasBlank(session.items)) return Promise.resolve();
-    return this.start("translations", this.translationsIntent(session));
+  keepMineTranslations(language?: CommonLanguage): Promise<void> {
+    const session = this.sessionOf(language);
+    if (!session || session.phase !== "conflict" || this.entry || !this.contextId || hasBlank(session.items)
+      || this.reading(session)) return Promise.resolve();
+    return this.start(this.targetOf(session), this.translationsIntent(session));
   }
 
   /** Conflict: take the list saved elsewhere; my list is dropped only by this explicit choice. */
-  acceptCurrentTranslations(): void {
-    const session = this.translations;
-    if (!session || session.phase !== "conflict") return;
+  acceptCurrentTranslations(language?: CommonLanguage): void {
+    const session = this.sessionOf(language);
+    if (!session || session.phase !== "conflict" || this.reading(session)) return;
     const texts = session.current.length > 0 ? session.current : [""];
     session.items = itemsOf(texts, () => this.newKey());
     session.original = [...texts];
@@ -368,11 +405,12 @@ export class OwnerEditorController {
   }
 
   /** After an unknown outcome the same command; after a refusal a new one with the same list. */
-  retryTranslations(): Promise<void> {
-    const session = this.translations, entry = this.entry;
+  retryTranslations(language?: CommonLanguage): Promise<void> {
+    const session = this.sessionOf(language), entry = this.entry;
     if (!session || session.phase !== "failed") return Promise.resolve();
-    if (entry && entry.target === "translations") return entry.status === "unknown" && !entry.busy ? this.execute(entry) : Promise.resolve();
-    return this.saveTranslations();
+    const target = this.targetOf(session);
+    if (entry && entry.target === target) return entry.status === "unknown" && !entry.busy ? this.execute(entry) : Promise.resolve();
+    return this.saveTranslations(language);
   }
 
   // ---- user actions: grammar (R12-05) ----
@@ -422,15 +460,7 @@ export class OwnerEditorController {
     const entry = this.entry;
     const session = this.translations;
     const translations: TranslationsSnapshot | null = session && this.openEditor === "translations" ? {
-      items: session.items.map(item => ({ ...item })), current: [...session.current], phase: session.phase,
-      problem: session.problem ? { ...session.problem } : null, dirty: this.translationsDirty(session),
-      blank: hasBlank(session.items), lastRefused: session.lastRefused, canEdit: this.translationsEditable(),
-      canSave: this.canSaveTranslations(session),
-      canRetry: session.phase === "failed" && (entry?.target === "translations" ? entry.status === "unknown" && !entry.busy
-        : this.retryable(session.problem) && !hasBlank(session.items)),
-      canCancel: !(entry?.busy ?? false), canRemove: canRemove(session.items),
-      checking: entry?.target === "translations" && entry.busy,
-      others: this.othersSnapshot(),
+      ...this.listSnapshot(session), canCancel: !(entry?.busy ?? false), others: this.othersSnapshot(),
     } : null;
     const grammar = this.openEditor === "grammar" ? {
       fields: [...this.grammar.values()].map(field => ({
@@ -451,14 +481,31 @@ export class OwnerEditorController {
     };
   }
 
-  private othersSnapshot(): OtherLanguagesSnapshot {
-    const others = this.others, language = this.source?.language;
-    if (!others) return { status: "loading", languages: [] };
-    const languages = others.status !== "ready" ? [] : commonLanguages.filter(item => item !== language).map(item => ({
-      language: item, texts: [...(others.byLanguage[item] ?? [])], expanded: others.expanded.has(item) }));
-    return { status: others.status, languages };
+  private listSnapshot(session: Translations): TranslationListSnapshot {
+    const entry = this.entry, target = this.targetOf(session);
+    return {
+      items: session.items.map(item => ({ ...item })), current: [...session.current], phase: session.phase,
+      problem: session.problem ? { ...session.problem } : null, dirty: this.translationsDirty(session),
+      blank: hasBlank(session.items), lastRefused: session.lastRefused, canEdit: this.translationsEditable(session),
+      canSave: this.canSaveTranslations(session),
+      canRetry: session.phase === "failed" && (entry?.target === target ? entry.status === "unknown" && !entry.busy
+        : this.retryable(session.problem) && !hasBlank(session.items) && this.othersSaveable(session)),
+      canRemove: canRemove(session.items), checking: entry?.target === target && entry.busy, reading: this.reading(session),
+    };
   }
 
+  private othersSnapshot(): OtherLanguagesSnapshot {
+    const others = this.others;
+    if (!others) return { status: "loading", languages: [], refresh: "idle" };
+    const languages = others.status !== "ready" ? [] : [...others.sessions].map(([language, session]) => ({
+      language, texts: [...session.current], expanded: others.expanded.has(language), editor: this.listSnapshot(session) }));
+    return { status: others.status, languages, refresh: others.refresh };
+  }
+
+  /**
+   * GET /common: the first read of the other languages, or a read again (refresh) after a save of another language, a
+   * conflict or a newer card revision (C333/A-1: the core's current shows the dictionary's language only).
+   */
   private async loadOthers(): Promise<void> {
     const others = this.others, source = this.source;
     if (!others || !source) return;
@@ -474,10 +521,68 @@ export class OwnerEditorController {
     if (this.disposed || this.others !== others || others.read !== read || this.source === null
       || !same(this.source.cardId, source.cardId)) return;
     const current = reply?.current;
-    if (!reply || !current) others.status = "failed";
-    else if (current.status !== "available" || current.language !== this.source.language) others.status = "unavailable";
-    else { others.status = "ready"; others.byLanguage = structuredClone(current.translations); }
+    if (!reply || !current) {
+      // A failed read again keeps the lists (and their drafts); the first failed read has none to keep.
+      if (others.status === "ready") others.refresh = "failed"; else others.status = "failed";
+    } else if (current.status !== "available" || current.language !== this.source.language) {
+      // A read again never drops the lists or their drafts (C337); the first read has nothing to show.
+      if (others.status === "ready") others.refresh = "unavailable";
+      else { others.status = "unavailable"; others.refresh = "idle"; others.sessions.clear(); others.revision = null; }
+    } else {
+      this.applyOthers(others, current.card_revision, current.translations);
+      // The card may have moved on while this read was under way (its first read included).
+      this.followOthers();
+    }
     this.notify();
+  }
+
+  /**
+   * The other languages' lists at a card revision. Untouched lists take the server's; a touched list whose server value
+   * changed is a conflict; the list of a save under way waits for its outcome. An older read adds nothing.
+   */
+  private applyOthers(others: Others, revision: string, lists: Record<CommonLanguage, string[]>): void {
+    const own = this.source?.language;
+    others.refresh = "idle";
+    if (others.revision !== null && newer(others.revision, revision)) return;
+    for (const language of commonLanguages) {
+      if (language === own) continue;
+      const server = [...lists[language]], session = others.sessions.get(language);
+      if (!session) {
+        // A language without a common translation starts with one empty field, as the dictionary's own.
+        const texts = server.length > 0 ? server : [""];
+        others.sessions.set(language, { items: itemsOf(texts, () => this.newKey()), original: [...texts], current: server,
+          phase: "editing", problem: null, lastRefused: false });
+        continue;
+      }
+      if (this.entry?.target === otherTarget(language)) continue;
+      others.stale.delete(language);
+      if (sameTexts(server, session.current)) continue;
+      if (!this.translationsDirty(session) && session.phase !== "conflict") {
+        const texts = server.length > 0 ? server : [""];
+        session.items = itemsOf(texts, () => this.newKey());
+        session.original = [...texts];
+      } else { session.phase = "conflict"; session.problem = null; }
+      session.current = server;
+    }
+    others.revision = revision;
+    others.status = "ready";
+  }
+
+  /** A newer card revision than the other lists stand on: they are read again once (a failure waits for a tap). */
+  private followOthers(): void {
+    const others = this.others, source = this.source;
+    if (!others || !source || this.openEditor !== "translations" || others.status !== "ready" || others.refresh !== "idle"
+      || this.entry !== null || others.revision === null || !newer(source.revision, others.revision)
+      || others.followed === source.revision) return;
+    others.followed = source.revision;
+    this.refreshOthers();
+  }
+
+  private refreshOthers(): void {
+    const others = this.others;
+    if (!others || others.status !== "ready" || this.openEditor !== "translations") return;
+    others.refresh = "loading";
+    void this.loadOthers();
   }
 
   // ---- rules ----
@@ -491,9 +596,35 @@ export class OwnerEditorController {
     return source !== null && grammarCardType(source.cardType) && source.grammar !== null;
   }
   /** While a save is in flight or unresolved the list is the one sent; it changes only after the outcome. */
-  private translationsEditable(): boolean {
+  private translationsEditable(session: Translations): boolean {
     // A conflict keeps its explicit choice («Взять сохранённое» / «Сохранить моё»); the list stays editable meanwhile.
-    return this.openEditor === "translations" && this.entry === null && this.translations?.phase !== "saving";
+    return this.openEditor === "translations" && this.entry === null && session.phase !== "saving";
+  }
+  /** The list of the dictionary's language, or of another language once its read is shown (R17-02). */
+  private sessionOf(language?: CommonLanguage): Translations | null {
+    if (language === undefined || language === this.source?.language) return this.translations;
+    const others = this.others;
+    return others?.status === "ready" ? others.sessions.get(language) ?? null : null;
+  }
+  private languageOf(session: Translations): CommonLanguage | null {
+    for (const [language, item] of this.others?.sessions ?? []) if (item === session) return language;
+    return null;
+  }
+  private targetOf(session: Translations): OwnerTarget {
+    const language = session === this.translations ? null : this.languageOf(session);
+    return language === null ? "translations" : otherTarget(language);
+  }
+  /** Another language's list is saved against the revision of its read, never while that read is renewed. */
+  private othersSaveable(session: Translations): boolean {
+    if (session === this.translations) return true;
+    const others = this.others;
+    return others !== null && others.status === "ready" && others.refresh !== "loading" && others.refresh !== "unavailable"
+      && others.revision !== null;
+  }
+  /** The list saved elsewhere of another language is not known yet (being read, or its read failed): its choice waits. */
+  private reading(session: Translations): boolean {
+    const language = session === this.translations ? null : this.languageOf(session);
+    return language !== null && (this.others?.stale.has(language) ?? false);
   }
   private grammarEditable(field: GrammarField): boolean {
     return this.openEditor === "grammar" && this.entry?.target !== field.name;
@@ -504,7 +635,7 @@ export class OwnerEditorController {
   /** An unchanged list is not saved; a blank field or an empty list never goes (R12-06). */
   private canSaveTranslations(session: Translations): boolean {
     const texts = textsOf(session.items);
-    return this.contextId !== null && this.entry === null && this.openEditor === "translations"
+    return this.contextId !== null && this.entry === null && this.openEditor === "translations" && this.othersSaveable(session)
       && (session.phase === "editing" || session.phase === "failed" && this.retryable(session.problem))
       && texts.length > 0 && !hasBlank(session.items) && !sameTexts(trimmed(texts), trimmed(session.original));
   }
@@ -518,8 +649,8 @@ export class OwnerEditorController {
   }
   private unsaved(): boolean {
     if (this.openEditor === "translations" && this.translations) {
-      const session = this.translations;
-      return this.translationsDirty(session) || session.phase === "conflict" || this.entry !== null;
+      return this.entry !== null || [this.translations, ...this.others?.sessions.values() ?? []]
+        .some(session => this.translationsDirty(session) || session.phase === "conflict");
     }
     if (this.openEditor === "grammar") {
       return this.entry !== null || [...this.grammar.values()].some(field => field.phase === "conflict"
@@ -528,11 +659,12 @@ export class OwnerEditorController {
     return false;
   }
 
+  /** R17-02: another language's list goes with its own language and the revision of its read. */
   private translationsIntent(session: Translations): CommonSaveIntent {
-    const source = this.source!;
+    const source = this.source!, other = session === this.translations ? null : this.languageOf(session);
     return copyCommonIntent({ kind: "field.save", command_id: this.options.newId(), context_id: this.contextId!,
-      card_id: source.cardId, field_name: "translation", language: source.language, value: textsOf(session.items),
-      expected_field_version: this.base ?? source.revision });
+      card_id: source.cardId, field_name: "translation", language: other ?? source.language, value: textsOf(session.items),
+      expected_field_version: other !== null ? this.others!.revision! : this.base ?? source.revision });
   }
   private grammarIntent(field: GrammarField): CommonSaveIntent {
     const source = this.source!;
@@ -719,9 +851,12 @@ export class OwnerEditorController {
   private accepted(entry: Entry, current: CommonCurrent, stateVersion: string): void {
     this.absorb(current, stateVersion);
     const source = this.source;
-    if (entry.target === "translations") {
-      // The editor closes after its save and leaves a note at the translation.
-      if (this.openEditor === "translations") { this.close(); this.savedNote = true; }
+    if (isOtherTarget(entry.target)) this.savedOther(entry, otherLanguageOf(entry.target));
+    else if (entry.target === "translations") {
+      // The editor closes after its save and leaves a note at the translation; while another language keeps an unsaved
+      // list it stays open with the saved list of its own language (R17-02: no draft is dropped without a choice).
+      if (this.openEditor === "translations" && this.othersUnsaved()) this.savedOwn(entry);
+      else if (this.openEditor === "translations") { this.close(); this.savedNote = true; }
     } else {
       const field = this.grammar.get(entry.target);
       if (field && source && this.openEditor === "grammar") {
@@ -734,6 +869,43 @@ export class OwnerEditorController {
     }
     this.notify();
     this.options.onChanged();
+  }
+
+  /** Only my save lies between the revision the other lists stand on and its fact: they follow it without a read. */
+  private followMine(entry: Entry): void {
+    const others = this.others, expected = entry.intent.expected_field_version;
+    if (others && others.revision === expected) others.revision = String(BigInt(expected) + 1n);
+  }
+
+  private othersUnsaved(): boolean {
+    return [...this.others?.sessions.values() ?? []].some(session => this.translationsDirty(session) || session.phase === "conflict");
+  }
+
+  /** The dictionary's list saved while another language keeps a draft: the editor stays with the reply's list. */
+  private savedOwn(entry: Entry): void {
+    const session = this.translations, source = this.source;
+    if (!session || !source) return;
+    const texts = source.translations.length > 0 ? source.translations : [""];
+    session.items = itemsOf(texts, () => this.newKey()); session.original = [...texts]; session.current = [...source.translations];
+    session.phase = "saved"; session.problem = null; session.lastRefused = false;
+    this.base = source.revision;
+    this.followMine(entry);
+  }
+
+  /**
+   * Another language saved (R17-02): the reply's current shows the dictionary's language only, so the saved list is read
+   * again (GET /common) and shown in its own panel (C333/A-1); meanwhile the panel holds what was sent, edges trimmed as
+   * the core does. The dictionary's list follows the reply as after any newer card read.
+   */
+  private savedOther(entry: Entry, language: CommonLanguage): void {
+    const session = this.others?.sessions.get(language);
+    this.followMine(entry);
+    if (this.openEditor !== "translations" || !session) return;
+    const sent = trimmed(entry.intent.value as string[]);
+    session.items = itemsOf(sent, () => this.newKey()); session.original = [...sent]; session.current = [...sent];
+    session.phase = "saved"; session.problem = null; session.lastRefused = false;
+    this.rebase();
+    this.refreshOthers();
   }
 
   /** After my own grammar save the other fields follow the reply (a concurrent change would be a conflict). */
@@ -753,6 +925,17 @@ export class OwnerEditorController {
   private conflict(target: OwnerTarget): void {
     const source = this.source;
     if (!source) return;
+    if (isOtherTarget(target)) {
+      // The reply's current is the dictionary's language: that list follows it; the list saved elsewhere of this
+      // language is read again, and its revision is what «Сохранить моё» expects (C333/A-1).
+      const language = otherLanguageOf(target), session = this.others?.sessions.get(language);
+      if (!session) return;
+      session.phase = "conflict"; session.problem = null;
+      this.others!.stale.add(language);
+      this.rebase();
+      this.refreshOthers();
+      return;
+    }
     if (target === "translations") {
       const session = this.translations;
       if (!session) return;
@@ -767,6 +950,11 @@ export class OwnerEditorController {
   }
 
   private mark(target: OwnerTarget, phase: OwnerPhase, problem: OwnerProblem | null): void {
+    if (isOtherTarget(target)) {
+      const session = this.others?.sessions.get(otherLanguageOf(target));
+      if (session) { session.phase = phase; session.problem = problem; }
+      return;
+    }
     if (target === "translations") {
       const session = this.translations;
       if (session) { session.phase = phase; session.problem = problem; }

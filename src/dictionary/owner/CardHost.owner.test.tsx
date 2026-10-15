@@ -15,7 +15,7 @@ afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstub
 /** Core-shaped server of one card with the owner's common data (C-FIELDS-3): revision, translations in order, noun grammar. */
 function server(role: "owner" | "user" = "owner") {
   const s = { state: 10n, next: 500, revision: 1n, translations: ["дом", "жилище", "здание"],
-    others: { uk: ["будинок", "житло"], en: [] as string[] },
+    others: { uk: ["будинок", "житло"], en: [] as string[] } as Record<"uk" | "en", string[]>,
     grammar: { gender: "neuter", gender_status: "applicable", singular: "Haus", singular_status: "applicable", plural: "Häuser",
       plural_status: "applicable", article_status: "applicable" } as Record<string, string | null>,
     contexts: new Map<string, "open" | "closed">(), posts: [] as Record<string, any>[] };
@@ -69,7 +69,8 @@ function server(role: "owner" | "user" = "owner") {
     if (payload.field_name === "translation") {
       const texts = (payload.value as string[]).map(text => text.trim());
       if (texts.length === 0 || texts.some(text => text === "")) return json({ error: { code: "VALIDATION_FAILED" } }, 422);
-      s.translations = texts;
+      // R17-02 (core 5b14780): any of ru, uk, en is saved in place; the current keeps showing the dictionary's ru.
+      if (payload.language === "ru") s.translations = texts; else s.others[payload.language as "uk" | "en"] = texts;
     } else if (payload.field_name === "separability") s.grammar.separability = payload.value;
     else {
       const column = payload.field_name === "article" ? "article_status" : `${payload.field_name}_status`;
@@ -108,6 +109,8 @@ const enabled = async (name: string) => {
 const fields = () => screen.getAllByRole("textbox", { name: /^Перевод \d$/ }) as HTMLInputElement[];
 const texts = () => fields().map(field => field.value);
 const commonPosts = (srv: ReturnType<typeof server>) => srv.posts.filter(post => post.kind === "field.save");
+/** The dictionary language's fields only (R17-02: an opened badge has fields of its own). */
+const ownTexts = () => fields().filter(field => !field.closest(".owner-others")).map(field => field.value);
 
 async function openTranslations(f: ReturnType<typeof fixture>) {
   render(<CardHost {...f.props} />);
@@ -271,7 +274,7 @@ describe("М12 owner common editor in the card host (R12-04…06, R14-01)", () =
     expect(commonPosts(f.srv)).toHaveLength(0);
   });
 
-  it("W9 R12-04: the dictionary's language is open, the others are folded under badges and open on a tap for viewing", async () => {
+  it("W9 R12-04 + R17-02: the others are folded under badges; an opened badge has the same fields as the dictionary's language", async () => {
     const f = fixture();
     const editor = await openTranslations(f);
     const others = await within(editor).findByRole("region", { name: "Другие языки" });
@@ -279,17 +282,152 @@ describe("М12 owner common editor in the card host (R12-04…06, R14-01)", () =
     const en = within(others).getByRole("button", { name: "английский · 0" });
     expect(within(others).queryByRole("button", { name: /русский/ })).toBeNull();
     expect(uk.getAttribute("aria-expanded")).toBe("false");
-    expect(within(others).queryByText("будинок")).toBeNull();
+    // Folded: nothing of another language is shown (the owner's screen is not loaded up: R12-04).
+    expect(within(others).queryByRole("textbox")).toBeNull();
     fireEvent.click(uk);
     expect(uk.getAttribute("aria-expanded")).toBe("true");
-    expect(within(others).getAllByRole("listitem").map(item => item.textContent)).toEqual(
-      expect.arrayContaining(["будинок", "житло"]));
+    const panel = within(others).getByRole("group", { name: "украинский" });
+    expect(uk.getAttribute("aria-controls")).toBe(panel.id);
+    const ukFields = within(panel).getAllByRole("textbox", { name: /^Перевод \d$/ }) as HTMLInputElement[];
+    expect(ukFields.map(field => [field.value, field.lang])).toEqual([["будинок", "uk"], ["житло", "uk"]]);
+    expect(within(panel).getByRole("button", { name: "Переместить «житло» выше" })).toBeTruthy();
+    expect(within(panel).getByRole("button", { name: "Добавить перевод" })).toBeTruthy();
+    expect((within(panel).getByRole("button", { name: "Сохранить: украинский" }) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(en);
-    expect(within(others).getByText("Перевода нет")).toBeTruthy();
-    // Viewing only: no field of another language, no save of it.
-    expect(within(others).queryByRole("textbox")).toBeNull();
-    expect(texts()).toEqual(["дом", "жилище", "здание"]);
+    const enPanel = within(others).getByRole("group", { name: "английский" });
+    expect((within(enPanel).getByRole("textbox") as HTMLInputElement).value).toBe("");
+    expect(within(enPanel).getByText("Пустое поле: заполните его или уберите.")).toBeTruthy();
+    expect(ownTexts()).toEqual(["дом", "жилище", "здание"]);
     expect(f.srv.reads("/common")).toBe(1);
     expect(commonPosts(f.srv)).toHaveLength(0);
+  });
+
+  it("W10 R17-02: another language is saved from its panel with its language; the saved list is read again and shown there (C333/A-1)", async () => {
+    const f = fixture();
+    const editor = await openTranslations(f);
+    const others = await within(editor).findByRole("region", { name: "Другие языки" });
+    fireEvent.click(await within(others).findByRole("button", { name: "украинский · 2" }));
+    const panel = within(others).getByRole("group", { name: "украинский" });
+    const up = within(panel).getByRole("button", { name: "Переместить «житло» выше" });
+    up.focus();
+    fireEvent.click(up);
+    expect(document.activeElement).toBe(within(panel).getByRole("button", { name: "Переместить «житло» ниже" }));
+    expect(within(panel).getByText("«житло» — 1 из 2.")).toBeTruthy();
+    fireEvent.click(within(panel).getByRole("button", { name: "Добавить перевод" }));
+    const fieldsOf = () => within(panel).getAllByRole("textbox") as HTMLInputElement[];
+    expect(document.activeElement).toBe(fieldsOf()[2]);
+    fireEvent.change(fieldsOf()[2], { target: { value: " оселя " } });
+    // The badge tells a folded list is unsaved (WORKING TEXT).
+    expect(within(others).getByRole("button", { name: "украинский · 2 · есть несохранённое" })).toBeTruthy();
+    fireEvent.click(within(panel).getByRole("button", { name: "Сохранить: украинский" }));
+    await within(panel).findByText("Сохранено.");
+    expect(commonPosts(f.srv)).toHaveLength(1);
+    expect(commonPosts(f.srv)[0]).toMatchObject({ expected_field_version: "1",
+      payload: { card_id: CARD, field_name: "translation", scope: "common", language: "uk", value: ["житло", "будинок", " оселя "] } });
+    expect(f.srv.others.uk).toEqual(["житло", "будинок", "оселя"]);
+    expect(f.srv.translations).toEqual(["дом", "жилище", "здание"]);
+    await waitFor(() => expect(f.srv.reads("/common")).toBe(2));
+    await within(others).findByRole("button", { name: "украинский · 3" });
+    expect(fieldsOf().map(field => field.value)).toEqual(["житло", "будинок", "оселя"]);
+    // The editor stays; the dictionary's list is unchanged and its next save expects the new revision.
+    expect(ownTexts()).toEqual(["дом", "жилище", "здание"]);
+    fireEvent.click(within(editor).getByRole("button", { name: "Переместить «жилище» выше" }));
+    fireEvent.click(within(editor).getByRole("button", { name: "Сохранить" }));
+    await within(translation()).findByText("Перевод для всех сохранён.");
+    expect(commonPosts(f.srv).map(post => [post.payload.language, post.expected_field_version])).toEqual([["uk", "1"], ["ru", "2"]]);
+  });
+
+  it("W11 R17-02: a change elsewhere of another language is a conflict in its panel; «Сохранить моё» goes against the new revision", async () => {
+    const f = fixture();
+    const editor = await openTranslations(f);
+    const others = await within(editor).findByRole("region", { name: "Другие языки" });
+    fireEvent.click(await within(others).findByRole("button", { name: "украинский · 2" }));
+    const panel = within(others).getByRole("group", { name: "украинский" });
+    fireEvent.click(within(panel).getByRole("button", { name: "Переместить «житло» выше" }));
+    // The bot's editor saved uk meanwhile (R12-05: the same rights).
+    f.srv.others.uk = ["хата"]; f.srv.revision = 2n;
+    fireEvent.click(within(panel).getByRole("button", { name: "Сохранить: украинский" }));
+    await within(panel).findByText("Сейчас сохранено: «хата».");
+    expect(within(panel).getByText("Общий перевод уже изменён в другом месте.")).toBeTruthy();
+    expect((within(panel).getAllByRole("textbox") as HTMLInputElement[]).map(field => field.value)).toEqual(["житло", "будинок"]);
+    // The dictionary's list shows no conflict of another language.
+    expect(within(editor).queryByRole("button", { name: "Сохранить моё" })).toBeNull();
+    fireEvent.click(within(panel).getByRole("button", { name: "Сохранить моё: украинский" }));
+    await within(panel).findByText("Сохранено.");
+    expect(commonPosts(f.srv).map(post => [post.payload.language, post.expected_field_version])).toEqual([["uk", "1"], ["uk", "2"]]);
+    expect(f.srv.others.uk).toEqual(["житло", "будинок"]);
+  });
+
+  it("W12 R14-01 in a panel: a long press drags a field of another language with the swipes off; the drop reorders only that list", async () => {
+    const swipes = { isVerticalSwipesEnabled: true, disableVerticalSwipes: vi.fn(), enableVerticalSwipes: vi.fn() };
+    vi.stubGlobal("Telegram", { WebApp: swipes });
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({ height: 44, width: 300, top: 0, left: 0, bottom: 44,
+      right: 300, x: 0, y: 0, toJSON: () => ({}) } as DOMRect);
+    const f = fixture();
+    const editor = await openTranslations(f);
+    const others = await within(editor).findByRole("region", { name: "Другие языки" });
+    fireEvent.click(await within(others).findByRole("button", { name: "украинский · 2" }));
+    const panel = within(others).getByRole("group", { name: "украинский" });
+    const ukFields = () => within(panel).getAllByRole("textbox") as HTMLInputElement[];
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    fireEvent.pointerDown(ukFields()[1], { pointerId: 9, clientX: 10, clientY: 200, pointerType: "touch" });
+    act(() => { vi.advanceTimersByTime(400); });
+    expect(swipes.disableVerticalSwipes).toHaveBeenCalledTimes(1);
+    fireEvent.pointerMove(ukFields()[1], { pointerId: 9, clientX: 10, clientY: 140, pointerType: "touch" });
+    fireEvent.pointerUp(ukFields()[1], { pointerId: 9, clientX: 10, clientY: 140, pointerType: "touch" });
+    expect(swipes.enableVerticalSwipes).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+    expect(ukFields().map(field => field.value)).toEqual(["житло", "будинок"]);
+    expect(ownTexts()).toEqual(["дом", "жилище", "здание"]);
+  });
+
+  it("W13 the dictionary's save while another language is unsaved keeps the editor and that list; Back still asks", async () => {
+    const f = fixture();
+    const editor = await openTranslations(f);
+    const others = await within(editor).findByRole("region", { name: "Другие языки" });
+    fireEvent.click(await within(others).findByRole("button", { name: "английский · 0" }));
+    const panel = within(others).getByRole("group", { name: "английский" });
+    fireEvent.change(within(panel).getByRole("textbox"), { target: { value: "house" } });
+    fireEvent.click(within(others).getByRole("button", { name: "английский · 0 · есть несохранённое" }));
+    expect(within(others).queryByRole("group", { name: "английский" })).toBeNull();
+    fireEvent.click(within(editor).getByRole("button", { name: "Переместить «жилище» выше" }));
+    fireEvent.click(within(editor).getByRole("button", { name: "Сохранить" }));
+    await within(editor).findByText("Сохранено.");
+    expect(screen.queryByText("Перевод для всех сохранён.")).toBeNull();
+    expect(ownTexts()).toEqual(["жилище", "дом", "здание"]);
+    fireEvent.click(within(others).getByRole("button", { name: "английский · 0 · есть несохранённое" }));
+    expect((within(within(others).getByRole("group", { name: "английский" })).getByRole("textbox") as HTMLInputElement).value).toBe("house");
+    fireEvent.click(screen.getByRole("button", { name: "Назад" }));
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Выйти без сохранения" }));
+    expect(commonPosts(f.srv).map(post => [post.payload.language, post.expected_field_version])).toEqual([["ru", "1"]]);
+    expect(f.srv.others.en).toEqual([]);
+  });
+
+  it("W14 QA P2-1: a conflict of another language whose read fails shows no list as saved; only the read is repeated", async () => {
+    const f = fixture();
+    const editor = await openTranslations(f);
+    const others = await within(editor).findByRole("region", { name: "Другие языки" });
+    fireEvent.click(await within(others).findByRole("button", { name: "украинский · 2" }));
+    const panel = within(others).getByRole("group", { name: "украинский" });
+    fireEvent.click(within(panel).getByRole("button", { name: "Переместить «житло» выше" }));
+    f.srv.others.uk = ["хата"]; f.srv.revision = 2n;
+    // The read of the saved lists fails once.
+    const serve = f.srv.fetcher.getMockImplementation()!;
+    let failing = true;
+    f.srv.fetcher.mockImplementation(async (input, init) => failing && String(input).includes("/common")
+      ? json({ error: { code: "INTERNAL" } }, 500) : serve(input, init));
+    fireEvent.click(within(panel).getByRole("button", { name: "Сохранить: украинский" }));
+    await within(panel).findByText("Общий перевод уже изменён в другом месте.");
+    await within(panel).findByText("Не удалось загрузить другие языки.");
+    expect(within(panel).queryByText(/Сейчас сохранено/)).toBeNull();
+    expect((within(panel).getByRole("button", { name: "Взять сохранённое: украинский" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((within(panel).getByRole("button", { name: "Сохранить моё: украинский" }) as HTMLButtonElement).disabled).toBe(true);
+    failing = false;
+    fireEvent.click(within(others).getByRole("button", { name: "Повторить" }));
+    await within(panel).findByText("Сейчас сохранено: «хата».");
+    fireEvent.click(within(panel).getByRole("button", { name: "Сохранить моё: украинский" }));
+    await within(panel).findByText("Сохранено.");
+    expect(commonPosts(f.srv).map(post => [post.payload.language, post.expected_field_version])).toEqual([["uk", "1"], ["uk", "2"]]);
   });
 });
