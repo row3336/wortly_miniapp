@@ -1,3 +1,4 @@
+import { gateWaitText } from "../commands/CommandRecovery";
 import { useEffect, useLayoutEffect, useRef } from "react";
 import { StepBackButton, stepBackCopy } from "../commands/StepBackButton";
 import type { Language } from "../i18n/language";
@@ -113,10 +114,16 @@ export function ConjugationTestScreen({ view, flow, language, submitOnEnter }: C
   const ended = view.screen === "summary" || view.screen === "closed";
   // An unknown outcome is first checked by GET with the same command ID; a retry appears only after that check.
   const check = view.canCheck && view.screen !== "stale";
+  // §4.1 «Правило кнопки» (C335; M-P03-9/10): while the write gate holds, the controls stay visible and inactive with
+  // the wait of §4.8; «Проверить» follows checkButtonActive, a resend mayWrite of its ID.
+  const gate = view.gate;
+  const checkBlocked = gate?.checkable === false, studyBlocked = gate?.primaryWritable === false, stopBlocked = gate?.stopWritable === false;
+  const held = check && checkBlocked || view.canRetry.study && studyBlocked || view.canRetry.stop && stopBlocked;
   const recovery = (check || view.canRetry.study || view.canRetry.stop) && <div className="learning-recovery">
-    {check && <button type="button" onClick={() => flow.refresh()}>{t.refresh}</button>}
-    {view.canRetry.study && <button type="button" onClick={() => flow.retry("study")}>{t.retryStudy}</button>}
-    {view.canRetry.stop && <button type="button" onClick={() => flow.retry("stop")}>{t.retryStop}</button>}
+    {held && gate?.wait && <p role="status" className="command-note">{gateWaitText(language, gate.wait)}</p>}
+    {check && <button type="button" disabled={checkBlocked} onClick={() => flow.refresh()}>{t.refresh}</button>}
+    {view.canRetry.study && <button type="button" disabled={studyBlocked} onClick={() => flow.retry("study")}>{t.retryStudy}</button>}
+    {view.canRetry.stop && <button type="button" disabled={stopBlocked} onClick={() => flow.retry("stop")}>{t.retryStop}</button>}
   </div>;
 
   return <main ref={root} className="learning-screen" aria-busy={view.screen === "loading"}

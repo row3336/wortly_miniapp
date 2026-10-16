@@ -1,3 +1,4 @@
+import { laneGate, type LaneGate } from "../commands/gateWait";
 import type { ClosedSessionBoundary, ConjugationSessionProjection, ConjugationSummary, Profile } from "../api/generated";
 import { ApiError, type HttpOptions } from "../api/http";
 import { sameId, uuid, version } from "../api/wireValidation";
@@ -59,6 +60,8 @@ export type ConjugationDocumentSnapshot = {
   canUndo: boolean;
   allowedGrades: readonly (3 | 4 | 5)[];
   canRetry: Record<ConjugationLane, boolean>;
+  /** The write gate of the manual controls (C335; M-P03-10): «Проверить» and the resends wait for it, visibly. */
+  gate?: LaneGate;
 };
 export type ConjugationDocumentOptions = {
   access: OpenedAccess;
@@ -199,7 +202,11 @@ export class ConjugationDocumentController implements ConjugationDocumentActions
     };
     this.makeOwner = make;
     this.commands = { study: make("study", this.floor), stop: make("stop", this.floor) };
-    this.unsubscribeGate = options.transport.gate.subscribe(() => this.readPausedLanes());
+    this.unsubscribeGate = options.transport.gate.subscribe(() => {
+      this.readPausedLanes();
+      const shown = JSON.stringify(laneGate(options.transport.gate, this.commands.study.snapshot(), this.commands.stop.snapshot()));
+      if (shown !== this.shownGate) { this.shownGate = shown; this.emit(); }
+    });
     this.minimum();
   }
 
@@ -424,7 +431,9 @@ export class ConjugationDocumentController implements ConjugationDocumentActions
       }
     } else this.presentationTicket = null;
 
-    const mutate = flowReady && !presenting;
+    // §4.1 «Правило кнопки» (K01s, K03, K06; C335, M-P03-10): every manual mutation of the screen waits for mayWrite.
+    const writable = this.options.transport.gate.mayWrite();
+    const mutate = flowReady && !presenting && writable;
     const caps = resultA?.capabilities, result = resultA?.result;
     const target3 = (value: { session_id: string; assignment_id: string; result_id: string; expected_result_version: string } | null | undefined) =>
       !!value && !!result && !!resultA && result.status === "active" && sameId(value.session_id, resultA.address.session_id)
@@ -433,7 +442,7 @@ export class ConjugationDocumentController implements ConjugationDocumentActions
     const allowedGrades = mutate && caps?.grades && target3(caps.grades) ? [...caps.grades.values] as (3 | 4 | 5)[] : [];
     const right = this.stopRight;
     // Stop needs open activity like any mutation, but not a ready study lane (unknown study must not block it).
-    const canStopBase = study && stopReady && !closed && !!right && this.fresh(right.version) && this.selected(right.sessionId);
+    const canStopBase = study && writable && stopReady && !closed && !!right && this.fresh(right.version) && this.selected(right.sessionId);
     // «На Сегодня» ends the natural summary, so unlike Stop it also waits for a ready study lane and a fresh summary
     // step (V-1, C083): an undo in flight could reopen the session and turn the summary_home into a refusal that a
     // late copy of the same command would replay on the next summary. stop() re-reads this before it begins.
@@ -468,7 +477,7 @@ export class ConjugationDocumentController implements ConjugationDocumentActions
       display: live ? { ...display } : { kind: "none" },
       stepTicket: live ? this.stepTicket?.ticket ?? null : null,
       presentationTicket: live ? this.presentationTicket?.ticket ?? null : null,
-      canStart: study && this.recovered && !this.refreshing && studyReady && stopReady && !foreignReceipt && !unknown
+      canStart: study && writable && this.recovered && !this.refreshing && studyReady && stopReady && !foreignReceipt && !unknown
         && (!this.sessionId || closed),
       canSubmit: mutate && display.kind === "step" && assignment?.status === "presented"
         && !!step && sameId(step.step.capabilities.answer_target ?? "", assignment.id),
@@ -477,6 +486,7 @@ export class ConjugationDocumentController implements ConjugationDocumentActions
       canStop: canStopBase && !!right?.stop, canSummaryHome: canStopBase && !!right?.home && summaryReady,
       allowedGrades,
       canRetry: { study: study && commands.study.canRetry && !this.tasks.study, stop: study && commands.stop.canRetry && !this.tasks.stop },
+      gate: laneGate(this.options.transport.gate, commands.study, commands.stop),
     };
   }
   private closedSnapshot(sessionId: string): ConjugationClosed {
@@ -739,6 +749,7 @@ export class ConjugationDocumentController implements ConjugationDocumentActions
     if (paused) void this.refresh();
   }
   private unsubscribeGate: () => void = () => undefined;
+  private shownGate = "";
   dispose(): void {
     this.unsubscribeGate();
     this.disposed = true; this.activityEpoch++; this.startJoin = null; this.shownJoin = null;

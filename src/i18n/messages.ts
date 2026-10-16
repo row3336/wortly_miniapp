@@ -35,6 +35,10 @@ const messages = {
     maintenanceOver: "Оновлення ще триває, орієнтовний час уже минув.",
     commandMaintenance: "Триває планове оновлення, нові дії зараз не приймаються. Пізніше перевір стан надсилання.",
     commandIncompatible: "Потрібно оновити застосунок: ця версія не може надсилати нові дії. Закрий Wortly і відкрий знову через бота.",
+    // WORKING TEXT (P03 §4.8, §4.12 ВР-8 [ПРЕДЛ, DEV-14]; M-P03-9): the neutral line of a window closed for good, never
+    // «replaced»; to be shown to the owner.
+    closedWindow: "Це вікно більше не активне",
+    closedWindowDetail: "Відкрий Wortly знову через бота.",
   },
   en: {
     loading: "Opening Wortly",
@@ -67,6 +71,9 @@ const messages = {
     maintenanceOver: "The update is still in progress; the estimated time has passed.",
     commandMaintenance: "A planned update is in progress and new actions are not accepted. Check the sending status later.",
     commandIncompatible: "The app needs an update: this version cannot send new actions. Close Wortly and open it again from the bot.",
+    // WORKING TEXT (P03 §4.8, §4.12 ВР-8 [ПРЕДЛ, DEV-14]; M-P03-9).
+    closedWindow: "This window is no longer active",
+    closedWindowDetail: "Open Wortly again from the bot.",
   },
   ru: {
     loading: "Открываем Wortly",
@@ -99,6 +106,9 @@ const messages = {
     maintenanceOver: "Обновление ещё идёт, ожидаемое время уже прошло.",
     commandMaintenance: "Идёт плановое обновление, новые действия сейчас не принимаются. Позже проверь состояние отправки.",
     commandIncompatible: "Нужно обновить приложение: эта версия не может отправлять новые действия. Закрой Wortly и открой снова через бота.",
+    // WORKING TEXT (P03 §4.8, §4.12 ВР-8 [ПРЕДЛ, DEV-14]; M-P03-9).
+    closedWindow: "Это окно больше не активно",
+    closedWindowDetail: "Открой Wortly снова через бота.",
   },
 } as const;
 

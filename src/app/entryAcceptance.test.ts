@@ -11,7 +11,7 @@ import { RemoteStopPendingStore } from "../study/remoteStopPending";
 import type { TodayApi } from "../today/todayApi";
 import { EntryController, type EntrySnapshot } from "./entryController";
 import { keysOf, openDocument, openRequestKeys } from "./openRules.test-support";
-import { testGate } from "../commands/testGate.test-support";
+import { freshTestGate } from "../commands/testGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const PROFILE = id(1);
@@ -66,7 +66,7 @@ let next = 100;
 function launch(api: EntryApi, storage: AsyncStorage, extra: Partial<ConstructorParameters<typeof EntryController>[0]> = {}) {
   const updates: EntrySnapshot[] = [];
   const release = vi.fn();
-  const controller = new EntryController({ gate: testGate(), api, storage, lock: { acquire: vi.fn(async () => ({ release })) },
+  const controller = new EntryController({ gate: freshTestGate(), api, storage, lock: { acquire: vi.fn(async () => ({ release })) },
     initData: "signed", savedLanguage: "ru", browserLanguage: "ru", clientVersion: "0.0.0", contractVersion: "1",
     timeZone: () => "Europe/Berlin", newId: () => id(next++), onUpdate: snapshot => updates.push(snapshot), ...extra });
   return { controller, updates, release, kinds: () => updates.map(update => update.state.kind),
@@ -413,8 +413,11 @@ describe("QA remote stop", () => {
     vi.mocked(f.remoteApi.status).mockRejectedValueOnce(new ApiError("network"));
     const opens = vi.mocked(f.api.open).mock.calls.length;
     const second = f.make(); await second.controller.start();
+    // P03 R10 п.4 (AC-118): the loaded pending does not hold the first open back — it goes once, without waiting for a
+    // GET; SESSION_BUSY then gives the narrow context whose read of the own stop fails: the remote screen, no new open.
     expect(f.remoteApi.status).toHaveBeenCalledOnce();
-    expect(vi.mocked(f.api.open).mock.calls.length).toBe(opens);
+    expect(vi.mocked(f.api.open).mock.calls.length).toBe(opens + 1);
+    expect(vi.mocked(f.api.open).mock.calls.at(-1)![2].event).toBe("open");
     expect(second.latest()).toMatchObject({ kind: "remote", remote: { pending: true, phase: "unresolved" } });
     expect(f.remoteApi.stop).toHaveBeenCalledOnce();
   });

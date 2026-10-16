@@ -1,4 +1,5 @@
 import { withJournalIntake } from "../journal/intake.test-support";
+import { activeButton } from "./gateButton.test-support";
 import { createHash } from "node:crypto";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { StrictMode } from "react";
@@ -13,6 +14,8 @@ import { settingsResponse } from "../settings/settingsRead.test-support";
 import { SETTINGS_RESET_SLOT, settingsResetSlotOf } from "../settings/settingsResetPending";
 import { SessionResumeController } from "../study/sessionResumeController";
 import { App } from "./App";
+import { latestPageGate, setPageProbe } from "./pageGate.test-support";
+import type { WriteGate } from "../commands/writeGate";
 import { enabledExits, foregroundOpen, loseReply as loseStudyReply, moveWithout, noLandings, pairMoved, settle as pause,
   watchCommits } from "./pairMoved.test-support";
 import { gate, refuseOnce, replaceDocument, watchFlash } from "./flashWatch.test-support";
@@ -727,7 +730,7 @@ describe("R17 native Back across a failed stop and an owner swap", () => {
     expect(stopPosts(a)).toHaveLength(1); expect(a.gets(`/commands/${commandId}`)).toHaveLength(0);
     expect(screen.queryByText(pairText)).toBeNull();
     // The earlier command is checked first; not_found makes the exact retry available.
-    fireEvent.click(screen.getByRole("button", { name: "Проверить состояние" }));
+    fireEvent.click(await activeButton("Проверить состояние", exchange));
     const retry = await screen.findByRole("button", { name: "Повторить завершение" });
     expect(a.gets(`/commands/${commandId}`).length).toBeGreaterThan(0);
     // Known failure: Back still visible and inert; the retry stays an explicit on-screen action.
@@ -1175,7 +1178,7 @@ describe("Learning: a start the server refused for good (C168 SETUP_REQUIRED, C1
       Object.defineProperty(document, "visibilityState", { configurable: true, get: () => state });
       document.dispatchEvent(new Event("visibilitychange"));
     });
-    fireEvent.click(screen.getByRole("button", { name: /Проверить/ })); await settled();
+    fireEvent.click(await activeButton(/Проверить/, exchange)); await settled();
     expect(await screen.findByRole("button", { name: "На Сегодня" })).toBeTruthy();
     await visibility("hidden"); await settled(); await visibility("visible");
     await act(async () => { window.dispatchEvent(new Event("pageshow")); }); await settled();
@@ -1283,7 +1286,7 @@ describe("Learning: a start the server refused for good (C168 SETUP_REQUIRED, C1
   it.each(CODES)("Q12a %s: a lost start reply, then «Проверить состояние» finds the stored refusal: idle exit, no stop", async code => {
     const back = fakeBack(), a = app({ back }); loseRefusedStart(a, code); render(<App />);
     fireEvent.click(await startButton(a));
-    fireEvent.click(await screen.findByRole("button", { name: /Проверить/ }, exchange));
+    fireEvent.click(await activeButton(/Проверить/, exchange));
     fireEvent.click(await screen.findByRole("button", { name: "На Сегодня" }, exchange));
     expect(new URL(String(checks(a)[0][0]), "http://localhost").searchParams.get("include_refusal")).toBe("true");
     await screen.findByText(pairText, undefined, exchange); await settled();
@@ -1293,7 +1296,7 @@ describe("Learning: a start the server refused for good (C168 SETUP_REQUIRED, C1
   it("Q12b control: a core that ignores include_refusal answers not_found; the lost start keeps its number, nothing is stopped", async () => {
     const a = app(); loseRefusedStart(a, "SETUP_REQUIRED", { olderCore: true }); render(<App />);
     fireEvent.click(await startButton(a));
-    fireEvent.click(await screen.findByRole("button", { name: /Проверить/ }, exchange));
+    fireEvent.click(await activeButton(/Проверить/, exchange));
     await waitFor(() => expect(checks(a).length).toBeGreaterThan(0)); await settled();
     expect(screen.queryByRole("button", { name: "На Сегодня" })).toBeNull();
     expect(stops(a)).toEqual([]); expect(starts(a)).toHaveLength(1);
@@ -1302,7 +1305,7 @@ describe("Learning: a start the server refused for good (C168 SETUP_REQUIRED, C1
   it.each(CODES)("Q12c %s: a reload after the lost start reply: the new owner's check finds the refusal and Today opens", async code => {
     const a = app(); loseRefusedStart(a, code); const view = render(<App />);
     fireEvent.click(await startButton(a));
-    await screen.findByRole("button", { name: /Проверить/ }, exchange);
+    await activeButton(/Проверить/, exchange);
     expect(localStorage.getItem("wortly.pending.learning_session")).not.toBeNull();
     view.unmount(); const before = checks(a).length; render(<App />);
     await screen.findByText(pairText, undefined, exchange); await settled();
@@ -1317,7 +1320,7 @@ describe("Learning: a start the server refused for good (C168 SETUP_REQUIRED, C1
   it("Q12d control: the same reload against a core that ignores include_refusal keeps the unresolved start on its screen", async () => {
     const a = app(); loseRefusedStart(a, "SETUP_REQUIRED", { olderCore: true }); const view = render(<App />);
     fireEvent.click(await startButton(a));
-    await screen.findByRole("button", { name: /Проверить/ }, exchange);
+    await activeButton(/Проверить/, exchange);
     view.unmount(); render(<App />);
     await screen.findByRole("heading", { name: "Изучение слов" }, exchange); await settled();
     expect(localStorage.getItem("wortly.pending.learning_session")).not.toBeNull();
@@ -1346,7 +1349,7 @@ describe("Learning: a start the server refused for good (C168 SETUP_REQUIRED, C1
   it("Q14 control (C210): a stored SESSION_CLOSED of a cancelled number is read as that refusal, not left: no idle, no stop", async () => {
     const a = app(); loseRefusedStart(a, "SESSION_CLOSED"); render(<App />);
     fireEvent.click(await startButton(a));
-    fireEvent.click(await screen.findByRole("button", { name: /Проверить/ }, exchange));
+    fireEvent.click(await activeButton(/Проверить/, exchange));
     await waitFor(() => expect(localStorage.getItem("wortly.pending.learning_session")).toBeNull()); await settled();
     expect(screen.getByText("Занятие завершено.")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "На Сегодня" })).toBeNull();
@@ -1358,7 +1361,7 @@ describe("Learning: a start the server refused for good (C168 SETUP_REQUIRED, C1
     const a = app();
     loseRefusedStart(a, "SETUP_REQUIRED", { currentOf: y => ({ ...current(y), pair: "ru-de" }) }); render(<App />);
     fireEvent.click(await startButton(a));
-    fireEvent.click(await screen.findByRole("button", { name: /Проверить/ }, exchange));
+    fireEvent.click(await activeButton(/Проверить/, exchange));
     await waitFor(() => expect(localStorage.getItem("wortly.pending.learning_session")).toBeNull()); await settled();
     expect(await screen.findByRole("textbox")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "На Сегодня" })).toBeNull();
@@ -1481,7 +1484,7 @@ describe("F1 of the first choice on the real legacy path (б): version 1, no ver
     fireEvent.click(screen.getByRole("button", { name: "Сегодня" }));
     await screen.findByText("Не удалось загрузить план", undefined, exchange);
     fireEvent.click(await screen.findByRole("button", { name: "Настройки" }, exchange));
-    fireEvent.click(await screen.findByRole("button", { name: "Повторить отправку" }, exchange));
+    fireEvent.click(await activeButton("Повторить отправку", exchange));
     await waitFor(() => expect(localStorage.getItem(settingSlot)).toBeNull(), exchange);
     expect(a.posts().filter(isSettingSave).map(post => post.command_id)).toEqual([commandId, commandId]);
     fireEvent.click(within(screen.getByRole("navigation")).getByRole("button", { name: "Сегодня" }));
@@ -1503,9 +1506,9 @@ describe("F1 of the first choice on the real legacy path (б): version 1, no ver
     fireEvent.click(screen.getByRole("button", { name: "Сегодня" }));
     await screen.findByText("Не удалось загрузить план", undefined, exchange);
     fireEvent.click(await screen.findByRole("button", { name: "Настройки" }, exchange));
-    await screen.findByRole("button", { name: "Повторить отправку" }, exchange);
+    await activeButton("Повторить отправку", exchange);
     expect(tab("Словарь").disabled).toBe(true); expect(tab("Сегодня").disabled).toBe(false);
-    fireEvent.click(screen.getByRole("button", { name: "Повторить отправку" }));
+    fireEvent.click(await activeButton("Повторить отправку", exchange));
     await waitFor(() => expect(localStorage.getItem(settingSlot)).toBeNull(), exchange);
     // The resend resolved the old intent, not the choice: the language is still at version 1.
     expect(tab("Словарь").disabled).toBe(true);
@@ -1527,7 +1530,7 @@ describe("F1 of the first choice on the real legacy path (б): version 1, no ver
     render(<App />);
     await screen.findByText("Не удалось загрузить план", undefined, exchange);
     fireEvent.click(await screen.findByRole("button", { name: "Настройки" }, exchange));
-    await screen.findByRole("button", { name: "Повторить отправку" }, exchange);
+    await activeButton("Повторить отправку", exchange);
     expect(localStorage.getItem(settingSlot)).toBe(stored);
   }, 30000);
 });
@@ -1732,7 +1735,7 @@ describe("Learning: a setting save resolved after the Settings race", () => {
       await screen.findByText(pendingText, undefined, exchange); await wait(500);
       expect(stored()).toBe(true); expect(gateOpen()).toBe(false); expect(seen.saves).toEqual([]); expect(a.studyPosts()).toEqual([]);
       fireEvent.click(screen.getByRole("button", { name: "Настройки" }));
-      fireEvent.click(await screen.findByRole("button", { name: "Повторить отправку" }, exchange));
+      fireEvent.click(await activeButton("Повторить отправку", exchange));
       await waitFor(() => expect(stored()).toBe(false), exchange);
       // The draft of the intent is the unsent choice; a refusal does not discard it.
       if (mode === "rejected") expect(chosen()).toBe("accelerated");
@@ -1912,7 +1915,7 @@ describe("Learning R1: the window refreshes itself into the session of the new p
     world.moved = true; world.openOld = true; fireEvent.click(start);
     await pause(1500);
     for (let check = 0; check < 2; check++) {
-      fireEvent.click(await screen.findByRole("button", { name: "Проверить состояние" }, exchange)); await pause(1500);
+      fireEvent.click(await activeButton("Проверить состояние", exchange)); await pause(1500);
     }
     expect(world.opens.slice(opens)).toEqual(["foreground"]);
     expect(a.studyPosts().map(post => post.kind)).toEqual(["session.start"]);
@@ -1975,7 +1978,7 @@ describe("Learning R1: the window refreshes itself into the session of the new p
     const a = app(); const world = pairMoved(a.fetcher);
     render(<App />); const start = await startButton(a); const opens = world.opens.length;
     world.moved = true; loseStudyReply(a.fetcher, "session.start"); fireEvent.click(start);
-    const check = await screen.findByRole("button", { name: "Проверить состояние" }, exchange);
+    const check = await activeButton("Проверить состояние", exchange);
     await pause(1500);
     expect(world.opens.slice(opens)).toEqual([]);
     expect((screen.getByRole("button", { name: "Выйти" }) as HTMLButtonElement).disabled).toBe(false);
@@ -1988,12 +1991,12 @@ describe("Learning R1: the window refreshes itself into the session of the new p
     const back = fakeBack(); const a = app({ back }); const world = pairMoved(a.fetcher);
     render(<App />); const start = await startButton(a); const opens = world.opens.length;
     world.moved = true; const open = foregroundOpen(a.fetcher, "hold"); fireEvent.click(start);
-    await screen.findByRole("button", { name: "Проверить состояние" }, exchange);
+    await activeButton("Проверить состояние", exchange);
     await pause(500);
     const stop = screen.getByRole("button", { name: "Выйти" }) as HTMLButtonElement;
     expect(stop.disabled).toBe(true);
     fireEvent.click(stop); await back.click();
-    fireEvent.click(screen.getByRole("button", { name: "Проверить состояние" })); await pause(1000);
+    fireEvent.click(await activeButton("Проверить состояние", exchange)); await pause(1000);
     fireEvent.click(screen.getByRole("button", { name: "Настройки" })); await pause(500);
     expect(a.studyPosts().map(post => post.kind)).toEqual(["session.start"]);
     expect(open.attempts).toBe(1);
@@ -2093,7 +2096,7 @@ describe("Learning Stop refused as DOCUMENT_STALE (C188)", () => {
     refuseStop(a, "live");
     const mark = a.fetcher.mock.calls.length;
     fireEvent.click(screen.getByRole("button", { name: "Выйти" }));
-    const retry = await screen.findByRole("button", { name: "Повторить завершение" }, exchange);
+    const retry = await activeButton("Повторить завершение", exchange);
     expect(screen.getByText("Завершаем занятие…")).toBeTruthy();
     expect((screen.getByRole("button", { name: "Выйти" }) as HTMLButtonElement).disabled).toBe(true);
     const stops = () => a.posts().filter(post => post.kind === "session.stop");
@@ -2129,8 +2132,8 @@ describe("Learning own start retried by hand after its loss (C249)", () => {
     });
     render(<App />);
     fireEvent.click(await startButton(a));
-    fireEvent.click(await screen.findByRole("button", { name: "Проверить состояние" }, exchange));
-    const retry = await screen.findByRole("button", { name: "Повторить отправку" }, exchange);
+    fireEvent.click(await activeButton("Проверить состояние", exchange));
+    const retry = await activeButton("Повторить отправку", exchange);
     await waitFor(() => expect((retry as HTMLButtonElement).disabled).toBe(false), exchange);
     fireEvent.click(retry);
     await waitFor(() => expect(a.studyPosts()).toHaveLength(2), exchange);
@@ -2146,4 +2149,125 @@ describe("Learning own start retried by hand after its loss (C249)", () => {
     expect(a.studyPosts().map(post => [post.kind, post.session_id])).toEqual([["session.start", lost.intent!.session_id],
       ["session.start", lost.intent!.session_id], ["learning.preview_next", lost.intent!.session_id], ["assignment.present", lost.intent!.session_id]]);
   });
+});
+
+describe("fix5 (QA r7 P2): the way back to Today from Learning is navigation — never held by the write gate", () => {
+  it("under an announced hold «На Сегодня» stays and works, Back too; nothing is posted and the start stays gated", async () => {
+    for (const exit of ["button", "back"] as const) {
+      const back = fakeBack(), a = app({ transitionMode: null, back }); render(<App />);
+      fireEvent.click(await startButton(a));
+      await screen.findByText("Для занятия нужно подтвердить настройки и текущую словарную пару.");
+      await waitFor(() => expect(back.handlers).toBe(1));
+      const writeGate = latestPageGate()!;
+      act(() => { writeGate.closeByMaintenance(600); }); // a hold of 600 s (6 s on the fast clock of the App tests)
+      await settled();
+      expect(writeGate.mayWrite()).toBe(false);
+      expect(screen.getByRole("button", { name: "На Сегодня" })).toBeTruthy();
+      expect(back.handlers, exit).toBe(1);
+      if (exit === "button") fireEvent.click(screen.getByRole("button", { name: "На Сегодня" }));
+      else await back.click();
+      await screen.findByText(pairText, undefined, exchange); await settled();
+      expect(a.posts(), exit).toEqual([]);
+      expect(writeGate.mayWrite()).toBe(false);
+      cleanup(); localStorage.clear();
+    }
+  }, 20_000);
+});
+
+describe("fix6 (C393/C394): the exits of a Learning start refusal on the real App", () => {
+  beforeEach(() => { setPageProbe({ status: "ready" }); });
+  afterEach(() => { setPageProbe({ status: "ready" }); });
+  function refuseStart(a: Server, code: string, onRefuse: () => void = () => {}) {
+    a.route(async (url, init, base) => {
+      if (!isPost(init, "session.start")) return base(url, init);
+      onRefuse();
+      const body = JSON.parse(String(init!.body));
+      return response({ command: { id: body.command_id, status: "rejected" }, current: { session_id: body.session_id, status: "not_found" },
+        state_version: a.version(), error: { code } }, 409);
+    });
+  }
+  const refusalText = { NO_MATERIAL: "Сейчас нет доступных слов для этого занятия.", SESSION_BUSY: "Занятие открыто на другом устройстве" };
+
+  it.each([
+    ["NO_MATERIAL", "net closed", (g: WriteGate) => { setPageProbe({ status: "unknown" }); g.closeByFailure(); }],
+    ["NO_MATERIAL", "hold 600 s", (g: WriteGate) => g.closeByMaintenance(600)],
+    ["SESSION_BUSY", "net closed", (g: WriteGate) => { setPageProbe({ status: "unknown" }); g.closeByFailure(); }],
+    ["SESSION_BUSY", "hold 600 s", (g: WriteGate) => g.closeByMaintenance(600)],
+  ] as const)("(1) %s, then %s: «На Сегодня» and Back stay and lead to Today; no start, Stop or other POST is let through", async (code, _shut, shut) => {
+    for (const exit of ["button", "back"] as const) {
+      const back = fakeBack(), a = app({ back }); refuseStart(a, code); render(<App />);
+      fireEvent.click(await startButton(a));
+      await screen.findByText(refusalText[code], undefined, exchange); await settled();
+      expect(screen.getByRole("button", { name: "На Сегодня" })).toBeTruthy();
+      const g = latestPageGate()!;
+      act(() => { shut(g); }); await settled();
+      expect(g.mayWrite()).toBe(false);
+      const posts = a.posts().length;
+      expect(screen.getByRole("button", { name: "На Сегодня" }), exit).toBeTruthy();
+      expect(back.handlers, exit).toBe(1);
+      if (exit === "button") fireEvent.click(screen.getByRole("button", { name: "На Сегодня" }));
+      else await back.click();
+      await screen.findByText(pairText, undefined, exchange); await settled();
+      // The way back gives no right to write: a new start from Today posts nothing while the gate stays shut.
+      fireEvent.click(screen.getByRole("button", { name: /Новая группа слов/ })); await settled();
+      expect(g.mayWrite()).toBe(false);
+      expect(a.posts().length, `${code} ${exit}`).toBe(posts);
+      cleanup(); localStorage.clear(); setPageProbe({ status: "ready" });
+    }
+  }, 60_000);
+
+  /** A start refused SESSION_BUSY by its direct reply while another device holds a session; its stop is applied, its reply lost. */
+  function busyElsewhere(a: Server) {
+    const other = id(60), remote = { busy: false, stopId: null as string | null };
+    a.openReply.mockImplementation(async (body: { client_instance_id: string; document_id: string }) => remote.busy
+      ? response({ status: "SESSION_BUSY", profile: profile(a.version()), compatibility, session: { status: "busy", stop_remote_target: other } })
+      : response({ status: "opened", profile: profile(a.version()), compatibility, client_instance_id: body.client_instance_id,
+        document_id: body.document_id, proof_version: "1", document_epoch: "1", session: null }));
+    refuseStart(a, "SESSION_BUSY", () => { remote.busy = true; });
+    a.route(async (url, init, base) => {
+      const path = new URL(String(url), "http://localhost").pathname;
+      if (isPost(init, "session.stop_remote")) {
+        remote.busy = false; remote.stopId = JSON.parse(String(init!.body)).command_id; throw new TypeError("network");
+      }
+      if (remote.stopId && path.endsWith(`/commands/${remote.stopId}`)) return response({ command: { id: remote.stopId,
+        kind: "session.stop_remote", status: "already_applied", target_id: other, applied_at: "2026-09-30T12:00:00Z", action_id: null,
+        result_id: null, context_id: null, object_version: null },
+      current: { session_id: other, status: "closed", close_reason: "remote_stop" }, state_version: a.version() });
+      return base(url, init);
+    });
+    return remote;
+  }
+
+  it("(2) П01: its «На Сегодня» names the refused start → busy Today → Stop, reply lost → one GET of that ID, no second POST, intent kept", async () => {
+    const a = app(), remote = busyElsewhere(a); render(<App />);
+    fireEvent.click(await startButton(a));
+    await screen.findByText(refusalText.SESSION_BUSY, undefined, exchange); await settled();
+    fireEvent.click(screen.getByRole("button", { name: "На Сегодня" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Завершить занятие на другом устройстве" }, exchange));
+    fireEvent.click(await screen.findByRole("button", { name: "Завершить занятие" }, exchange));
+    const check = await screen.findByRole("button", { name: "Проверить результат" }, exchange);
+    await waitFor(() => expect((check as HTMLButtonElement).disabled).toBe(false), exchange);
+    const stop = a.posts().filter(post => (post.kind as string) === "session.stop_remote");
+    expect(stop).toHaveLength(1);
+    const { client_instance_id: _client, document_id: _document, ...sent } = stop[0];
+    expect(JSON.parse(localStorage.getItem("wortly.pending.remote_stop")!).intent).toEqual(sent); // the same intent, not rewritten
+    fireEvent.click(check);
+    await screen.findByText(pairText, undefined, exchange); await settled();
+    expect(a.gets(`/commands/${remote.stopId}`)).toHaveLength(1);
+    expect(a.posts().filter(post => (post.kind as string) === "session.stop_remote")).toHaveLength(1);
+    expect(localStorage.getItem("wortly.pending.remote_stop")).toBeNull();
+  }, 30_000);
+
+  it("(2, control) the native Back of the same refusal names nothing: the window closes (N14, C388) — no Stop, 0 requests after", async () => {
+    const back = fakeBack(), a = app({ back }), remote = busyElsewhere(a); render(<App />);
+    fireEvent.click(await startButton(a));
+    await screen.findByText(refusalText.SESSION_BUSY, undefined, exchange); await settled();
+    await back.click();
+    await screen.findByText("Wortly уже открыт", undefined, exchange);
+    expect(screen.queryByRole("button", { name: "Завершить занятие на другом устройстве" })).toBeNull();
+    const count = a.fetcher.mock.calls.length;
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 300)); });
+    expect(a.fetcher.mock.calls.length).toBe(count);
+    expect(remote.stopId).toBeNull();
+  }, 30_000);
 });

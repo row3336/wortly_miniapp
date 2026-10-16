@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createEntryApi, EntryApiError } from "./entryApi";
-import { testGate } from "../commands/testGate.test-support";
+import { freshTestGate } from "../commands/testGate.test-support";
 
 const sampleProfile = () => ({ profile_id: "profile", access: { status: "admitted", version: "1", reason: null },
   role: "user", ui_language: "ru", dictionary_language: "ru", time_zone: null, state_version: "1" });
@@ -11,7 +11,7 @@ const authRequest = { init_data: "synthetic", client_version: "0.0.0", contract_
 
 function respondingWith(body: unknown) {
   return createEntryApi({ fetcher: vi.fn(async () => new Response(JSON.stringify(body))) as typeof fetch,
-    timeoutMs: 1000, maxResponseBytes: 10000, gate: testGate() });
+    timeoutMs: 1000, maxResponseBytes: 10000, gate: freshTestGate() });
 }
 
 describe("entry API transport", () => {
@@ -32,14 +32,14 @@ describe("entry API transport", () => {
         session: { status: "busy" }, compatibility: { compatible: true, contract_version: "1" },
       }), { status: 200 });
     });
-    const api = createEntryApi({ fetcher: fetcher as typeof fetch, timeoutMs: 1000, maxResponseBytes: 10000, gate: testGate() });
+    const api = createEntryApi({ fetcher: fetcher as typeof fetch, timeoutMs: 1000, maxResponseBytes: 10000, gate: freshTestGate() });
     const auth = await api.auth({ init_data: "signed", client_version: "0.0.0", contract_version: "1" });
     await api.open(auth.access_token, "proof", { client_instance_id: "c", document_id: "d", time_zone: "Europe/Berlin", event: "open", client_version: "0.0.0", contract_version: "1" });
     expect(fetcher).toHaveBeenCalledTimes(2);
   });
 
   it("rejects malformed success data rather than treating it as authorization", async () => {
-    const api = createEntryApi({ fetcher: vi.fn(async () => new Response("{}", { status: 200 })) as typeof fetch, timeoutMs: 1000, maxResponseBytes: 10000, gate: testGate() });
+    const api = createEntryApi({ fetcher: vi.fn(async () => new Response("{}", { status: 200 })) as typeof fetch, timeoutMs: 1000, maxResponseBytes: 10000, gate: freshTestGate() });
     await expect(api.auth({ init_data: "signed", client_version: "0.0.0", contract_version: "1" }))
       .rejects.toMatchObject({ kind: "invalid_response" } satisfies Partial<EntryApiError>);
   });
@@ -48,17 +48,17 @@ describe("entry API transport", () => {
     const api = createEntryApi({
       fetcher: vi.fn(async () => new Response("x".repeat(32), { status: 200 })) as typeof fetch,
       timeoutMs: 1000,
-      maxResponseBytes: 16, gate: testGate(),
+      maxResponseBytes: 16, gate: freshTestGate(),
     });
     await expect(api.auth({ init_data: "signed", client_version: "0.0.0", contract_version: "1" }))
       .rejects.toMatchObject({ kind: "invalid_response" });
-    expect(() => createEntryApi({ fetcher: fetch, timeoutMs: 0, maxResponseBytes: 16, gate: testGate() })).toThrow();
+    expect(() => createEntryApi({ fetcher: fetch, timeoutMs: 0, maxResponseBytes: 16, gate: freshTestGate() })).toThrow();
   });
 
   it("preserves the bounded business code on an HTTP conflict", async () => {
     const api = createEntryApi({
       fetcher: vi.fn(async () => new Response(JSON.stringify({ error: { code: "VERSION_CONFLICT" } }), { status: 409 })) as typeof fetch,
-      timeoutMs: 1000, maxResponseBytes: 1000, gate: testGate(),
+      timeoutMs: 1000, maxResponseBytes: 1000, gate: freshTestGate(),
     });
     await expect(api.reapply("token", { command_id: "intent", expected_access_version: "3" }))
       .rejects.toMatchObject({ kind: "http", status: 409, code: "VERSION_CONFLICT" });
@@ -166,7 +166,7 @@ describe("incompatible client open and refusals of a write (M-COMPAT-HDR)", () =
       seen[url] = new Headers(init.headers).get("X-Wortly-Contract-Version");
       return new Response(JSON.stringify({ error: { code: "CLIENT_INCOMPATIBLE" } }), { status: 409 });
     });
-    const api = createEntryApi({ fetcher: fetcher as typeof fetch, timeoutMs: 1000, maxResponseBytes: 1000, gate: testGate(), contractVersion: "5" });
+    const api = createEntryApi({ fetcher: fetcher as typeof fetch, timeoutMs: 1000, maxResponseBytes: 1000, gate: freshTestGate(), contractVersion: "5" });
     await expect(api.reapply("t", { command_id: "c", expected_access_version: "1" })).rejects
       .toMatchObject({ kind: "http", status: 409, code: "CLIENT_INCOMPATIBLE" });
     await expect(api.open("t", "p", openRequest)).rejects.toMatchObject({ code: "CLIENT_INCOMPATIBLE" });
@@ -176,7 +176,7 @@ describe("incompatible client open and refusals of a write (M-COMPAT-HDR)", () =
   it("carries the pause estimate of a paused reapply", async () => {
     const api = createEntryApi({ fetcher: vi.fn(async () => new Response(JSON.stringify({
       error: { code: "MAINTENANCE", estimated_end_at: "2026-10-07T12:00:00Z", wait_seconds: 40 } }),
-      { status: 503, headers: { "Retry-After": "40" } })) as typeof fetch, timeoutMs: 1000, maxResponseBytes: 1000, gate: testGate() });
+      { status: 503, headers: { "Retry-After": "40" } })) as typeof fetch, timeoutMs: 1000, maxResponseBytes: 1000, gate: freshTestGate() });
     await expect(api.reapply("t", { command_id: "c", expected_access_version: "1" })).rejects.toMatchObject({
       kind: "http", status: 503, code: "MAINTENANCE", pause: { waitSeconds: 40 } });
   });

@@ -16,17 +16,23 @@ async function waitUntil(test: () => boolean, label: string, limitMs = 20_000) {
   throw new Error(`not reached: ${label}`);
 }
 
-type Net = { offline: boolean; lostAt: number; submits: number[]; checks: number[] };
+type Net = { offline: boolean; lostAt: number; submits: number[]; checks: number[]; recoveredAt: number };
 
 /** The written quiz on «слово 6»; the answer is sent `lost` times and every send is lost, the last one with the network. */
 async function loseAnswer(lost: number) {
   const a = app({ cards: [6, 7] });
-  const net: Net = { offline: false, lostAt: -1, submits: [], checks: [] };
+  const net: Net = { offline: false, lostAt: -1, submits: [], checks: [], recoveredAt: -1 };
   const base = a.fetcher.getMockImplementation()!;
   a.fetcher.mockImplementation(async (url, init) => {
     const path = new URL(String(url), "http://localhost").pathname, method = init?.method ?? "GET";
     if (net.offline) throw new TypeError("network");
     if (method === "GET" && path.includes("/commands/")) net.checks.push(performance.now());
+    // The confirmed recovery foreground after the network is back (К-11 ВР-5 → ВР-6): the moment the resend may follow.
+    if (net.lostAt >= 0 && net.recoveredAt < 0 && path.endsWith("/client/open") && JSON.parse(String(init?.body ?? "{}")).event === "foreground") {
+      const reply = await base(url, init);
+      if (reply.ok) net.recoveredAt = performance.now();
+      return reply;
+    }
     if (method === "POST" && path.endsWith("/commands") && JSON.parse(String(init!.body)).kind === "answer.submit") {
       net.submits.push(performance.now());
       if (net.submits.length <= lost) {
@@ -54,20 +60,24 @@ const resends = (net: Net) => net.submits.filter(at => at > net.lostAt).map(at =
 const checkedFirst = (net: Net) => net.submits.filter(at => at > net.lostAt).every(at => net.checks.some(check => check <= at && at - check < 1));
 const advanceTo = async (net: Net, ms: number) => { const left = net.lostAt + ms - performance.now(); if (left > 0) await step(left); };
 
-/** A return from the background while the network is still down ends in «Попробовать ещё раз»; it is pressed at `retryAt`. */
+/**
+ * A return from the background while the network is still down. P03 M-P03-10 (К-11 ВР-1, AC-11 (в)): the working window
+ * keeps its screen in recovery — the status 9.2.2, no «Попробовать ещё раз»; the network comes back at `retryAt`, and the
+ * gate's next ready brings the one foreground of the same document (ВР-5), then the check by ID and the resend (I5).
+ */
 async function retryAt(net: Net, retryAtMs: number) {
   const visibility = vi.spyOn(document, "visibilityState", "get");
   await advanceTo(net, 200); visibility.mockReturnValue("hidden"); fireEvent(document, new Event("visibilitychange"));
   await advanceTo(net, 300); visibility.mockReturnValue("visible"); fireEvent(document, new Event("visibilitychange"));
-  await waitUntil(() => text("Попробовать ещё раз"), "unavailable", 5_000);
+  await waitUntil(() => text("Нет связи с сервером"), "recovering", 5_000);
+  expect(text("Попробовать ещё раз")).toBe(false);
   await advanceTo(net, retryAtMs);
   net.offline = false;
-  fireEvent.click(screen.getByRole("button", { name: "Попробовать ещё раз" }));
   await step(0);
   return after(net, performance.now());
 }
 
-describe("a resend after «Попробовать ещё раз» in the same document", () => {
+describe("a resend after the recovery of the same document (P03 К-11; before M-P03-10: «Попробовать ещё раз»)", () => {
   beforeEach(() => { vi.useFakeTimers(); hashInPlace(); return () => { vi.useRealTimers(); }; });
 
   // Send 2 of the answer was lost: the pause before send 3 is RETRY_PAUSES_MS[1].
@@ -80,7 +90,10 @@ describe("a resend after «Попробовать ещё раз» in the same do
     await step(70_000); // a second resend of the same answer would show here
     expect(resends(net)).toHaveLength(1);
     expect(resends(net)[0]).toBeGreaterThanOrEqual(clicked);
-    expect(resends(net)[0]).toBeLessThanOrEqual(clicked + 200);
+    // The pause of the lost send has run out: the resend goes right after the identity is confirmed again (its check by
+    // ID first), never after a new full pause — measured from the recovery, since the recovery itself waits for ready.
+    expect(net.recoveredAt).toBeGreaterThan(0);
+    expect(resends(net)[0]).toBeLessThanOrEqual(after(net, net.recoveredAt) + 200);
     expect(checkedFirst(net)).toBe(true);
     // The immediate resend lands in the window of the settings race (race_fix): the quiz must go on, not stop at Settings.
     // Which screen follows the accepted resend (its result or the next question) is not asserted here.

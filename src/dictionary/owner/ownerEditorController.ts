@@ -210,8 +210,13 @@ export class OwnerEditorController {
 
   private readonly registry: GatePending;
 
+  private readonly unsubscribeGate: () => void;
+
   constructor(private readonly options: Options) {
     this.registry = new GatePending(options.gate, "owner_field");
+    // §4.1 «Правило кнопки» (C335, AC-16/AC-28; M-P03-10): «Сохранить»/«Повторить» follow the write gate — visible and
+    // inactive while it holds, repainted as it changes; a press meanwhile does nothing and nothing is queued.
+    this.unsubscribeGate = options.gate.subscribe(() => this.notify());
   }
 
   // ---- inputs from the host ----
@@ -257,6 +262,8 @@ export class OwnerEditorController {
   }
 
   dispose(): void {
+    // Unsubscribed first: the release below changes the gate, and a disposed owner repaints nothing.
+    this.unsubscribeGate();
     // R3: an ID without a definite answer stays locked to itself in the gate.
     this.registry.release();
     this.disposed = true;
@@ -409,7 +416,9 @@ export class OwnerEditorController {
     const session = this.sessionOf(language), entry = this.entry;
     if (!session || session.phase !== "failed") return Promise.resolve();
     const target = this.targetOf(session);
-    if (entry && entry.target === target) return entry.status === "unknown" && !entry.busy ? this.execute(entry) : Promise.resolve();
+    if (entry && entry.target === target) {
+      return entry.status === "unknown" && !entry.busy && this.registry.writable(entry.intent.command_id) ? this.execute(entry) : Promise.resolve();
+    }
     return this.saveTranslations(language);
   }
 
@@ -446,7 +455,9 @@ export class OwnerEditorController {
   retryGrammar(name: GrammarFieldName): Promise<void> {
     const field = this.grammar.get(name), entry = this.entry;
     if (!field || field.phase !== "failed") return Promise.resolve();
-    if (entry && entry.target === name) return entry.status === "unknown" && !entry.busy ? this.execute(entry) : Promise.resolve();
+    if (entry && entry.target === name) {
+      return entry.status === "unknown" && !entry.busy && this.registry.writable(entry.intent.command_id) ? this.execute(entry) : Promise.resolve();
+    }
     return this.saveGrammar(name);
   }
 
@@ -468,8 +479,9 @@ export class OwnerEditorController {
         phase: field.phase, problem: field.problem ? { ...field.problem } : null,
         dirty: !sameGrammar(field.name, field.draft, field.original), canEdit: this.grammarEditable(field),
         canSave: this.canSaveGrammar(field),
-        canRetry: field.phase === "failed" && (entry?.target === field.name ? entry.status === "unknown" && !entry.busy
-          : this.retryable(field.problem)),
+        canRetry: field.phase === "failed" && (entry?.target === field.name
+          ? entry.status === "unknown" && !entry.busy && this.registry.writable(entry.intent.command_id)
+          : this.retryable(field.problem) && this.registry.writable()),
         checking: entry?.target === field.name && entry.busy,
       })),
       canCancel: !(entry?.busy ?? false),
@@ -488,8 +500,9 @@ export class OwnerEditorController {
       problem: session.problem ? { ...session.problem } : null, dirty: this.translationsDirty(session),
       blank: hasBlank(session.items), lastRefused: session.lastRefused, canEdit: this.translationsEditable(session),
       canSave: this.canSaveTranslations(session),
-      canRetry: session.phase === "failed" && (entry?.target === target ? entry.status === "unknown" && !entry.busy
-        : this.retryable(session.problem) && !hasBlank(session.items) && this.othersSaveable(session)),
+      canRetry: session.phase === "failed" && (entry?.target === target
+        ? entry.status === "unknown" && !entry.busy && this.registry.writable(entry.intent.command_id)
+        : this.retryable(session.problem) && !hasBlank(session.items) && this.othersSaveable(session) && this.registry.writable()),
       canRemove: canRemove(session.items), checking: entry?.target === target && entry.busy, reading: this.reading(session),
     };
   }
@@ -637,12 +650,13 @@ export class OwnerEditorController {
     const texts = textsOf(session.items);
     return this.contextId !== null && this.entry === null && this.openEditor === "translations" && this.othersSaveable(session)
       && (session.phase === "editing" || session.phase === "failed" && this.retryable(session.problem))
-      && texts.length > 0 && !hasBlank(session.items) && !sameTexts(trimmed(texts), trimmed(session.original));
+      && texts.length > 0 && !hasBlank(session.items) && !sameTexts(trimmed(texts), trimmed(session.original))
+      && this.registry.writable();
   }
   private canSaveGrammar(field: GrammarField): boolean {
     return this.contextId !== null && this.entry === null && this.openEditor === "grammar"
       && (field.phase === "editing" || field.phase === "saved" || field.phase === "failed" && this.retryable(field.problem))
-      && !sameGrammar(field.name, field.draft, field.original);
+      && !sameGrammar(field.name, field.draft, field.original) && this.registry.writable();
   }
   private retryable(problem: OwnerProblem | null): boolean {
     return this.contextId !== null && this.entry === null && problem?.reason !== "unavailable" && problem?.reason !== "forbidden";

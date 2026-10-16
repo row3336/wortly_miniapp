@@ -18,6 +18,9 @@ const fast: RecoveryClock = {
 let latest: WriteGate | null = null;
 let pageProbeAnswer: Availability = { status: "ready" };
 
+/** The page gate of the App mounted last (a test of the gate's facts reads its snapshot). */
+export function latestPageGate(): WriteGate | null { return latest; }
+
 /** What the availability probe of the App under test answers (ready by default); a test of an outage sets unknown. */
 export function setPageProbe(answer: Availability): void { pageProbeAnswer = answer; }
 

@@ -292,7 +292,13 @@ export class ConjugationCommandController {
     }
     if (!this.live()) return;
     if (reply.outcome === "mismatch") { this.observe(reply.state_version); await this.markMismatch(pending); }
-    else await this.settle(reply);
+    else {
+      // fix3 (П01): the direct reply refused this page's own start as SESSION_BUSY.
+      if (reply.outcome === "rejected" && pending.intent.kind === "session.start" && "error" in reply && reply.error.code === "SESSION_BUSY") {
+        this.registry?.startRefusedBusy(pending.intent.command_id);
+      }
+      await this.settle(reply);
+    }
   }
   begin(action: ConjugationTransition): Promise<void> {
     if (!this.live() || this.running || !this.loaded || this.pending || !["idle", "settled"].includes(this.phase)) return this.running ?? Promise.resolve();

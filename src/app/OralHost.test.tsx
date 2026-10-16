@@ -107,7 +107,7 @@ function setup(options: Options = {}) {
     const settings = useSettingsDocument({ access, transport, pendingStore: settingsStore, onCurrent() {} });
     const value = useOralHost({ access, transport, stores, newId: () => id(counter++), language: "ru", settings,
       initialSessionId: seed, seedPending: false, route,
-      onOral: () => { onOral(); if (!options.holdRoute) update("oral"); }, onToday: () => { onToday(); update("today"); },
+      onOral: () => { onOral(); if (!options.holdRoute) update("oral"); }, onToday: intent => { onToday(intent); update("today"); },
       onOpenCard: options.openCard ? onOpenCard : undefined });
     host.current = value;
     return <>{value.screen}{route === "today" && <p data-testid="today">{value.blocksToday ? "held" : "shown"}</p>}</>;
@@ -188,11 +188,17 @@ describe("useOralHost: start, routing and Today", () => {
     expect(JSON.parse(h.values.get(studyKey)!).intent.command_id).toBe(id(90));
   });
 
-  it("O6 a rejected start returns to Today once and never resends", async () => {
-    const h = setup({ reject: "NO_MATERIAL" }); await gateOpen(h);
+  // Q29 (fix5): the refusal stays on the oral screen until the person leaves it; its «На Сегодня» names the refused start
+  // for the П01 episode only when it was refused SESSION_BUSY (startRefusalIntent).
+  it.each(["NO_MATERIAL", "SESSION_BUSY"])("O6 a rejected start (%s) stays on the oral screen; its «На Сегодня» leaves once and never resends", async code => {
+    const h = setup({ reject: code }); await gateOpen(h);
     act(() => { h.host.current!.requestStart({ material: "words", direction: "de-l1" }); });
-    await waitFor(() => expect(h.onToday).toHaveBeenCalledOnce()); await settled();
-    expect(h.kinds()).toEqual(["session.start"]); expect(h.onToday).toHaveBeenCalledOnce(); expect(h.haptic).not.toHaveBeenCalled();
+    const today = await screen.findByRole("button", { name: "На Сегодня" }); await settled();
+    expect(h.onToday).not.toHaveBeenCalled();
+    fireEvent.click(today); await settled();
+    expect(h.onToday).toHaveBeenCalledOnce();
+    expect(h.onToday).toHaveBeenCalledWith(code === "SESSION_BUSY" ? { startRefused: h.posts[0].command_id } : undefined);
+    expect(h.kinds()).toEqual(["session.start"]); expect(h.haptic).not.toHaveBeenCalled();
   });
 });
 

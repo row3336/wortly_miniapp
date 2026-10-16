@@ -1,7 +1,8 @@
 import { ApiError } from "../api/http";
 import { GatePending, pausedBeforeSend } from "../commands/gatePending";
+import { PausedBeforeSendError } from "../commands/writeGate";
 import { PendingStoreError, validId } from "../commands/pendingSlot";
-import type { ReadbackTicket, WriteGate } from "../commands/writeGate";
+import type { ReadbackTicket, RemoteReadContext, WriteGate } from "../commands/writeGate";
 import type { RemoteStopIntent, RemoteStopReply, RemoteStopStatus } from "./remoteSessionApi";
 import { RemoteStopPendingStore, type RemoteStopPending } from "./remoteStopPending";
 
@@ -43,6 +44,8 @@ export class RemoteStopController {
   private running: Promise<void> | null = null;
   private readonly registry: GatePending;
   private readonly unsubscribe: () => void;
+  /** R10: the narrow read context of the busy branch (null: the ordinary readback of a live opened, R2). */
+  private readContext: RemoteReadContext | null = null;
 
   constructor(private readonly options: Options) {
     if (!validId(options.profileId) || !validId(options.clientInstanceId)) throw new Error("invalid remote context");
@@ -99,6 +102,26 @@ export class RemoteStopController {
     await this.clearSettled();
   }
 
+  /** R10 п.2: the entry gives the narrow context of the busy branch; the next readback of the own stop uses it. */
+  setReadContext(context: RemoteReadContext | null): void { this.readContext = context; }
+
+  /**
+   * R10 п.4: loads and registers the saved own stop, without any read of its status — the entry's first open does not
+   * wait for a GET. An outcome kept from before is cleared as refresh would.
+   */
+  load(): Promise<void> {
+    return this.run(async () => {
+      if (!this.loaded) {
+        this.pending = await this.options.pendingStore.load(this.options.profileId, this.lifetime.signal);
+        if (!this.live()) return;
+        this.loaded = true;
+        if (this.pending) this.registry.hold(this.pending.intent.command_id);
+      }
+      if (this.outcome) { await this.clearSettled(); return; }
+      this.phase = this.pending ? "unresolved" : "idle";
+    });
+  }
+
   /** Reads only. Not-found is still unresolved, never permission for an automatic resend. */
   refresh(): Promise<void> {
     return this.run(async () => {
@@ -120,8 +143,17 @@ export class RemoteStopController {
       } else {
         // R6: the status of this ID is read only with the gate's ticket.
         const intent = structuredClone(this.pending.intent);
-        const reply = await this.registry.read(intent.command_id, ticket => this.options.check(intent, ticket));
+        // R10: in busy/remote by the narrow ticket of the entry's context; otherwise the ordinary one (R2).
+        const context = this.readContext;
+        const read = (ticket: ReadbackTicket) => this.options.check(intent, ticket);
+        // A context that is no longer live refuses at once (cancelled): nothing waits for an opened that may never come.
+        const reply = context
+          ? await this.options.gate.runRemoteReadback(context, intent.command_id, read)
+          : await this.registry.read(intent.command_id, read);
         if (!this.live()) return;
+        // R10 п.3 (AC-116): a reply that comes after its context was voided (unavailable, another identity or document,
+        // a closed window) changes nothing — the pending, its locks and the episode stay as they were.
+        if (context && !this.options.gate.remoteReadContextLive(context)) throw new PausedBeforeSendError("cancelled");
         this.stateVersion = reply.state_version;
         if (reply.outcome === "accepted") { await this.settle("accepted"); return; }
         this.registry.settled("not_recorded");

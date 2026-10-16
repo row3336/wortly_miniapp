@@ -1,4 +1,5 @@
 import { withJournalIntake } from "../journal/intake.test-support";
+import { activeButton } from "./gateButton.test-support";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OralSessionProjection, Profile, TodayResponse } from "../api/generated";
@@ -325,16 +326,16 @@ describe("oral R1: the window refreshes itself into the session of the new pair 
     expect(commandPosts(a.fetcher, mark).map(post => [post.kind, post.session_id])).toEqual([["session.start", world.started],
       ["assignment.present", world.started]]);
   });
-  it("a failed refresh keeps its own failure and manual retry; the retry goes into the same session", async () => {
+  // P03 M-P03-10 (К-11 ВР-1/ВР-5): a refresh lost by the transport keeps the working window in recovery; the gate's ready
+  // brings one foreground of the same document — no unavailable screen, no manual retry — and the window lands in it.
+  it("a refresh lost by the transport is recovered by one foreground after ready (К-11) into the same session", async () => {
     const a = app(); const world = pairMoved(a.fetcher);
     render(<App />); const start = await todayReady(); const mark = a.fetcher.mock.calls.length;
     world.moved = true; const open = foregroundOpen(a.fetcher, "fail");
     fireEvent.click(start);
-    const retry = await screen.findByRole("button", { name: "Попробовать ещё раз" }, { timeout: 5000 });
-    await pause(2000); expect(open.attempts).toBe(1);
-    expect(commandPosts(a.fetcher, mark).map(post => post.kind)).toEqual(["session.start"]);
-    fireEvent.click(retry);
     expect(await screen.findByText("das Haus", undefined, { timeout: 5000 })).toBeTruthy();
+    expect(open.attempts).toBe(2);
+    expect(screen.queryByRole("button", { name: "Попробовать ещё раз" })).toBeNull();
     expect(commandPosts(a.fetcher, mark).map(post => [post.kind, post.session_id])).toEqual([["session.start", world.started],
       ["assignment.present", world.started]]);
   });
@@ -349,7 +350,8 @@ describe("oral R1: the window refreshes itself into the session of the new pair 
       // P03 (L2, M-P03-4): the lost reply closed the page gate; the check comes once the connection is back, so the
       // presentation that follows it is not kept on the client.
       await pageGateOpen();
-      fireEvent.click(check);
+      expect(check).toBeTruthy();
+      fireEvent.click(await activeButton("Проверить состояние", { timeout: 5000 })); // C335: once the gate lets it
     }
     expect(await screen.findByText("das Haus", undefined, { timeout: 5000 })).toBeTruthy();
     await pause(2500);
@@ -417,7 +419,8 @@ describe("oral R1: the window refreshes itself into the session of the new pair 
     expect(screen.queryByText("das Haus")).toBeNull();
     // An unknown start has no Stop of its own here: the oral screen offers none while its start is unresolved.
     expect((screen.getByRole("button", { name: "Выйти" }) as HTMLButtonElement).disabled).toBe(true);
-    fireEvent.click(check);
+    expect(check).toBeTruthy();
+    fireEvent.click(await activeButton("Проверить состояние", { timeout: 5000 }));
     expect(await screen.findByText("das Haus", undefined, { timeout: 5000 })).toBeTruthy();
     await pause(1000);
     expect(new Set(statusReads())).toEqual(new Set([`/api/v1/commands/${started.command_id}`]));

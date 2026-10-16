@@ -736,3 +736,46 @@ describe("shared study view: a known mismatch against an update in progress and 
     }
   });
 });
+
+// fix6/fix7 (C393, QA r9 W1/W3/W5): a lane step without a projection (unavailable / not_found) is taken once per lane and
+// per content and version — an update that only repeats it (the write gate changed) leaves the view as it is, while a
+// really new step on either lane is still taken.
+describe("observe: a step without a projection is taken once per lane, content and version", () => {
+  async function refusedThenIdle() {
+    const f = view({ sessionId: null, rules: { ignoreUnboundUnavailable: false } }); await f.controller.refresh();
+    f.replies.set("session.start", () => ({ outcome: "rejected", rejectionCode: "SESSION_BUSY",
+      current: { session_id: SESSION, status: "not_found" } as never }));
+    await f.commands.begin({ kind: "session.start" });
+    expect(f.controller.snapshot().phase).toBe("stale"); // the refusal's step was taken
+    await f.controller.refresh();
+    expect(f.controller.snapshot().phase).toBe("idle"); // the read after it shows the view without a session
+    return f;
+  }
+  it("an update that only repeats the step — as the gate closing and opening does — keeps the view idle", async () => {
+    const f = await refusedThenIdle();
+    f.state.canBegin = false; f.state.heldByGate = true; f.publish();
+    f.state.canBegin = true; f.state.heldByGate = false; f.publish();
+    expect(f.controller.snapshot().phase).toBe("idle");
+  });
+  it("the same step at a newer state version of its lane is a new fact and is taken", async () => {
+    const f = await refusedThenIdle();
+    f.publish();
+    f.state.stateVersion = "9"; f.state.primary = { ...f.state.primary, stateVersion: "9" }; f.publish();
+    expect(f.controller.snapshot().phase).toBe("stale");
+  });
+  it("each later step of other content is taken, not only the first one the lane gave", async () => {
+    const f = await refusedThenIdle();
+    f.state.primary = { ...f.state.primary, current: { session_id: SESSION, status: "unavailable" } }; f.publish();
+    expect(f.controller.snapshot().phase).toBe("stale");
+    await f.controller.refresh();
+    expect(f.controller.snapshot().phase).toBe("idle");
+    f.state.primary = { ...f.state.primary, current: { session_id: SESSION, status: "not_found" } }; f.publish();
+    expect(f.controller.snapshot().phase).toBe("stale");
+  });
+  it("the Stop lane keeps its own record: the same step arriving there is taken although the study lane gave it", async () => {
+    const f = await refusedThenIdle();
+    f.state.stop = { ...idle(), current: { session_id: SESSION, status: "not_found" }, stateVersion: f.state.primary.stateVersion };
+    f.publish();
+    expect(f.controller.snapshot().phase).toBe("stale");
+  });
+});

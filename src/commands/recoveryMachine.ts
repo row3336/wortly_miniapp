@@ -603,12 +603,23 @@ export class RecoveryMachine<I extends { command_id: string }> {
     if (!gate) { this.unreachable(null, false); return; }
     const snapshot = gate.snapshot();
     const planned = snapshot.net.kind === "closed" && snapshot.net.cause === "maintenance" || gate.holdActive();
+    // §4.8 (M-P03-9): the estimate of 9.2.4 is what is left of the gate's announced hold (bounded by §3.5); once an
+    // estimate passed while the pause goes on, 0 (maintenanceOver); none announced — no number.
+    const estimate = () => gate.holdActive() ? gate.holdRemainingS() : this.pauseSeconds === null ? null : 0;
     this.enter(planned
-      ? { name: "maintenance", probe: this.probes + 1, pauseSeconds: this.pauseSeconds, budgetSpent: (this.marks?.reserved ?? 0) >= MAX_SENDS }
+      ? { name: "maintenance", probe: this.probes + 1, pauseSeconds: estimate(), budgetSpent: (this.marks?.reserved ?? 0) >= MAX_SENDS }
       : { name: "unreachable", probe: this.probes + 1, pauseSeconds: null });
     const generation = this.generation;
     const resume = () => {
-      if (generation !== this.generation || !this.active || !this.writable()) return;
+      if (generation !== this.generation || !this.active) return;
+      if (!this.writable()) {
+        // The hold ended (or was lengthened) while the pause goes on: the same state with its new estimate.
+        if (this.state.name === "maintenance" && this.state.pauseSeconds !== estimate()) {
+          this.state = { ...this.state, pauseSeconds: estimate() };
+          this.emit();
+        }
+        return;
+      }
       this.gateWait?.();
       this.gateWait = null;
       void this.afterGate(generation);

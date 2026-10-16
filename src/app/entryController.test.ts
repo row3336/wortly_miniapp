@@ -6,7 +6,7 @@ import type { AsyncStorage } from "../platform/storage";
 import type { DocumentLock } from "./documentLock";
 import { EntryController } from "./entryController";
 import { newerVersion } from "./installation";
-import { testGate } from "../commands/testGate.test-support";
+import { freshTestGate } from "../commands/testGate.test-support";
 
 const profileId = "11111111-1111-4111-8111-111111111111";
 const instanceId = "22222222-2222-4222-8222-222222222222";
@@ -65,7 +65,7 @@ function fixture(status: "admitted" | "pending" | "rejected" = "admitted", onSta
   };
   const lock: DocumentLock = { acquire: vi.fn(async () => ({ release: vi.fn() })) };
   const timeZone = vi.fn((): string | null => "Europe/Berlin");
-  const controller = new EntryController({ gate: testGate(),
+  const controller = new EntryController({ gate: freshTestGate(),
     api, storage, lock, initData: "signed-Telegram-data", savedLanguage: "ru", browserLanguage: "ru-RU",
     clientVersion: "0.0.0", contractVersion: "1", timeZone,
     newId: () => {
@@ -81,7 +81,7 @@ function fixture(status: "admitted" | "pending" | "rejected" = "admitted", onSta
 /** A new document of the same Mini App: shared server and storage, its own controller. */
 function relaunch(api: EntryApi, storage: AsyncStorage, ids: string[]) {
   const states: string[] = [];
-  const controller = new EntryController({ gate: testGate(),
+  const controller = new EntryController({ gate: freshTestGate(),
     api, storage, lock: { acquire: vi.fn(async () => ({ release: vi.fn() })) },
     initData: "signed", savedLanguage: "ru", browserLanguage: "ru", clientVersion: "0.0.0", contractVersion: "1",
     timeZone: () => "Europe/Berlin", newId: () => ids.shift()!, onUpdate: ({ state }) => states.push(state.kind),
@@ -167,7 +167,9 @@ describe("entry controller", () => {
     const first = f.controller.getOpenedAccess()!;
     let refuse!: (error: Error) => void;
     const pending = first.run(() => new Promise<void>((_resolve, reject) => { refuse = reject; }));
-    await f.controller.retry();
+    // P03 M-P03-10: retry() is the button of `unavailable` only (§4.13); a new access of the same document comes with
+    // the foreground refresh.
+    await f.controller.foreground();
     const second = f.controller.getOpenedAccess()!;
     expect(second).not.toBe(first); expect(second.isLive()).toBe(true);
     refuse(new EntryApiError("http", 401));
@@ -213,7 +215,7 @@ describe("entry controller", () => {
     expect(f.states.slice(stateCount)).toEqual([]);
     expect(f.api.open).toHaveBeenCalledTimes(2);
     // The takeover needs no lock flag or confirmation (decision 2.3): the refresh names only the document.
-    expect(vi.mocked(f.api.open).mock.calls[1]).toEqual(["memory-token", "saved-proof", {
+    expect(vi.mocked(f.api.open).mock.calls[1].slice(0, 3)).toEqual(["memory-token", "saved-proof", {
       client_instance_id: instanceId, document_id: documentId, time_zone: "Asia/Tokyo",
       event: "foreground", client_version: "0.0.0", contract_version: "1",
     }]);
@@ -289,21 +291,22 @@ describe("entry controller", () => {
     const f = fixture(); await f.controller.start();
     f.timeZone.mockReturnValue("Asia/Tokyo");
     vi.mocked(f.api.open).mockRejectedValueOnce(new EntryApiError("network"));
+    const access = f.controller.getOpenedAccess()!;
     await f.controller.foreground();
-    expect(f.states.at(-1)).toBe("unavailable"); expect(f.controller.getOpenedAccess()).toBeNull();
+    // P03 M-P03-10 (К-11 ВР-1): a lost foreground of the working window keeps it opened, with its access, in recovery;
+    // no second request goes until the gate's ready (ВР-5) or a show of the window (ВР-4), and never `event="open"`.
+    expect(f.states.at(-1)).toBe("opened"); expect(f.controller.getOpenedAccess()).toBe(access);
+    expect(f.controller.unconfirmed()).toBe(true);
     await f.controller.foreground(); expect(f.api.open).toHaveBeenCalledTimes(2);
-    await f.controller.retry();
-    expect(f.states.at(-1)).toBe("opened");
+    await f.controller.retry(); expect(f.api.open).toHaveBeenCalledTimes(2);
     expect(f.api.auth).toHaveBeenCalledOnce(); expect(f.api.register).toHaveBeenCalledOnce();
-    expect(vi.mocked(f.api.open).mock.calls[2]).toEqual(["memory-token", "saved-proof", {
-      ...vi.mocked(f.api.open).mock.calls[1][2], event: "open",
-    }]);
+    expect(vi.mocked(f.api.open).mock.calls.map(call => call[2].event)).toEqual(["open", "foreground"]);
   });
 
   it("does not call auth without signed Telegram init data", async () => {
     const { api, storage, lock } = fixture();
     const states: string[] = [];
-    const controller = new EntryController({ gate: testGate(),
+    const controller = new EntryController({ gate: freshTestGate(),
       api, storage, lock, initData: null, savedLanguage: null, browserLanguage: "en",
       clientVersion: "0.0.0", contractVersion: "1", timeZone: () => "Europe/Berlin",
       newId: () => instanceId, onUpdate: ({ state }) => states.push(state.kind),
@@ -375,7 +378,7 @@ describe("entry controller", () => {
     first.controller.dispose();
 
     const states: string[] = [];
-    const second = new EntryController({ gate: testGate(),
+    const second = new EntryController({ gate: freshTestGate(),
       api: first.api, storage: first.storage, lock: first.lock,
       initData: "signed", savedLanguage: "ru", browserLanguage: "ru", clientVersion: "0.0.0", contractVersion: "1",
       timeZone: () => "Europe/Berlin", newId: () => { throw new Error("New ID must not be used"); },
@@ -438,8 +441,9 @@ describe("entry controller", () => {
     await controller.reapply();
     expect(storage.values.has(`wortly.reapply:${profileId}`)).toBe(false);
     expect(states.at(-1)).toBe("unavailable");
+    // fix1 (C373, QA-C5): the button reads the current profile by its own contract — one sign-in, no open.
     await controller.retry();
-    expect(api.auth).toHaveBeenCalledTimes(2);
+    expect(api.auth).toHaveBeenCalledTimes(2); expect(api.open).not.toHaveBeenCalled();
     expect(states.at(-1)).toBe("unavailable"); // Auth still reports access version 3.
     vi.mocked(api.auth).mockResolvedValueOnce({ ...auth("rejected"), profile: { ...profile("rejected", "9007199254740994"), access: { status: "rejected", version: "4", reason: "Review complete" } } });
     await controller.retry();
@@ -500,11 +504,11 @@ describe("entry controller", () => {
     await controller.start();
     expect(states.at(-1)).toBe("unavailable");
     expect(api.open).not.toHaveBeenCalled();
+    // P03 M-P03-10 (§4.13 В, AC-99/AC-102): the window has no document yet — its button is blocked, nothing is sent.
     await controller.retry();
-    expect(states.at(-1)).toBe("opened");
-    expect(api.auth).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(api.register).mock.calls[0]).toEqual(vi.mocked(api.register).mock.calls[1]);
-    expect(JSON.parse(storage.values.get(`wortly.installation:${profileId}`)!)).toMatchObject({ activated: true, proof: "saved-proof" });
+    expect(states.at(-1)).toBe("unavailable");
+    expect(api.register).toHaveBeenCalledTimes(1); expect(api.open).not.toHaveBeenCalled();
+    expect(JSON.parse(storage.values.get(`wortly.installation:${profileId}`)!)).toMatchObject({ proof: null });
   });
 
   it("stores the proof before open and repeats a lost open with the same document", async () => {
@@ -516,10 +520,11 @@ describe("entry controller", () => {
     });
     await controller.start();
     expect(states.at(-1)).toBe("unavailable");
+    // P03 M-P03-10 (п.8б, §4.13 В): a lost first open is never repeated by this window, neither by retry() nor by L2.
     await controller.retry();
-    expect(states.at(-1)).toBe("opened");
+    expect(states.at(-1)).toBe("unavailable");
     expect(api.register).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(api.open).mock.calls[0]).toEqual(vi.mocked(api.open).mock.calls[1]);
+    expect(api.open).toHaveBeenCalledTimes(1);
   });
 
   it("retries after a newer busy profile without falling back to stale auth", async () => {
@@ -530,9 +535,10 @@ describe("entry controller", () => {
     });
     await controller.start();
     expect(states.at(-1)).toBe("busy");
+    // P03 M-P03-10: retry() is no repeat of the open from the busy screen (п.8б); nothing is sent.
     await controller.retry();
-    expect(states.at(-1)).toBe("opened");
-    expect(api.register).toHaveBeenCalledTimes(1);
+    expect(states.at(-1)).toBe("busy");
+    expect(api.register).toHaveBeenCalledTimes(1); expect(api.open).toHaveBeenCalledTimes(1);
   });
 
   it("retries an opened document after storing activation fails", async () => {
@@ -541,10 +547,10 @@ describe("entry controller", () => {
       .mockRejectedValueOnce(new Error("storage denied"));
     await controller.start();
     expect(states.at(-1)).toBe("unavailable");
+    // P03 M-P03-10 (§4.13 В): no confirmed opened reached the gate, so the window has no document to check; blocked.
     await controller.retry();
-    expect(states.at(-1)).toBe("opened");
-    expect(api.register).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(api.open).mock.calls[0]).toEqual(vi.mocked(api.open).mock.calls[1]);
+    expect(states.at(-1)).toBe("unavailable");
+    expect(api.register).toHaveBeenCalledTimes(1); expect(api.open).toHaveBeenCalledTimes(1);
   });
 
   it("keeps a saved proof after a lost open response and a new auth session", async () => {
@@ -554,7 +560,7 @@ describe("entry controller", () => {
     const saved = JSON.parse(first.storage.values.get(`wortly.installation:${profileId}`)!);
     first.controller.dispose();
     const states: string[] = [];
-    const second = new EntryController({ gate: testGate(),
+    const second = new EntryController({ gate: freshTestGate(),
       api: first.api, storage: first.storage, lock: first.lock,
       initData: "signed", savedLanguage: null, browserLanguage: "ru", clientVersion: "0.0.0", contractVersion: "1",
       timeZone: () => "Europe/Berlin", newId: () => "88888888-8888-4888-8888-888888888888",
@@ -611,8 +617,9 @@ describe("entry controller", () => {
     await controller.reapply();
     expect(states.at(-1)).toBe("expired");
     expect(lock.acquire).not.toHaveBeenCalled(); expect(release).not.toHaveBeenCalled();
+    // P03 M-P03-10 (AC-102): the expired screen has no retry; a new sign-in is a new launch (P01).
     await controller.retry();
-    expect(api.auth).toHaveBeenCalledTimes(2);
+    expect(api.auth).toHaveBeenCalledTimes(1);
   });
 
   it("never registers or opens when saving IDs fails", async () => {
@@ -656,7 +663,7 @@ describe("entry controller", () => {
       open: vi.fn(async (_token, _proof, request) => ({ ...opened(), client_instance_id: request.client_instance_id })),
     };
     const ids = [freshInstance, freshRegistration, documentId];
-    const second = new EntryController({ gate: testGate(),
+    const second = new EntryController({ gate: freshTestGate(),
       api: freshApi, storage: first.storage, lock: { acquire: async () => "unsupported" },
       initData: "signed", savedLanguage: "ru", browserLanguage: "ru", clientVersion: "0.0.0", contractVersion: "1",
       timeZone: () => "Europe/Berlin", newId: () => ids.shift()!, onUpdate: () => {},

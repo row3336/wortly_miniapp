@@ -6,7 +6,7 @@ import { browserStorage } from "../platform/storage";
 import type { AsyncStorage } from "../platform/storage";
 import { closeMiniApp, notifyAcceptedMilestone, signedInitData, syncPlatform, telegramLanguage } from "../platform/telegram";
 import { browserDocumentLock } from "./documentLock";
-import { EntryController } from "./entryController";
+import { EntryController, type ForegroundIntent } from "./entryController";
 import { EntryScreen } from "./EntryScreen";
 import type { EntryState } from "./entryState";
 import { clientContractVersion, type HttpOptions } from "../api/http";
@@ -17,6 +17,7 @@ import type { BusyAccess } from "./busyAccess";
 import { BusyTodayHost } from "./TodayHost";
 import { createTodayApi } from "../today/todayApi";
 import { ApplicationDocument } from "./ApplicationDocument";
+import { WindowRecoveryStatus } from "../commands/RecoveryOverlay";
 import { LaunchHost } from "./LaunchScreen";
 import { forgetLaunchCard, LaunchCard, launchCardId } from "./launchCard";
 import { useBackLayer } from "./navigationBack";
@@ -77,8 +78,10 @@ export function App({ learningPage }: { learningPage?: LearningPageStarts } = {}
       publishLanguage(current.profileId, current.version, current.uiLanguage);
     }
   }, [publishLanguage]);
-  const foreground = useCallback(async () => {
-    await controller?.foreground();
+  const foreground = useCallback(async (intent?: ForegroundIntent) => {
+    await controller?.foreground("screen", intent);
+    // While the window recovers (К-11/К-9а) its foreground proves nothing to the screens (AC-11h).
+    if (controller?.unconfirmed()) return "unconfirmed" as const;
     return controller?.getOpenedAccess() ?? null;
   }, [controller]);
 
@@ -91,7 +94,11 @@ export function App({ learningPage }: { learningPage?: LearningPageStarts } = {}
     // The write gate of this page (P03 M-P03-3): every request of every module passes it (RD-7); it owns the probes.
     const gate = pageGate.make();
     // The series of probes runs only in a visible window: hidden, its timers stop; shown, it starts again at 5 s (Q35.3).
-    const visibility = () => gate.setVisible(document.visibilityState !== "hidden");
+    const visibility = () => {
+      gate.setVisible(document.visibilityState !== "hidden");
+      // The entry counts shows (ВР-4: one recovery foreground per show of a hidden window).
+      currentController?.setVisible(document.visibilityState !== "hidden");
+    };
     visibility();
     document.addEventListener("visibilitychange", visibility);
     try {
@@ -178,6 +185,7 @@ export function App({ learningPage }: { learningPage?: LearningPageStarts } = {}
             }
           },
         });
+        currentController.setVisible(document.visibilityState !== "hidden");
         setController(currentController);
         void currentController.start();
       } catch {
@@ -201,7 +209,8 @@ export function App({ learningPage }: { learningPage?: LearningPageStarts } = {}
 
   useEffect(() => {
     const foreground = () => {
-      if (document.visibilityState === "visible") void controller?.foreground();
+      // The real return of the window (P03 N14, E-M12): the entry tells it from a screen's own synchronization (fix2).
+      if (document.visibilityState === "visible") void controller?.foreground("show");
     };
     document.addEventListener("visibilitychange", foreground);
     window.addEventListener("pageshow", foreground);
@@ -239,6 +248,8 @@ export function App({ learningPage }: { learningPage?: LearningPageStarts } = {}
             launchCard={launchCard} learningPage={learningPage} />
         </div>
         {documentCheck && <EntryScreen state={{ kind: "checking" }} language={language} afterStale />}
+        {/* К-11/К-9а and the identity check (P03 §4.8): a status over the kept screen, without buttons. */}
+        {!documentCheck && entryState.wait && <WindowRecoveryStatus wait={entryState.wait} language={language} />}
       </>;
     }
     if (entryState.kind === "busy" && busyAccess && transport && controller) {

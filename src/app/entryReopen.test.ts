@@ -10,7 +10,7 @@ import type { DocumentLease, DocumentLock } from "./documentLock";
 import { EntryController } from "./entryController";
 import { keysOf, openDocument, openRequestKeys } from "./openRules.test-support";
 import type { EntryState } from "./entryState";
-import { testGate } from "../commands/testGate.test-support";
+import { freshTestGate } from "../commands/testGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const compatibility = { compatible: true, contract_version: "1" };
@@ -69,7 +69,7 @@ function device(lock: DocumentLock, options: { remote?: boolean } = {}) {
     const states: EntryState[] = [];
     const closeWindow = vi.fn();
     const checks: boolean[] = [];
-    const controller = new EntryController({ gate: testGate(), api, storage, lock, initData: "signed", savedLanguage: "ru",
+    const controller = new EntryController({ gate: freshTestGate(), api, storage, lock, initData: "signed", savedLanguage: "ru",
       browserLanguage: "ru", clientVersion: "0.0.0", contractVersion: "1", timeZone: () => "UTC",
       newId: () => id(next++), onUpdate: ({ state }) => { states.push(state); }, closeWindow,
       onDocumentCheck: checking => { checks.push(checking); }, ...remote });
@@ -200,7 +200,9 @@ describe("a new window takes the document over at once (decision 2.3, CT:186)", 
     only.controller.documentStale();
     await settle();
     expect(only.checks).toEqual([true, false]);
-    expect(only.latest()).toEqual(lost ? { kind: "unavailable" } : { kind: "opened" });
+    // P03 M-P03-10 (К-11 ВР-1): a lost foreground of the working window keeps it opened in recovery, not unavailable.
+    if (lost) expect(only.latest()).toMatchObject({ kind: "opened", recovery: "recovering" });
+    else expect(only.latest()).toEqual({ kind: "opened" });
   });
 
   it("a DOCUMENT_STALE of the live window (a closed card context) keeps it open: its foreground confirms the document", async () => {
@@ -212,9 +214,12 @@ describe("a new window takes the document over at once (decision 2.3, CT:186)", 
     expect(only.latest()).toEqual({ kind: "opened" });
     expect(only.controller.getOpenedAccess()).not.toBeNull();
     expect(only.closeWindow).not.toHaveBeenCalled();
-    // The answer cleared the doubt: a later retry is an ordinary open again.
+    // The answer cleared the doubt. P03 M-P03-10: retry() of an opened window sends nothing (it is the button of
+    // `unavailable`, §4.13), and the next refresh is a foreground again — never a repeated open (п.8б).
     await only.controller.retry();
-    expect(d.bodies()[2]).toEqual(d.bodies()[0]);
+    expect(d.bodies()).toHaveLength(2);
+    await only.controller.foreground();
+    expect(d.bodies()[2]).toEqual({ ...d.bodies()[0], event: "foreground" });
   });
 
   it("after DOCUMENT_STALE the window never sends open for that document again (2.30, QA Н1)", async () => {
@@ -234,26 +239,29 @@ describe("a new window takes the document over at once (decision 2.3, CT:186)", 
     vi.mocked(d.api.open).mockRejectedValueOnce(new EntryApiError("network"));
     first.controller.documentStale();
     await settle();
-    expect(first.latest()).toEqual({ kind: "unavailable" });
-    await first.controller.retry();
+    // P03 M-P03-10 (К-11): the lost check keeps the working window in recovery; its next check is the one foreground of
+    // a show of the window (ВР-4) — the same document, never `event="open"`.
+    expect(first.latest()).toMatchObject({ kind: "opened", recovery: "recovering" });
+    first.controller.setVisible(false); first.controller.setVisible(true);
+    await first.controller.foreground();
     expect(d.bodies().slice(2).map(body => [body.document_id, body.event]))
       .toEqual([[d.bodies()[0].document_id, "foreground"], [d.bodies()[0].document_id, "foreground"]]);
     expect(first.latest()).toEqual({ kind: "replaced" });
     expect(d.server.document).toBe(d.bodies()[1].document_id);
   });
 
-  it("a lost reply to the open repeats the same request", async () => {
+  it("a lost reply to the open is not repeated by this window (P03 п.8б)", async () => {
     const d = device(browserLock());
     const original = vi.mocked(d.api.open).getMockImplementation()!;
     vi.mocked(d.api.open).mockImplementationOnce(async (...args) => { await original(...args); throw new EntryApiError("network"); });
     const only = d.window(); await only.controller.start();
     expect(only.latest()).toEqual({ kind: "unavailable" });
+    // P03 M-P03-10 (п.8б, §4.13 В, AC-99/AC-101): a lost first open is not repeated — neither by the button (blocked
+    // until Я19) nor by a direct retry(); the server's document stays as the one open made it.
     await only.controller.retry();
-    expect(only.latest()).toEqual({ kind: "opened" });
-    expect(d.bodies()[1]).toEqual(d.bodies()[0]);
+    expect(only.latest()).toEqual({ kind: "unavailable" });
+    expect(d.bodies()).toHaveLength(1);
     expect(d.server.epoch).toBe(1);
-    await only.controller.foreground();
-    expect(d.bodies()[2]).toEqual({ ...d.bodies()[0], event: "foreground" });
   });
 
   it("a refused access gives the lock back; a window that lost its document never closes the live one", async () => {

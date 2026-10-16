@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TodayResponse } from "../api/generated";
 import { settingsResponse } from "../settings/settingsRead.test-support";
 import { App } from "./App";
+import { activeButton } from "./gateButton.test-support";
 import { keysOf, openDocument, openRequestKeys, staleRefusal } from "./openRules.test-support";
 import { pageGateOpen } from "./pageGate.test-support";
 
@@ -171,16 +172,20 @@ describe("QA screens before a successful server answer (п.4, RA:344)", () => {
       expect(document.documentElement.lang).toBe(language);
     });
 
-  it("retry after a network loss before the first answer authenticates again and opens Today", async () => {
+  // P03 M-P03-10 (§4.13 В, AC-99/AC-102; P02-W К-5а (г)): a window that never opened a document, with no other
+  // installation's occupancy known, keeps its «Спробувати ще раз» visible and blocked until Я19 — also after ready and
+  // the end of the hold; no sign-in, registration or open leaves by it. The way out is a new launch of the Mini App.
+  it("a network loss before the first answer: the retry is visible and blocked until Я19; nothing is sent by it", async () => {
     const f = fixture("uk", { auth: "network" }); render(<App />);
-    fireEvent.click(await screen.findByRole("button", { name: "Спробувати ще раз" }));
+    const retry = await screen.findByRole("button", { name: "Спробувати ще раз" }) as HTMLButtonElement;
     f.server.auth = "ok";
-    const retry = await screen.findByRole("button", { name: "Спробувати ще раз" });
-    // P03 (L2, M-P03-4): the lost connection closed the page gate; the open of the retry is a write and waits for ready.
     await pageGateOpen();
+    expect(retry.disabled).toBe(true);
     fireEvent.click(retry);
-    await screen.findByRole("heading", { name: "Сьогодні", level: 1 });
-    expect(f.calls("/auth/telegram")).toHaveLength(3);
+    await new Promise(resolve => setTimeout(resolve, 200));
+    expect(screen.queryByRole("heading", { name: "Сьогодні", level: 1 })).toBeNull();
+    expect(f.calls("/auth/telegram")).toHaveLength(1);
+    expect(f.calls("/client/open")).toHaveLength(0);
   });
 
   it("Н4: an expired Telegram login (401 on auth) asks to confirm sign-in again and offers no retry with the same data", async () => {
@@ -304,8 +309,10 @@ describe("M-COMPAT-HDR: the contract version on the wire and the new refusals th
     // The pause is over: the same button sends the same saved command and it goes through. P03 (L2, K13): the 503 closed
     // the page gate with the announced hold, so the press comes after ready and the end of the hold.
     paused = false;
+    // M-P03-10 (K13, C335): meanwhile the button is visible and inactive; it is active again once the gate lets it.
+    expect((screen.getByRole("button", { name: "Подать заявку ещё раз" }) as HTMLButtonElement).disabled).toBe(true);
     await pageGateOpen();
-    fireEvent.click(screen.getByRole("button", { name: "Подать заявку ещё раз" }));
+    fireEvent.click(await activeButton("Подать заявку ещё раз"));
     await screen.findByRole("heading", { name: "Заявка отправлена" });
     const sent = f.calls("/access/reapply").map(call => JSON.parse(String((call[1] as RequestInit).body)).command_id);
     expect(sent).toHaveLength(2); expect(sent[1]).toBe(sent[0]);

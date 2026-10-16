@@ -284,9 +284,26 @@ describe("known refusals of a write (M-COMPAT-HDR)", () => {
       .toMatchObject({ waitSeconds: 5 });
   });
 
-  it.each([-1, 1.5, "7", null, 2 ** 60])("drops a malformed wait_seconds %s", async wait => {
+  it.each([-1, 1.5, "7", null])("drops a malformed wait_seconds %s", async wait => {
     expect(httpError(await refusal({ error: { code: "MAINTENANCE", wait_seconds: wait } }, 503)).pause)
       .toEqual({ waitSeconds: null });
+  });
+
+  // M-P03-9: the shown wait is bounded as send_hold is (§3.5): an integer above 900 shows 900, not nothing.
+  it("clamps a huge wait_seconds to 900 (§3.5)", async () => {
+    expect(httpError(await refusal({ error: { code: "MAINTENANCE", wait_seconds: 2 ** 60 } }, 503)).pause)
+      .toEqual({ waitSeconds: 900 });
+  });
+
+  it("M-P03-9: retry_after_s comes before wait_seconds and Retry-After in the shown wait (§3.2, §3.5)", async () => {
+    expect(httpError(await refusal({ error: { code: "MAINTENANCE", retry_after_s: 30, wait_seconds: 40 } }, 503, { "Retry-After": "50" })).pause)
+      .toEqual({ waitSeconds: 30 });
+    expect(httpError(await refusal({ error: { code: "MAINTENANCE", wait_seconds: 40 } }, 503, { "Retry-After": "50" })).pause)
+      .toEqual({ waitSeconds: 40 });
+    expect(httpError(await refusal({ error: { code: "MAINTENANCE" } }, 503, { "Retry-After": "50" })).pause)
+      .toEqual({ waitSeconds: 50 });
+    expect(httpError(await refusal({ error: { code: "MAINTENANCE", retry_after_s: 1000 } }, 503)).pause)
+      .toEqual({ waitSeconds: 900 });
   });
 
   it("ignores a Retry-After that is a date or negative", async () => {

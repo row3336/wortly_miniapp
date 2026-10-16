@@ -1,3 +1,4 @@
+import type { ForegroundIntent } from "../app/entryController";
 import { useEffect, useMemo, useReducer, useRef, type ReactNode } from "react";
 import type { HttpOptions } from "../api/http";
 import { useBackLayer } from "../app/navigationBack";
@@ -25,7 +26,8 @@ export type WrittenHostOptions = {
   route: "today" | "written" | "hidden";
   onWritten(): void;
   /** Navigation only: a confirmed closure that shows no summary, or an explicit return. */
-  onToday(): void | Promise<void>;
+  /** intent (fix4, П01): only from the screen of a start refused as SESSION_BUSY (startRefusalIntent). */
+  onToday(intent?: ForegroundIntent): void | Promise<void>;
   /**
    * «Уточнить поля» (TA:115, К05-080): push the full card of the answered assignment; it returns to this quiz (M-CARD).
    * Without it the result offers no such button.
@@ -249,6 +251,6 @@ export function useWrittenHost(options: WrittenHostOptions): WrittenHost {
       <button type="button" onClick={() => { void options.settings.actions.refresh(); }}>{t.refresh}</button>
       <button type="button" onClick={() => { void latest.current.onToday(); }}>{t.today}</button>
     </section> : state ? <WrittenScreen state={state} language={options.language} submitOnEnter actions={screenActions}
-      onToday={() => { void latest.current.onToday(); }} onRefineFields={openCard} /> : null,
+      onToday={intent => { void latest.current.onToday(intent); }} onRefineFields={openCard} /> : null,
   };
 }

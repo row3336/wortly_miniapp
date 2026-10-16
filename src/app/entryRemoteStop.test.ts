@@ -8,7 +8,7 @@ import { RemoteStopPendingStore } from "../study/remoteStopPending";
 import { EntryController, type EntrySnapshot } from "./entryController";
 import type { TodayApi } from "../today/todayApi";
 import { ClosedAccessError } from "./openedAccess";
-import { testGate } from "../commands/testGate.test-support";
+import { freshTestGate } from "../commands/testGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const profile = (version = "1"): Profile => ({ profile_id: id(1), role: "user", ui_language: "ru",
@@ -52,7 +52,7 @@ function fixture() {
   const updates: EntrySnapshot[] = [];
   const release = vi.fn();
   const todayApi: TodayApi = { get: vi.fn() };
-  const make = () => new EntryController({ gate: testGate(), api, today: todayApi, remote: { api: remoteApi, pendingStore }, storage,
+  const make = () => new EntryController({ gate: freshTestGate(), api, today: todayApi, remote: { api: remoteApi, pendingStore }, storage,
     lock: { acquire: vi.fn(async () => ({ release })) }, initData: "synthetic-init", savedLanguage: "ru", browserLanguage: "ru",
     clientVersion: "0.0.0", contractVersion: "1", timeZone: () => "UTC", newId: () => id(nextId++),
     onUpdate: snapshot => updates.push(snapshot) });
@@ -233,20 +233,25 @@ describe("Entry remote confirmation integration", () => {
       f.state.busy = false; return accepted(command); // Keep open's profile version older than the command's.
     });
     f.controller.requestRemoteStop(); await f.controller.confirmRemoteStop();
-    expect(f.latest()).toEqual({ kind: "unavailable" });
+    // P03 §4.13 Б: another installation's occupancy was known — the button checks this window's own document.
+    expect(f.latest()).toEqual({ kind: "unavailable", route: "own", checkable: true });
     expect(f.controller.getOpenedAccess()).toBeNull();
+    // After the confirmed stop the window asks with a foreground of its own document, never a new open (AC-106).
+    expect(vi.mocked(f.api.open).mock.calls.at(-1)![2].event).toBe("foreground");
   });
 
   it("retries a failed open after a settled command without rejecting the cached profile or resending", async () => {
     const f = fixture(); await f.controller.start();
     vi.mocked(f.api.open).mockRejectedValueOnce(new ApiError("network"));
     f.controller.requestRemoteStop(); await f.controller.confirmRemoteStop();
-    expect(f.latest()).toEqual({ kind: "unavailable" });
+    expect(f.latest()).toEqual({ kind: "unavailable", route: "own", checkable: true });
     expect(f.values.has("wortly.pending.remote_stop")).toBe(false);
+    // P03 §4.13 Б: the manual check is one foreground of the own document — never `event="open"` (п.8б).
     await f.controller.retry();
     expect(f.latest()).toEqual({ kind: "opened" });
     expect(f.remoteApi.stop).toHaveBeenCalledOnce();
     expect(f.api.auth).toHaveBeenCalledOnce(); expect(f.api.open).toHaveBeenCalledTimes(3);
+    expect(vi.mocked(f.api.open).mock.calls.map(call => call[2].event)).toEqual(["open", "foreground", "foreground"]);
   });
 
   it("disposal while recovering cannot open the app or clear the old intent", async () => {

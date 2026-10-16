@@ -7,6 +7,8 @@ import type { Pair } from "./commandLane";
 import { LaneRecovery, pageSendCounter, type RecoveryIntent, type RecoveryView } from "./laneRecovery";
 import { systemRecoveryClock } from "./recoveryClock";
 import { createdHere, noteCreatedHere } from "./pageOrigin";
+import { laneGate, type LaneGate } from "./gateWait";
+export type { LaneGate } from "./gateWait";
 
 export type DocumentLane = "primary" | "stop";
 export type Credentials = Parameters<Parameters<OpenedAccess["run"]>[0]>[0];
@@ -62,6 +64,13 @@ export type DocumentLanesSnapshot<C> = {
   /** The primary lane holds a study result: it is recovered automatically, never by a manual check or retry. */
   automaticPrimary: boolean;
   closedAction: ClosedAction | null;
+  /**
+   * The write gate for the manual controls of CommandRecovery (P03 §4.1 «Правило кнопки», C335; M-P03-9/10): the check
+   * by ID follows checkButtonActive, a resend of a lane mayWrite of its ID; wait is the cause shown while they wait.
+   */
+  gate?: LaneGate;
+  /** Only the write gate keeps canBegin false now (fix1): a view pauses its timers instead of dropping them. */
+  heldByGate?: boolean;
 };
 export type DocumentLanesOptions<C> = {
   access(): OpenedAccess;
@@ -192,9 +201,19 @@ export class DocumentLanes<C extends LaneState, T extends { kind: string; sessio
     this.controllers = { primary: controller("primary"), stop: controller("stop") };
     // M03 (P03 §5.2): once the gate lets a write through again, a manual intent the gate kept on the client is read by
     // its ID; the lane then offers the same send again («Повторить отправку»). Nothing is sent by this.
-    this.unsubscribeGate = options.transport.gate.subscribe(() => this.readPausedLanes());
+    // The buttons of CommandRecovery follow the gate too (§4.1 «Правило кнопки», C335): each change repaints them.
+    this.unsubscribeGate = options.transport.gate.subscribe(() => {
+      this.readPausedLanes();
+      // Only a change of what the controls show is published: a registration inside a step changes nothing here.
+      const shown = JSON.stringify(this.laneGate());
+      if (shown !== this.shownGate) { this.shownGate = shown; this.emit(); }
+    });
   }
   private readonly unsubscribeGate: () => void;
+  private shownGate = "";
+  private laneGate(): LaneGate {
+    return laneGate(this.options.transport.gate, this.controllers.primary.snapshot(), this.controllers.stop.snapshot());
+  }
   private readPausedLanes(): void {
     if (!this.live()) return;
     for (const lane of ["primary", "stop"] as const) {
@@ -271,9 +290,14 @@ export class DocumentLanes<C extends LaneState, T extends { kind: string; sessio
     const foreign = lane.canRetry && !this.lanePage.has(lane.kind ?? "")
       && !createdHere(this.options.storage, lane.pendingIntent?.command_id);
     const primary = automaticPrimary || foreign ? { ...lane, canRetry: false } : lane;
-    return { live, stateVersion, primary, stop,
-      canBegin: live && !this.refreshing && !this.work.primary && !this.work.stop && ready(primary) && ready(stop) && !this.recovery.busy(),
-      canStop: live && !this.work.stop && ready(stop), recovery: live ? this.recovery.view() : null, automaticPrimary,
+    const gate = this.laneGate();
+    this.shownGate = JSON.stringify(gate);
+    const begin = live && !this.refreshing && !this.work.primary && !this.work.stop && ready(primary) && ready(stop) && !this.recovery.busy();
+    return { live, stateVersion, primary, stop, gate,
+      // §4.1 «Правило кнопки» (K01s start, K03 Stop; C335, M-P03-10): a new action waits for mayWrite — visibly inactive.
+      canBegin: begin && this.options.transport.gate.mayWrite(),
+      heldByGate: begin && !this.options.transport.gate.mayWrite(),
+      canStop: live && !this.work.stop && ready(stop) && this.options.transport.gate.mayWrite(), recovery: live ? this.recovery.view() : null, automaticPrimary,
       closedAction: live ? this.closedActionView(lane, stop) : null };
   }
   private closedActionView(primary: C, stop: C): ClosedAction | null {

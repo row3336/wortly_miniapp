@@ -126,7 +126,7 @@ describe("М20 with a slow API: the timer does not confirm the entry (RA:155)", 
 });
 
 describe("М20 and refusals lead to the entry screens (Д01/Д04)", () => {
-  it("an unavailable entry waits for the end of the assembly, leaves in 700 ms and offers a retry; retry brings no new launch", async () => {
+  it("an unavailable entry waits for the end of the assembly, leaves in 700 ms; its retry is blocked until Я19 and brings no new launch", async () => {
     const f = fixture({ auth: 500 });
     render(<App />);
     await advance(100);
@@ -137,13 +137,17 @@ describe("М20 and refusals lead to the entry screens (Д01/Д04)", () => {
     await advance(LAUNCH_EXIT_MS);
     expect(phase()).toBeNull();
     f.server.auth = "ok";
-    fireEvent.click(screen.getByRole("button", { name: "Попробовать ещё раз" }));
+    // P03 M-P03-10 (§4.13 В, AC-99): the retry of a window that never opened a document is visible and blocked until
+    // Я19; a press sends nothing and brings no new launch.
+    const retry = screen.getByRole("button", { name: "Попробовать ещё раз" }) as HTMLButtonElement;
+    expect(retry.disabled).toBe(true);
+    fireEvent.click(retry);
     await advance(0);
     expect(phase()).toBeNull();
     expect(host().hasAttribute("inert")).toBe(false);
     await advance(50);
-    expect(todayShown()).toBe(true);
-    expect(f.auths()).toBe(2);
+    expect(todayShown()).toBe(false);
+    expect(f.auths()).toBe(1);
   });
 
   it("a pending request is a decided entry too: the access screen after the exit", async () => {

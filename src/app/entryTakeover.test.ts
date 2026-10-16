@@ -11,7 +11,7 @@ import { browserDocumentLock } from "./documentLock";
 import { EntryController } from "./entryController";
 import type { EntryState } from "./entryState";
 import { openDocument, staleDocument, staleRefusal } from "./openRules.test-support";
-import { testGate } from "../commands/testGate.test-support";
+import { freshTestGate } from "../commands/testGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const compatibility = { compatible: true, contract_version: "1" };
@@ -83,9 +83,9 @@ function device(options: { otherSession?: string; locks?: boolean } = {}) {
     const states: EntryState[] = [];
     const closeWindow = vi.fn();
     let controller: EntryController | null = null;
-    const http: HttpOptions = { fetcher: fetcher as unknown as typeof fetch, timeoutMs: 1000, maxResponseBytes: 100000, gate: testGate(),
+    const http: HttpOptions = { fetcher: fetcher as unknown as typeof fetch, timeoutMs: 1000, maxResponseBytes: 100000, gate: freshTestGate(),
       onDocumentStale: () => controller?.documentStale() };
-    controller = new EntryController({ gate: testGate(), api: createEntryApi(http), storage, lock: browserDocumentLock(nav),
+    controller = new EntryController({ gate: freshTestGate(), api: createEntryApi(http), storage, lock: browserDocumentLock(nav),
       remote: { api: createRemoteSessionApi(http), pendingStore: new RemoteStopPendingStore(storage) },
       initData: "signed", savedLanguage: "ru", browserLanguage: "ru", clientVersion: "0.0.0", contractVersion: "1",
       timeZone: () => "UTC", newId: () => id(next++), onUpdate: ({ state }) => { states.push(state); }, closeWindow });

@@ -91,7 +91,9 @@ describe("Written correct result first shown after a full reload (decision 20.1-
     expect(submits(a, commandId)).toHaveLength(1);
   }, 40_000);
 
-  for (const [mode, strict] of cases) it(`a 403 re-entry in the same window keeps waiting for «Далее» as before (${label(mode, strict)})`, async () => {
+  // P03 M-P03-10 (§4.13 В, AC-102): after a 403 (Z5) the retry of the same window is blocked until Я19; the re-entry is a
+  // new launch (the full reload above). The window sends nothing more, its pending answer stays for that launch.
+  for (const [mode, strict] of cases) it(`a 403 in the same window: the retry is blocked, nothing more is sent (${label(mode, strict)})`, async () => {
     const a = app({ cards: [6, 7], transitionMode: mode }); render(tree(strict));
     await startWords();
     loseReply(a, "answer.submit");
@@ -108,19 +110,14 @@ describe("Written correct result first shown after a full reload (decision 20.1-
     fireEvent.click(screen.getByRole("button", { name: "Проверить" }));
     await waitFor(() => expect(a.kinds()).toContain("answer.submit"));
     const commandId = a.posts().find(post => post.kind === "answer.submit")!.command_id as string;
-    const again = await screen.findByRole("button", { name: "Попробовать ещё раз" }, { timeout: 10_000 });
-    // P03 (L2, M-P03-4): the lost reply closed the page gate; the new open of «Попробовать ещё раз» waits for ready.
+    const again = await screen.findByRole("button", { name: "Попробовать ещё раз" }, { timeout: 10_000 }) as HTMLButtonElement;
     await pageGateOpen();
+    const posts = a.posts().length;
+    expect(again.disabled).toBe(true);
     fireEvent.click(again);
-    await screen.findByText("Верно", undefined, { timeout: 10_000 });
-    const before = presents(a);
-    await sleep(4500);
-    expect(screen.queryByText("слово 7")).toBeNull();
-    expect(presents(a)).toBe(before);
-    await tap("Далее");
-    await screen.findByText("слово 7", undefined, exchange);
     await sleep(500);
-    expect(presents(a)).toBe(before + 1);
+    expect(screen.queryByText("Верно")).toBeNull();
+    expect(a.posts()).toHaveLength(posts);
     expect(submits(a, commandId)).toHaveLength(1);
   }, 40_000);
 

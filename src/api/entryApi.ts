@@ -16,10 +16,17 @@ export interface EntryApi {
   auth(request: AuthRequest): Promise<AuthResponse>;
   reapply(token: string, request: ReapplyRequest): Promise<AccessCommandResponse>;
   register(token: string, request: RegisterRequest): Promise<RegisterResponse>;
-  open(token: string, proof: string, request: OpenRequest): Promise<OpenedClient | BusyClient | IncompatibleClient>;
+  /**
+   * hooks (M-P03-10): who asked (L2 п.8 origin) and the gate's stamp of this open (§2 п.3), told right before it leaves;
+   * the entry gives the stamp back to the gate with noteDefinite/noteForbiddenBeforeChange.
+   */
+  open(token: string, proof: string, request: OpenRequest, hooks?: OpenHooks): Promise<OpenedClient | BusyClient | IncompatibleClient>;
 }
 
+export type OpenHooks = { origin?: RequestOrigin; stamped?: (stamp: RequestStamp) => void };
+
 import { ApiError as EntryApiError, createJsonTransport, httpError, type HttpOptions } from "./http";
+import type { RequestOrigin, RequestStamp } from "../commands/writeGate";
 import { exactKeys, uuid } from "./wireValidation";
 export { ApiError as EntryApiError } from "./http";
 
@@ -129,10 +136,12 @@ function validReapply(value: unknown): value is AccessCommandResponse {
 export function createEntryApi(options: FetchOptions): EntryApi {
   const request = createJsonTransport(options);
   async function post<T>(path: string, body: object, valid: (value: unknown) => value is T,
-    token?: string, proof?: string): Promise<T> {
-    const reply = await request(path, { method: "POST", body, token, proof });
+    token?: string, proof?: string, hooks?: OpenHooks): Promise<T> {
+    const reply = await request(path, { method: "POST", body, token, proof, ...hooks });
     if (!reply.ok) throw httpError(reply);
-    if (!valid(reply.value)) throw new EntryApiError("invalid_response");
+    // A decoder refusal names the status it read: the transport's unreadable body has none (P02-W К-11 «Класс отказа»,
+    // ВР-8 against the transport of ВР-1/ВР-9).
+    if (!valid(reply.value)) throw new EntryApiError("invalid_response", reply.status);
     return reply.value;
   }
 
@@ -140,6 +149,6 @@ export function createEntryApi(options: FetchOptions): EntryApi {
     auth: (request) => post("/auth/telegram", request, validAuth),
     reapply: (token, request) => post("/access/reapply", request, validReapply, token),
     register: (token, request) => post("/client/register", request, validRegister, token),
-    open: (token, proof, request) => post("/client/open", request, validOpen, token, proof),
+    open: (token, proof, request, hooks) => post("/client/open", request, validOpen, token, proof, hooks),
   };
 }

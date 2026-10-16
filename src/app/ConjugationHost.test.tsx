@@ -77,7 +77,7 @@ function setup(options: Options = {}) {
     const value = useConjugationHost({ access, transport, stores, newId: model.newId, language: "ru", settings,
       initialSessionId: seed, seedPending: options.seedPending ?? false, route,
       onConjugation: () => { onConjugation(); if (!options.holdRoute) update("conjugation"); },
-      onToday: () => { onToday(); update("today"); } });
+      onToday: intent => { onToday(intent); update("today"); } });
     host.current = value;
     return <>{value.screen}{route === "today" && <p data-testid="today">{value.blocksToday ? "held" : "shown"}</p>}</>;
   }
@@ -283,8 +283,9 @@ describe.each([["StrictMode", true], ["plain render", false]])("useConjugationHo
       await editable();
     });
 
-    // pending owner answer 5.1.1 (D-CONJ-HOST): TEMPORARY expectation. The screen of a refused start stays as the module
-    // shows it and nothing leaves by itself; only native Back returns to Today (C085). Replace once the owner chooses.
+    // Q29 (owner's answer 12.10, variant 1; was «5.1.1» of D-CONJ-HOST): the screen of a refused start stays as the module
+    // shows it and nothing leaves by itself; only native Back returns to Today (C085). fix5 (C388): that Back names the
+    // shown refusal for the П01 episode — the command_id of the start refused SESSION_BUSY, nothing for any other code.
     it.each([["NO_MATERIAL", "Не удалось обновить занятие."], ["SETUP_REQUIRED", "Не удалось обновить занятие."],
       ["SESSION_BUSY", "Занятие открыто на другом устройстве"], ["SESSION_CLOSED", "Занятие завершено."]])(
       "H5 a refused start (%s) stays on the module's screen; Back returns to Today once and the host does not take it back", async (code, text) => {
@@ -299,6 +300,7 @@ describe.each([["StrictMode", true], ["plain render", false]])("useConjugationHo
         await h.back.click();
         await macrotasks();
         expect(h.onToday).toHaveBeenCalledOnce();
+        expect(h.onToday).toHaveBeenCalledWith(code === "SESSION_BUSY" ? { startRefused: h.starts()[0].command_id } : undefined);
         expect(screen.getByTestId("today").textContent).toBe("shown");
         // No claim of the refused session: the route stays on Today, nothing is cleared, cancelled or started again.
         expect(h.onConjugation).toHaveBeenCalledOnce(); expect(h.model.posted).toHaveLength(1);

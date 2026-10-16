@@ -211,6 +211,12 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
   /** The last action whose automatic recovery this view has shown; each is shown once. */
   private recoveredCommand: string | null = null;
   /**
+   * fix6 (C393): the step without a projection each lane last gave this view. Since M-P03-9/10 the lanes also emit when
+   * only the write gate changed; such an update carries the same step again, and taking it again would undo what the view
+   * did after it (a refused start read back to idle would turn stale again, its «На Сегодня» and Back gone).
+   */
+  private seenSteps: { primary: string | null; stop: string | null } = { primary: null, stop: null };
+  /**
    * This view's session as the server showed it open in another pair before any projection of this pair (R1: the pair
    * changed elsewhere and the server started the session there). Nothing of it is shown; a projection of this pair ends it.
    */
@@ -296,6 +302,8 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
     this.options.onUpdate(this.snapshot());
   }
   protected cancelTimer(): void { this.timer.cancel(); }
+  /** The result timer was paused only by the write gate (fix1): the next update with canBegin arms it again. */
+  private timerHeld = false;
   /** Every action this view creates is one of its mode's transitions. */
   protected begin(action: object): Promise<void> { return this.commands.begin(action as never); }
   private setQuestion(assignment: PublicAssignment): void {
@@ -389,14 +397,31 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
       // Outside this update: a read starts from here.
       void Promise.resolve().then(() => this.refresh());
     }
-    this.capture(state.primary.current, state.primary.stateVersion);
-    this.capture(state.stop.current, state.stop.stateVersion);
+    for (const lane of ["primary", "stop"] as const) {
+      const { current, stateVersion } = state[lane];
+      // Only a step without a projection (unavailable / not_found of a session) is taken once: it resets the view to stale.
+      // Projections are taken on every update, as before (their closure, pair and version rules decide).
+      if (current && !("pair" in current)) {
+        const key = JSON.stringify([current, stateVersion]);
+        if (key === this.seenSteps[lane]) continue;
+        this.seenSteps[lane] = key;
+      }
+      this.capture(current, stateVersion);
+    }
     this.trackStart(state);
     const closure = this.closure(state);
     if (closure) this.close(this.sessionId!, closure.reason);
     else if (!this.is("closed")) {
       this.laneForeign(state);
-      if (!state.canBegin) this.cancelTimer();
+      // fix1 (QA-Q2): a write gate that holds only for a moment pauses the result timer (its deadline kept) and the next
+      // update after the gate lets writes through again arms it with the rest; any other reason drops it, as before.
+      if (!state.canBegin && state.heldByGate) {
+        if (this.timer.view()) { this.timer.pause(); this.timerHeld = true; }
+      } else if (!state.canBegin) { this.timerHeld = false; this.cancelTimer(); }
+      else if (this.timerHeld) {
+        this.timerHeld = false;
+        void Promise.resolve().then(() => { if (this.live()) this.armTimer(); });
+      }
       if (state.stop.pending && state.stop.outcome === null) this.phase = "stopping";
       else if (this.is("stopping") && state.stop.outcome === "rejected") {
         this.phase = "stale"; this.problem = state.stop.rejectionCode ?? "stop_rejected";

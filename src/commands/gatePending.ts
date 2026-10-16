@@ -50,6 +50,11 @@ export class GatePending {
    * checkButtonActive — a family lock of the held ID never keeps it, since this read is what lifts that lock (R5, C335).
    */
   checkable(): boolean { return this.gate.checkButtonActive(); }
+  /**
+   * fix3 (П01): the direct reply of this owner's POST session.start was a definite refusal SESSION_BUSY — the gate may
+   * attribute the «На Сегодня» that follows to that episode (TZA 12.1). Never after a readback or a restored record.
+   */
+  startRefusedBusy(commandId: string): void { this.gate.noteStartBusy(commandId); }
   /** I9: a manual send of commandId (or a new action) is allowed by the gate right now. */
   writable(commandId?: string): boolean { return this.gate.mayWrite(commandId); }
 }

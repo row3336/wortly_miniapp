@@ -166,7 +166,7 @@ export function LearningScreen({ state, language, submitOnEnter, actions, render
     {state.phase === "unknown" && !state.question && !unknownAnswer && !result && <p role="status">{t.unknown}</p>}
     {problem && !isClosed && <p role="status">{problem}</p>}
     {showRecovery && <CommandRecovery className="learning-recovery" language={language} lanes={manualLanes} localOnly={localOnly}
-      canRetryPrimary={state.canRetryPrimary} canRetryStop={stop.canRetry}
+      canRetryPrimary={state.canRetryPrimary} canRetryStop={stop.canRetry} gate={state.commands.gate}
       onCheck={() => { void (localOnly ? actions.cleanup() : actions.refresh()); }} onRetry={lane => { void actions.retry(lane); }} />}
     {recovering && <RecoveryOverlay screen={recovering} language={language} canEnd={state.canStop}
       onEnd={() => { if (state.canStop) void actions.stop("stop"); }} />}

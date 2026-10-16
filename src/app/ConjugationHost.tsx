@@ -1,3 +1,5 @@
+import { startRefusalIntent } from "../commands/startRefusal";
+import type { ForegroundIntent } from "./entryController";
 import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, type ReactNode } from "react";
 import type { HttpOptions } from "../api/http";
 import { acceptedForeignStart } from "../commands/foreignStart";
@@ -30,7 +32,8 @@ export type ConjugationHostOptions = {
   route: "today" | "conjugation" | "hidden";
   onConjugation(): void;
   /** Navigation only: a summary_home closure, an explicit return or nothing left to show. */
-  onToday(): void | Promise<void>;
+  /** intent (fix4, П01): only from the screen of a start refused as SESSION_BUSY (startRefusalIntent). */
+  onToday(intent?: ForegroundIntent): void | Promise<void>;
   /**
    * Answer 17.1-А (R1): this owner's accepted start made a session the server holds open in another pair. The document
    * refreshes its access once per such session and goes into it; the owner only reports it.
@@ -110,13 +113,13 @@ export function useConjugationHost(options: ConjugationHostOptions): Conjugation
   if (state && state.phase !== "loading" && state.phase !== "disposed") bound.recovered = true;
 
   // Every way to Today leaves once per session: the flow's own (summary_home, «На Сегодня») and this host's.
-  const leave = useRef((sessionId: string | null) => {
+  const leave = useRef((sessionId: string | null, intent?: ForegroundIntent) => {
     const owner = lifetime.current;
     if (owner && sessionId !== null) {
       if (owner.notified.has(sessionId)) return;
       owner.notified.add(sessionId);
     }
-    void latest.current.onToday();
+    void latest.current.onToday(intent);
   });
   // One flow for the hook's lifetime: its actions are stable and always reach the current document owner.
   // StrictMode runs the effect cleanup on a flow that stays in use; a disposed flow is final, so the effect replaces it.
@@ -180,8 +183,8 @@ export function useConjugationHost(options: ConjugationHostOptions): Conjugation
       return;
     }
     if (current.route !== "conjugation") return;
-    // pending owner answer 5.1.1 (D-CONJ-HOST): a refused start stays on the conjugation screen as the module shows it;
-    // this host adds no navigation or text for it until the owner chooses.
+    // Q29 (owner's answer 12.10, variant 1; was «5.1.1» of D-CONJ-HOST): a refused start stays on the conjugation screen
+    // as the module shows it, until the person leaves it (Back below); this host adds no automatic return and no text.
     const sessionId = state.sessionId?.toLowerCase() ?? null;
     if (state.phase === "closed" && leavesToToday(state.closed?.reason ?? null)) {
       leave.current(sessionId);
@@ -196,7 +199,7 @@ export function useConjugationHost(options: ConjugationHostOptions): Conjugation
 
   // While the own start is on its way the selected session has no projection yet, which the module shows as a failed
   // refresh. The flow sees no snapshot then, so the screen loads (TA табл. 4.1; D-CONJ-HOST 3.6.3, H4). A refused start
-  // still reaches the screen afterwards, as the module shows it (5.1.1 above).
+  // still reaches the screen afterwards, as the module shows it (Q29 above).
   const masked = seedPending || bound.starting;
   const input: FlowInput = { source: { tuple: flowTuple(access), access }, state: masked ? null : state,
     transitionMode, active: enabled };
@@ -212,9 +215,10 @@ export function useConjugationHost(options: ConjugationHostOptions): Conjugation
     if (view.screen === "summary" && view.canHome) back = () => flow.home();
     else if (view.screen !== "closed" && view.canStop) back = () => flow.stop();
     else if (view.screen === "closed") back = () => flow.today();
-    // pending owner answer 5.1.1 (D-CONJ-HOST): only an explicit Back leaves a refused start (C085); the screen itself,
-    // an automatic return and its wording stay as the module has them. It clears nothing and sends nothing.
-    else if (refusedStart) back = () => leave.current(state.sessionId?.toLowerCase() ?? null);
+    // Q29 (was «5.1.1»): only an explicit Back leaves a refused start (C085); the screen and its wording stay as the module
+    // has them, and nothing returns by itself. fix5 (C388): this Back is the exit of the shown refusal, so it names that
+    // command (startRefusalIntent: SESSION_BUSY only) — the П01 episode of exactly it, as the «На Сегодня» of the other modes.
+    else if (refusedStart) back = () => leave.current(state.sessionId?.toLowerCase() ?? null, startRefusalIntent(study));
     else if (awaitingStop) back = () => {};
   }
   useBackLayer("screen", back);

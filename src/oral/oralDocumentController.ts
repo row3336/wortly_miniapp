@@ -1,3 +1,4 @@
+import { laneGate, type LaneGate } from "../commands/gateWait";
 import type { OralSessionProjection } from "../api/generated";
 import { ApiError, type HttpOptions } from "../api/http";
 import { sameId, uuid, version } from "../api/wireValidation";
@@ -32,6 +33,8 @@ export type OralDocumentSnapshot = {
   presentationTicket: OralPresentationTicket | null;
   canStart: boolean; canReveal: boolean; canGrade: boolean; canStop: boolean; canSummaryHome: boolean;
   canRetry: Record<OralCommandLane, boolean>;
+  /** The write gate of the manual controls (C335; M-P03-10): «Проверить» and the resends wait for it, visibly. */
+  gate?: LaneGate;
   closed: OralClosed | null;
   /**
    * The own session the server proved open in another pair (a read or a reply not below the floor): a fact about the
@@ -135,8 +138,14 @@ export class OralDocumentController {
       },
     });
     this.commands = { study: make("study"), stop: make("stop") };
-    this.unsubscribeGate = options.transport.gate.subscribe(() => this.readPausedLanes());
+    this.unsubscribeGate = options.transport.gate.subscribe(() => {
+      this.readPausedLanes();
+      // The manual controls follow the gate: only a change of what they show is published.
+      const shown = JSON.stringify(laneGate(options.transport.gate, this.commands.study.snapshot(), this.commands.stop.snapshot()));
+      if (shown !== this.shownGate) { this.shownGate = shown; this.emit(); }
+    });
   }
+  private shownGate = "";
   private live(): boolean {
     return !this.disposed && (this.options.isLive?.() ?? true) && this.options.access.isLive()
       && this.options.access.profile.access.status === "admitted";
@@ -267,7 +276,9 @@ export class OralDocumentController {
     const checkedAbsent = live && onlyCheckedAbsent([commands.study, commands.stop],
       this.problem ?? (foreignReceipt ? "unconfirmed_session" : null) ?? busyRefusal(commands));
     const right = this.stopRight;
-    const canStop = this.active("stop") && stopReady && !closed && !!right
+    // §4.1 «Правило кнопки» (K01s, K03, K05; C335, M-P03-10): every manual mutation of the screen waits for mayWrite.
+    const writable = this.options.transport.gate.mayWrite();
+    const canStop = this.active("stop") && stopReady && !closed && !!right && writable
       && BigInt(right.version) >= BigInt(this.floor) && !!this.sessionId && sameId(right.sessionId, this.sessionId);
     const assignment = current?.status === "active" ? current.assignment : null;
     if (!current || assignment?.status !== "prefetched" || !this.active("study") || !studyReady || !stopReady) this.ticket = null;
@@ -294,11 +305,11 @@ export class OralDocumentController {
         ?? commands.stop.problem ?? busyRefusal(commands) ?? this.problem
         ?? (foreignReceipt ? "unconfirmed_session" : null) : null,
       presentationTicket: live ? this.ticket : null,
-      canStart: this.active("study") && this.recovered && !this.refreshing && studyReady && stopReady
+      canStart: this.active("study") && writable && this.recovered && !this.refreshing && studyReady && stopReady
         && !foreignHistory && (!this.sessionId || closed),
-      canReveal: this.active("study") && studyReady && stopReady && !foreignReceipt && assignment?.status === "presented"
+      canReveal: this.active("study") && writable && studyReady && stopReady && !foreignReceipt && assignment?.status === "presented"
         && !assignment.revealed && sameId(current!.capabilities.reveal_target, assignment.id),
-      canGrade: this.active("study") && studyReady && stopReady && !foreignReceipt && assignment?.status === "presented"
+      canGrade: this.active("study") && writable && studyReady && stopReady && !foreignReceipt && assignment?.status === "presented"
         && assignment.revealed && sameId(current!.capabilities.grade_target, assignment.id),
       canStop: canStop && !!right?.stop, canSummaryHome: canStop && !!right?.home,
       // Decision 2.3 А: a study action of another window or of the page before a reload is only checked, never retried
@@ -306,6 +317,7 @@ export class OralDocumentController {
       canRetry: { study: this.active("study") && commands.study.canRetry
         && this.options.studyStore.created(commands.study.pendingIntent?.command_id),
         stop: this.active("stop") && commands.stop.canRetry },
+      gate: laneGate(this.options.transport.gate, commands.study, commands.stop),
       closed: live && closed ? this.closedSnapshot(this.sessionId!) : null,
       pairMismatch: live && !closed && this.mismatch !== null && !!this.sessionId && sameId(this.mismatch, this.sessionId)
         ? this.mismatch : null,

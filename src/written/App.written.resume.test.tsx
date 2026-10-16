@@ -1,6 +1,6 @@
 // Resuming a written session after a relaunch and the busy chain (В02), moved from the independent QA of M-WCORR CP2 (QA2-02…06, QA2-08).
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { App } from "../app/App";
 import { app, answer, compatibility, dropRequest, exchange, field, loseReply, offlineStudy, pairText, requests, row, startWords,
   useWrittenAppEnvironment } from "./writtenApp.test-support";
@@ -166,5 +166,73 @@ describe("Written start refused as SESSION_BUSY (В02)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Завершить занятие" }));
     await screen.findByText(pairText);
     expect(a.kinds()).toEqual(["session.start", "session.stop_remote"]);
+  });
+});
+
+describe("fix3 (C382): П01 through the real App — the lost reply of the confirmed stop is read by its own ID", () => {
+  it("a definite SESSION_BUSY of the own start → «На Сегодня» → Stop applied, reply lost → «Проверить результат»: one GET, no second POST", async () => {
+    const a = app({ refuseStart: "SESSION_BUSY" }), other = id(60), remote = { busy: false };
+    const base = a.fetcher.getMockImplementation()!;
+    let stopId: string | null = null;
+    a.fetcher.mockImplementation(async (url, init) => {
+      const path = new URL(String(url), "http://localhost").pathname, body = init?.body ? JSON.parse(String(init.body)) : null;
+      if (path.endsWith("/client/open") && remote.busy) return response({ status: "SESSION_BUSY", profile: profile(String(a.server.state.version)),
+        compatibility, session: { status: "busy", stop_remote_target: other } });
+      if (path.endsWith("/commands") && body?.kind === "session.stop_remote") {
+        remote.busy = false; a.server.state.version++; stopId = body.command_id;
+        throw new TypeError("network"); // the server applied the stop; its reply is lost
+      }
+      if (stopId && path.endsWith(`/commands/${stopId}`)) {
+        return response({ command: { id: stopId, kind: "session.stop_remote", status: "already_applied", target_id: other,
+          applied_at: "2026-10-05T12:00:00Z", action_id: null, result_id: null, context_id: null, object_version: null },
+        current: { session_id: other, status: "closed", close_reason: "remote_stop" }, state_version: String(a.server.state.version) });
+      }
+      return base(url, init);
+    });
+    render(<App />);
+    await screen.findByText(pairText);
+    await waitFor(() => expect(row(/Слова: перевод на немецкий/).disabled).toBe(false));
+    remote.busy = true;
+    fireEvent.click(row(/Слова: перевод на немецкий/));
+    await screen.findByText("Занятие открыто на другом устройстве");
+    fireEvent.click(screen.getByRole("button", { name: "На Сегодня" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Завершить занятие на другом устройстве" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Завершить занятие" }));
+    const check = await screen.findByRole("button", { name: "Проверить результат" }, exchange);
+    await waitFor(() => expect((check as HTMLButtonElement).disabled).toBe(false), exchange);
+    fireEvent.click(check);
+    await screen.findByText(pairText, undefined, exchange);
+    const reads = a.fetcher.mock.calls.filter(([url, init]) => (init?.method ?? "GET") === "GET" && String(url).includes(`/commands/${stopId}`));
+    expect(reads).toHaveLength(1);
+    expect(a.kinds().filter(kind => kind === "session.stop_remote")).toHaveLength(1);
+    expect(localStorage.getItem("wortly.pending.remote_stop")).toBeNull();
+  });
+});
+
+describe("fix4 (C382): only the «На Сегодня» of the refusal screen spends the П01 episode", () => {
+  it("native Back from the same refusal (a generic return to Today, no П01): the window closes by N14 (C388) — no Stop, 0 requests after", async () => {
+    const a = app({ refuseStart: "SESSION_BUSY" }), other = id(60), remote = { busy: false };
+    const base = a.fetcher.getMockImplementation()!;
+    a.fetcher.mockImplementation(async (url, init) => {
+      const path = new URL(String(url), "http://localhost").pathname;
+      if (path.endsWith("/client/open") && remote.busy) return response({ status: "SESSION_BUSY", profile: profile(String(a.server.state.version)),
+        compatibility, session: { status: "busy", stop_remote_target: other } });
+      return base(url, init);
+    });
+    render(<App />);
+    await screen.findByText(pairText);
+    await waitFor(() => expect(row(/Слова: перевод на немецкий/).disabled).toBe(false));
+    remote.busy = true;
+    fireEvent.click(row(/Слова: перевод на немецкий/));
+    await screen.findByText("Занятие открыто на другом устройстве");
+    await a.back.click(); // the native Back: a return to Today, not the refusal screen's «На Сегодня»
+    await screen.findByText("Wortly уже открыт", undefined, exchange);
+    expect(screen.queryByRole("button", { name: "Завершить занятие на другом устройстве" })).toBeNull();
+    const count = a.fetcher.mock.calls.length;
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    fireEvent(document, new Event("visibilitychange")); fireEvent(window, new Event("pageshow"));
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 300)); });
+    expect(a.fetcher.mock.calls.length).toBe(count);
+    expect(a.kinds()).toEqual(["session.start"]);
   });
 });

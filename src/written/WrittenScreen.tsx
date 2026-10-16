@@ -1,3 +1,5 @@
+import { startRefusalIntent } from "../commands/startRefusal";
+import type { ForegroundIntent } from "../app/entryController";
 import { useRef } from "react";
 import type { Language } from "../i18n/language";
 import { recoveryCopy } from "../commands/commandCopy";
@@ -19,7 +21,8 @@ export type WrittenScreenProps = {
   submitOnEnter: boolean;
   actions: WrittenActions;
   /** Navigation only: leaves an already closed session of this owner for Today. */
-  onToday(): void;
+  /** intent (fix4, П01): the «На Сегодня» of a start refused as SESSION_BUSY carries startRefusalIntent. */
+  onToday(intent?: ForegroundIntent): void;
   /** «Уточнить поля» (TA:115, К05-080): opens the full card of the answered assignment; the card returns to this quiz. */
   onRefineFields?(cardId: string, assignmentId: string): void;
 };
@@ -178,10 +181,11 @@ export function WrittenScreen({ state, language, submitOnEnter, actions, onToday
     {state.phase === "unknown" && !state.question && !unknownAnswer && !result && <p role="status">{t.unknown}</p>}
     {problem && !isClosed && <p role="status">{problem}</p>}
     {showRecovery && <CommandRecovery className="written-recovery" language={language} lanes={manualLanes} localOnly={localOnly}
-      canRetryPrimary={state.canRetryPrimary} canRetryStop={stop.canRetry}
+      canRetryPrimary={state.canRetryPrimary} canRetryStop={stop.canRetry} gate={state.commands.gate}
       onCheck={() => { void (localOnly ? actions.cleanup() : actions.refresh()); }} onRetry={lane => { void actions.retry(lane); }} />}
     {recovering && <RecoveryOverlay screen={recovering} language={language} canEnd={state.canStop}
       onEnd={() => { if (state.canStop) void actions.stop("stop"); }} />}
-    {(state.phase === "idle" && !unresolved || summaryFailed || undecided) && <button type="button" className="written-today" onClick={onToday}>{t.today}</button>}
+    {(state.phase === "idle" && !unresolved || summaryFailed || undecided) && <button type="button" className="written-today"
+      onClick={() => onToday(startRefusalIntent(primary))}>{t.today}</button>}
   </main>;
 }

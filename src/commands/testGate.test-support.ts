@@ -24,6 +24,12 @@ const shared = new OpenTestGate({ clock: new ManualClock() });
 
 export function testGate(): WriteGate { return shared; }
 
+/**
+ * A gate of its own for one EntryController of a test (M-P03-10): the entry reports its document, its open attempts
+ * (п.8б) and its identity lock to the gate, so two controllers of one file must never share one. Never shut, as above.
+ */
+export function freshTestGate(): WriteGate { return new OpenTestGate({ clock: new ManualClock() }); }
+
 /** A command status read of a test with the one-shot ticket of the shared test gate (R6). */
 export function withTicket<T>(intent: { command_id: string }, read: (ticket: ReadbackTicket) => Promise<T>): Promise<T> {
   return shared.runReadback(intent.command_id, read);

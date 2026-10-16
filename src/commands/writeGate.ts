@@ -85,9 +85,44 @@ export type GateSnapshot = {
   seriesIndex: number;
   probeScheduled: boolean;
   probeInFlight: boolean;
+  openAttempts: readonly string[];
+  retryAfter403Doc: string | null;
+  lastRecoveryForegroundSentAt: number | null;
+  recoveryForegroundInFlight: boolean;
+  remoteReadContext: boolean;
 };
 
-export type AdmitRequest = { method: string; path: string; body?: unknown; readbackTicket?: ReadbackTicket };
+/**
+ * Who asked for a request (L2 п.8, `Request.origin`): a press of the user, or the client itself (a timer, `ready`, a
+ * shown window, a late answer). Only the K-5 requests read it (п.8а); until Я19 they are refused whatever the origin.
+ */
+export type RequestOrigin = "user" | "auto";
+
+export type AdmitRequest = { method: string; path: string; body?: unknown; readbackTicket?: ReadbackTicket; origin?: RequestOrigin };
+
+/**
+ * The stamp the transport puts on every admitted request (§2 п.3, M-P03-10): an opaque requestId unique on the page, the
+ * document_id of the request (from its body or its query) and the episode at the moment it left. A decoder gives it
+ * back with noteDefinite/resolvePending; a stamp of another request, document or episode changes nothing (AC-89, AC-95).
+ */
+export type RequestStamp = { readonly requestId: string; readonly documentId: string | null; readonly episode: number | null };
+
+/**
+ * K-5 (the explicit return of work: the marker, `open` with `return_marker`, `/client/window-return`) stays off until the
+ * owner approves the server contract Я19 (§4.1 п.8, [ЗАВ-Я19]). A constant of the build, with no setter: the stub
+ * refuses every K-5 request (`k5_denied`) whatever else holds; the other conditions of п.8а are not evaluated before Я19.
+ */
+export const YA19_CONTRACT_APPROVED = false as const;
+
+/**
+ * R10 (§4.11, ред.20): the narrow context in which the owner of the page's own `session.stop_remote` may read its status in
+ * `busy`/`remote` without an `opened`. The entry makes it after a valid current SESSION_BUSY; it is no `gateDoc`, no
+ * `lastWorkingDoc` and no `openedAccess`, and it gives no other right.
+ */
+export interface RemoteReadContext { readonly remoteReadContext: true }
+
+/** fix3: the П01 episode — a definite SESSION_BUSY of this page's own session.start for its working document. */
+export interface P01Episode { readonly p01: true; readonly doc: GateDoc; readonly commandId: string }
 
 export type WriteGateOptions = {
   clock?: RecoveryClock;
@@ -115,7 +150,18 @@ function probeDelay(index: number): number {
   return PROBE_DELAYS_MS[Math.min(Math.max(index, 1), PROBE_DELAYS_MS.length) - 1];
 }
 
-type Deferred = { commandId: string; start: () => void; cancel: (reason: PausedReason) => void };
+type Deferred = { commandId: string; start: () => void; cancel: (reason: PausedReason) => void; remote?: RemoteReadContext };
+type Issued = { commandId: string; doc: GateDoc | null; remote?: { context: RemoteReadContext; registration: object } };
+
+/** The anti-flapping threshold of a shown window (§2 «Антифлаппинг»): ≥ 5 s from the last recovery foreground sent. */
+const SHOW_FOREGROUND_GAP_MS = 5_000;
+
+function documentIdOf(path: string, body: Record<string, unknown> | undefined): string | null {
+  if (typeof body?.document_id === "string") return body.document_id;
+  const query = path.split("?", 2)[1];
+  if (!query) return null;
+  try { return new URLSearchParams(query).get("document_id"); } catch { return null; }
+}
 type Lock = { doc: GateDoc; phase: "verifying" | "readback"; round: Map<string, string> };
 
 export class WriteGate {
@@ -128,7 +174,11 @@ export class WriteGate {
   private holdUntil: number | null = null;
   private holdTimer: RecoveryTimer | null = null;
 
-  private episode: { id: number } | null = null;
+  /**
+   * The episode of a failure (§2); withPending: begun while a registered pending had no definite answer; anchor: the
+   * command whose request failed (§2 п.1) — or, when a foreground or a projection read failed, the first registered one.
+   */
+  private episode: { id: number; withPending: boolean; anchor: string | null } | null = null;
   private episodes = 0;
   private seriesIndex = 0;
   private seriesTimer: RecoveryTimer | null = null;
@@ -148,13 +198,33 @@ export class WriteGate {
   private disposed = false;
 
   private readonly registry = new Map<string, { family: string; resolved: boolean }>();
-  private readonly tickets = new Map<ReadbackTicket, { commandId: string; doc: GateDoc | null }>();
+  private readonly tickets = new Map<ReadbackTicket, Issued>();
   private deferred: Deferred[] = [];
+
+  /** §2 openAttempts: every document_id whose `event="open"` L2 has already checked (sent or refused). */
+  private readonly openAttempts = new Set<string>();
+  /** §2 retryAfter403Doc: the one-shot allowance of one repeat of `open` after a definite 403 FORBIDDEN (п.8б (5)). */
+  private retryAfter403Doc: string | null = null;
+  /** The stamps of the requests this gate let go (§2 п.3), the most recent ones only. */
+  private readonly stamps = new Map<string, RequestStamp>();
+  private stampSequence = 0;
+  /** §2 «Антифлаппинг»: when the last recovery foreground of any source was sent in this episode; one in flight at most. */
+  private lastRecoveryForegroundSentAt: number | null = null;
+  private recoveryForegroundInFlight = false;
+  /** fix3: the П01 episode of a definite SESSION_BUSY of the page's own start, and the last command this gate let go. */
+  private p01: P01Episode | null = null;
+  private lastCommand: { commandId: string; documentId: string | null } | null = null;
+  /** R10: the live context of the own stop_remote readback in busy/remote, and its readbacks a hidden window holds back. */
+  private remote: RemoteReadContext | null = null;
+  private remoteDeferred: Deferred[] = [];
+  /** The page started closed by the outage mark (§4.4, T28s): its first `open` waits for mayWrite (§4.10, R1). */
+  readonly outageAtStart: boolean;
 
   constructor(options: WriteGateOptions = {}) {
     this.clock = options.clock ?? systemRecoveryClock;
     this.freshReadyMs = options.freshReadyMs ?? FRESH_READY_MS;
     this.probe = options.probe ?? null;
+    this.outageAtStart = !!options.outage;
     if (options.outage) {
       this.net = { kind: "closed", cause: "unknown" };
       this.extendHoldBy(options.outage.retryAfterS ?? null);
@@ -177,6 +247,18 @@ export class WriteGate {
     return (this.access !== "untracked" ? this.access : null) ?? this.lastWorkingDoc;
   }
 
+  /**
+   * The entry of the page reports its document from now on (noteOpened/noteAccessLost, M-P03-10 with R10): until its
+   * first confirmed `opened` no ordinary readback ticket is given (R2, R8 п.5). A gate nobody tracks (an owner's unit
+   * test) keeps giving tickets by its locks only.
+   */
+  trackAccess(): void { if (this.access === "untracked") this.access = null; }
+
+  /** Whole seconds left of the announced hold: null if none was ever announced, 0 once it passed (§4.8 maintenanceOver). */
+  holdRemainingS(): number | null {
+    return this.holdUntil === null ? null : Math.max(0, Math.ceil((this.holdUntil - this.clock.now()) / 1_000));
+  }
+
   holdActive(): boolean { return this.holdUntil !== null && this.clock.now() < this.holdUntil; }
 
   /**
@@ -185,7 +267,8 @@ export class WriteGate {
    * settles them (Z4, R5). The «no recovery foreground in flight» part belongs to the entry (M-P03-10).
    */
   checkButtonActive(): boolean {
-    return !this.closedWindow && !this.disposed && this.net.kind === "open" && !this.holdActive();
+    return !this.closedWindow && !this.disposed && this.net.kind === "open" && !this.holdActive()
+      && !this.recoveryForegroundInFlight;
   }
 
   /** mayWrite(req) = net=open ∧ hold over ∧ no identity lock of gateDoc ∧ ID not family-locked ∧ window not closed. */
@@ -218,20 +301,164 @@ export class WriteGate {
       || route === "/client/open" && body !== undefined && Object.hasOwn(body, "return_marker") && body.return_marker !== undefined) {
       return "k5_denied";
     }
+    // п.8б: a repeated `event="open"` without a marker — a retry() of the same document — is refused whatever its
+    // origin, mayWrite or locks; any `event="open"` is refused once the page has a document of reference (gateDoc).
+    // The first check of a document_id records it, before every other condition (§2 openAttempts).
+    if (route === "/client/open" && request.method === "POST" && body?.event === "open") {
+      const documentId = typeof body.document_id === "string" ? body.document_id : null;
+      const repeated = documentId === null || this.openAttempts.has(documentId);
+      if (documentId !== null) this.openAttempts.add(documentId);
+      const allowance = repeated && documentId !== null && this.retryAfter403Doc === documentId;
+      if (allowance) this.retryAfter403Doc = null; // spent by this check, sent or not (§2)
+      if (this.gateDoc() !== null) return "k5_denied";
+      if (repeated && !allowance && !YA19_CONTRACT_APPROVED) return "k5_denied";
+      return this.mayWrite() ? null : "paused";
+    }
     const routeClass = Object.hasOwn(POST_ROUTES, route) ? POST_ROUTES[route] : "gated";
     if (request.method === "POST" && routeClass === "exception") return null;
     if (request.method === "POST" && routeClass === "foreground_only" && body?.event === "foreground") return null;
     const commandId = typeof body?.command_id === "string" ? body.command_id : undefined;
-    return this.mayWrite(commandId) ? null : "paused";
+    if (!this.mayWrite(commandId)) return "paused";
+    if (request.method === "POST" && route === "/commands" && commandId !== undefined) {
+      // fix3 (П01): the command this page is about to send; any newer action ends a П01 episode of an earlier refusal.
+      this.p01 = null;
+      this.lastCommand = { commandId, documentId: typeof body?.document_id === "string" ? body.document_id : null };
+    }
+    return null;
   }
+
+  // ---- fix3: the П01 episode — a definite SESSION_BUSY of this page's own session.start (TZA 12.1, В4) ----
+
+  /**
+   * The decoder of the direct reply of POST /commands session.start read a definite refusal SESSION_BUSY (not a readback,
+   * not a restored record): the П01 episode of the working document begins. Only for the command this gate let go last,
+   * of the live document of reference, without an identity lock or a closed window. Nothing is opened or lifted by it.
+   */
+  noteStartBusy(commandId: string): boolean {
+    const doc = this.gateDoc();
+    if (this.closedWindow || this.disposed || this.lock || doc === null || this.access === null || this.access === "untracked"
+      || !sameDoc(this.access, doc) || this.lastCommand?.commandId !== commandId || this.lastCommand.documentId !== doc.documentId) {
+      return false;
+    }
+    this.p01 = Object.freeze({ p01: true as const, doc, commandId });
+    return true;
+  }
+
+  /** The «На Сегодня» of that refusal spends the episode, once; any other caller only ends it (endP01). */
+  takeP01(commandId: string): P01Episode | null {
+    const episode = this.p01;
+    this.p01 = null; // spent or ended by this check either way: one transition per episode
+    if (!episode || episode.commandId.toLowerCase() !== commandId.toLowerCase()) return null;
+    // fix5 (C388): the episode holds only while its document is still the live one of reference, unlocked and open.
+    const doc = this.gateDoc();
+    if (this.closedWindow || this.disposed || this.lock || doc === null || !sameDoc(doc, episode.doc)
+      || this.access === null || this.access === "untracked" || !sameDoc(this.access, episode.doc)
+      || this.lastWorkingDoc === null || !sameDoc(this.lastWorkingDoc, episode.doc)) return null;
+    return episode;
+  }
+  endP01(): void { this.p01 = null; }
+  p01Pending(): boolean { return this.p01 !== null; }
+
+  /**
+   * The narrow read context of the own stop_remote after the busy Today of a П01 episode: the same R10 tickets (one GET of
+   * the registered own stop, bound to its registration and this context), for the working document of the episode only —
+   * its lastWorkingDoc stays, no opened, gateDoc or epoch is made; no identity lock, no closed window.
+   */
+  openP01ReadContext(episode: P01Episode): RemoteReadContext | null {
+    if (this.closedWindow || this.disposed || this.lock !== null || this.lastWorkingDoc === null
+      || !sameDoc(this.lastWorkingDoc, episode.doc)) return null;
+    this.voidRemote();
+    const context: RemoteReadContext = Object.freeze({ remoteReadContext: true as const });
+    this.remote = context;
+    return context;
+  }
+
+  /** The stamp of a request admit() has just let go (§2 п.3): the transport takes it in the same synchronous stretch. */
+  stamp(path: string, body?: unknown): RequestStamp {
+    const stamp: RequestStamp = Object.freeze({ requestId: `rq${++this.stampSequence}`,
+      documentId: documentIdOf(path, record(body) ? body : undefined), episode: this.episode?.id ?? null });
+    this.stamps.set(stamp.requestId, stamp);
+    if (this.stamps.size > 256) this.stamps.delete(this.stamps.keys().next().value as string);
+    return stamp;
+  }
+
+  /** The stamp is one this gate gave, of the current episode and of the document of reference (§2 п.3). */
+  private currentStamp(stamp: RequestStamp): boolean {
+    const issued = this.stamps.get(stamp.requestId);
+    if (!issued || issued !== stamp && (issued.documentId !== stamp.documentId || issued.episode !== stamp.episode)) return false;
+    if (stamp.episode !== (this.episode?.id ?? null)) return false;
+    const doc = this.gateDoc();
+    return doc === null || stamp.documentId === doc.documentId;
+  }
+
+  /**
+   * §2 п.3: a strict decoder read a definite answer of the core to the request of this stamp (not a readback). It ends an
+   * episode without pending (§2 п.2); an episode begun with pending ends only by the definite readback of its anchor.
+   * A late answer of another request, document or episode changes nothing (it is a fact for the journal only).
+   */
+  noteDefinite(stamp: RequestStamp): boolean {
+    if (this.closedWindow || this.disposed || !this.episode || !this.currentStamp(stamp)) return false;
+    if (this.episode.withPending && this.anchor() !== null) return false;
+    this.finishEpisode();
+    return true;
+  }
+
+  /**
+   * The late-registration branch of the first open (§2 retryAfter403Doc, п.8б (5)): a definite 403 FORBIDDEN of the core to
+   * the open of this stamp allows one repeat of `event="open"` of the same document. Nothing else sets it.
+   */
+  noteForbiddenBeforeChange(stamp: RequestStamp): boolean {
+    if (this.closedWindow || this.disposed || stamp.documentId === null) return false;
+    const issued = this.stamps.get(stamp.requestId);
+    if (!issued || issued.documentId !== stamp.documentId || !this.openAttempts.has(stamp.documentId)) return false;
+    this.retryAfter403Doc = stamp.documentId;
+    return true;
+  }
+
+  /** The late registration ended without the repeat (its register failed, fail()): the allowance is gone (§2, ред.15). */
+  dropRetryAfter403(): void { this.retryAfter403Doc = null; }
+
+  /** True while the allowance of п.8б (5) waits for its one repeat (observation, tests). */
+  retryAfter403Pending(): string | null { return this.retryAfter403Doc; }
+
+  /** Has L2 already checked an `event="open"` of this document (§2 openAttempts)? */
+  openAttempted(documentId: string): boolean { return this.openAttempts.has(documentId); }
+
+  // ---- The recovery foreground of the entry (K-11/K-9a, §2 «Антифлаппинг»; M-P03-10) ----
+
+  /** A recovery foreground of any source (show, ready, manual check) leaves now: the mark moves, one is in flight. */
+  recoveryForegroundSent(): void {
+    this.lastRecoveryForegroundSentAt = this.clock.now();
+    this.recoveryForegroundInFlight = true;
+    this.emit({ type: "changed" });
+  }
+
+  /** Its answer or failure came back. */
+  recoveryForegroundSettled(): void {
+    if (!this.recoveryForegroundInFlight) return;
+    this.recoveryForegroundInFlight = false;
+    this.emit({ type: "changed" });
+  }
+
+  /** A shown window may send its immediate foreground: none in flight and ≥ 5 s from the mark (or no mark yet). */
+  showForegroundAllowed(): boolean {
+    if (this.recoveryForegroundInFlight) return false;
+    return this.lastRecoveryForegroundSentAt === null || this.clock.now() - this.lastRecoveryForegroundSentAt >= SHOW_FOREGROUND_GAP_MS;
+  }
+
+  recoveryForegroundBusy(): boolean { return this.recoveryForegroundInFlight; }
 
   // ---- net, send_hold and the single series of probes (§2, §3.5, §4.4) ----
 
-  /** 503 MAINTENANCE on a real request: closed(maintenance); its estimate (bounded by §3.5) only lengthens the hold. */
-  closeByMaintenance(retryAfterS: number | null): void {
+  /**
+   * 503 MAINTENANCE on a real request: closed(maintenance); its estimate (bounded by §3.5) only lengthens the hold.
+   * commandId: the command of the request (its POST or its readback), when it was one (§2 п.1, Z3).
+   */
+  closeByMaintenance(retryAfterS: number | null, commandId?: string): void {
     if (this.closedWindow || this.disposed) return;
     this.net = { kind: "closed", cause: "maintenance" };
     this.extendHoldBy(retryAfterS);
+    this.interruptRound(commandId);
     // The same episode continues on its next index (ВР-10); outside an episode the series starts at 5 s.
     if (this.episode) this.nextOfSeries(this.clock.now());
     else if (!this.seriesTimer && !this.inFlight) this.scheduleProbe(1, this.clock.now());
@@ -243,11 +470,12 @@ export class WriteGate {
    * observer applies RD-2 also a timeout): the first one starts an episode (probe in 5 s); within an episode the series
    * goes on with the next index from this moment (§2 «Тот же эпизод», «Таймер ряда один»).
    */
-  closeByFailure(cause: "unavailable" | "unknown" = "unknown"): void {
+  closeByFailure(cause: "unavailable" | "unknown" = "unknown", commandId?: string): void {
     if (this.closedWindow || this.disposed) return;
     this.net = { kind: "closed", cause };
+    this.interruptRound(commandId);
     if (this.episode) this.nextOfSeries(this.clock.now());
-    else this.beginEpisode();
+    else this.beginEpisode(commandId);
     this.emit({ type: "changed" });
   }
 
@@ -262,6 +490,7 @@ export class WriteGate {
     if (!this.episode) return;
     this.episode = null;
     this.seriesIndex = 0;
+    this.lastRecoveryForegroundSentAt = null;
     if (this.net.kind === "open") this.cancelSeries();
     this.emit({ type: "changed" });
   }
@@ -275,6 +504,12 @@ export class WriteGate {
     this.visible = visible;
     if (!visible) { this.cancelSeries(); return; }
     if (this.closedWindow || this.disposed) return;
+    // AC-11b: readbacks a hidden window held back under the identity lock go now (in the order asked, T36).
+    this.releaseDeferred();
+    // R10 п.3: a hidden window starts no readback of its own stop_remote; shown again, they go.
+    const remote = this.remoteDeferred;
+    this.remoteDeferred = [];
+    for (const job of remote) { if (job.remote === this.remote) job.start(); else job.cancel("cancelled"); }
     if (this.net.kind === "closed" || this.episode) this.scheduleProbe(1, this.clock.now());
   }
 
@@ -290,8 +525,10 @@ export class WriteGate {
     return result?.status === "ready" && this.mayWrite();
   }
 
-  private beginEpisode(): void {
-    this.episode = { id: ++this.episodes };
+  private beginEpisode(failed?: string): void {
+    const withPending = this.hasUnsettledPending();
+    const own = failed !== undefined && this.registry.get(failed)?.resolved === false ? failed : null;
+    this.episode = { id: ++this.episodes, withPending, anchor: withPending ? own ?? this.firstUnsettled() : null };
     this.scheduleProbe(1, this.clock.now());
   }
 
@@ -355,11 +592,23 @@ export class WriteGate {
     const until = this.clock.now() + Math.min(retryAfterS, HOLD_MAX_S) * 1_000;
     if (this.holdUntil !== null && until <= this.holdUntil) return false;
     this.holdUntil = until;
-    if (this.holdTimer) this.clock.cancel(this.holdTimer);
-    // The end of the hold opens nothing; subscribers only look again (buttons, a fresh probe).
-    this.holdTimer = this.clock.schedule(() => { this.holdTimer = null; this.emit({ type: "changed" }); },
-      Math.max(0, until - this.clock.now()));
+    this.scheduleHoldEnd();
     return true;
+  }
+
+  /**
+   * The end of the hold opens nothing; subscribers only look again (buttons, a fresh probe). A timer that fires a moment
+   * early (the timer and the monotonic clock are two sources) waits for the rest instead of telling a hold still on.
+   */
+  private scheduleHoldEnd(): void {
+    if (this.holdTimer) this.clock.cancel(this.holdTimer);
+    this.holdTimer = null;
+    if (this.holdUntil === null || this.disposed) return;
+    this.holdTimer = this.clock.schedule(() => {
+      this.holdTimer = null;
+      if (this.holdActive()) { this.scheduleHoldEnd(); return; }
+      this.emit({ type: "changed" });
+    }, Math.max(1, this.holdUntil - this.clock.now()));
   }
 
   // ---- The document, the identity lock and the closed window (§4.11, §4.12) ----
@@ -369,18 +618,25 @@ export class WriteGate {
     if (this.closedWindow || this.disposed) return;
     const current = this.gateDoc();
     if (current && !sameDoc(current, doc)) this.dropDocument();
+    this.voidRemote(); // an ordinary context replaces the narrow one of R10
     this.access = doc;
     this.lastWorkingDoc = doc;
     this.releaseDeferred();
     this.emit({ type: "changed" });
   }
 
-  /** `fail()` → `unavailable`: not Z5. The locks and lastWorkingDoc stay; tickets are void until the next `opened`. */
-  noteAccessLost(): void {
+  /**
+   * No live `opened` any more (`fail()` → `unavailable`, `busy`, a new entry run): not Z5. The locks and lastWorkingDoc stay;
+   * ordinary tickets are void until the next `opened`. keepRemote: the UI step busy → remote_confirm → remote of the same
+   * entry generation, the only change the R10 context outlives (R10 п.1); anything else voids it too (R10 п.3).
+   */
+  noteAccessLost(options: { keepRemote?: boolean } = {}): void {
     if (this.closedWindow || this.disposed) return;
-    this.access = null;
-    this.tickets.clear();
-    this.emit({ type: "changed" });
+    const changed = this.access !== null;
+    if (this.access !== "untracked") this.access = null;
+    for (const [ticket, issued] of this.tickets) if (!issued.remote) this.tickets.delete(ticket);
+    if (!options.keepRemote) { this.voidRemote(); this.p01 = null; }
+    if (changed) this.emit({ type: "changed" });
   }
 
   /** Z1 (K-9a, K-11 ВР-1): the identity lock of a working document; an existing lock of the same doc is kept. */
@@ -412,11 +668,25 @@ export class WriteGate {
     this.emit({ type: "changed" });
   }
 
+  /**
+   * Z3 transport (ВР-12): a failure of a task of the round (the readback of one of its commands) while the round is read
+   * sends the lock back to `verifying`; its round is kept. A failure of any other request (a projection) does not.
+   */
+  private interruptRound(commandId?: string): void {
+    if (this.lock && this.lock.phase === "readback" && commandId !== undefined && this.lock.round.has(commandId)) {
+      this.lock.phase = "verifying";
+    }
+  }
+
+  /** Is there an identity lock of this document of reference (any phase)? For the entry's routing (§4.13). */
+  identityLocked(): boolean { return this.lock !== null; }
+
   /** Z5 by `resetInvalidSession` (401/403): the old document's locks, registrations and deferred readbacks go. */
   resetDocument(): void {
     if (this.closedWindow || this.disposed) return;
     this.dropDocument();
-    this.access = null;
+    this.retryAfter403Doc = null;
+    if (this.access !== "untracked") this.access = null;
     this.emit({ type: "changed" });
   }
 
@@ -428,6 +698,8 @@ export class WriteGate {
     if (this.closedWindow || this.disposed) return;
     const closed = { doc: doc ?? this.gateDoc() };
     this.dropDocument();
+    this.retryAfter403Doc = null;
+    this.recoveryForegroundInFlight = false;
     this.access = null;
     this.closedWindow = closed;
     this.cancelSeries();
@@ -442,16 +714,84 @@ export class WriteGate {
     if (this.holdTimer) this.clock.cancel(this.holdTimer);
     this.holdTimer = null;
     this.disposed = true;
+    this.recoveryForegroundInFlight = false;
     this.listeners.clear();
   }
 
   private dropDocument(): void {
+    this.p01 = null;
     this.lock = null;
     this.familyLocks.clear();
     this.lastWorkingDoc = null;
     this.registry.clear();
     this.tickets.clear();
     this.cancelDeferred(() => true);
+    this.voidRemote();
+  }
+
+  // ---- R10: the readback of the own stop_remote in busy/remote without `opened` (§4.11 R10, ред.20) ----
+
+  /**
+   * R10 п.1: the narrow read context after a valid current SESSION_BUSY of the page's own document. Never with a document
+   * of reference, an identity lock or a closed window (AC-115). A new one voids the old one and its tickets.
+   */
+  openRemoteReadContext(): RemoteReadContext | null {
+    if (this.closedWindow || this.disposed || this.lastWorkingDoc !== null || this.lock !== null) return null;
+    this.voidRemote();
+    const context: RemoteReadContext = Object.freeze({ remoteReadContext: true as const });
+    this.remote = context;
+    return context;
+  }
+
+  /** The entry voids the context (the generation, the identity or the document changed). */
+  voidRemoteReadContext(context?: RemoteReadContext | null): void {
+    if (!context || context === this.remote) this.voidRemote();
+  }
+
+  remoteReadContextLive(context: RemoteReadContext | null | undefined): boolean {
+    return !!context && context === this.remote && !this.closedWindow && !this.disposed;
+  }
+
+  private voidRemote(): void {
+    const old = this.remote;
+    if (!old) return;
+    this.remote = null;
+    for (const [ticket, issued] of this.tickets) if (issued.remote?.context === old) this.tickets.delete(ticket);
+    const cancelled = this.remoteDeferred;
+    this.remoteDeferred = [];
+    for (const job of cancelled) job.cancel("cancelled");
+  }
+
+  /**
+   * R10 п.2: the one-shot ticket of the registered own `session.stop_remote` of commandId, bound to the context and to this
+   * registration. Another family, an unknown or a settled ID, a dead context: no ticket (zero transfers). Hidden: waits.
+   */
+  runRemoteReadback<T>(context: RemoteReadContext, commandId: string, fn: (ticket: ReadbackTicket) => Promise<T>): Promise<T> {
+    if (this.closedWindow) return Promise.reject(new PausedBeforeSendError("closed_window"));
+    if (this.disposed || context !== this.remote) return Promise.reject(new PausedBeforeSendError("cancelled"));
+    const registration = this.registry.get(commandId);
+    if (!registration || registration.family !== "stop_remote" || registration.resolved) {
+      return Promise.reject(new PausedBeforeSendError("no_ticket"));
+    }
+    return new Promise<T>((resolve, reject) => {
+      const job: Deferred = {
+        commandId, remote: context,
+        start: () => {
+          if (context !== this.remote || this.registry.get(commandId) !== registration) {
+            reject(new PausedBeforeSendError("cancelled"));
+            return;
+          }
+          const ticket: ReadbackTicket = Object.freeze({ readbackTicket: true as const });
+          this.tickets.set(ticket, { commandId, doc: null, remote: { context, registration } });
+          let run: Promise<T>;
+          try { run = Promise.resolve(fn(ticket)); } catch (error) { run = Promise.reject(error); }
+          run.finally(() => { this.tickets.delete(ticket); }).then(resolve, reject);
+        },
+        cancel: reason => reject(new PausedBeforeSendError(reason)),
+      };
+      if (this.visible) job.start();
+      else this.remoteDeferred.push(job);
+    });
   }
 
   // ---- The registry of readbacks and the tickets (§4.11 R1–R9) ----
@@ -471,6 +811,10 @@ export class WriteGate {
     if (entry && !entry.resolved) this.familyLocks.add(commandId);
     this.lock?.round.delete(commandId);
     this.cancelDeferred(job => job.commandId === commandId);
+    const remote = this.remoteDeferred.filter(job => job.commandId === commandId);
+    this.remoteDeferred = this.remoteDeferred.filter(job => job.commandId !== commandId);
+    for (const job of remote) job.cancel("cancelled");
+    for (const [ticket, issued] of this.tickets) if (issued.remote && issued.commandId === commandId) this.tickets.delete(ticket);
     this.settleRound();
     this.emit({ type: "changed" });
   }
@@ -480,16 +824,49 @@ export class WriteGate {
    * (stale, window_stale, a storage error, a malformed record) takes it out of the round into familyLocks. The checks of
    * requestId/doc/episode of a reply (§2 п.3) belong to the decoders (M-P03-10).
    */
-  resolvePending(commandId: string, outcome: DefiniteOutcome | IndefiniteOutcome): void {
+  resolvePending(commandId: string, outcome: DefiniteOutcome | IndefiniteOutcome, stamp?: RequestStamp): void {
     if (this.closedWindow || this.disposed) return;
+    // §2 п.3: a decoder that names its request is heard only for the current request, document and episode (AC-89).
+    if (stamp && !this.currentStamp(stamp)) return;
     const entry = this.registry.get(commandId);
+    const endsEpisode = !!this.episode?.withPending && DEFINITE.has(outcome) && this.anchor() === commandId;
     if (DEFINITE.has(outcome)) {
       if (entry) entry.resolved = true;
       this.familyLocks.delete(commandId);
     } else this.familyLocks.add(commandId);
     this.lock?.round.delete(commandId);
     this.settleRound();
+    if (endsEpisode) this.finishEpisode();
+    else if (this.episode?.withPending && this.anchor() === null) this.episode.withPending = false; // §2 п.1 → п.2
     this.emit({ type: "changed" });
+  }
+
+  /**
+   * §2 п.1: the anchor of an episode begun with pending — the command whose request failed. Once it is settled otherwise,
+   * unregistered or family-locked by an indefinite readback, the next not locked one takes its place (the lock of the old
+   * anchor stays); with only locked ones left, the first of them. Registration order stands for creation order.
+   */
+  private anchor(): string | null {
+    const episode = this.episode;
+    const current = episode?.anchor ?? null;
+    if (current !== null) {
+      const entry = this.registry.get(current);
+      if (entry && !entry.resolved && !this.familyLocks.has(current)) return current;
+    }
+    let locked: string | null = null;
+    for (const [id, entry] of this.registry) {
+      if (entry.resolved) continue;
+      if (!this.familyLocks.has(id)) { if (episode) episode.anchor = id; return id; }
+      locked ??= id;
+    }
+    if (episode && locked !== null) episode.anchor = locked;
+    return locked;
+  }
+
+  /** The first registered pending without a definite answer (registration order stands for creation order). */
+  private firstUnsettled(): string | null {
+    for (const [id, entry] of this.registry) if (!entry.resolved) return id;
+    return null;
   }
 
   /** True while a registered pending still waits for a definite answer (used by the K-5 rule, §4.1 п.8). */
@@ -524,6 +901,8 @@ export class WriteGate {
 
   private readbackAllowed(): boolean {
     if (this.closedWindow || this.disposed || this.access === null) return false;
+    // AC-11b / ВР-3: the round of an identity lock is read only in a visible window; shown again, it goes (setVisible).
+    if (this.lock && !this.visible) return false;
     return !(this.lock && this.lock.phase === "verifying" && sameDoc(this.lock.doc, this.gateDoc()));
   }
 
@@ -545,7 +924,10 @@ export class WriteGate {
     if (!ticket) return false;
     const issued = this.tickets.get(ticket);
     if (!issued || issued.commandId !== commandId) return false;
-    if (issued.doc && !sameDoc(issued.doc, this.gateDoc())) return false;
+    if (issued.remote) {
+      // R10 п.2: live context, the same registration of the owner, right before the network.
+      if (issued.remote.context !== this.remote || this.registry.get(commandId) !== issued.remote.registration) return false;
+    } else if (issued.doc && !sameDoc(issued.doc, this.gateDoc())) return false;
     this.tickets.delete(ticket);
     return true;
   }
@@ -572,6 +954,11 @@ export class WriteGate {
       seriesIndex: this.seriesIndex,
       probeScheduled: this.seriesTimer !== null,
       probeInFlight: this.inFlight !== null,
+      openAttempts: [...this.openAttempts],
+      retryAfter403Doc: this.retryAfter403Doc,
+      lastRecoveryForegroundSentAt: this.lastRecoveryForegroundSentAt,
+      recoveryForegroundInFlight: this.recoveryForegroundInFlight,
+      remoteReadContext: this.remote !== null,
     };
   }
 

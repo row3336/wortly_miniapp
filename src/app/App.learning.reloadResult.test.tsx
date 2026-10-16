@@ -252,30 +252,26 @@ describe("Learning result first shown after a full reload (decision 20.1-А)", (
     expect(submits(a, commandId)).toHaveLength(1);
   }, 40_000);
 
-  for (const [mode, strict] of cases) it(`a 403 re-entry in the same window (no reload) shows the old result and waits for «Далее» (decision 22.1-А, ${label(mode, strict)})`, async () => {
+  // P03 M-P03-10 (§4.13 В, AC-102): a 403 resets the session and the document of the window (Z5); its «Попробовать ещё
+  // раз» is then blocked until Я19 — no new sign-in or open in the same window. The re-entry of decision 22.1-А is the new
+  // launch (the full reload above); here the window keeps its pending answer for it and sends nothing more.
+  for (const [mode, strict] of cases) it(`a 403 in the same window (no reload): the retry is blocked, the pending answer is kept for a new launch (${label(mode, strict)})`, async () => {
     const a = app(mode); const input = await startToQuestion(a, strict);
     a.loseAnswerReply(); a.denyNextRead();
     fireEvent.change(input, { target: { value: "Haus" } });
     fireEvent.click(screen.getByRole("button", { name: "Проверить" }));
     await waitFor(() => expect(a.kinds()).toContain("answer.submit"));
     const command = a.posts().find(post => post.kind === "answer.submit")!, commandId = command.command_id as string;
-    const again = await screen.findByRole("button", { name: "Попробовать ещё раз" }, { timeout: 10_000 });
-    // P03 (L2, M-P03-4): the lost reply closed the page gate; the new open of «Попробовать ещё раз» waits for ready.
+    const again = await screen.findByRole("button", { name: "Попробовать ещё раз" }, { timeout: 10_000 }) as HTMLButtonElement;
     await pageGateOpen();
+    const posts = a.posts().length;
+    expect(again.disabled).toBe(true);
     fireEvent.click(again);
-    await screen.findByRole("region", { name: "Верно" }, { timeout: 10_000 });
-    const before = presents(a);
-    await sleep(4500);
-    expect(screen.getByRole("region", { name: "Верно" })).toBeTruthy();
-    expect(presents(a)).toBe(before);
-    const easy = screen.getByRole("button", { name: "Легко" }) as HTMLButtonElement;
-    await waitFor(() => expect(easy.disabled).toBe(false), exchange);
-    fireEvent.click(easy);
-    await waitFor(() => expect(a.kinds()).toContain("result.grade"));
-    const grade = a.posts().find(post => post.kind === "result.grade")!;
-    expect([grade.result_id, grade.expected_result_version, grade.payload])
-      .toEqual([id(700 + Number((command.assignment_id as string).slice(-3))), "1", { grade: 5 }]);
+    await sleep(500);
+    expect(screen.queryByRole("region", { name: "Верно" })).toBeNull();
+    expect(a.posts()).toHaveLength(posts);
     expect(submits(a, commandId)).toHaveLength(1);
+    expect(command.assignment_id).toBeTruthy();
   }, 40_000);
 
   // 32.1-А is the written quiz's. A Learning correction restored after a reload is not held: the view goes on to the next

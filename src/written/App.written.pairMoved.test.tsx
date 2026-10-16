@@ -2,6 +2,7 @@
 // tapped here made the session in uk-de. The window refreshes its access by itself (one client/open) and goes into that
 // session; Stop of it is never sent from the old screen.
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { activeButton } from "../app/gateButton.test-support";
 import { StrictMode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { App } from "../app/App";
@@ -67,12 +68,12 @@ describe("written R1: the window refreshes itself into the session of the new pa
     const { a, world, opens } = await ready();
     world.moved = true; loseReply(a.fetcher, "session.start");
     fireEvent.click(row(words));
-    await screen.findByRole("button", { name: "Проверить состояние" }, exchange);
+    await activeButton("Проверить состояние", exchange);
     await settle(1500);
     expect(world.opens.slice(opens)).toEqual([]);
     // An unknown start is no confirmed session of another pair: its Stop is as before (17.2-А is not a general ban).
     expect((screen.getByRole("button", { name: "Выйти" }) as HTMLButtonElement).disabled).toBe(false);
-    fireEvent.click(screen.getByRole("button", { name: "Проверить состояние" }));
+    fireEvent.click(await activeButton("Проверить состояние", exchange));
     expect(await screen.findByText("слово 6", undefined, exchange)).toBeTruthy();
     expect(world.opens.slice(opens)).toEqual(["foreground"]);
     await inSession(a, world.started!);
@@ -82,12 +83,12 @@ describe("written R1: the window refreshes itself into the session of the new pa
     const { a, world, opens, mark } = await ready();
     world.moved = true; const open = foregroundOpen(a.fetcher, "hold");
     fireEvent.click(row(words));
-    await screen.findByRole("button", { name: "Проверить состояние" }, exchange);
+    await activeButton("Проверить состояние", exchange);
     await settle(500);
     const stop = screen.getByRole("button", { name: "Выйти" }) as HTMLButtonElement;
     expect(stop.disabled).toBe(true);
     fireEvent.click(stop);
-    fireEvent.click(screen.getByRole("button", { name: "Проверить состояние" }));
+    fireEvent.click(await activeButton("Проверить состояние", exchange));
     await settle(1500);
     expect(commandPosts(a.fetcher, mark).map(post => post.kind)).toEqual(["session.start"]);
     expect(open.attempts).toBe(1);
@@ -97,26 +98,28 @@ describe("written R1: the window refreshes itself into the session of the new pa
     await inSession(a, world.started!);
   });
 
-  it("a failed refresh is not repeated by itself; the manual retry goes into the session", async () => {
+  // P03 M-P03-10 (К-11 ВР-1/ВР-5, AC-11 (в)): a refresh lost by the transport keeps the working window opened in recovery
+  // — no `unavailable`, no manual retry; the gate's ready brings exactly one foreground of the same document, and the
+  // window then goes into its session. Nothing else is sent meanwhile.
+  it("a refresh lost by the transport is recovered by one foreground after ready (К-11); the window goes into the session", async () => {
     const { a, world, mark } = await ready();
     world.moved = true; const open = foregroundOpen(a.fetcher, "fail");
     fireEvent.click(row(words));
-    const retry = await screen.findByRole("button", { name: "Попробовать ещё раз" }, exchange);
-    await settle(4000);
-    expect(open.attempts).toBe(1);
-    expect(commandPosts(a.fetcher, mark).map(post => post.kind)).toEqual(["session.start"]);
-    fireEvent.click(retry);
+    expect(await screen.findByText("слово 6", undefined, exchange)).toBeTruthy();
     await inSession(a, world.started!);
+    expect(open.attempts).toBe(2);
+    expect(screen.queryByRole("button", { name: "Попробовать ещё раз" })).toBeNull();
+    expect(commandPosts(a.fetcher, mark).map(post => post.kind).filter(kind => kind === "session.start")).toEqual(["session.start"]);
   });
 
   it("a refresh that still names the old pair is not asked again by later checks, and Stop keeps waiting", async () => {
     const { a, world, opens, mark } = await ready();
     world.moved = true; world.openOld = true;
     fireEvent.click(row(words));
-    const check = await screen.findByRole("button", { name: "Проверить состояние" }, exchange);
+    const check = await activeButton("Проверить состояние", exchange);
     await settle(1500);
     fireEvent.click(check); await settle(1500);
-    fireEvent.click(screen.getByRole("button", { name: "Проверить состояние" })); await settle(1500);
+    fireEvent.click(await activeButton("Проверить состояние", exchange)); await settle(1500);
     expect(world.opens.slice(opens)).toEqual(["foreground"]);
     expect((screen.getByRole("button", { name: "Выйти" }) as HTMLButtonElement).disabled).toBe(true);
     expect(commandPosts(a.fetcher, mark).map(post => post.kind)).toEqual(["session.start"]);

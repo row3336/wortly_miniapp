@@ -1,3 +1,4 @@
+import type { LaneGate } from "../commands/gateWait";
 import type { ConjugationSummary, WrittenResult } from "../api/generated";
 import { sameId } from "../api/wireValidation";
 import type { OpenedAccess } from "../app/openedAccess";
@@ -22,7 +23,9 @@ type Common = { canStop: boolean; stopping: boolean; problem: string | null; can
   undoing: boolean;
   /** A manual GET may check the outcome now (TA табл. 5.1 `unknown`): stale, an unknown outcome, or a closed
    * session whose frozen summary is unknown (T2 C2). It re-proves the same command IDs; it never sends. */
-  canCheck: boolean };
+  canCheck: boolean;
+  /** The write gate of the manual controls (C335): they stay visible and inactive while it holds. */
+  gate?: LaneGate };
 export type ConjugationView = Common & (
   | { screen: "loading" } | { screen: "recovery" }
   /** `known`: the session is proved open in another pair and no problem is named: a fact, not a failed update (C178). */
@@ -294,12 +297,14 @@ export class ConjugationTestFlow {
   }
   retry(lane: ConjugationLane): void {
     const state = this.active();
-    if (state && (lane === "study" || lane === "stop") && state.canRetry[lane]) void this.options.actions.retry(lane);
+    // C335: a press while the gate holds does nothing (the button is inactive); nothing is queued.
+    const writable = lane === "study" ? state?.gate?.primaryWritable : state?.gate?.stopWritable;
+    if (state && (lane === "study" || lane === "stop") && state.canRetry[lane] && writable !== false) void this.options.actions.retry(lane);
   }
   /** Manual GET only, when the view offers a check (`canCheck`). */
   refresh(): void {
     const state = this.active();
-    if (state && this.view(state).canCheck) void this.options.actions.refresh();
+    if (state && this.view(state).canCheck && state.gate?.checkable !== false) void this.options.actions.refresh();
   }
   dispose(): void {
     this.cancelTimer(); this.disposed = true; this.input = null;
@@ -329,7 +334,7 @@ export class ConjugationTestFlow {
     const common: Common = { canStop: active && state.canStop, stopping: state.phase === "stopping",
       problem: refusedUndo ? undoUnavailableProblem : state.problem,
       canRetry: { study: active && state.canRetry.study, stop: active && state.canRetry.stop }, canCheck: false,
-      undoing: answered.kind === "result.undo" && busy.includes(answered.phase) };
+      undoing: answered.kind === "result.undo" && busy.includes(answered.phase), ...(state.gate ? { gate: state.gate } : {}) };
     const checkable: Common = { ...common, canCheck: active };
     if (memory.terminal || state.phase === "closed") {
       const summary = state.closed?.summary ? structuredClone(state.closed.summary) : null;

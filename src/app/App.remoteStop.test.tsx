@@ -198,15 +198,21 @@ describe("remote stop through the actual App and HTTP client", () => {
     expect(f.commands).toHaveLength(1);
   });
 
-  it("restores pending after remount through GET before exposing Today", async () => {
+  it("restores pending after remount: the first open does not wait for the GET of the stop (R10 п.4)", async () => {
     const f = fixture(); f.state.lose = "after";
     const first = render(<App />); await confirm();
     await screen.findByRole("heading", { name: "Завершение пока не подтверждено" });
     first.unmount(); const count = f.fetcher.mock.calls.length;
     render(<App />); await screen.findByRole("heading", { name: "Сегодня", level: 1 });
+    // P03 R10 п.4 (AC-118): the remount loads and registers the saved stop without a GET; its first open goes at once, and
+    // the status of the stop is read after the answer — here an opened, so by the ordinary ticket (R2). No second stop.
+    await waitFor(() => expect(f.fetcher.mock.calls.slice(count).map(call => String(call[0]))
+      .some(path => path.includes(`/commands/${f.commands[0].command_id}?`))).toBe(true));
     const paths = f.fetcher.mock.calls.slice(count).map(call => String(call[0]));
-    expect(paths[1]).toContain(`/commands/${f.commands[0].command_id}?`);
-    expect(paths[2]).toBe("/api/v1/client/open"); expect(f.commands).toHaveLength(1);
+    const openAt = paths.indexOf("/api/v1/client/open");
+    const readAt = paths.findIndex(path => path.includes(`/commands/${f.commands[0].command_id}?`));
+    expect(openAt).toBeGreaterThanOrEqual(0); expect(readAt).toBeGreaterThan(openAt);
+    expect(f.commands).toHaveLength(1);
   });
 
   it("requires explicit retry after not-found and preserves the complete original command", async () => {

@@ -1,5 +1,6 @@
 // The own start of this window lost before the server, checked and sent again by hand with the same ID (C246).
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { activeButton } from "../app/gateButton.test-support";
 import { describe, expect, it } from "vitest";
 import { App } from "../app/App";
 import { commandPosts, foregroundOpen, pairMoved } from "../app/pairMoved.test-support";
@@ -30,11 +31,11 @@ async function lostStartChecked(a: ReturnType<typeof app>, entered = () => {}) {
   await waitFor(() => expect(row(/Слова: перевод на немецкий/).disabled).toBe(false), exchange);
   dropRequest(a, "session.start");
   fireEvent.click(row(/Слова: перевод на немецкий/));
-  await screen.findByRole("button", { name: "Проверить состояние" }, exchange);
+  await activeButton("Проверить состояние", exchange);
   const lost = a.posts().at(-1)!;
   expect(lost.kind).toBe("session.start");
-  fireEvent.click(button("Проверить состояние"));
-  await screen.findByRole("button", { name: "Повторить отправку" }, exchange);
+  fireEvent.click(await activeButton("Проверить состояние", exchange));
+  await activeButton("Повторить отправку", exchange);
   await waitFor(() => expect(button("Повторить отправку").disabled).toBe(false), exchange);
   return lost;
 }
@@ -44,7 +45,7 @@ describe("Written own start retried by hand after its loss (C246)", () => {
     const a = app({ cards: [6, 7] }); render(<App />);
     const lost = await lostStartChecked(a);
     expect(a.server.state.sessionId).toBeNull();
-    fireEvent.click(button("Повторить отправку"));
+    fireEvent.click(await activeButton("Повторить отправку", exchange));
     // The server confirmed this very session (one more POST of the same command); the view then follows it.
     await waitFor(() => expect(a.server.state.sessionId).toBe(lost.session_id), exchange);
     await screen.findByText("слово 6", undefined, exchange);
@@ -61,7 +62,7 @@ describe("Written own start retried by hand after its loss (C246)", () => {
     const a = app({ cards: [6, 7] }); render(<App />);
     const gate = holdReply(a, "session.start");
     const lost = await lostStartChecked(a);
-    fireEvent.click(button("Повторить отправку"));
+    fireEvent.click(await activeButton("Повторить отправку", exchange));
     // The server applied the retry; its reply has not come back yet, and the screen still waits for the outcome.
     await waitFor(() => expect(gate.held).toBe(true), exchange);
     await settle();
@@ -83,7 +84,7 @@ describe("Written own start retried by hand after its loss (C246)", () => {
     const a = app({ cards: [6, 7] }); render(<App />);
     const start = holdReply(a, "session.start");
     const lost = await lostStartChecked(a);
-    fireEvent.click(button("Повторить отправку"));
+    fireEvent.click(await activeButton("Повторить отправку", exchange));
     await waitFor(() => expect(start.held).toBe(true), exchange);
     const stop = holdReply(a, "session.stop");
     fireEvent.click(button("Выйти"));
@@ -106,7 +107,7 @@ describe("Written own start retried by hand after its loss (C246)", () => {
     render(<App />);
     const lost = await lostStartChecked(a, () => { world.moved = true; });
     const opens = world.opens.length, open = foregroundOpen(a.fetcher, "hold");
-    fireEvent.click(button("Повторить отправку"));
+    fireEvent.click(await activeButton("Повторить отправку", exchange));
     await waitFor(() => expect(open.attempts).toBe(1), exchange);
     await settle(1500);
     // Accepted in uk-de; the refresh of this window has not answered: no question, no present.
@@ -129,7 +130,7 @@ describe("Written own start retried by hand after its loss (C246)", () => {
     const lost = await lostStartChecked(a);
     first.unmount();
     render(<App />);
-    fireEvent.click(await screen.findByRole("button", { name: "Проверить состояние" }, exchange));
+    fireEvent.click(await activeButton("Проверить состояние", exchange));
     await settle(2000);
     expect(screen.queryByRole("button", { name: "Повторить отправку" })).toBeNull();
     expect(screen.getByText("Проверяем, сохранилось ли действие.")).toBeTruthy();

@@ -6,6 +6,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { App } from "../app/App";
+import { activeButton } from "../app/gateButton.test-support";
 import { app, dropRequest, exchange, pairText, requests, row, useWrittenAppEnvironment } from "./writtenApp.test-support";
 import { id } from "./writtenFixtures.test-support";
 import { writtenPrimaryKey } from "./writtenPending";
@@ -24,8 +25,9 @@ describe("written 2.3 А: the start record of another window is only checked", (
     await waitFor(() => expect(row(words).disabled).toBe(false), exchange);
     dropRequest(a, "session.start");
     fireEvent.click(row(words));
-    fireEvent.click(await screen.findByRole("button", { name: CHECK }, exchange)); await pause(1500);
-    const retry = await screen.findByRole("button", { name: RETRY }, exchange);
+    // P03 C335: the controls wait for the write gate after the loss; the user presses them once they are active.
+    fireEvent.click(await activeButton(CHECK, exchange)); await pause(1500);
+    const retry = await activeButton(RETRY, exchange);
     const [sent] = startPosts(a);
     fireEvent.click(retry); await pause(1500);
     // Only the right of this mount is pinned here; what the screen shows after the accepted retry is not (QA-FINAL: the

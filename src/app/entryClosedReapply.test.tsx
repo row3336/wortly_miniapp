@@ -7,7 +7,7 @@ import type { AsyncStorage } from "../platform/storage";
 import { EntryController } from "./entryController";
 import { EntryScreen } from "./EntryScreen";
 import type { EntryState } from "./entryState";
-import { testGate } from "../commands/testGate.test-support";
+import { freshTestGate } from "../commands/testGate.test-support";
 
 // After two refusals the core closes reapplication (CT §6.3): the refusal screen says so without a reapply
 // button, and a 403 ACCESS_REJECTED to a reapply lands there too instead of looping through "unavailable".
@@ -40,7 +40,7 @@ function fixture(profile: Profile) {
     open: vi.fn(async () => { throw new Error("not expected"); }),
   };
   let id = 0;
-  const controller = new EntryController({ gate: testGate(),
+  const controller = new EntryController({ gate: freshTestGate(),
     api, storage, lock: { acquire: vi.fn(async () => ({ release: vi.fn() })) },
     initData: "signed-Telegram-data", savedLanguage: "ru", browserLanguage: "ru-RU",
     clientVersion: "0.0.0", contractVersion: "1", timeZone: () => "Europe/Berlin",
@@ -127,7 +127,7 @@ describe("closed reapplication: profile decoder", () => {
       fetcher: vi.fn(async () => new Response(JSON.stringify({ access_token: "token",
         expires_at: "2026-10-01T00:00:00Z", profile, compatibility: { compatible: true, contract_version: "1" } })),
       ) as typeof fetch,
-      timeoutMs: 1000, maxResponseBytes: 10000, gate: testGate(),
+      timeoutMs: 1000, maxResponseBytes: 10000, gate: freshTestGate(),
     });
   }
   const request = { init_data: "synthetic", client_version: "0.0.0", contract_version: "1" };

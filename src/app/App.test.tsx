@@ -248,7 +248,8 @@ describe("ordinary Entry to Today integration", () => {
     expect(f.haptic).toHaveBeenCalledOnce();
   });
 
-  it.each([401, 403, 503])("does not read Today through a refused foreground (%s)", async status => {
+  // P03 M-P03-10: a 503 without MAINTENANCE on the foreground of the working window is the transport of К-11 (below).
+  it.each([401, 403])("does not read Today through a refused foreground (%s)", async status => {
     const f = fixture(); render(<App />); await screen.findByText("В базе");
     f.openReply.mockResolvedValueOnce(json({ error: { code: "SYNTHETIC_REFUSAL" } }, status));
     vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
@@ -257,6 +258,39 @@ describe("ordinary Entry to Today integration", () => {
     expect(screen.queryByText("В базе")).toBeNull();
     fireEvent(document, new Event("visibilitychange"));
     expect(f.openReply).toHaveBeenCalledTimes(2); expect(f.todayReply).toHaveBeenCalledOnce();
+    expect(f.haptic).toHaveBeenCalledOnce();
+  });
+
+  it("N14 (fix2): the real return of a working window (pageshow) answered SESSION_BUSY closes it — no busy Today, no Stop", async () => {
+    const f = fixture(); render(<App />); await screen.findByText("В базе");
+    f.openReply.mockResolvedValueOnce(json({ status: "SESSION_BUSY", profile: profile(), compatibility: { compatible: true, contract_version: "1" },
+      session: { status: "busy", stop_remote_target: "99999999-9999-4999-8999-999999999999" } }));
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    fireEvent(window, new Event("pageshow"));
+    await screen.findByText("Wortly уже открыт");
+    expect(screen.queryByText("В базе")).toBeNull();
+    expect(screen.queryByRole("button")).toBeNull();
+    fireEvent(document, new Event("visibilitychange"));
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(f.openReply).toHaveBeenCalledTimes(2);
+  });
+
+  it("К-11: a 503 without MAINTENANCE on the foreground keeps the working window; one foreground after ready, then Today", async () => {
+    const f = fixture(); render(<App />); await screen.findByText("В базе");
+    f.openReply.mockResolvedValueOnce(json({ error: { code: "SYNTHETIC_REFUSAL" } }, 503));
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    fireEvent(window, new Event("pageshow"));
+    // ВР-1: the screen stays, under the status 9.2.2 and without a button — never «Не удалось открыть Wortly».
+    await screen.findByText(/Нет связи с сервером/);
+    expect(screen.queryByText("Не удалось открыть Wortly")).toBeNull();
+    expect(screen.getByText("В базе")).toBeTruthy();
+    // ВР-5: the gate's ready brings exactly one foreground of the same document; the confirmed one reads Today again.
+    await waitFor(() => expect(f.todayReply).toHaveBeenCalledTimes(2));
+    expect(f.openReply).toHaveBeenCalledTimes(3);
+    const events = f.fetcher.mock.calls.filter(call => String(call[0]) === "/api/v1/client/open")
+      .map(call => JSON.parse(String(call[1]?.body)).event);
+    expect(events).toEqual(["open", "foreground", "foreground"]);
+    expect(screen.queryByText(/Нет связи с сервером/)).toBeNull();
     expect(f.haptic).toHaveBeenCalledOnce();
   });
 

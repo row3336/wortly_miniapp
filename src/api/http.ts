@@ -1,6 +1,6 @@
 import { clientJournal, journalRecord, journalRefusal } from "../journal/clientJournal";
 import { isCommandKind, isErrorCode, journalId, ATTEMPT_MAX_MS, type CommandReplyEvent } from "../journal/events";
-import { PausedBeforeSendError, type ReadbackTicket, type WriteGate } from "../commands/writeGate";
+import { PausedBeforeSendError, type ReadbackTicket, type RequestOrigin, type RequestStamp, type WriteGate } from "../commands/writeGate";
 
 /** The contract version of this client, sent with every write and with sign-in/open (the server compares for equality). */
 export function clientContractVersion(): string {
@@ -64,6 +64,13 @@ type Request = {
   started?: () => void;
   /** The one-shot permission of gate.runReadback to read a command's status (R6); never sent on the wire. */
   readbackTicket?: ReadbackTicket;
+  /** Who asked (L2 п.8, M-P03-10): a press of the user or the client itself; read by the K-5 rule only. */
+  origin?: RequestOrigin;
+  /**
+   * Told the gate's stamp of this request (requestId, document_id, episode — §2 п.3) right after L2 let it go, in the same
+   * synchronous stretch as fetch: the decoder gives it back with noteDefinite/resolvePending.
+   */
+  stamped?: (stamp: RequestStamp) => void;
 };
 
 /**
@@ -127,15 +134,13 @@ export function errorCode(value: unknown): string | undefined {
   if (typeof error.code === "string" && /^[A-Z][A-Z0-9_]*$/.test(error.code)) return error.code;
 }
 
-function wholeSeconds(value: unknown): number | null {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
-}
-
-/** MAINTENANCE carries its wait in the body and the same number in Retry-After; a malformed part is dropped. estimated_end_at is not read: the wait line needs only the seconds. */
+/**
+ * The wait a planned pause shows (P03 §3.2, §3.5; M-P03-9): the same reading as send_hold — error.retry_after_s first,
+ * then error.wait_seconds, then Retry-After; the first source present decides, bounded to 0…900 s, a malformed one shown as
+ * no estimate. estimated_end_at is not read: the wait line needs only the seconds.
+ */
 function maintenancePause(reply: JsonReply): MaintenancePause {
-  const error = typeof reply.value === "object" && reply.value !== null && "error" in reply.value
-    && typeof reply.value.error === "object" && reply.value.error !== null ? reply.value.error : {};
-  return { waitSeconds: wholeSeconds("wait_seconds" in error ? error.wait_seconds : undefined) ?? reply.retryAfter ?? null };
+  return { waitSeconds: readRetryAfter(reply).seconds };
 }
 
 export function httpError(reply: JsonReply): ApiError {
@@ -218,8 +223,10 @@ export function createJsonTransport(options: HttpOptions): JsonTransport {
       const url = `${base}/api/v1${path}`, body = request.body === undefined ? undefined : JSON.stringify(request.body);
       // L2 (RD-7): the gate decides here, and fetch follows in the same synchronous stretch, with no await in between.
       // A refused request is not started: started() is not told and fetch is never called.
-      const refusal = gate?.admit({ method: request.method, path, body: request.body, readbackTicket: request.readbackTicket });
+      const refusal = gate?.admit({ method: request.method, path, body: request.body, readbackTicket: request.readbackTicket,
+        ...(request.origin ? { origin: request.origin } : {}) });
       if (refusal) throw new PausedBeforeSendError(refusal);
+      if (gate && request.stamped) request.stamped(gate.stamp(path, request.body));
       request.started?.();
       journal?.started();
       const response = await fetcher(url, {
@@ -261,7 +268,7 @@ export function createJsonTransport(options: HttpOptions): JsonTransport {
       if (error instanceof ApiError) throw error;
       throw new ApiError("network");
     } finally { clearTimeout(timer); }
-    observeReply(gate, path, reply);
+    observeReply(gate, path, request, reply);
     journal?.answered(reply);
     // A lost admission or a deleted profile, seen on any route, ends the client journal at once (P04 r9 §8).
     journalRefusal(reply.status, errorCode(reply.value));
@@ -277,23 +284,38 @@ export function createJsonTransport(options: HttpOptions): JsonTransport {
  * on any real request closes `net`; an ordinary loss does not. The availability probe is no real request: the gate reads
  * its answers itself. Nothing here ends an episode: definiteness is told by the module decoders (§2 п.3, M-P03-10).
  */
-function observeReply(gate: WriteGate | undefined, path: string, reply: JsonReply): void {
+function observeReply(gate: WriteGate | undefined, path: string, request: Request, reply: JsonReply): void {
   if (!gate || probeRoute(path) || reply.status < 500) return;
-  const code = errorCode(reply.value);
-  if (reply.status === 503 && code === "MAINTENANCE") gate.closeByMaintenance(readRetryAfter(reply).seconds);
-  else gate.closeByFailure(reply.status === 503 && code === "WRITE_UNAVAILABLE" ? "unavailable" : "unknown");
+  const code = errorCode(reply.value), command = commandOf(path, request);
+  if (reply.status === 503 && code === "MAINTENANCE") gate.closeByMaintenance(readRetryAfter(reply).seconds, command);
+  else gate.closeByFailure(reply.status === 503 && code === "WRITE_UNAVAILABLE" ? "unavailable" : "unknown", command);
+}
+
+/** The command a request is about (its POST or the readback of its status): the anchor of an episode (§2 п.1), Z3. */
+function commandOf(path: string, request: Request): string | undefined {
+  const route = path.split(/[?#]/, 1)[0];
+  if (request.method === "POST" && route === "/commands" && record(request.body) && typeof request.body.command_id === "string") {
+    return request.body.command_id;
+  }
+  const status = request.method === "GET" ? /^\/commands\/([^/]+)$/.exec(route) : null;
+  if (!status) return undefined;
+  try { return decodeURIComponent(status[1]); } catch { return undefined; }
 }
 
 /**
  * A failed exchange: a refused connection or an unreadable answer ≥500 closes `net`. The client's own timeout and an
  * unreadable answer <500 are an ordinary loss (RD-2, in force once M-P03-2 tells the timeout apart): `net` stays as it
- * is. The one exception is the entry's foreground open: its timeout closes `net` (K-11 ВР-1 ahead of RD-2, §4.4).
+ * is. The one exception is the entry's foreground open: its timeout or an unreadable 2xx closes `net` (K-11 ВР-1 ahead
+ * of RD-2, §4.4).
  */
 function observeFailure(gate: WriteGate | undefined, path: string, request: Request,
   failure: "network" | "timeout" | "unreadable_5xx" | "unreadable_4xx" | "unreadable_2xx"): void {
   if (!gate || probeRoute(path)) return;
-  if (failure === "network" || failure === "unreadable_5xx") { gate.closeByFailure("unknown"); return; }
-  if (failure === "timeout" && foregroundOpen(path, request)) gate.closeByFailure("unknown");
+  const command = commandOf(path, request);
+  if (failure === "network" || failure === "unreadable_5xx") { gate.closeByFailure("unknown", command); return; }
+  // The foreground of the entry: its timeout and a body the transport cannot read (an unreadable 2xx) are the transport
+  // class of K-11 (ВР-1, P02-W «Класс отказа»), ahead of RD-2 — they close `net`, and the series brings the ready.
+  if ((failure === "timeout" || failure === "unreadable_2xx") && foregroundOpen(path, request)) gate.closeByFailure("unknown");
 }
 
 function probeRoute(path: string): boolean { return path.split(/[?#]/, 1)[0] === "/availability"; }

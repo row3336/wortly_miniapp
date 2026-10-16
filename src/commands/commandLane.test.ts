@@ -6,6 +6,7 @@ import type { AsyncStorage } from "../platform/storage";
 import { CommandLane, copyLanePending, failureProblem, missingProblem, retryStep, validLanePending, type CommandProblem, type LaneOptions, type LanePending,
   type LaneResolved, type LaneSettled, type LaneSnapshot, type MissingStatus, type Pair, type WithoutId } from "./commandLane";
 import { PendingSlot, PendingStoreError } from "./pendingSlot";
+import { WriteGate } from "./writeGate";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 type Intent = { command_id: string; kind: "session.start" | "item.mark" | "session.stop"; session_id: string };
@@ -55,7 +56,7 @@ const mark: WithoutId<Intent> = { kind: "item.mark", session_id: id(3) };
 
 type RecordFields = Partial<Pick<LanePending<Intent>, "profileId" | "clientInstanceId" | "pair">>;
 function fixture(options: { lane?: "study" | "stop"; minimum?: () => string | null; saved?: Intent; mismatch?: boolean;
-  pair?: Pair; record?: RecordFields; conflict?: () => void } = {}) {
+  pair?: Pair; record?: RecordFields; conflict?: () => void; gate?: WriteGate } = {}) {
   const values = new Map<string, string>();
   const storage: AsyncStorage = { get: vi.fn(async key => values.get(key) ?? null),
     set: vi.fn(async (key, value) => { values.set(key, value); }), remove: vi.fn(async key => { values.delete(key); }) };
@@ -72,7 +73,8 @@ function fixture(options: { lane?: "study" | "stop"; minimum?: () => string | nu
   const read = vi.fn<(sessionId: string) => Promise<{ state_version: string; current: Current }>>();
   const onUpdate = vi.fn<(snapshot: Snapshot) => void>(), newId = vi.fn(() => id(next++));
   const controller = new TestLane({ profileId: id(1), clientInstanceId: id(2), pair: options.pair ?? "ru-de", lane, pendingStore: store,
-    isLive: () => true, newId, send, check, read, onUpdate, stateVersion: "5", minimumStateVersion: options.minimum, slotConflict: options.conflict });
+    isLive: () => true, newId, send, check, read, onUpdate, stateVersion: "5", minimumStateVersion: options.minimum, slotConflict: options.conflict,
+    ...(options.gate ? { gate: options.gate } : {}) });
   return { controller, values, storage, send, check, read, newId, onUpdate };
 }
 
@@ -632,5 +634,22 @@ describe("restored outcome of an inherited intent", () => {
     await f.controller.refresh();
     expect(f.controller.snapshot()).toMatchObject({ outcome: "accepted" });
     expect(f.controller.snapshot().resolved?.restored).toBeUndefined();
+  });
+});
+
+describe("fix5 (QA r7 Y12): only a direct SESSION_BUSY refusal of a session.start signals the П01 episode", () => {
+  it.each([
+    ["SESSION_BUSY", "session.start", 1],
+    ["SESSION_NOT_ACTIVE", "session.start", 0],
+    ["PAIR_MISMATCH", "session.start", 0],
+    ["SESSION_BUSY", "item.mark", 0],
+  ] as const)("%s refusing %s → %i signal", async (code, kind, signals) => {
+    const gate = new WriteGate();
+    const noted = vi.spyOn(gate, "noteStartBusy");
+    const f = fixture({ gate }); await f.controller.refresh();
+    f.send.mockResolvedValueOnce({ outcome: "rejected", error: { code }, state_version: "6", current: { session_id: id(3), status: "not_found" } });
+    await f.controller.begin({ kind, session_id: id(3) });
+    expect(f.send).toHaveBeenCalledOnce();
+    expect(noted.mock.calls.map(([commandId]) => commandId)).toEqual(signals ? [f.send.mock.calls[0][0].command_id] : []);
   });
 });

@@ -136,6 +136,29 @@ button:focus-visible { outline: 2px solid var(--text); outline-offset: 3px; }
 }
 .recovery-overlay p { margin: 0; max-width: 420px; }
 .recovery-overlay .wortly-loader { margin-bottom: 0; }
+/*
+ * The status of a working window the write gate holds (P03 §4.8, К-11/К-9а): a strip over the kept screen, no buttons.
+ */
+.window-recovery-status {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 12px 16px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--bg) 85%, transparent);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  overflow-wrap: anywhere;
+}
+.window-recovery-status p { margin: 0; max-width: 420px; }
+.window-recovery-status .wortly-loader { margin: 0; width: 20px; height: 20px; }
+.gate-wait { margin: 0; }
 @keyframes wortly-loading { to { stroke-dasharray: 100 100; } }
 @media (prefers-reduced-motion: reduce) { .wortly-loader-arc { animation: none; stroke-dasharray: 50 100; } }
 @media (max-width: 359px) {

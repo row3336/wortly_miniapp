@@ -258,7 +258,13 @@ export class LearningCommandController extends LaneCore<LearningCommandIntent, L
       this.registry?.settled("mismatch");
       this.pending = { ...pending, mismatch: true }; this.problem = "mismatch"; this.phase = "unresolved";
       await this.options.pendingStore.markMismatch(this.pending, this.lifetime.signal);
-    } else await this.settle(reply.outcome, reply);
+    } else {
+      // fix3 (П01): the direct reply refused this page's own start as SESSION_BUSY.
+      if (reply.outcome === "rejected" && intent.kind === "session.start" && "error" in reply && reply.error.code === "SESSION_BUSY") {
+        this.registry?.startRefusedBusy(intent.command_id);
+      }
+      await this.settle(reply.outcome, reply);
+    }
   }
   /**
    * The host tells this right where the request of the current send starts (inside the open handle, after its check):

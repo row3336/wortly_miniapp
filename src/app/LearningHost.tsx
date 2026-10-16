@@ -1,3 +1,5 @@
+import { startRefusalIntent } from "../commands/startRefusal";
+import type { ForegroundIntent } from "./entryController";
 import { useEffect, useReducer, useRef } from "react";
 import type { HttpOptions } from "../api/http";
 import { acceptedForeignStart } from "../commands/foreignStart";
@@ -28,7 +30,8 @@ export type LearningHostProps = {
   renderPreview: LearningScreenProps["renderPreview"];
   onLearning(): void;
   /** One automatic notification per confirmed closure, or explicit idle/closed navigation to Today. */
-  onToday(): void | Promise<void>;
+  /** intent (fix4, П01): only from the screen of a start refused as SESSION_BUSY (startRefusalIntent). */
+  onToday(intent?: ForegroundIntent): void | Promise<void>;
   onSettings(): void;
   /** Other sections reachable from Today; without it only Settings is. */
   onNavigate?(destination: "dictionary" | "statistics"): void;
@@ -155,8 +158,11 @@ export function LearningHost(props: LearningHostProps) {
   // Native Back runs the visible Learning exit/return control (tz_app:86). While an already sent stop
   // is awaited it stays visible and does nothing: no second stop; waiting and retry stay on screen (К10-151).
   const stopLane = state?.commands.stop;
+  // fix5 (QA r7 P2): the way back to Today is navigation, not a write — it needs the lanes settled (canBegin before the write
+  // gate), never mayWrite: a pause, a hold or a closed net keeps it (heldByGate); a start or Stop stays gated.
+  const lanesSettled = state !== null && (state.commands.canBegin || state.commands.heldByGate === true);
   const todayShown = state !== null && (state.phase === "idle" && state.sessionId === null || state.phase === "closed")
-    && !state.commands.primary.pending && !state.commands.stop.pending && state.commands.canBegin && !bound.starting;
+    && !state.commands.primary.pending && !state.commands.stop.pending && lanesSettled && !bound.starting;
   let back: (() => void) | null = null;
   if (props.route === "learning" && state) {
     const closed = state.phase === "closed" || state.phase === "disposed";
@@ -209,8 +215,7 @@ export function LearningHost(props: LearningHostProps) {
     {/* A study result left after the closure is checked by its automatic recovery, never by hand (Я15, CT §6.1 п. 2). */}
     {state?.phase === "closed" && (state.commands.primary.pending && !state.commands.automaticPrimary || state.commands.stop.pending)
       && <button type="button" onClick={() => { void actions.refresh(); }}>{t.check}</button>}
-    {state && (state.phase === "idle" && state.sessionId === null || state.phase === "closed")
-      && !state.commands.primary.pending && !state.commands.stop.pending && state.commands.canBegin
-      && !bound.starting && <button type="button" onClick={() => { void props.onToday(); }}>{t.today}</button>}
+    {state && todayShown && <button type="button"
+        onClick={() => { void props.onToday(startRefusalIntent(state.commands.primary)); }}>{t.today}</button>}
   </>;
 }

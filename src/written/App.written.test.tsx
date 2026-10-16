@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { OpenRequest } from "../api/generated";
 import { App } from "../app/App";
+import { activeButton } from "../app/gateButton.test-support";
 import { pageGateOpen, setPageProbe } from "../app/pageGate.test-support";
 import { staleCommand, staleRefusal } from "../app/openRules.test-support";
 import { gate, replaceDocument, watchFlash } from "../app/flashWatch.test-support";
@@ -243,7 +244,8 @@ describe("Written quiz through the actual App document", () => {
     Object.assign(a.server.state, { status: "closed", closeReason: "midnight", assignment: null, version: a.server.state.version + 1 });
     await waitFor(() => expect(screen.getByRole("button", { name: "Выйти" })).toBeTruthy(), exchange);
     await pageGateOpen();
-    fireEvent.click(screen.getByRole("button", { name: "Выйти" }));
+    // M-P03-10 (K03, C335): «Выйти» is inactive until the gate lets the Stop go; the user presses it then.
+    fireEvent.click(await activeButton("Выйти", exchange));
     await screen.findByText("Проверяем, сохранилось ли действие.", undefined, exchange);
     await settle();
     expect(screen.queryByText("Занятие завершено.")).toBeNull();
@@ -273,7 +275,8 @@ describe("Written quiz through the actual App document", () => {
     fireEvent.click(screen.getByRole("button", { name: "Выйти" }));
     // P03 (L2, M10, §4.8): every read fails, so the page gate stays closed; Stop is kept on the client and the screen
     // says it waits for the connection (9.2.2).
-    await screen.findByText("Нет связи с сервером. Ждём, когда связь восстановится…", undefined, exchange);
+    // fix1 (§4.8): the window names the same wait over the screen as well — the line is there, maybe twice.
+    expect((await screen.findAllByText("Нет связи с сервером. Ждём, когда связь восстановится…", undefined, exchange)).length).toBeGreaterThan(0);
     await settle();
     expect(a.posts().filter(post => post.kind === "session.stop")).toEqual([]);
     expect(screen.queryByText("Занятие завершено.")).toBeNull();
@@ -450,7 +453,10 @@ describe("Written quiz through the actual App document", () => {
     expect(a.posts().map(post => [post.kind, post.session_id, post.payload]))
       .toEqual([["session.start", expect.any(String), { mode: "written", bucket: "words" }], ["session.stop_remote", other, { confirmed: true }]]);
     expect(screen.queryByRole("textbox")).toBeNull();
-    // Another installation's session never closes this window (decision 2.2: the busy screen is only for it).
+    // The refused start's «На Сегодня» (П01, TZA 12.1, В4) is a screen's synchronization of the working window: its
+    // SESSION_BUSY gives the busy Today with the confirmed stop, not a closure (fix2). Answer 2.2 (questions_cc_20261006)
+    // is about a second window's busy screen and does not say «never close»; the real return of a working window
+    // answered SESSION_BUSY does close it (P03 N14) — see entryRecovery «fix2».
     expect(close).not.toHaveBeenCalled();
   });
 

@@ -527,7 +527,13 @@ export abstract class CommandLane<S extends LaneSpec, O extends LaneOptions<S> =
     if (reply.outcome === "mismatch") {
       this.observe(reply.state_version);
       await this.markMismatch(pending);
-    } else await this.settle(reply, false, reply.outcome === "accepted" && (reply as { command?: { status?: string } }).command?.status === "already_applied");
+    } else {
+      // fix3 (П01): the direct reply — not a check, not a restored record — refused this page's own start as SESSION_BUSY.
+      if (reply.outcome === "rejected" && intent.kind === "session.start" && (reply as Refused).error.code === "SESSION_BUSY") {
+        this.registry?.startRefusedBusy(intent.command_id);
+      }
+      await this.settle(reply, false, reply.outcome === "accepted" && (reply as { command?: { status?: string } }).command?.status === "already_applied");
+    }
   }
   begin(action: WithoutId<S["intent"]>): Promise<void> {
     if (this.busy()) return this.running ?? Promise.resolve();

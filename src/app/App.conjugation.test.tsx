@@ -7,6 +7,7 @@ import { conjugationId as id, conjugationServer, FORMS, type ModelSession } from
 import { cardIdOf } from "../dictionary/card/cardTestData.test-support";
 import { settingsResponse } from "../settings/settingsRead.test-support";
 import { App } from "./App";
+import { activeButton } from "./gateButton.test-support";
 import { gate, replaceDocument, watchFlash } from "./flashWatch.test-support";
 import { commandPosts, enabledExits, foregroundOpen, loseReply as loseStudyReply, moveWithout, noLandings, pairMoved,
   settle as pause, watchCommits } from "./pairMoved.test-support";
@@ -184,8 +185,9 @@ describe.each([["StrictMode", true], ["plain render", false]])("App (%s)", (_nam
       expect(a.model.posted[0]).toMatchObject({ session_id: S1, assignment_id: FORMS[0] });
     });
 
-    // pending owner answer 5.1.1 (D-CONJ-HOST): TEMPORARY expectation. A refused start stays on the module's screen; only a
-    // return from the background (a new access, so a new owner without that session) leads back to Today.
+    // Q29 (owner's answer 12.10, variant 1; was «5.1.1» of D-CONJ-HOST): a refused start stays on the module's screen until
+    // the person leaves it; here a return from the background (a new access, so a new owner without that session) leads
+    // back to Today (no SESSION_BUSY: the window has no other device's session).
     it("A5 a refused start stays on the test screen; after a foreground Today offers a new start with another session ID", async () => {
       const a = app();
       a.model.server.rejectStart = "NO_MATERIAL";
@@ -327,7 +329,8 @@ describe("conjugation R1: the window refreshes itself into the session of the ne
     if (lose) {
       const check = await screen.findByRole("button", { name: "Проверить статус" }, exchange);
       await pause(1000); expect(world.opens.slice(opens)).toEqual([]);
-      fireEvent.click(check);
+      expect(check).toBeTruthy();
+      fireEvent.click(await activeButton("Проверить статус", exchange)); // C335: pressed once the gate lets it
     }
     const field = await screen.findByRole("textbox", undefined, exchange) as HTMLTextAreaElement;
     await waitFor(() => expect(field.readOnly).toBe(false));
@@ -352,7 +355,9 @@ describe("conjugation R1: the window refreshes itself into the session of the ne
       // The lost reply itself is a real unknown: its own lines stay until the check.
       const check = await screen.findByRole("button", { name: "Проверить статус" }, exchange);
       await pause(500); expect(world.opens.slice(opens)).toEqual([]);
-      shown = watchCommits(failure); fireEvent.click(check);
+      expect(check).toBeTruthy();
+      const active = await activeButton("Проверить статус", exchange); // C335: pressed once the gate lets it
+      shown = watchCommits(failure); fireEvent.click(active);
     } else shown = watchCommits(failure);
     try {
       const field = await screen.findByRole("textbox", undefined, exchange) as HTMLTextAreaElement;
@@ -363,17 +368,16 @@ describe("conjugation R1: the window refreshes itself into the session of the ne
     expect(commandPosts(a.fetcher, mark).map(post => [post.kind, post.session_id])).toEqual([["session.start", world.started],
       ["assignment.present", world.started]]);
   });
-  it("a failed refresh keeps its own failure and manual retry; the retry goes into the same session", async () => {
+  // P03 M-P03-10 (К-11 ВР-1/ВР-5): the lost refresh is recovered by one foreground after the gate's ready, not by hand.
+  it("a refresh lost by the transport is recovered by one foreground after ready (К-11) into the same session", async () => {
     const a = app(); const world = pairMoved(a.fetcher);
     render(<App />); const start = await startButton(); const mark = a.fetcher.mock.calls.length;
     world.moved = true; const open = foregroundOpen(a.fetcher, "fail");
     fireEvent.click(start);
-    const retry = await screen.findByRole("button", { name: "Попробовать ещё раз" }, exchange);
-    await pause(2000); expect(open.attempts).toBe(1);
-    expect(commandPosts(a.fetcher, mark).map(post => post.kind)).toEqual(["session.start"]);
-    fireEvent.click(retry);
     const field = await screen.findByRole("textbox", undefined, exchange) as HTMLTextAreaElement;
     await waitFor(() => expect(field.readOnly).toBe(false));
+    expect(open.attempts).toBe(2);
+    expect(screen.queryByRole("button", { name: "Попробовать ещё раз" })).toBeNull();
     expect(commandPosts(a.fetcher, mark).map(post => [post.kind, post.session_id])).toEqual([["session.start", world.started],
       ["assignment.present", world.started]]);
   });
@@ -398,11 +402,10 @@ describe("conjugation R1: the window refreshes itself into the session of the ne
     if (lose) loseStudyReply(a.fetcher, "session.start");
     fireEvent.click(start);
     if (lose) {
-      const check = await screen.findByRole("button", { name: "Проверить статус" }, exchange);
       // P03 (L2, M-P03-4): the lost reply closed the page gate; the check comes once the connection is back, so the
-      // presentation that follows it is not kept on the client.
+      // presentation that follows it is not kept on the client. M-P03-10 (C335): until then the button is inactive.
       await pageGateOpen();
-      fireEvent.click(check);
+      fireEvent.click(await activeButton("Проверить статус", exchange));
     }
     const field = await screen.findByRole("textbox", undefined, exchange) as HTMLTextAreaElement;
     await waitFor(() => expect(field.readOnly).toBe(false)); await pause(2500);

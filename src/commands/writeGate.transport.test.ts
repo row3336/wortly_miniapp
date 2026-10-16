@@ -52,7 +52,8 @@ describe("L2 in the transport (RD-7, AC-43)", () => {
       const error = await sent.catch(caught => caught);
       expect(error).toBeInstanceOf(PausedBeforeSendError);
       expect(error).not.toBeInstanceOf(ApiError);
-      expect(error.reason).toBe(reason);
+      // п.8б (M-P03-10): with a document of reference (gateDoc) any `event="open"` is refused as k5_denied, before mayWrite.
+      expect(error.reason).toBe(name === "/client/open#open" && stateName === "identity lock of the document" ? "k5_denied" : reason);
       expect(fetcher).not.toHaveBeenCalled();
       expect(started).not.toHaveBeenCalled();
     });
@@ -90,7 +91,8 @@ describe("L2 in the transport (RD-7, AC-43)", () => {
     const { gate, fetcher, request } = setup();
     gate.noteOpened(DOC_A);
     gate.lockIdentity(DOC_A);
-    await expect(request("/client/open", { method: "POST", body: { event: "open", document_id: "document-a" } })).rejects.toMatchObject({ reason: "paused" });
+    // п.8б (M-P03-10): the working document is gateDoc, so its `event="open"` is k5_denied whatever the lock.
+    await expect(request("/client/open", { method: "POST", body: { event: "open", document_id: "document-a" } })).rejects.toMatchObject({ reason: "k5_denied" });
     await expect(request("/client/open", { method: "POST", body: { event: "foreground", document_id: "document-a" } })).resolves.toMatchObject({ status: 200 });
     expect(fetcher).toHaveBeenCalledOnce();
   });

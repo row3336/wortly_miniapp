@@ -1,6 +1,7 @@
 import type { Language } from "../i18n/language";
 import { maintenanceWait } from "../i18n/messages";
 import { recoveryCopy } from "./commandCopy";
+import type { GateWait } from "./gateWait";
 import type { RecoveryView } from "./laneRecovery";
 
 export type RecoveryScreen =
@@ -90,5 +91,22 @@ export function RecoveryOverlay({ screen, language, canEnd = false, onEnd }: {
     <Loader />
     <p>{t[screen.status]}{wait ? ` ${wait}` : ""}</p>
     {screen.status === "unconfirmed" && onEnd && <button type="button" disabled={!canEnd} onClick={() => { if (canEnd) onEnd(); }}>{t.endSession}</button>}
+  </div>;
+}
+
+/**
+ * The status of a working window while the gate holds it (P03 §4.8; M-P03-9/10): К-11 `recovering` — 9.2.2 over its own
+ * screen; К-9а (503 MAINTENANCE on the foreground) or an announced hold — 9.2.4 with the estimate (maintenanceOver once
+ * it passed); the identity check or the first round of readbacks with pending actions — 9.2.1, otherwise 9.2.2. No
+ * buttons: the screen stays, its writes wait for the gate. It is no `unavailable`.
+ */
+export function WindowRecoveryStatus({ wait, language }: { wait: GateWait; language: Language }) {
+  const t = recoveryCopy[language];
+  const estimate = wait.cause === "maintenance" ? maintenanceWait(language, wait.waitSeconds) : null;
+  const text = wait.cause === "maintenance" ? `${t.maintenance}${estimate ? ` ${estimate}` : ""}`
+    : wait.cause === "checking" ? t.checking : t.offline;
+  return <div className="window-recovery-status" role="status" aria-busy="true">
+    <Loader />
+    <p>{text}</p>
   </div>;
 }

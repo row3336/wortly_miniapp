@@ -1,3 +1,4 @@
+import type { ForegroundIntent } from "./entryController";
 import { useEffect, useMemo, useReducer, useRef, type ReactNode } from "react";
 import type { HttpOptions } from "../api/http";
 import type { Language } from "../i18n/language";
@@ -30,7 +31,8 @@ export type OralHostOptions = {
   route: "today" | "oral" | "hidden";
   onOral(): void;
   /** Navigation only: a confirmed closure, a rejected start or nothing left to show. */
-  onToday(): void | Promise<void>;
+  /** intent (fix4, П01): only from the screen of a start refused as SESSION_BUSY (startRefusalIntent). */
+  onToday(intent?: ForegroundIntent): void | Promise<void>;
   /**
    * «Уточнить поля» (M-ORAL-ENTRY): the question's card opens on top of the quiz and Back returns to it. The oral quiz
    * never moves on by a card action (К07-080), so nothing is reported back.
@@ -128,6 +130,7 @@ export function useOralHost(options: OralHostOptions): OralHost {
     || state.sessionId !== null && state.phase !== "closed" && state.phase !== "idle")
     ? state.sessionId ?? study?.pendingIntent?.session_id ?? stop?.pendingIntent?.session_id ?? "receipt" : null;
   const resolvedStart = study?.resolved?.kind === "session.start" ? study.resolved.commandId : null;
+  const startRefusedShown = resolvedStart !== null && study?.outcome === "rejected";
   useEffect(() => {
     const current = latest.current;
     if (current.route !== "oral") bound.idleNotified = false;
@@ -148,10 +151,11 @@ export function useOralHost(options: OralHostOptions): OralHost {
       return;
     }
     if (current.route !== "oral") return;
-    // A rejected start leaves this owner unable to start again: Today is the only exit.
-    if (resolvedStart && study?.outcome === "rejected" && !bound.notified.has(resolvedStart)) {
-      bound.notified.add(resolvedStart); bound.awaitingStart = false;
-      void current.onToday();
+    // A rejected start leaves this owner unable to start again: Today is the only exit. Q29 (fix5): the refusal stays on
+    // the oral screen until the person leaves it — its «На Сегодня» (the П01 intent of that command, OralScreen) or Back;
+    // nothing goes to Today by itself, so no П01 episode is spent and no foreground is sent without a human action.
+    if (startRefusedShown) {
+      if (!bound.notified.has(resolvedStart!)) { bound.notified.add(resolvedStart!); bound.awaitingStart = false; }
       return;
     }
     // The own Stop shows its summary; any other confirmed closure returns to Today once.
@@ -166,7 +170,7 @@ export function useOralHost(options: OralHostOptions): OralHost {
       bound.idleNotified = true;
       void current.onToday();
     }
-  }, [bound, state, route, claim, resolvedStart, study?.outcome, lanesPending, options.seedPending]);
+  }, [bound, state, route, claim, resolvedStart, startRefusedShown, study?.outcome, lanesPending, options.seedPending]);
 
   const startedElsewhere = state && state.phase !== "disposed" ? acceptedForeignStart(study, state) : null;
   useEffect(() => { if (startedElsewhere !== null) latest.current.onForeignStart?.(startedElsewhere); }, [startedElsewhere]);
@@ -203,6 +207,6 @@ export function useOralHost(options: OralHostOptions): OralHost {
     canRequestStart: gate,
     requestStart,
     screen: route === "oral" ? <OralScreen state={seedPending ? null : state} actions={screenActions} language={options.language}
-      active onToday={() => { void latest.current.onToday(); }} onRefineFields={openCard} /> : null,
+      active onToday={intent => { void latest.current.onToday(intent); }} onRefineFields={openCard} /> : null,
   };
 }

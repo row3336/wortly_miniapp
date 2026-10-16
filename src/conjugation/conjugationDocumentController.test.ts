@@ -7,6 +7,8 @@ import { ConjugationSessionPendingStore, ConjugationStopPendingStore } from "./c
 import { ConjugationDocumentController, type ConjugationDocumentOptions, type ConjugationPresentationTicket,
   type ConjugationStepTicket } from "./conjugationDocumentController";
 import { testGate } from "../commands/testGate.test-support";
+import { WriteGate } from "../commands/writeGate";
+import { ManualClock } from "../commands/writeGate.test-support";
 
 const id = (n: number) => `cccccccc-dddd-4000-8000-${String(n).padStart(12, "0")}`;
 const S1 = id(3), S2 = id(4), B1 = id(21), B2 = id(22), B3 = id(23), R1 = id(31);
@@ -1577,3 +1579,20 @@ describe("the conjugation document after a dropped start", () => {
   });
 });
 
+describe("fix1 (X23, C335): the manual mutations of the conjugation screen wait for the write gate", () => {
+  it("answer and Stop are inactive while net is closed; the gate's ready gives them back", async () => {
+    const f = fixture();
+    const clock = new ManualClock();
+    const gate = new WriteGate({ clock, probe: async () => ({ status: "ready" }) });
+    f.controller.dispose();
+    const controller = new ConjugationDocumentController({ ...f.options, transport: { ...f.options.transport, gate } });
+    await controller.refresh();
+    expect(controller.snapshot()).toMatchObject({ phase: "question", canSubmit: true });
+    gate.closeByFailure();
+    expect(controller.snapshot()).toMatchObject({ canSubmit: false, canStop: false, canStart: false });
+    expect(controller.snapshot().gate).toMatchObject({ checkable: false, wait: { cause: "offline" } });
+    await clock.advanceTo(5_000);
+    expect(controller.snapshot()).toMatchObject({ canSubmit: true });
+    controller.dispose();
+  });
+});

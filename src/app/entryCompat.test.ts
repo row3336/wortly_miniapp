@@ -7,7 +7,7 @@ import type { DocumentLock } from "./documentLock";
 import { EntryController } from "./entryController";
 import type { EntryState } from "./entryState";
 import { readInstallation } from "./installation";
-import { testGate } from "../commands/testGate.test-support";
+import { freshTestGate } from "../commands/testGate.test-support";
 
 // M-COMPAT-HDR: a client the core does not serve reads why, and a paused write is told from a network error.
 const profileId = "11111111-1111-4111-8111-111111111111";
@@ -49,7 +49,7 @@ function fixture(status: "admitted" | "rejected" = "admitted", compatible = true
   };
   const lock: DocumentLock = { acquire: vi.fn(async () => ({ release: vi.fn() })) };
   const ids = [instanceId, registrationId, documentId, commandId];
-  const controller = new EntryController({ gate: testGate(),
+  const controller = new EntryController({ gate: freshTestGate(),
     api, storage, lock, initData: "signed", savedLanguage: "ru", browserLanguage: "ru", clientVersion: "0.0.0",
     contractVersion: "1", timeZone: () => "Europe/Berlin", newId: () => ids.shift()!,
     onUpdate: ({ state, profile }) => { states.push(state); profiles.push(profile); },

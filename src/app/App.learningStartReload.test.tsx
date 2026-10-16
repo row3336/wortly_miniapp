@@ -197,17 +197,16 @@ describe("App Learning 35.1-А: the start of another page is only checked", () =
     expect(s.cancels()).toBe(0);
   });
 
-  it("unchanged, not an owner decision: re-entry after 403 in the same page keeps «Повторить отправку» by a tap", async () => {
+  // P03 M-P03-10 (§4.13 В, AC-102): after the 403 (Z5: session and document reset) the window's «Попробовать ещё раз»
+  // is blocked until Я19 — the same page signs in and opens no more; the lost start stays pending (nothing is resent).
+  it("after a 403 in the same page the retry is blocked until Я19: no re-entry, the lost start is not resent", async () => {
     const page = new LearningPageStarts();
     const { s, first } = await lostStart(page, "before");
     s.control.refuse = true; foreground(); await settled(10);
-    fireEvent.click(await screen.findByRole("button", { name: "Попробовать ещё раз" }, exchange)); await settled(15);
-    const retry = await screen.findByRole("button", { name: RETRY }, exchange);
+    const again = await screen.findByRole("button", { name: "Попробовать ещё раз" }, exchange) as HTMLButtonElement;
+    expect(again.disabled).toBe(true);
+    fireEvent.click(again); await settled(15);
+    expect(screen.queryByRole("button", { name: RETRY })).toBeNull();
     expect(s.posts()).toEqual([first]);
-    fireEvent.click(retry); await settled(10);
-    expect(s.posts()).toEqual([first, first]);
-    // C251: the accepted retry of this page's start lands in that session (its preview), not in an unknown wait.
-    expect(await screen.findByRole("button", { name: "Дальше" }, exchange)).toBeTruthy();
-    expect(screen.queryByText("Проверяем, сохранилось ли действие.")).toBeNull();
   });
 });

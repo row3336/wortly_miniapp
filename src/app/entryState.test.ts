@@ -5,7 +5,7 @@ import type { EntryApi } from "../api/entryApi";
 import type { AsyncStorage } from "../platform/storage";
 import { EntryController } from "./entryController";
 import type { EntryState } from "./entryState";
-import { testGate } from "../commands/testGate.test-support";
+import { freshTestGate } from "../commands/testGate.test-support";
 
 // The entry screens render exactly the state sequence that EntryController publishes.
 const profileId = "11111111-1111-4111-8111-111111111111";
@@ -32,7 +32,7 @@ function setup(status: Profile["access"]["status"], reason: string | null = null
   };
   let next = 0;
   const states: EntryState[] = [];
-  const controller = new EntryController({ gate: testGate(), api, storage, lock: { acquire: async () => ({ release: () => undefined }) },
+  const controller = new EntryController({ gate: freshTestGate(), api, storage, lock: { acquire: async () => ({ release: () => undefined }) },
     initData: "signed", savedLanguage: "en", browserLanguage: "en", clientVersion: "0.0.0", contractVersion: "1",
     timeZone: () => "UTC", newId: () => `00000000-0000-4000-8000-${String(++next).padStart(12, "0")}`,
     onUpdate: ({ state }) => states.push(state) });
@@ -86,7 +86,9 @@ describe("entry state sequence", () => {
     vi.mocked(failed.api.auth).mockRejectedValueOnce(new EntryApiError("network"));
     await failed.controller.start();
     expect(failed.kinds()).toEqual(["checking", "unavailable"]);
+    // P03 M-P03-10 (§4.13 В, AC-102): a window without a session or a document signs in again no more; nothing leaves.
     await failed.controller.retry();
-    expect(failed.kinds()).toEqual(["checking", "unavailable", "checking", "pending"]);
+    expect(failed.kinds()).toEqual(["checking", "unavailable"]);
+    expect(failed.api.auth).toHaveBeenCalledOnce();
   });
 });

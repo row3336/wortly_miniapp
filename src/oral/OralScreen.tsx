@@ -1,3 +1,6 @@
+import { gateWaitText } from "../commands/CommandRecovery";
+import { startRefusalIntent } from "../commands/startRefusal";
+import type { ForegroundIntent } from "../app/entryController";
 import { useEffect, useLayoutEffect, useRef } from "react";
 import { commandCopy } from "../commands/commandCopy";
 import type { Language } from "../i18n/language";
@@ -13,8 +16,11 @@ export type OralScreenProps = {
   language: Language;
   /** The host sets this only for the currently displayed route. */
   active: boolean;
-  /** Leaves the summary of this owner's own Stop for Today; navigation belongs to the host. */
-  onToday(): void;
+  /**
+   * Leaves the summary of this owner's own Stop, or the shown refusal of its start, for Today; navigation belongs to the
+   * host. intent (fix5, Q29): the «На Сегодня» of a start refused as SESSION_BUSY carries startRefusalIntent (П01).
+   */
+  onToday(intent?: ForegroundIntent): void;
   /** «Уточнить поля»: opens the question's card (М12) on top of the quiz; without it the button is absent. */
   onRefineFields?(cardId: string, assignmentId: string): void;
 };
@@ -125,8 +131,14 @@ export function OralScreen({ state, actions, language, active, onToday, onRefine
   const showRecovery = usable && !suspended && (phase === "unknown" || phase === "stale" || phase === "closed"
     || !!problem || lanes.some(lane => lane.pending) || state!.canRetry.study || state!.canRetry.stop);
   const allowed = (capability: boolean | undefined) => usable && capability === true;
+  const checkBlocked = state?.gate?.checkable === false;
+  const studyBlocked = state?.gate?.primaryWritable === false, stopBlocked = state?.gate?.stopWritable === false;
+  const gateHeld = checkBlocked || !!state?.canRetry.study && studyBlocked || !!state?.canRetry.stop && stopBlocked;
   const toToday = closedSummary !== null || allowed(state?.canSummaryHome);
   const refineCard = active && phase !== "disposed" ? oralRefineCardId(state) : null;
+  // Q29 (fix5): a refused start stays on this screen until the person leaves it; its exit names that refusal (П01).
+  const study = state?.commands.study;
+  const startRefused = usable && !assignment && study?.outcome === "rejected" && study.resolved?.kind === "session.start";
 
   // Waiting for the summary of the own Stop looks like the application start, never like a zero result.
   if (waiting) return <main className="app-shell" lang={language} aria-busy="true">
@@ -179,12 +191,19 @@ export function OralScreen({ state, actions, language, active, onToday, onRefine
         onClick={() => { if (closedSummary) onToday(); else if (allowed(state?.canSummaryHome)) void actions.stop("summary_home"); }}>{t.today}</button>
     </section>}
     {problem && <p role="status">{problem}</p>}
+    {startRefused && <button type="button" className="oral-today"
+      onClick={() => onToday(startRefusalIntent(study))}>{t.today}</button>}
     {showRecovery && <section className="oral-recovery" aria-label={t.recovery}>
       {state!.commands.study.pending && state!.commands.study.outcome === null && <p>{t.pendingStudy}</p>}
       {state!.commands.stop.pending && state!.commands.stop.outcome === null && <p>{t.pendingStop}</p>}
-      <button type="button" disabled={refreshBusy} onClick={() => { if (usable && !refreshBusy) void actions.refresh(); }}>{t.refresh}</button>
-      {state!.canRetry.study && <button type="button" onClick={() => { if (allowed(state!.canRetry.study)) void actions.retry("study"); }}>{t.retryStudy}</button>}
-      {state!.canRetry.stop && <button type="button" onClick={() => { if (allowed(state!.canRetry.stop)) void actions.retry("stop"); }}>{t.retryStop}</button>}
+      {/* §4.1 «Правило кнопки» (C335; M-P03-9/10): visible and inactive while the write gate holds, with its wait. */}
+      {gateHeld && state!.gate?.wait && <p role="status" className="command-note">{gateWaitText(language, state!.gate.wait)}</p>}
+      <button type="button" disabled={refreshBusy || checkBlocked}
+        onClick={() => { if (usable && !refreshBusy && !checkBlocked) void actions.refresh(); }}>{t.refresh}</button>
+      {state!.canRetry.study && <button type="button" disabled={studyBlocked}
+        onClick={() => { if (allowed(state!.canRetry.study) && !studyBlocked) void actions.retry("study"); }}>{t.retryStudy}</button>}
+      {state!.canRetry.stop && <button type="button" disabled={stopBlocked}
+        onClick={() => { if (allowed(state!.canRetry.stop) && !stopBlocked) void actions.retry("stop"); }}>{t.retryStop}</button>}
     </section>}
   </main>;
 }

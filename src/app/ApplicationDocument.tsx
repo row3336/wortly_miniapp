@@ -1,3 +1,4 @@
+import type { ForegroundIntent } from "./entryController";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from "react";
 import type { LearningPreviewAddress } from "../api/generated";
 import type { HttpOptions } from "../api/http";
@@ -35,7 +36,11 @@ import { useConjugationHost, type ConjugationStores } from "./ConjugationHost";
 type Props = {
   access: OpenedAccess; transport: HttpOptions; pendingStore: SettingsPendingStore; language: Language;
   storage: AsyncStorage; newId(): string; oralStores: OralStores; conjugationStores: ConjugationStores;
-  foreground(): Promise<OpenedAccess | null>;
+  /**
+   * "unconfirmed" (P02-W К-11, AC-11h; M-P03-10): the window is in recovery — the foreground proved no synchronization;
+   * the document keeps what it shows, waits, and synchronizes again once the identity is confirmed (ВР-6).
+   */
+  foreground(options?: ForegroundIntent): Promise<OpenedAccess | null | "unconfirmed">;
   onCurrent(current: SettingsObservation): void;
   /** The card a bot button asked for at launch (answer Q20); taken by the first document only. */
   launchCard?: LaunchCard;
@@ -96,7 +101,8 @@ export function ApplicationDocument(props: Props) {
   const visit = useMemo<DictionaryVisit | null>(() => route.screen !== "dictionary" ? null
     : route.restored?.source === "dictionary" ? { kind: "return", scroll: route.restored.scroll ?? null } : { kind: "entry" }, [route]);
   const [floor, setFloor] = useState<SettingsObservation | null>(null);
-  const [gate, setGate] = useState<"ready" | "loading" | "failed">("ready");
+  // waiting: the third state of a synchronization the recovery left unconfirmed — neither ready nor failed (AC-11h).
+  const [gate, setGate] = useState<"ready" | "loading" | "waiting" | "failed">("ready");
   // The Learning owner is chosen once per document; later mode reads never reseed or remount it.
   // A resumed seed belongs to the dictionary pair it was read for.
   const [selected, setSelected] = useState<ModeSeed>(null);
@@ -119,11 +125,12 @@ export function ApplicationDocument(props: Props) {
   const seedReleased = useRef(false);
   const synchronizedClosed = useRef(new Set<string>());
   // Answer 17.1-А (R1): the sessions this document refreshed its access for after its own accepted start landed in
-  // another pair. One refresh per session: a failed one ends as any foreground does, with its manual retry.
+  // another pair. One refresh per session: a failed one ends as any foreground does — a lost transport answer of the
+  // working window recovers by itself (К-11: one foreground after ready), another refusal leaves the window's own route.
   const refreshedFor = useRef(new Set<string>());
   useEffect(() => { lifetime.current++; return () => { lifetime.current++; running.current = null; }; }, []);
 
-  const synchronize = useCallback(() => {
+  const synchronize = useCallback((intent?: ForegroundIntent) => {
     if (running.current) return running.current;
     const generation = lifetime.current, key = current.current.access.key;
     const live = () => generation === lifetime.current && current.current.access.key === key;
@@ -131,8 +138,10 @@ export function ApplicationDocument(props: Props) {
     const task = (async () => {
       // The first open may join a request started before a setting was committed.
       for (let attempt = 0; attempt < 2; attempt++) {
-        const opened = await current.current.foreground();
+        // fix3 (П01): only the first exchange carries the transition of a refused start to Today.
+        const opened = await current.current.foreground(attempt === 0 ? intent : undefined);
         if (!live()) return;
+        if (opened === "unconfirmed") { setGate("waiting"); return; }
         if (!opened?.isLive() || opened.key !== key) break;
         if (covers(opened, latest.current)) { setGate("ready"); return; }
       }
@@ -143,6 +152,11 @@ export function ApplicationDocument(props: Props) {
     running.current = task;
     return task;
   }, []);
+
+  // A synchronization the recovery left unconfirmed runs again once the window's access is confirmed anew (ВР-6).
+  useEffect(() => {
+    if (gate === "waiting" && props.access.isLive()) void synchronize();
+  }, [gate, props.access, synchronize]);
 
   // The same refresh as a return to the window (client/open): the server names the pair and the session to go into.
   const refreshForStart = useCallback((sessionId: string) => {
@@ -260,11 +274,12 @@ export function ApplicationDocument(props: Props) {
   // The launch card host that has shown its content: closing it after that forgets the card in the address (answer S03).
   const shownLaunch = useRef<string | null>(null);
 
-  const today = () => {
+  const today = (intent?: ForegroundIntent) => {
     attemptedFloor.current = latest.current?.version ?? null;
     navigate({ type: "home" });
-    void synchronize();
+    void synchronize(intent);
   };
+  // fix4 (П01): a study host passes the intent only from the screen of a start refused as SESSION_BUSY (startRefusalIntent).
   // Native Back of a non-study screen (TA:86): a return to Today is its «Сегодня» (SettingsScreen onToday) with the
   // same refresh; a session supplies its own exit from its owner. A gate-hidden Host is not Settings.
   const destination = backDestination(route);
@@ -371,7 +386,7 @@ export function ApplicationDocument(props: Props) {
       minimumStateVersion={highest(floor?.version, selected.version)} initialSessionId={seed}
       route={hostRoute} submitOnEnter renderPreview={renderPreview} quizzes={quizzes} page={props.learningPage}
       onLearning={() => { hostClaimed.current = true; navigate({ type: "open", screen: "learning" }); }}
-      onToday={() => { hostClaimed.current = false; seedReleased.current = true; today(); }}
+      onToday={intent => { hostClaimed.current = false; seedReleased.current = true; today(intent); }}
       onSettings={openSettings} onForeignStart={refreshForStart}
       onNavigate={destination => destination === "statistics" ? navigate({ type: "push", screen: "statistics" }) : openTab(destination)} />}
     {screen}
