@@ -8,8 +8,8 @@ import { oralIntentHash, type OralCommand, type OralIntent } from "../oral/oralI
 import { settingsResponse } from "../settings/settingsRead.test-support";
 import type { WrittenCardAction } from "../written/useWrittenHost";
 import { App } from "./App";
-import { commandPosts, enabledExits, foregroundOpen, loseReply, moveWithout, noLandings, pairMoved, settle as pause,
-  watchCommits } from "./pairMoved.test-support";
+import { commandPosts, enabledExits, foregroundOpen, LONG_SCENARIO_MS, loseReply, moveWithout, noLandings, pairMoved,
+  settle as pause, watchCommits } from "./pairMoved.test-support";
 import { windows } from "./twoWindows.test-support";
 import { pageGateOpen } from "./pageGate.test-support";
 
@@ -383,7 +383,7 @@ describe("oral R1: the window refreshes itself into the session of the new pair 
     expect(w.posts("B")).toEqual([["session.start", started], ["assignment.present", started], ["oral.reveal", started],
       ["session.stop", started]]);
     expect(w.posts("A")).toEqual([]);
-  });
+  }, LONG_SCENARIO_MS);
   // C151 forks: a reply below the floor, a reply naming another session, and a refresh that finds the created session
   // closed, another session open or the pair changed again. None is this start's R1 landing: no refresh into it, no new
   // start, no Stop of any session, and the session is never shown. The refresh asks once; the second open after it is the
@@ -432,5 +432,5 @@ describe("oral R1: the window refreshes itself into the session of the new pair 
     fireEvent.click(screen.getByRole("button", { name: "Выйти" })); await pause(1500);
     expect(commandPosts(a.fetcher, mark).map(post => [post.kind, post.session_id])).toEqual([["session.start", world.started],
       ["assignment.present", world.started], ["oral.reveal", world.started], ["session.stop", world.started]]);
-  });
+  }, LONG_SCENARIO_MS);
 });

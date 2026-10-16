@@ -6,8 +6,8 @@ import { activeButton } from "../app/gateButton.test-support";
 import { StrictMode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { App } from "../app/App";
-import { commandPosts, enabledExits, foregroundOpen, loseReply, moveWithout, noLandings, pairMoved, settle,
-  watchCommits } from "../app/pairMoved.test-support";
+import { commandPosts, enabledExits, foregroundOpen, LONG_SCENARIO_MS, loseReply, moveWithout, noLandings, pairMoved,
+  settle, watchCommits } from "../app/pairMoved.test-support";
 import { app, exchange, pairText, row, useWrittenAppEnvironment } from "./writtenApp.test-support";
 
 /**
@@ -123,7 +123,7 @@ describe("written R1: the window refreshes itself into the session of the new pa
     expect(world.opens.slice(opens)).toEqual(["foreground"]);
     expect((screen.getByRole("button", { name: "Выйти" }) as HTMLButtonElement).disabled).toBe(true);
     expect(commandPosts(a.fetcher, mark).map(post => post.kind)).toEqual(["session.start"]);
-  });
+  }, LONG_SCENARIO_MS);
 
   // C151 forks: a reply below the floor, a reply naming another session, and a refresh that finds the created session
   // closed, another session open or the pair changed again. None is this start's R1 landing: no refresh into it, no new

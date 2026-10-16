@@ -16,8 +16,8 @@ import { SessionResumeController } from "../study/sessionResumeController";
 import { App } from "./App";
 import { latestPageGate, setPageProbe } from "./pageGate.test-support";
 import type { WriteGate } from "../commands/writeGate";
-import { enabledExits, foregroundOpen, loseReply as loseStudyReply, moveWithout, noLandings, pairMoved, settle as pause,
-  watchCommits } from "./pairMoved.test-support";
+import { enabledExits, foregroundOpen, LONG_SCENARIO_MS, loseReply as loseStudyReply, moveWithout, noLandings, pairMoved,
+  settle as pause, watchCommits } from "./pairMoved.test-support";
 import { gate, refuseOnce, replaceDocument, watchFlash } from "./flashWatch.test-support";
 import { staleCommand, staleRefusal } from "./openRules.test-support";
 import { cardIdOf } from "../dictionary/card/cardTestData.test-support";
@@ -1875,7 +1875,7 @@ describe("Learning R1: the window refreshes itself into the session of the new p
     expect(world.opens.slice(opens)).toEqual(["foreground"]);
     const after = screen.getByRole("textbox") as HTMLInputElement;
     expect(after.value).toBe("Hau"); expect(after).toBe(input);
-  });
+  }, LONG_SCENARIO_MS);
   // C151 (no false published state): from the tap until the card, «not started» is never on screen, neither in the old
   // pair nor in the new one; the start under way shows the loading status the start itself shows.
   it.each([["R1", true, false], ["own pair", false, false], ["R1 StrictMode", true, true], ["own pair StrictMode", false, true]] as const)(
@@ -1920,7 +1920,7 @@ describe("Learning R1: the window refreshes itself into the session of the new p
     expect(world.opens.slice(opens)).toEqual(["foreground"]);
     expect(a.studyPosts().map(post => post.kind)).toEqual(["session.start"]);
     expect(enabledExits()).toEqual([]);
-  });
+  }, LONG_SCENARIO_MS);
   // 2.3-А with the automatic recovery (QA-R1-V3 F6). An old record X of this installation in the written slot of the new
   // pair, of an automatic kind, addressed to a session Z that is no open step of this window. After the refresh the
   // written owner of the new pair resumes X with the send count the page knows (k), checks it by its ID only, and the

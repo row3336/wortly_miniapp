@@ -2,7 +2,7 @@
 // server, B still shows ru. The fake answers several installations as the core does (twoWindows.test-support).
 import { fireEvent, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { commandPosts, pairMoved, settle } from "../app/pairMoved.test-support";
+import { commandPosts, LONG_SCENARIO_MS, pairMoved, settle } from "../app/pairMoved.test-support";
 import { windows } from "../app/twoWindows.test-support";
 import { app, exchange, useWrittenAppEnvironment } from "./writtenApp.test-support";
 
@@ -49,7 +49,7 @@ describe("written R1 with two real windows of one profile", () => {
       ["session.stop", started]]);
     expect(w.posts("A")).toEqual([]);
     expect(commandPosts(a.fetcher).filter(post => post.kind === "session.start")).toHaveLength(1);
-  });
+  }, LONG_SCENARIO_MS);
 
   it("no R1: B itself holds the new pair, so its start refreshes nothing", async () => {
     const a = app({ cards: [6, 7] }); const world = pairMoved(a.fetcher), w = windows(a.fetcher);
@@ -88,5 +88,5 @@ describe("written R1 with two real windows of one profile", () => {
     await answerAndStop(A);
     expect(w.posts("A")).toEqual([["session.start", own], ["assignment.present", own], ["answer.submit", own], ["session.stop", own]]);
     expect(w.posts("B").map(post => post[0])).toEqual(["session.start"]);
-  });
+  }, LONG_SCENARIO_MS);
 });

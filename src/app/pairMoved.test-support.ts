@@ -8,6 +8,15 @@ const pathOf = (url: string | URL | Request) => new URL(String(url), "http://loc
 
 export const settle = (ms: number) => act(async () => { await new Promise(done => setTimeout(done, ms)); });
 
+/**
+ * Test timeout of a scenario that is long by construction: its explicit `settle` pauses (real time, "nothing more is sent
+ * or opened") add up to 4-7 s on their own, so vitest's 5 s default is a limit of the harness, not a product timer. The
+ * product's own timers (the page gate's 5/10/20/30 s series, the 5 s of a hold) are untouched and the pauses are not
+ * shortened. Measured with the default lifted (79c9c5b, loaded machine): 3.4-9.2 s per scenario, so 20 s is about twice
+ * the slowest. A limit for named tests only, never the global `testTimeout`.
+ */
+export const LONG_SCENARIO_MS = 20_000;
+
 /** Every "state_version" of a reply, 5 higher. */
 const grown = (raw: string) => raw.replace(/"state_version":"([1-9][0-9]*)"/g, (_, value: string) => `"state_version":"${BigInt(value) + 5n}"`);
 
