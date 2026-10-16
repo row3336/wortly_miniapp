@@ -4,6 +4,7 @@ import type { EntryState } from "./entryState";
 import { RemoteStopScreen } from "../study/RemoteStopScreen";
 import { gateWaitText } from "../commands/CommandRecovery";
 import { recoveryCopy } from "../commands/commandCopy";
+import { deleteText } from "../profile/profileDeleteCopy";
 
 type Props = {
   state: EntryState;
@@ -15,15 +16,28 @@ type Props = {
   onRemoteConfirm?: () => void;
   onRemoteCheck?: () => void;
   onRemoteRetry?: () => void;
+  /** PD-28: the explicit sign-in after an unknown outcome of the deletion; never called by itself. */
+  onLogin?: () => void;
   /** The check of a window whose request got DOCUMENT_STALE: only its title differs from the ordinary entry. */
   afterStale?: boolean;
 };
 
 export function EntryScreen({ state, language, onRetry, onReapply,
-  onRemoteRequest, onRemoteCancel, onRemoteConfirm, onRemoteCheck, onRemoteRetry, afterStale }: Props) {
+  onRemoteRequest, onRemoteCancel, onRemoteConfirm, onRemoteCheck, onRemoteRetry, onLogin, afterStale }: Props) {
   if (state.kind === "remote" || state.kind === "remote_confirm" || state.kind === "busy" && state.remoteTarget) {
     return <RemoteStopScreen state={state} language={language} onRequest={onRemoteRequest}
       onCancel={onRemoteCancel} onConfirm={onRemoteConfirm} onCheck={onRemoteCheck} onRetry={onRemoteRetry} />;
+  }
+  if (state.kind === "profile_deleted" || state.kind === "deletion_unknown") {
+    // P04 ред.14 §8: no automatic sign-in from here; the deleted result has no button at all (S-A07, TZA:313).
+    const d = deleteText(language), unknown = state.kind === "deletion_unknown";
+    return <main className="app-shell">
+      <section className="entry-card" aria-live="polite">
+        <h1>{unknown ? d.unknownTitle : d.group}</h1>
+        <p>{unknown ? d.unknownDetail : d.deleted}</p>
+        {unknown && onLogin && <button className="primary-action" type="button" onClick={onLogin}>{d.login}</button>}
+      </section>
+    </main>;
   }
   const copy = t(language);
   // К-9 / a first open held by the outage mark (P03 §4.8, §4.10): a wait screen without a button — the planned pause

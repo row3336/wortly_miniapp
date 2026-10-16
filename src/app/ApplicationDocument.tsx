@@ -32,6 +32,7 @@ import type { OpenedAccess } from "./openedAccess";
 import type { LearningPageStarts } from "../learning/learningPageStarts";
 import { useOralHost, type OralStores } from "./OralHost";
 import { useConjugationHost, type ConjugationStores } from "./ConjugationHost";
+import type { DeletionEnd } from "../profile/profileDeleteController";
 
 type Props = {
   access: OpenedAccess; transport: HttpOptions; pendingStore: SettingsPendingStore; language: Language;
@@ -46,6 +47,8 @@ type Props = {
   launchCard?: LaunchCard;
   /** The Learning starts of this page (35.1-А); the JS document's own unless a test models another page. */
   learningPage?: LearningPageStarts;
+  /** The end of a profile deletion on its screen in Settings (P04 §8); without it Settings offer no deletion. */
+  onDeletionEnded?(end: DeletionEnd): void;
 };
 function covers(opened: OpenedAccess, floor: SettingsObservation | null): boolean {
   if (!floor) return true;
@@ -415,7 +418,8 @@ export function ApplicationDocument(props: Props) {
     {settingsOpened && <div hidden={at !== "settings"}>
       <SettingsHost access={props.access} transport={props.transport} document={settings}
         language={props.language} active={at === "settings"} onToday={today}
-        onDictionary={choice === "chosen" ? () => openTab("dictionary") : undefined} />
+        onDictionary={choice === "chosen" ? () => openTab("dictionary") : undefined}
+        deletion={props.onDeletionEnded ? { storage: props.storage, newId: props.newId, onEnded: props.onDeletionEnded } : undefined} />
     </div>}
   </div>;
 }

@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import type { SettingConstraint, Topic } from "../api/generated";
 import { BottomNav } from "../app/BottomNav";
 import type { FeedbackDocument } from "../feedback/useFeedbackDocument";
@@ -39,6 +39,8 @@ export type SettingsScreenProps = {
   onView?(view: SettingsView): void;
   /** «Открыть бота» in the submenu before the bot is opened (R12-15). */
   onOpenBot?(): void;
+  /** The item of the profile deletion on the main view (P04 §8, П5-006); its screen belongs to the host. */
+  profileDeletion?: ReactNode;
 };
 export type SettingsView = "main" | "notifications";
 const groups: Array<{ name: "languages" | "learning" | "checking" | "additional"; fields: MainSettingKey[] }> = [
@@ -374,6 +376,7 @@ export function SettingsScreen(props: SettingsScreenProps) {
     {snapshot.data && <SettingsReset snapshot={snapshot} language={language} onReset={() => { clearResult(); void actions.reset(); }}
       onRetry={() => { void actions.retry(); }} />}
     {feedback && <SettingsFeedback feedback={feedback} language={language} />}
+    {props.profileDeletion}
     <BottomNav current="settings" language={language} enabled={onDictionary ? ["today", "dictionary"] : ["today"]}
       onNavigate={tab => { if (tab === "today") onToday(); else if (tab === "dictionary") onDictionary?.(); }} />
     </div>

@@ -19,6 +19,8 @@ import { journalAccess, journalRecord } from "../journal/clientJournal";
 import { GatePending, pausedBeforeSend } from "../commands/gatePending";
 import type { GateDoc, GateEvent, P01Episode, RemoteReadContext, RequestOrigin, RequestStamp, WriteGate } from "../commands/writeGate";
 import { gateWait } from "../commands/gateWait";
+import { wipeProfileRecords } from "../profile/profileWipe";
+import type { DeletionEnd } from "../profile/profileDeleteController";
 
 export type EntrySnapshot = { state: EntryState; profile?: Profile };
 
@@ -32,6 +34,14 @@ export type ForegroundIntent = { startRefused?: string };
 /** HTTP 401 means this sign-in no longer works: retrying with the same signed data cannot help. */
 function expiredBy(error: unknown): boolean {
   return error instanceof EntryApiError && error.kind === "http" && error.status === 401;
+}
+
+/**
+ * 403 PROFILE_DELETED (P04 ред.14 §8, §3.9): the profile is deleted — its result, without a retry or a button that would
+ * sign in again.
+ */
+function deletedBy(error: unknown): boolean {
+  return error instanceof EntryApiError && error.kind === "http" && error.status === 403 && error.code === "PROFILE_DELETED";
 }
 
 /** A planned pause of the core or of the responder (503 MAINTENANCE, §3.2). */
@@ -391,6 +401,7 @@ export class EntryController {
     if (pausedBeforeSend(error) && (error.reason === "closed_window" || error.reason === "cancelled")) return;
     this.recovery = "none";
     this.resetInvalidSession(error);
+    if (deletedBy(error)) { this.emit({ kind: "profile_deleted" }); return; }
     if (expiredBy(error)) { this.emit({ kind: "expired" }); return; }
     // К-9: a window without a working document met a planned pause (on open, auth or register) or a gate that kept its
     // open on the client: a wait screen without a button until ready and the end of the hold, then К-7 — no open.
@@ -416,6 +427,7 @@ export class EntryController {
   }
 
   private failureState(error: unknown): EntryState {
+    if (deletedBy(error)) return { kind: "profile_deleted" };
     return expiredBy(error) ? { kind: "expired" } : this.unavailableState();
   }
 
@@ -672,6 +684,9 @@ export class EntryController {
     // and clears its buffer (P04 r9 §3.8); another 403 (a refused proof) only stops its sending.
     if (error.status === 403 && (error.code === "PROFILE_DELETED" || error.code === "ACCESS_PENDING" || error.code === "ACCESS_REJECTED")) {
       journalAccess.revoke(true);
+      // CON §7.3 п.2, P04 §8: after PROFILE_DELETED (also on another device) the local records of X go too.
+      const deleted = this.session?.profile.profile_id;
+      if (error.code === "PROFILE_DELETED" && deleted) void wipeProfileRecords(this.options.storage, deleted);
     } else {
       journalAccess.credentials(null);
       if (error.status === 401) journalAccess.revoke(false);
@@ -1246,6 +1261,20 @@ export class EntryController {
     });
     this.running = task;
     return task;
+  }
+
+  /**
+   * The deletion screen ended this document (P04 ред.14 §8, PD-28): the sign-in is dropped and no sign-in follows by
+   * itself. deleted — the result S-A07; unknown — «исход неизвестен» with the explicit sign-in (start()); expired —
+   * AUTH_* on the first attempt, the ordinary expired screen.
+   */
+  endAfterDeletion(end: DeletionEnd): void {
+    if (this.disposed || this.replaced) return;
+    this.generation += 1; // A pending foreground reply must not reopen the document.
+    this.recovery = "none";
+    this.resetInvalidSession(end.kind === "deleted"
+      ? new EntryApiError("http", 403, "PROFILE_DELETED") : new EntryApiError("http", 401, "AUTH_INVALID"));
+    this.emit({ kind: end.kind === "deleted" ? "profile_deleted" : end.kind === "unknown" ? "deletion_unknown" : "expired" });
   }
 
   dispose(): void {

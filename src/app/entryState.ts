@@ -38,4 +38,9 @@ export type EntryState =
   | { kind: "unavailable"; route?: "document" | "own" | "profile" | "blocked"; checkable?: true; waiting?: true; wait?: GateWait }
   // The window closed for good by ВР-8 (identity) or ВР-8б (SESSION_BUSY on the recovery foreground), P03 §4.12: the
   // platform closes it; where it cannot, a line without buttons stays.
-  | { kind: "closed"; reason: "identity" | "busy" };
+  | { kind: "closed"; reason: "identity" | "busy" }
+  // P04 ред.14 §8: the profile is deleted (applied, already_applied or PROFILE_DELETED): the one-time result S-A07,
+  // no automatic sign-in. deletion_unknown: AUTH_* after an unknown outcome of the deletion (PD-28): only an explicit
+  // sign-in follows.
+  | { kind: "profile_deleted" }
+  | { kind: "deletion_unknown" };

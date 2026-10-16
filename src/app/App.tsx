@@ -32,6 +32,9 @@ import type { ConjugationStores } from "./ConjugationHost";
 import packageJson from "../../package.json";
 import { clientJournal, installClientJournal } from "../journal/clientJournal";
 import { createPageJournal, watchPage } from "../journal/pageJournal";
+import type { DeletionEnd } from "../profile/profileDeleteController";
+import { DeletionNotice, deletionCheckResult } from "../profile/DeletionNotice";
+import { wipeProfileRecords } from "../profile/profileWipe";
 
 /** The entry is still being decided: the launch screen keeps waiting (М20). Every other state is an answer, success or refusal. */
 const undecided: ReadonlySet<EntryState["kind"]> = new Set(["checking", "opening", "reapplying"]);
@@ -58,6 +61,10 @@ export function App({ learningPage }: { learningPage?: LearningPageStarts } = {}
   // Read once at launch; the opened document takes it after the ordinary entry (answer Q20).
   const [launchCard] = useState(() => new LaunchCard(launchCardId(window.location.search), () => forgetLaunchCard(window)));
   const openedRef = useRef<OpenedAccess | null>(null);
+  // PD-28 (P04 §3.7): the profile whose deletion ended unknown; the next profile the explicit sign-in names decides it.
+  // Memory of this page only: a reload or a closed Mini App forgets it, like the intent itself (Q-DEL-4).
+  const deletionCheck = useRef<string | null>(null);
+  const [deletionNotice, setDeletionNotice] = useState<"deleted" | "not_deleted" | null>(null);
   const storageRef = useRef<AsyncStorage | null>(null);
   const observedLanguage = useRef<{ profileId: string; version: string } | null>(null);
   const languageWrites = useRef(Promise.resolve());
@@ -78,6 +85,11 @@ export function App({ learningPage }: { learningPage?: LearningPageStarts } = {}
       publishLanguage(current.profileId, current.version, current.uiLanguage);
     }
   }, [publishLanguage]);
+  // The deletion screen ended the document (P04 §8): no sign-in follows by itself.
+  const endDeletion = useCallback((end: DeletionEnd) => {
+    deletionCheck.current = end.kind === "unknown" ? end.confirmedProfileId : null;
+    controller?.endAfterDeletion(end);
+  }, [controller]);
   const foreground = useCallback(async (intent?: ForegroundIntent) => {
     await controller?.foreground("screen", intent);
     // While the window recovers (К-11/К-9а) its foreground proves nothing to the screens (AC-11h).
@@ -180,6 +192,13 @@ export function App({ learningPage }: { learningPage?: LearningPageStarts } = {}
                 notifyAcceptedMilestone(window, "entry");
               }
             }
+            const confirmed = deletionCheck.current, checked = deletionCheckResult(confirmed, snapshot);
+            if (confirmed && checked) {
+              deletionCheck.current = null;
+              // Another profile after the explicit sign-in: the earlier one is deleted, its local records go (§3.7 (A)).
+              if (checked === "deleted") void wipeProfileRecords(readyStorage, confirmed);
+              setDeletionNotice(checked);
+            }
             if (snapshot.profile) {
               publishLanguage(snapshot.profile.profile_id, snapshot.profile.state_version, snapshot.profile.ui_language);
             }
@@ -227,6 +246,10 @@ export function App({ learningPage }: { learningPage?: LearningPageStarts } = {}
   useBackLayer("check", documentCheck ? holdBack : null);
 
   const content = (): ReactNode => {
+    // PD-28 after the explicit sign-in: the conclusion first; the entry of the profile now signed in waits under it.
+    if (language !== null && deletionNotice) {
+      return <DeletionNotice kind={deletionNotice} language={language} onContinue={() => setDeletionNotice(null)} />;
+    }
     if (language === null) {
       return (
         <EntryScreen
@@ -244,7 +267,7 @@ export function App({ learningPage }: { learningPage?: LearningPageStarts } = {}
         <div className="document-check" style={{ display: documentCheck ? "none" : "contents" }} inert={documentCheck}>
           <ApplicationDocument key={access.key} access={access} transport={transport} pendingStore={pendingStore}
             storage={storage} oralStores={oralStores} conjugationStores={conjugationStores} newId={newId} language={language}
-            foreground={foreground} onCurrent={observeSettings}
+            foreground={foreground} onCurrent={observeSettings} onDeletionEnded={controller ? endDeletion : undefined}
             launchCard={launchCard} learningPage={learningPage} />
         </div>
         {documentCheck && <EntryScreen state={{ kind: "checking" }} language={language} afterStale />}
@@ -267,6 +290,7 @@ export function App({ learningPage }: { learningPage?: LearningPageStarts } = {}
         onRemoteConfirm={controller ? () => { void controller.confirmRemoteStop(); } : undefined}
         onRemoteCheck={controller ? () => { void controller.checkRemoteStop(); } : undefined}
         onRemoteRetry={controller ? () => { void controller.retryRemoteStop(); } : undefined}
+        onLogin={controller && entryState.kind === "deletion_unknown" ? () => { void controller.start(); } : undefined}
       />
     );
   };
