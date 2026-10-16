@@ -1,7 +1,7 @@
 import { settingsResponse as current } from "./settingsRead.test-support";
 import { describe, expect, it, vi } from "vitest";
 import { clientContractVersion } from "../api/http";
-import type { Profile, SavedCommandFact, SettingCommand, SettingsResetCommand, SettingsResponse } from "../api/generated";
+import type { Profile, SavedCommandFact, SettingCommand, SettingsResetCancelCommand, SettingsResetCommand, SettingsResponse } from "../api/generated";
 import {
   allowedSettingValue, createSettingsApi, resetKeys, validSettingIntent, validSettingsResetIntent,
   type EditableSettingIntent, type SettingIntent, type SettingKey, type SettingSaveCommand, type SettingsResetIntent,
@@ -472,19 +472,27 @@ describe("Settings recovery status", () => {
   });
 });
 
-describe("Settings reset exchange (M-SET-RESET, D-SET-RESET 4.3.3)", () => {
-  const resetIntent = (): SettingsResetIntent => ({ command_id: id(1), kind: "settings.reset", payload: {} });
-  const resetCommand = (): SettingsResetCommand => ({ ...resetIntent(), client_instance_id: id(2), document_id: id(3) });
+describe("Settings reset exchange (M-SET-RESET, D-SET-RESET 4.3.3, P02-R I.5–I.8, R16-01)", () => {
+  const resetIntent = (): SettingsResetIntent => ({ command_id: id(1), kind: "settings.reset", payload: { expected_reset_epoch: "3" } });
+  const legacyIntent = (): SettingsResetIntent => ({ command_id: id(1), kind: "settings.reset", payload: {} });
+  const resetCommand = (): SettingsResetCommand => ({ command_id: id(1), kind: "settings.reset", client_instance_id: id(2),
+    document_id: id(3), payload: { expected_reset_epoch: "3" } });
   // A reset has no field version: its fact carries the settings row version, unrelated to any intent field.
   const resetFact = (): SavedCommandFact => ({ ...fact(), kind: "settings.reset", object_version: "7" });
   const resetReply = () => ({ command: resetFact(), current: current(), state_version: big });
+  const refusal = (code: string) => ({ command: { id: id(1), status: "rejected" }, error: { code }, current: current(), state_version: big });
+  const statusRefusal = (outcome: string, code: string, http?: number | null) => ({ command: { id: id(1), kind: "settings.reset",
+    status: "rejected", outcome, refused_at: time, ...(http === undefined ? {} : { http_status: http }) }, error: { code },
+  current: current(), state_version: big });
+  const read = (body: unknown, status = 200, intent = resetIntent()) =>
+    readWithTicket(intent, (__command, __ticket) => setup(body, status).api.resetStatus("synthetic", subject, __command, __ticket));
 
   it("lists exactly the eleven fields of TC 13.1 and never the reminder pause, languages or material", () => {
     expect([...resetKeys].sort()).toEqual(["include_comparative", "include_preterite", "learning_content", "learning_group_size",
       "learning_intervals_seconds", "learning_mix", "retry_count", "retry_gap", "review_error_mode", "strict_case", "transition_mode"]);
   });
 
-  it("posts the exact empty-payload command and accepts the fact with its row version", async () => {
+  it("posts the exact command with the read's epoch and accepts the fact with its row version", async () => {
     const { api, fetcher } = setup(resetReply());
     await expect(api.reset("synthetic", "synthetic-proof", subject, resetCommand())).resolves.toEqual({
       outcome: "accepted", command: resetFact(), current: current(), state_version: big });
@@ -492,7 +500,7 @@ describe("Settings reset exchange (M-SET-RESET, D-SET-RESET 4.3.3)", () => {
     expect(url).toBe("/api/v1/commands");
     expect(init?.headers).toMatchObject({ "X-Origin-Proof": "synthetic-proof" });
     expect(JSON.parse(init!.body as string)).toEqual({ command_id: id(1), kind: "settings.reset", client_instance_id: id(2),
-      document_id: id(3), payload: {} });
+      document_id: id(3), payload: { expected_reset_epoch: "3" } });
     expect(fetcher).toHaveBeenCalledOnce();
   });
 
@@ -509,6 +517,8 @@ describe("Settings reset exchange (M-SET-RESET, D-SET-RESET 4.3.3)", () => {
     await expect(setup(body).api.reset("synthetic", "proof", subject, resetCommand())).rejects.toMatchObject({ kind: "invalid_response" });
     const empty = { ...resetReply(), current: { status: "unavailable" } };
     await expect(setup(empty).api.reset("synthetic", "proof", subject, resetCommand())).rejects.toMatchObject({ kind: "invalid_response" });
+    const epoch = { ...resetReply(), current: { ...current(), reset_epoch: "01" } };
+    await expect(setup(epoch).api.reset("synthetic", "proof", subject, resetCommand())).rejects.toMatchObject({ kind: "invalid_response" });
   });
 
   it("a save fact does not confirm a reset, nor a reset fact a save", async () => {
@@ -517,57 +527,178 @@ describe("Settings reset exchange (M-SET-RESET, D-SET-RESET 4.3.3)", () => {
     await expect(setup(body).api.save("synthetic", "proof", subject, command())).rejects.toMatchObject({ kind: "invalid_response" });
   });
 
-  it.each([403, 409, 422])("recognizes addressed refusals and a mismatch (%s)", async status => {
-    const body = { ...resetReply(), command: { id: id(1), status: "rejected" }, error: { code: "DOCUMENT_STALE" } };
-    await expect(setup(body, status).api.reset("synthetic", "proof", subject, resetCommand()))
-      .resolves.toMatchObject({ outcome: "rejected", error: { code: "DOCUMENT_STALE" }, current: current() });
-    body.error.code = "COMMAND_PAYLOAD_MISMATCH";
-    await expect(setup(body, status).api.reset("synthetic", "proof", subject, resetCommand())).resolves.toMatchObject({ outcome: "mismatch" });
+  it.each([
+    [409, "RESET_EPOCH_STALE"], [409, "RESET_CANCELLED"], [422, "VALIDATION_FAILED"], [409, "CLIENT_INCOMPATIBLE"],
+  ] as const)("I.7: an attributed %s %s is a stored refusal of this reset (F1/F2)", async (status, code) => {
+    await expect(setup(refusal(code), status).api.reset("synthetic", "proof", subject, resetCommand()))
+      .resolves.toEqual({ outcome: "refused", code, command: { id: id(1), status: "rejected" }, current: current(), state_version: big });
   });
 
-  it("an old core's plain 422 without current (unknown kind) is not read as a refusal (QA finding 3)", async () => {
-    await expect(setup({ error: { code: "VALIDATION_FAILED" } }, 422).api.reset("synthetic", "proof", subject, resetCommand()))
-      .rejects.toMatchObject({ kind: "http", status: 422 });
+  it.each([
+    ["F1 with 422", refusal("RESET_EPOCH_STALE"), 422], ["F2 VALIDATION_FAILED with 409", refusal("VALIDATION_FAILED"), 409],
+    ["F2 CLIENT_INCOMPATIBLE with 422", refusal("CLIENT_INCOMPATIBLE"), 422],
+    ["another command's ID", { ...refusal("VALIDATION_FAILED"), command: { id: id(9), status: "rejected" } }, 422],
+    ["a command with extra fields", { ...refusal("VALIDATION_FAILED"), command: { id: id(1), status: "rejected", kind: "settings.reset" } }, 422],
+    ["no current", { command: { id: id(1), status: "rejected" }, error: { code: "VALIDATION_FAILED" }, state_version: big }, 422],
+    ["a bare 422", { error: { code: "VALIDATION_FAILED" } }, 422], ["a bare 409", { error: { code: "CLIENT_INCOMPATIBLE" } }, 409],
+    ["DOCUMENT_STALE", refusal("DOCUMENT_STALE"), 409], ["SESSION_BUSY", refusal("SESSION_BUSY"), 409],
+    ["VERSION_CONFLICT", refusal("VERSION_CONFLICT"), 409], ["a 503", { error: { code: "WRITE_UNAVAILABLE" } }, 503],
+  ] as const)("R16-01: %s records no outcome of this reset and is no refusal: it throws", async (_label, body, status) => {
+    const error = await setup(body, status).api.reset("synthetic", "proof", subject, resetCommand()).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toHaveProperty("refusal");
+    expect(error).toMatchObject({ kind: "http", status });
   });
 
-  it("a lost reply is unknown, and the caller's repeat sends the identical body", async () => {
+  it("a mismatch of the reset's ID is its own answer only with its 409; another status records nothing of X (Q09)", async () => {
+    await expect(setup(refusal("COMMAND_PAYLOAD_MISMATCH"), 409).api.reset("synthetic", "proof", subject, resetCommand()))
+      .resolves.toMatchObject({ outcome: "mismatch", error: { code: "COMMAND_PAYLOAD_MISMATCH" } });
+    for (const status of [422, 403, 400]) {
+      await expect(setup(refusal("COMMAND_PAYLOAD_MISMATCH"), status).api.reset("synthetic", "proof", subject, resetCommand()))
+        .rejects.toMatchObject({ kind: "http", status, code: "COMMAND_PAYLOAD_MISMATCH" });
+    }
+  });
+
+  it("a lost reply is unknown; the API itself never repeats", async () => {
     const { api, fetcher } = setup(resetReply());
     fetcher.mockRejectedValueOnce(new Error("lost-after-commit"));
     await expect(api.reset("synthetic", "proof", subject, resetCommand())).rejects.toMatchObject({ kind: "network" });
     expect(fetcher).toHaveBeenCalledOnce();
-    await api.reset("synthetic", "proof", subject, resetCommand());
-    expect(fetcher.mock.calls[0][1]?.body).toBe(fetcher.mock.calls[1][1]?.body);
   });
 
   it.each([
     { payload: { key: "retry_count" } }, { kind: "setting.save" }, { command_id: "not-an-id" },
-    { expected_field_version: "1" }, { client_instance_id: "x" },
-  ])("never sends a malformed reset command %#", async corrupt => {
+    { expected_field_version: "1" }, { client_instance_id: "x" }, { payload: {} }, { payload: { expected_reset_epoch: "0" } },
+    { payload: { expected_reset_epoch: "007" } }, { payload: { expected_reset_epoch: 3 } },
+  ])("never sends a malformed reset command, nor one without an epoch %#", async corrupt => {
     const { api, fetcher } = setup(resetReply());
     await expect(api.reset("synthetic", "proof", subject, { ...resetCommand(), ...corrupt } as SettingsResetCommand)).rejects.toThrow();
     expect(fetcher).not.toHaveBeenCalled();
   });
 
-  it("validates the stored reset intent exactly", () => {
+  it("validates the stored reset intent exactly; the legacy empty payload is an intent too", () => {
     expect(validSettingsResetIntent(resetIntent())).toBe(true);
-    for (const corrupt of [{ payload: { extra: 1 } }, { kind: "setting.save" }, { command_id: "x" }, { extra: 1 }, { payload: null }]) {
+    expect(validSettingsResetIntent(legacyIntent())).toBe(true);
+    for (const corrupt of [{ payload: { extra: 1 } }, { kind: "setting.save" }, { command_id: "x" }, { extra: 1 }, { payload: null },
+      { payload: { expected_reset_epoch: "9223372036854775808" } }, { payload: { expected_reset_epoch: "3", extra: 1 } }]) {
       expect(validSettingsResetIntent({ ...resetIntent(), ...corrupt })).toBe(false);
     }
   });
 
-  it("status: accepted only for the reset fact, not_found keeps the same profile", async () => {
+  it("status: always with include_refusal=true; accepted only for the reset fact, the canonical not_found keeps the same profile", async () => {
     const accepted = { command: { ...resetFact(), status: "already_applied" }, current: current(), state_version: big };
-    await expect(readWithTicket(resetIntent(), (__command, __ticket) => setup(accepted).api.resetStatus("synthetic", subject, __command, __ticket))).resolves.toMatchObject({ outcome: "accepted" });
+    await expect(read(accepted)).resolves.toMatchObject({ outcome: "accepted" });
+    await expect(read(accepted, 200, legacyIntent())).resolves.toMatchObject({ outcome: "accepted" });
     const missing = setup({ command: { id: id(1), status: "not_found" }, current: profile(), state_version: big });
     await expect(readWithTicket(resetIntent(), (__command, __ticket) => missing.api.resetStatus("synthetic", subject, __command, __ticket))).resolves.toMatchObject({ outcome: "not_found" });
-    expect(missing.fetcher).toHaveBeenCalledExactlyOnceWith(`/api/v1/commands/${id(1)}`, expect.objectContaining({ method: "GET" }));
+    expect(missing.fetcher).toHaveBeenCalledExactlyOnceWith(`/api/v1/commands/${id(1)}?include_refusal=true`, expect.objectContaining({ method: "GET" }));
     for (const command of [{ ...fact(), status: "already_applied" }, { ...resetFact(), status: "already_applied", target_id: id(99) },
       resetFact()]) {
-      await expect(readWithTicket(resetIntent(), (__command, __ticket) => setup({ command, current: current(), state_version: big }).api.resetStatus("synthetic", subject, __command, __ticket)))
-        .rejects.toMatchObject({ kind: "invalid_response" });
+      await expect(read({ command, current: current(), state_version: big })).rejects.toMatchObject({ kind: "invalid_response" });
     }
     const partial = current(); delete (partial.settings as Partial<SettingsResponse["settings"]>).strict_case;
-    await expect(readWithTicket(resetIntent(), (__command, __ticket) => setup({ ...accepted, current: partial }).api.resetStatus("synthetic", subject, __command, __ticket)))
-      .rejects.toMatchObject({ kind: "invalid_response" });
+    await expect(read({ ...accepted, current: partial })).rejects.toMatchObject({ kind: "invalid_response" });
+  });
+
+  it.each([
+    ["another ID", { command: { id: id(9), status: "not_found" }, current: profile(), state_version: big }],
+    ["another profile", { command: { id: id(1), status: "not_found" }, current: { ...profile(), profile_id: id(8) }, state_version: big }],
+    ["an extra field", { command: { id: id(1), status: "not_found", kind: "settings.reset" }, current: profile(), state_version: big }],
+    ["an error beside it", { command: { id: id(1), status: "not_found" }, current: profile(), state_version: big, error: { code: "NOT_FOUND" } }],
+    ["no profile", { command: { id: id(1), status: "not_found" }, current: { status: "unavailable" }, state_version: big }],
+    ["no state version", { command: { id: id(1), status: "not_found" }, current: profile() }],
+  ])("C362: a not_found with %s is no canonical answer and decides nothing", async (_label, body) => {
+    await expect(read(body)).rejects.toMatchObject({ kind: "invalid_response" });
+  });
+
+  it.each([
+    ["404 page", { error: { code: "NOT_FOUND" } }, 404], ["503", { error: { code: "MAINTENANCE" } }, 503],
+    ["401", { error: { code: "AUTH_EXPIRED" } }, 401],
+  ] as const)("C362: a failed status read (%s) throws and is no not_found", async (_label, body, status) => {
+    await expect(read(body, status)).rejects.toMatchObject({ kind: "http", status });
+  });
+
+  it.each([
+    ["rejected_stale_epoch", "RESET_EPOCH_STALE", undefined], ["cancelled", "RESET_CANCELLED", null],
+    ["rejected_invalid", "VALIDATION_FAILED", 422], ["rejected_incompatible", "CLIENT_INCOMPATIBLE", 409],
+  ] as const)("I.8: a stored refusal %s reads as refused with its code", async (outcome, code, http) => {
+    await expect(read(statusRefusal(outcome, code, http))).resolves.toMatchObject({ outcome: "refused", code,
+      command: { id: id(1), kind: "settings.reset", status: "rejected", outcome, refused_at: time }, current: current() });
+    const unavailable = { ...statusRefusal(outcome, code, http), current: { status: "unavailable" } };
+    await expect(read(unavailable)).resolves.toMatchObject({ outcome: "refused", code, current: { status: "unavailable" } });
+  });
+
+  it.each([
+    ["outcome and code disagree", statusRefusal("rejected_invalid", "CLIENT_INCOMPATIBLE", 409)],
+    ["F2 without its HTTP status", statusRefusal("rejected_invalid", "VALIDATION_FAILED")],
+    ["F2 with the other HTTP status", statusRefusal("rejected_incompatible", "CLIENT_INCOMPATIBLE", 422)],
+    ["F1 with an HTTP status", statusRefusal("cancelled", "RESET_CANCELLED", 409)],
+    ["another kind", { ...statusRefusal("cancelled", "RESET_CANCELLED"), command: { ...statusRefusal("cancelled", "RESET_CANCELLED").command, kind: "session.start" } }],
+    ["another ID", { ...statusRefusal("cancelled", "RESET_CANCELLED"), command: { ...statusRefusal("cancelled", "RESET_CANCELLED").command, id: id(9) } }],
+    ["a bad time", { ...statusRefusal("cancelled", "RESET_CANCELLED"), command: { ...statusRefusal("cancelled", "RESET_CANCELLED").command, refused_at: "x" } }],
+    ["an extra field", { ...statusRefusal("cancelled", "RESET_CANCELLED"), command: { ...statusRefusal("cancelled", "RESET_CANCELLED").command, extra: 1 } }],
+    ["no projection", { ...statusRefusal("cancelled", "RESET_CANCELLED"), current: profile() }],
+    ["an unknown code", statusRefusal("cancelled", "SESSION_BUSY")],
+  ])("AC-59: a refusal read whose parts disagree (%s) is no attribution", async (_label, body) => {
+    await expect(read(body)).rejects.toMatchObject({ kind: "invalid_response" });
+  });
+
+  describe("the cancel of an earlier reset (I.5, I.9)", () => {
+    const cancelCommand = (): SettingsResetCancelCommand => ({ command_id: id(5), kind: "settings.reset_cancel", client_instance_id: id(2),
+      document_id: id(3), payload: { target_command_id: id(1) } });
+    const cancelFact = (status = "applied") => ({ id: id(5), kind: "settings.reset_cancel", status, applied_at: time, target_id: id(1),
+      action_id: null, result_id: null, context_id: null, object_version: null });
+    const cancelReply = (outcome = "cancelled", status = "applied") => ({ command: cancelFact(status),
+      current: { ...current(), reset_target: { command_id: id(1), outcome } }, state_version: big });
+
+    it.each(["applied", "cancelled", "rejected_stale_epoch", "rejected_invalid", "rejected_incompatible"])(
+      "posts the exact cancel and reads the target's outcome %s; the projection comes back without reset_target", async outcome => {
+        const { api, fetcher } = setup(cancelReply(outcome));
+        const answer = await api.resetCancel("synthetic", "synthetic-proof", subject, cancelCommand());
+        expect(answer).toMatchObject({ outcome: "accepted", target: outcome, state_version: big });
+        expect(answer.current).toEqual(current());
+        const [url, init] = fetcher.mock.calls[0];
+        expect(url).toBe("/api/v1/commands");
+        expect(JSON.parse(init!.body as string)).toEqual({ command_id: id(5), kind: "settings.reset_cancel", client_instance_id: id(2),
+          document_id: id(3), payload: { target_command_id: id(1) } });
+      });
+
+    it.each([
+      ["no reset_target", { ...cancelReply(), current: current() }],
+      ["another target", { ...cancelReply(), current: { ...current(), reset_target: { command_id: id(9), outcome: "cancelled" } } }],
+      ["an unknown outcome", { ...cancelReply(), current: { ...current(), reset_target: { command_id: id(1), outcome: "lost" } } }],
+      ["a fact of the reset", { ...cancelReply(), command: { ...cancelFact(), kind: "settings.reset" } }],
+      ["a fact naming another target", { ...cancelReply(), command: { ...cancelFact(), target_id: id(9) } }],
+      ["a fact with a version", { ...cancelReply(), command: { ...cancelFact(), object_version: "1" } }],
+    ])("an answer with %s is no outcome", async (_label, body) => {
+      await expect(setup(body).api.resetCancel("synthetic", "proof", subject, cancelCommand())).rejects.toMatchObject({ kind: "invalid_response" });
+    });
+
+    it("a mismatch of the cancel's ID, a refusal or a lost answer throw or name the mismatch", async () => {
+      const mismatch = { command: { id: id(5), status: "rejected" }, error: { code: "COMMAND_PAYLOAD_MISMATCH" }, current: current(), state_version: big };
+      await expect(setup(mismatch, 409).api.resetCancel("synthetic", "proof", subject, cancelCommand())).resolves.toMatchObject({ outcome: "mismatch" });
+      await expect(setup({ ...mismatch, error: { code: "VALIDATION_FAILED" } }, 422).api.resetCancel("synthetic", "proof", subject, cancelCommand()))
+        .rejects.toMatchObject({ kind: "http", status: 422, code: "VALIDATION_FAILED" });
+      await expect(setup({ error: { code: "CLIENT_INCOMPATIBLE" } }, 409).api.resetCancel("synthetic", "proof", subject, cancelCommand()))
+        .rejects.toMatchObject({ kind: "http", status: 409, code: "CLIENT_INCOMPATIBLE" });
+    });
+
+    it.each([{ payload: { target_command_id: id(5) } }, { payload: {} }, { kind: "settings.reset" }, { document_id: "x" }])(
+      "never sends a malformed cancel %#", async corrupt => {
+        const { api, fetcher } = setup(cancelReply());
+        await expect(api.resetCancel("synthetic", "proof", subject, { ...cancelCommand(), ...corrupt } as SettingsResetCancelCommand)).rejects.toThrow();
+        expect(fetcher).not.toHaveBeenCalled();
+      });
+
+    it("its status: the fact with the target's outcome, or the canonical not_found", async () => {
+      const intent = { command_id: id(5), target_command_id: id(1) };
+      const status = (body: unknown) => readWithTicket(intent, (__command, __ticket) =>
+        setup(body).api.resetCancelStatus("synthetic", subject, __command, __ticket));
+      await expect(status(cancelReply("rejected_invalid", "already_applied"))).resolves.toMatchObject({ outcome: "accepted", target: "rejected_invalid" });
+      await expect(status({ command: { id: id(5), status: "not_found" }, current: profile(), state_version: big })).resolves.toMatchObject({ outcome: "not_found" });
+      await expect(status(cancelReply("cancelled", "applied"))).rejects.toMatchObject({ kind: "invalid_response" });
+      await expect(status({ ...cancelReply(), command: cancelFact("already_applied"), current: { status: "unavailable" } }))
+        .rejects.toMatchObject({ kind: "invalid_response" });
+    });
   });
 });

@@ -45,7 +45,7 @@ function setup(saved?: "accepted" | "missing" | "invalid", strict = false, befor
   f.fetcher.mockImplementation(async (url, init) => {
     const path = String(url);
     if (path.endsWith("/settings")) return get();
-    if (path.includes("/commands/")) return status(path.split("/").at(-1)!);
+    if (path.includes("/commands/")) return status(path.split("/").at(-1)!.split("?")[0]);
     if (path.endsWith("/commands")) return post(JSON.parse(String(init?.body)));
     throw new Error("Unexpected endpoint");
   });
@@ -239,7 +239,8 @@ describe("settings reset through the document owner (M-SET-RESET, D-SET-RESET 4.
     post.mockImplementationOnce(resetOn(data) as never);
     await act(() => result.current.actions.reset());
     expect(post).toHaveBeenCalledOnce();
-    expect(post.mock.calls[0][0]).toMatchObject({ kind: "settings.reset", payload: {}, client_instance_id: id(1) });
+    expect(post.mock.calls[0][0]).toEqual({ command_id: expect.any(String), kind: "settings.reset", client_instance_id: id(1),
+      document_id: expect.any(String), payload: { expected_reset_epoch: "1" } });
     expect(result.current.confirmed?.settings.retry_count.value).toBe(4);
     expect(result.current.state.resetOutcome?.status).toBe("accepted");
     expect(Object.keys(result.current.state.drafts)).toEqual(["ui_language"]);
@@ -259,14 +260,22 @@ describe("settings reset through the document owner (M-SET-RESET, D-SET-RESET 4.
     expect(observed).toBe(true); expect(post).not.toHaveBeenCalled(); expect(f.values.has(resetSlot)).toBe(false);
   });
 
-  it("an unconfirmed reset withholds confirmed settings, is checked first and repeats only on request", async () => {
+  it("an unconfirmed reset of an earlier build withholds confirmed settings, is checked by its ID; not found, the client cancels it (R16-01)", async () => {
+    const cancelling = deferred<Response>();
     const { result, post, status, data, f } = setup(undefined, false, f => { f.values.set(resetSlot, JSON.stringify(resetPending)); });
-    await waitFor(() => expect(result.current.state.canRetry).toBe(true));
-    expect(status).toHaveBeenCalledExactlyOnceWith(id(100)); expect(post).not.toHaveBeenCalled();
-    expect(result.current.confirmed).toBeNull(); expect(result.current.state.canReset).toBe(false);
-    post.mockImplementationOnce(resetOn(data) as never);
-    await act(() => result.current.actions.retry());
-    expect(post.mock.calls[0][0]).toMatchObject({ command_id: id(100), kind: "settings.reset", payload: {} });
-    expect(result.current.confirmed?.settings.retry_count.value).toBe(4); expect(f.values.has(resetSlot)).toBe(false);
+    post.mockImplementationOnce((() => cancelling.promise) as never);
+    await waitFor(() => expect(post).toHaveBeenCalledOnce());
+    expect(status).toHaveBeenCalledExactlyOnceWith(id(100));
+    expect(post.mock.calls[0][0]).toEqual({ command_id: expect.any(String), kind: "settings.reset_cancel", client_instance_id: id(1),
+      document_id: expect.any(String), payload: { target_command_id: id(100) } });
+    expect(result.current.confirmed).toBeNull(); expect(result.current.state).toMatchObject({ canReset: false, canRetry: false });
+    const { state_version, ...current } = structuredClone(data);
+    const cancelId = (post.mock.calls[0][0] as unknown as { command_id: string }).command_id;
+    await act(async () => cancelling.resolve(response({ command: { id: cancelId, kind: "settings.reset_cancel", status: "applied",
+      applied_at: "2026-10-16T00:00:00Z", target_id: id(100), action_id: null, result_id: null, context_id: null, object_version: null },
+    current: { ...current, reset_target: { command_id: id(100), outcome: "cancelled" } }, state_version })));
+    await waitFor(() => expect(result.current.confirmed).not.toBeNull());
+    expect(result.current.state.resetOutcome).toMatchObject({ commandId: id(100), status: "rejected", code: "RESET_CANCELLED" });
+    expect(f.values.has(resetSlot)).toBe(false); expect(post).toHaveBeenCalledOnce();
   });
 });

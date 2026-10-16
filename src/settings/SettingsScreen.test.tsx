@@ -8,11 +8,12 @@ import type { FeedbackDocument } from "../feedback/useFeedbackDocument";
 import { resetKeys } from "./settingsApi";
 import { settingsCopy } from "./settingsCopy";
 import { settingsFeedbackCopy } from "./settingsFeedbackCopy";
+import type { SettingsResetPending } from "./settingsResetPending";
 
 const big = "9007199254740995";
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 function current(state = big): SettingsResponse {
-  return { state_version: state, needs_setup: true, settings: {
+  return { state_version: state, needs_setup: true, reset_epoch: "1", settings: {
     ui_language: { value: "ru", version: "1" }, dictionary_language: { value: "uk", version: "1" },
     time_zone: { value: "UTC", version: "1" }, retry_gap: { value: null, version: "1" },
     retry_count: { value: 3, version: big }, learning_group_size: { value: null, version: "1" },
@@ -504,8 +505,8 @@ describe("returning the initial settings (M-SET-RESET, D-SET-RESET 4.1, 5.3.1)",
   const feedback = { state: { phase: "ready", text: "", canEdit: true, canSend: false, canRetry: false, confirmed: false,
     refusal: false, problem: null }, actions: { edit: vi.fn(), send: vi.fn(), retry: vi.fn() } } as unknown as FeedbackDocument;
   const resetButton = () => screen.getByRole("button", { name: "Сброс настроек" });
-  const resetRecord = { schemaVersion: 1 as const, profileId: id(1), clientInstanceId: id(2),
-    intent: { command_id: id(100), kind: "settings.reset" as const, payload: {} } };
+  const resetRecord: SettingsResetPending = { schemaVersion: 2, profileId: id(1), clientInstanceId: id(2),
+    intent: { command_id: id(100), kind: "settings.reset", payload: { expected_reset_epoch: "1" } } };
   afterEach(() => { vi.unstubAllGlobals(); });
 
   it("stands after the collapsed additional settings and before the message to the developer", () => {
@@ -573,27 +574,78 @@ describe("returning the initial settings (M-SET-RESET, D-SET-RESET 4.1, 5.3.1)",
     expect(screen.queryByRole("status")).toBeNull();
   });
 
-  it.each(["network", "not_found"] as const)("an unknown outcome (%s) offers the exact retry and keeps new writes disabled", reason => {
+  it.each(["network", "not_found"] as const)("an unknown outcome (%s) offers only the check by ID, never a repeat of X (P02-R R-5)", reason => {
     const f = fixture();
-    f.snapshot = { ...f.snapshot, phase: "unresolved", resetPending: resetRecord, problem: { reason }, canEdit: false, canReset: false, canRetry: true };
+    f.snapshot = { ...f.snapshot, phase: "unresolved", resetPending: resetRecord, problem: { reason }, canEdit: false, canReset: false, canRetry: false };
     const { container } = render(<SettingsScreen {...f} />);
-    const unknown = "Пока не удалось подтвердить возврат исходных настроек. Проверь состояние или повтори отправку.";
-    // Shown and announced once, in the reset block, with its retry there (QA finding 2).
+    const unknown = "Пока не удалось подтвердить возврат исходных настроек. Проверь состояние ещё раз.";
+    // Shown and announced once, in the reset block, with its check there (QA finding 2).
     expect(screen.getAllByRole("alert").map(item => item.textContent)).toEqual([unknown]);
     expect(screen.queryByRole("status")).toBeNull();
     const block = container.querySelector(".settings-reset-status")!;
     expect(block.textContent).toContain(unknown);
     expect((resetButton() as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getAllByRole("button", { name: "Повторить отправку" })).toHaveLength(1);
-    fireEvent.click(within(block as HTMLElement).getByRole("button", { name: "Повторить отправку" }));
-    expect(f.actions.retry).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("button", { name: "Повторить отправку" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Отменить прежний сброс" })).toBeNull();
+    fireEvent.click(within(block as HTMLElement).getByRole("button", { name: "Проверить ещё раз" }));
+    expect(f.actions.refresh).toHaveBeenCalledOnce(); expect(f.actions.retry).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "Обновить настройки" })).toBeDefined();
     expect(f.actions.reset).not.toHaveBeenCalled();
   });
 
+  it("R8-05/R16-01: a refusal the server stored is shown once beside «Отменить прежний сброс», which calls only cancelReset", () => {
+    const f = fixture(); f.actions.cancelReset = vi.fn(async () => {});
+    f.snapshot = { ...f.snapshot, phase: "unresolved", resetPending: { ...resetRecord, state: { refused: "VALIDATION_FAILED" } },
+      problem: { reason: "reset_refused", code: "VALIDATION_FAILED" }, canEdit: false, canReset: false, canCancelReset: true };
+    const { container } = render(<SettingsScreen {...f} />);
+    const text = "Сервер отклонил прежний сброс настроек. Ничего не изменилось. Чтобы снова менять настройки, отмени прежний сброс.";
+    expect(screen.getAllByRole("alert").map(item => item.textContent)).toEqual([text]);
+    const block = container.querySelector(".settings-reset-status") as HTMLElement;
+    fireEvent.click(within(block).getByRole("button", { name: "Отменить прежний сброс" }));
+    expect(f.actions.cancelReset).toHaveBeenCalledOnce();
+    for (const action of [f.actions.retry, f.actions.reset, f.actions.refresh]) expect(action).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Проверить ещё раз" })).toBeNull();
+  });
+
+  it.each([["uk", "Скасувати попереднє скидання"], ["en", "Cancel the earlier reset"]] as const)("%s: the button has its own text", (language, label) => {
+    const f = fixture(); f.actions.cancelReset = vi.fn(async () => {});
+    f.snapshot = { ...f.snapshot, phase: "unresolved", resetPending: { ...resetRecord, state: { refused: "VALIDATION_FAILED" } },
+      problem: { reason: "reset_refused", code: "VALIDATION_FAILED" }, canEdit: false, canReset: false, canCancelReset: true };
+    render(<SettingsScreen {...f} language={language} />);
+    fireEvent.click(screen.getByRole("button", { name: label }));
+    expect(f.actions.cancelReset).toHaveBeenCalledOnce();
+  });
+
+  it("RQ-2 (а): in the incompatible build the refusal asks to update and offers no button", () => {
+    const f = fixture(); f.actions.cancelReset = vi.fn(async () => {});
+    f.snapshot = { ...f.snapshot, phase: "unresolved", resetPending: { ...resetRecord, state: { refused: "CLIENT_INCOMPATIBLE" } },
+      problem: { reason: "incompatible", code: "CLIENT_INCOMPATIBLE" }, canEdit: false, canReset: false, canCancelReset: false };
+    render(<SettingsScreen {...f} />);
+    expect(screen.getAllByRole("alert").map(item => item.textContent)).toEqual([
+      "Нужно обновить приложение: эта версия не может отправлять новые действия. Закрой Wortly и открой снова через бота.",
+      "Сервер отклонил прежний сброс настроек. Ничего не изменилось. Чтобы снова менять настройки, отмени прежний сброс."]);
+    expect(screen.queryByRole("button", { name: "Отменить прежний сброс" })).toBeNull();
+  });
+
+  it("while the reset is checked or its cancel is sent, one line says so; a core without reset_epoch offers no reset", () => {
+    const f = fixture();
+    f.snapshot = { ...f.snapshot, phase: "sending", resetPending: { ...resetRecord, state: { cancel: id(101), explicit: false } },
+      canEdit: false, canReset: false };
+    const view = render(<SettingsScreen {...f} />);
+    expect(screen.getAllByRole("status").map(item => item.textContent)).toEqual(["Проверяем прежний сброс настроек"]);
+    f.snapshot = { ...f.snapshot, phase: "checking", resetPending: resetRecord };
+    view.rerender(<SettingsScreen {...f} />);
+    expect(screen.getAllByRole("status").map(item => item.textContent)).toEqual(["Проверяем прежний сброс настроек"]);
+    const { reset_epoch: _epoch, ...older } = current();
+    f.snapshot = { ...f.snapshot, phase: "ready", resetPending: null, data: older as typeof f.snapshot.data, canEdit: true, canReset: false };
+    view.rerender(<SettingsScreen {...f} />);
+    expect(screen.getByText("Сброс настроек пока недоступен: нужно обновление сервера.")).toBeDefined();
+    expect((resetButton() as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it.each([
-    ["client_changed", "unresolved"], ["pending_changed", "unresolved"], [null, "checking"],
-  ] as const)("with no retry available (%s, %s) the block never suggests one (defect 2.1)", (reason, phase) => {
+    ["client_changed", "unresolved"], ["pending_changed", "unresolved"],
+  ] as const)("with no check line (%s, %s) the block never suggests a repeat (defect 2.1)", (reason, phase) => {
     // A status check clears the problem while it runs (settingsController refresh), so it says nothing failed yet.
     const f = fixture();
     f.snapshot = { ...f.snapshot, phase, resetPending: { ...resetRecord, clientInstanceId: reason === "client_changed" ? id(9) : id(2) },
@@ -616,29 +668,29 @@ describe("returning the initial settings (M-SET-RESET, D-SET-RESET 4.1, 5.3.1)",
     expect(status?.textContent).toBe("Возвращаем исходные настройки");
   });
 
-  it("without settings data the top line still reports the unknown reset once, with its retry", () => {
+  it("without settings data the top line still reports the unknown reset once; the refresh is the way on", () => {
     const f = fixture();
     f.snapshot = { ...f.snapshot, phase: "unresolved", data: null, resetPending: resetRecord, problem: { reason: "network" },
-      canEdit: false, canReset: false, canRetry: true };
+      canEdit: false, canReset: false, canRetry: false };
     render(<SettingsScreen {...f} />);
     expect(screen.getAllByRole("alert").map(item => item.textContent))
-      .toEqual(["Пока не удалось подтвердить возврат исходных настроек. Проверь состояние или повтори отправку.Повторить отправку"]);
-    fireEvent.click(screen.getByRole("button", { name: "Повторить отправку" })); expect(f.actions.retry).toHaveBeenCalledOnce();
+      .toEqual(["Пока не удалось подтвердить возврат исходных настроек. Проверь состояние ещё раз."]);
+    expect(screen.queryByRole("button", { name: "Повторить отправку" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Обновить настройки" })); expect(f.actions.refresh).toHaveBeenCalledOnce();
   });
 
-  it("a retryable reason without an approved reset text keeps the top line and its retry, not a second line", () => {
+  it("a reason without a reset text keeps the top line, not a second line, and no repeat", () => {
     const f = fixture();
     f.snapshot = { ...f.snapshot, phase: "unresolved", resetPending: resetRecord, problem: { reason: "stale_response" },
-      canEdit: false, canReset: false, canRetry: true };
+      canEdit: false, canReset: false, canRetry: false };
     const { container } = render(<SettingsScreen {...f} />);
     expect(container.querySelector(".settings-reset-status")?.textContent).toBe("");
     expect(screen.getAllByRole("alert")).toHaveLength(1);
-    expect(screen.getAllByRole("button", { name: "Повторить отправку" })).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "Повторить отправку" })).toBeNull();
   });
 
   it.each([
     ["incompatible", "reset", "Нужно обновить приложение: эта версия не может отправлять новые действия. Закрой Wortly и открой снова через бота."],
-    ["command_refused", "reset", "Сервер не принял эту отправку возврата исходных настроек. Выполнен ли возврат раньше, пока не подтверждено. Проверь состояние."],
     ["incompatible", "save", "Нужно обновить приложение: эта версия не может отправлять новые действия. Закрой Wortly и открой снова через бота."],
     ["command_refused", "save", "Сервер не принял эту отправку изменения. Принято ли оно раньше, пока не подтверждено. Проверь состояние."],
   ] as const)("a known refusal (%s, %s) uses an existing text and offers no repeat (C082)", (reason, kind, text) => {

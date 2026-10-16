@@ -236,7 +236,7 @@ describe("LearningHost with real document owners and synthetic HTTP", () => {
       const h = setup({ initialSessionId: id(3), route: "learning", pendingReset: held, language });
       try {
         // The status read is out: the owner is checking, not loading for the first time.
-        await waitFor(() => expect(h.f.fetcher.mock.calls.some(([url]) => String(url).endsWith(`/commands/${id(61)}`))).toBe(true));
+        await waitFor(() => expect(h.f.fetcher.mock.calls.some(([url]) => new URL(String(url), "http://localhost").pathname.endsWith(`/commands/${id(61)}`))).toBe(true));
         await act(async () => {});
         expect(screen.getByText(loading)).toBeDefined();
         expect((screen.getByRole("textbox") as HTMLInputElement).readOnly).toBe(true);

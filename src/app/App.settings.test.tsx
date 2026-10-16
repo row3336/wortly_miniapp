@@ -15,7 +15,7 @@ let sessionReads = 0; let sessionHook: ((n: number) => Promise<void>) | null = n
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status });
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(r => { resolve = r; }); return { promise, resolve }; }
 function current(state = "10"): SettingsResponse {
-  return { state_version: state, needs_setup: true, settings: {
+  return { state_version: state, needs_setup: true, reset_epoch: "1", settings: {
     ui_language: { value: "ru", version: "1" }, dictionary_language: { value: "uk", version: "1" },
     time_zone: { value: "UTC", version: "1" }, retry_gap: { value: null, version: "1" },
     retry_count: { value: 3, version: "1" }, learning_group_size: { value: null, version: "1" },

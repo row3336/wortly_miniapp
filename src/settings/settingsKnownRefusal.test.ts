@@ -71,8 +71,9 @@ function memory(): AsyncStorage {
   return { get: async key => values.get(key) ?? null, set: async (key, value) => { values.set(key, value); },
     remove: async key => { values.delete(key); } };
 }
+// A settings.reset is no longer here: by P02-R and R16-01 variant 1 a bare 409/422 records no outcome of the reset, so it is
+// no refusal of it; its route (status by ID, then the client's own cancel) is pinned in settingsResetClassifier.test.ts.
 const commands = {
-  reset: async (controller: SettingsController) => controller.reset(),
   save: async (controller: SettingsController) => { controller.edit("retry_count" as SettingKey, "4"); await controller.save("retry_count"); },
 };
 
@@ -171,24 +172,15 @@ describe("known refusals of settings commands are not lost replies (C082)", () =
       expect(e.snapshot()).toMatchObject({ problem: { reason: "not_found" }, canRetry: true });
     });
 
-    it("a reload is a new document: a field save's 422 kept with its record still holds (R2-09 / K19-024); a reset gets one attempt", async () => {
+    it("a reload is a new document: a field save's 422 kept with its record still holds (R2-09 / K19-024)", async () => {
       const storage = memory(); const w = world(storage); const c = w.make(); await c.refresh();
       w.postAnswers.push(refused); await send(c); c.dispose();
       // Entry gives a reloaded page a new document ID (app/entryController.ts); the stored intent is the same.
       w.open(opened(id(2), id(4)), 2); const d = w.make(); await d.refresh();
-      if (_name === "save") {
-        expect(d.snapshot()).toMatchObject({ problem: { reason: "command_refused", code: "VALIDATION_FAILED" }, canRetry: false,
-          canEdit: false, canCancelStored: true });
-        await d.retry(); expect(w.posts).toHaveLength(1);
-        await d.refresh(); await d.retry(); expect(w.posts).toHaveLength(1);
-        return;
-      }
-      // The reset keeps its earlier behaviour here (its own cancel, R8-05, is a separate step).
-      expect(d.snapshot()).toMatchObject({ problem: { reason: "not_found" }, canRetry: true });
-      w.postAnswers.push(refused); await d.retry();
-      expect(w.posts).toHaveLength(2); expect(w.posts[1].command_id).toBe(w.posts[0].command_id);
-      expect(d.snapshot()).toMatchObject({ problem: { reason: "command_refused" }, canRetry: false });
-      await d.refresh(); await d.retry(); expect(w.posts).toHaveLength(2);
+      expect(d.snapshot()).toMatchObject({ problem: { reason: "command_refused", code: "VALIDATION_FAILED" }, canRetry: false,
+        canEdit: false, canCancelStored: true });
+      await d.retry(); expect(w.posts).toHaveLength(1);
+      await d.refresh(); await d.retry(); expect(w.posts).toHaveLength(1);
     });
 
     it("another installation or another profile keeps every restriction", async () => {
@@ -234,16 +226,22 @@ describe("known refusals of settings commands are not lost replies (C082)", () =
     { status: 200, body: { error: { code: "CLIENT_INCOMPATIBLE" } } },
   ])("only the exact forms are known refusals; %# stays a plain error with the usual repeat", async reply => {
     const w = world(); const c = w.make(); await c.refresh();
-    w.postAnswers.push(reply); await c.reset();
+    w.postAnswers.push(reply); await commands.save(c);
     expect(c.snapshot()).toMatchObject({ problem: { reason: "network" }, canRetry: true });
   });
 
-  it("the api names the two refusals and nothing else", async () => {
+  it("the api names the two refusals of a save and nothing else; a reset gets none (R16-01 variant 1)", async () => {
     const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify(incompatible.body), { status: 409 }));
     const api = createSettingsApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 20000, gate: testGate() });
-    const command = { command_id: id(1), kind: "settings.reset" as const, client_instance_id: id(2), document_id: id(3), payload: {} };
-    const error = await api.reset("t", "p", id(1), command).catch((caught: unknown) => caught);
+    const save = { command_id: id(1), kind: "setting.save" as const, client_instance_id: id(2), document_id: id(3),
+      expected_field_version: "1", payload: { key: "retry_count" as const, value: 4 } };
+    const error = await api.save("t", "p", id(1), save).catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(KnownRefusal);
     expect(error).toMatchObject({ refusal: "incompatible", kind: "http", status: 409, code: "CLIENT_INCOMPATIBLE" });
+    const reset = { command_id: id(5), kind: "settings.reset" as const, client_instance_id: id(2), document_id: id(3),
+      payload: { expected_reset_epoch: "1" } };
+    const bare = await api.reset("t", "p", id(1), reset).catch((caught: unknown) => caught);
+    expect(bare).not.toBeInstanceOf(KnownRefusal);
+    expect(bare).toMatchObject({ kind: "http", status: 409, code: "CLIENT_INCOMPATIBLE" });
   });
 });

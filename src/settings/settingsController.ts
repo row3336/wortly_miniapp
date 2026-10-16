@@ -1,14 +1,15 @@
-import type { SettingsProjection, SettingsResponse } from "../api/generated";
+import type { Profile, SettingsProjection, SettingsResponse, UnavailableCurrent } from "../api/generated";
 import { ApiError } from "../api/http";
 import { version as validVersion } from "../api/wireValidation";
 import { ClosedAccessError, type OpenedAccess } from "../app/openedAccess";
 import { GatePending, pausedBeforeSend } from "../commands/gatePending";
 import { PendingStoreError, validId } from "../commands/pendingSlot";
-import type { WriteGate } from "../commands/writeGate";
-import { allowedSettingValue, KnownRefusal, resetKeys, storedOnly, type IntentKey, type SettingKey, type SettingSaveReply,
-  type SettingsApi } from "./settingsApi";
+import { PausedBeforeSendError, type WriteGate } from "../commands/writeGate";
+import { allowedSettingValue, heldRefusal, KnownRefusal, refusalCodeOf, resetEpochOf, resetKeys, storedOnly, type IntentKey,
+  type ResetFinalCode, type ResetHeldCode, type ResetReply, type ResetTargetOutcome, type SettingKey, type SettingSaveReply, type SettingsApi } from "./settingsApi";
 import { SettingsPendingStore, type SettingsPending } from "./settingsPending";
-import type { SettingsResetPending, SettingsResetPendingStore } from "./settingsResetPending";
+import { unfinished, type SettingsResetFinalOnly, type SettingsResetPending, type SettingsResetPendingStore,
+  type SettingsResetRecord } from "./settingsResetPending";
 
 type Draft = { input: unknown; original?: unknown; fieldVersion: string; revision: number };
 export type SettingsDraft = Omit<Draft, "revision"> & {
@@ -22,11 +23,19 @@ type Problem = { reason: "network" | "storage" | "invalid_pending" | "pending_ch
   | "context_closed" | "context_refreshed" | "client_changed" | "profile_changed" | "mismatch" | "not_found" | "stale_response"
   | KnownRefusal["refusal"]
   /** PAUSED_BEFORE_SEND (P03 §4.2): the write gate kept the request on the client; the ID and the record stay. */
-  | "paused"; code?: string };
+  | "paused"
+  /**
+   * P02-R I.11.3c, R8-05/R8-06 variant 1: the server stored an explicit refusal of the sent reset (F2); nothing is sent until
+   * the user's «Отменить прежний сброс» (`code`: VALIDATION_FAILED or CLIENT_INCOMPATIBLE).
+   */
+  | "reset_refused"; code?: string };
 /** `key` may name a stored-only key (R14-02): a stored intent of an earlier build, checked like any other. */
 type Outcome = { commandId: string; key: IntentKey; status: "accepted" | "rejected"; code?: string };
 /** The server's answer to a reset; shown only once the server reported it (TA 12.4). */
-type ResetOutcome = Omit<Outcome, "key">;
+type ResetOutcome = Omit<Outcome, "key"> & {
+  /** F1 of the reset itself (I.11.3a, «отказан»): the server closed it for good; worded by TZA:311, not as a cancel. */
+  final?: true;
+};
 export type SettingsSnapshot = {
   phase: "loading" | "ready" | "sending" | "checking" | "unresolved" | "blocked" | "disposed";
   data: SettingsResponse | null;
@@ -53,6 +62,12 @@ export type SettingsSnapshot = {
    * field and is never repeated from here. Absent means false.
    */
   canCancelStored?: boolean;
+  /**
+   * P02-R I.11.3b п.3: «Отменить прежний сброс» — the user's explicit cancel of a reset the server refused and stored (F2).
+   * Not offered while this build is the incompatible one (RQ-2 (а)), nor while the refusal is held only in this page's
+   * memory (I.11.3c п.5). Absent means false.
+   */
+  canCancelReset?: boolean;
 };
 type Options = {
   api: SettingsApi;
@@ -64,6 +79,11 @@ type Options = {
   onUpdate(snapshot: SettingsSnapshot): void;
   /** The write gate of the page (P03 M-P03-8): readback registry, status reads by ticket, the buttons (I9, M12). */
   gate: WriteGate;
+  /**
+   * Whether the page is shown (C365 N3): an automatic send — the client's own cancel of a reset, the resend of a stored
+   * cancel — leaves only while it is; the gate's `mayWrite` does not see visibility. Default: document.visibilityState.
+   */
+  visible?(): boolean;
 };
 
 function integerInput(value: unknown): unknown {
@@ -90,6 +110,22 @@ const documentRefusals = new Map<string, Refusal>();
  * and proof) alive: the WeakMap does not hold its keys.
  */
 const handleNumbers = new WeakMap<OpenedAccess, number>();
+/**
+ * Documents whose settings reset (or its cancel) got CLIENT_INCOMPATIBLE, with the handle that got it (page memory only, as
+ * documentRefusals). P02-R RQ-2 (а): in the incompatible build the cancel button is useless and is not shown; a newer handle
+ * is a compatible open (app/entryController.ts) and lifts it.
+ */
+const incompatibleResets = new Map<string, number>();
+/**
+ * Documents (profile, installation, document_id) whose reset or its cancel got a DOCUMENT_STALE that the window's junction
+ * proved a replacement of this document (page memory only). The proof is the junction's, not the code's (C437): the entry
+ * attributes the 409 to the very command sent (kind of the reset family, command_id/rejected, current DocMark, profile,
+ * document; entryController.replacementProved) and closes the window (closedWindow) before this module reads the refusal.
+ * P02-R I.11.3 step 4, I.11.4 (:439, :631, :640), C362 (3), C376: the record is not touched; X is read and cancelled only in a
+ * new document. A new access object of the same document (a handle, generation or epoch) does not lift it. A bare or
+ * unconfirmed DOCUMENT_STALE of a live window proves nothing: it takes the route of an unknown outcome (R16-01 variant 1).
+ */
+const staleResets = new Set<string>();
 let lastHandleNumber = 0;
 function handleNumber(access: OpenedAccess): number {
   let number = handleNumbers.get(access);
@@ -111,6 +147,13 @@ export class SettingsController {
   private submittedRevision: number | null = null;
   private pending: SettingsPending | null = null;
   private resetPending: SettingsResetPending | null = null;
+  /**
+   * The reset record as the storage holds it. It differs from `resetPending` only when the write of a held refusal failed
+   * (I.11.3c п.5): the refusal is then held in this document's memory and nothing is sent for it.
+   */
+  private resetStored: SettingsResetRecord | null = null;
+  /** «Отказан» alone (I.11.3a): the profile's record when no reset is unfinished; it never blocks editing. */
+  private resetFinal: SettingsResetFinalOnly | null = null;
   private loaded = false;
   private settled = false;
   private version: string | null = null;
@@ -151,10 +194,46 @@ export class SettingsController {
       document: JSON.stringify([access.profile.profile_id, access.document.clientInstanceId, access.document.documentId]) };
     this.registry = new GatePending(options.gate, "settings");
     // M12: the fields stay editable, «Сохранить» and the reset wait for the gate; its changes repaint them.
-    this.unsubscribe = options.gate.subscribe(() => this.emit());
+    const unsubscribe = options.gate.subscribe(() => { this.emit(); this.resumeResetCheck(); });
+    // C365 N3: a check stopped while the page was hidden is taken up on its return (reading first, resumeResetCheck).
+    const shownAgain = () => this.resumeResetCheck();
+    if (typeof document !== "undefined") document.addEventListener("visibilitychange", shownAgain);
+    this.unsubscribe = () => {
+      unsubscribe();
+      if (typeof document !== "undefined") document.removeEventListener("visibilitychange", shownAgain);
+    };
+  }
+  /**
+   * R16-01 variant 1 in the same window: a check of the sent reset that the gate stopped (net closed, a hold, PAUSED_BEFORE_SEND)
+   * or a lost answer stopped is taken up again by itself once the gate lets a readback and a write through (P03 I5: the gate
+   * open, the hold over, then a fresh readback not_recorded before the send). One resumption per stop; a held refusal (F2)
+   * and a mismatch are never resumed.
+   */
+  private resetCheckDue = false;
+  private shown(): boolean {
+    return this.options.visible ? this.options.visible() : typeof document === "undefined" || document.visibilityState !== "hidden";
+  }
+  /**
+   * C365 N3: the last guard of an automatic send, right before the request is built (after every await of the path). A
+   * hidden page sends nothing by itself: the record stays as it is (a stored cancel keeps its ID), and the check is due
+   * again — on the return to the page it reads first and sends only the allowed rest.
+   */
+  private automaticSendAllowed(): void {
+    if (!this.shown()) throw new PausedBeforeSendError("paused");
+  }
+  private resumeResetCheck(): void {
+    if (!this.resetCheckDue || !this.shown() || this.staleHere() || this.running || !this.live() || !this.currentAccess() || !this.resetPending || this.heldCode()
+      || this.resetPending.mismatch || this.writeBlocked || !this.registry.checkable() || !this.registry.writable()) return;
+    this.resetCheckDue = false;
+    void this.refresh();
   }
   /** I9: a save, a reset or a retry of the sent ID is allowed by the write gate right now. */
-  private writable(): boolean { return this.registry.writable(this.sent()?.intent.command_id); }
+  private writable(): boolean { return this.registry.writable(this.heldId()); }
+  /** The ID the gate holds for this document: the sent intent, or the stored cancel of the sent reset. */
+  private heldId(): string | undefined {
+    const state = this.resetPending?.state;
+    return state && "cancel" in state ? state.cancel : this.sent()?.intent.command_id;
+  }
 
   private live(): boolean { return !this.lifetime.signal.aborted; }
   private currentAccess(): OpenedAccess | null {
@@ -193,8 +272,9 @@ export class SettingsController {
     return this.refusal.reason === "command_refused" || this.refusal.handle === handleNumber(access) ? this.refusal.reason : null;
   }
   private retryAllowed(): boolean {
-    const sent = this.sent();
-    return !!this.currentAccess() && !this.running && !this.writeBlocked && !this.settled && !!sent && !this.refused()
+    // A reset is never sent again, by itself or by hand (P02-R I.11.3 step 4, R-5, CON:301): only its status is read.
+    const sent = this.pending;
+    return !!this.currentAccess() && !this.running && !this.writeBlocked && !this.settled && !!sent && !this.resetPending && !this.refused()
       && !sent.mismatch && sent.clientInstanceId === this.scope.clientId
       && !!this.problem && ["network", "storage", "not_found", "context_refreshed", "stale_response", "paused"].includes(this.problem.reason)
       && this.writable();
@@ -213,6 +293,37 @@ export class SettingsController {
     return !!this.currentAccess() && !this.running && !this.writeBlocked && !this.settled && !!pending && !this.resetPending
       && !pending.mismatch && this.loaded && (this.refused() === "command_refused"
         || storedOnly(pending.intent.payload.key) && pending.clientInstanceId !== this.scope.clientId);
+  }
+
+  private staleHere(): boolean { return staleResets.has(this.scope.document); }
+  /**
+   * The junction proved the replacement of this document (C437): the window is closed for good (P03 §4.12). The settings take
+   * the window's decision; they never decide a replacement from the code alone.
+   */
+  private replacementProved(): boolean { return this.options.gate.snapshot().closedWindow !== null; }
+  private incompatibleHere(): boolean {
+    const access = this.currentAccess();
+    return !!access && incompatibleResets.get(this.scope.document) === handleNumber(access);
+  }
+  private noteIncompatible(error: unknown): void {
+    const access = this.currentAccess();
+    if (access && error instanceof ApiError && error.code === "CLIENT_INCOMPATIBLE") incompatibleResets.set(this.scope.document, handleNumber(access));
+  }
+  /** The explicit refusal (F2) this document holds for the sent reset, or null. */
+  private heldCode(): ResetHeldCode | null {
+    const state = this.resetPending?.state;
+    return state && "refused" in state ? state.refused : null;
+  }
+  private heldProblem(): Problem {
+    if (this.resetStored !== this.resetPending) return { reason: "storage" };
+    if (this.incompatibleHere()) return { reason: "incompatible", code: "CLIENT_INCOMPATIBLE" };
+    return { reason: "reset_refused", code: this.heldCode()! };
+  }
+  private cancelResetAllowed(): boolean {
+    const reset = this.resetPending;
+    return !!this.currentAccess() && !this.running && !this.writeBlocked && !this.settled && this.loaded && !!reset
+      && !reset.mismatch && this.heldCode() !== null && this.resetStored === reset && !this.incompatibleHere() && !this.staleHere()
+      && this.registry.writable();
   }
 
   snapshot(): SettingsSnapshot {
@@ -235,8 +346,9 @@ export class SettingsController {
       pending: available ? this.pending : null, resetPending: available ? this.resetPending : null,
       outcome: available ? this.outcome : null, resetOutcome: available ? this.resetOutcome : null,
       problem: available ? this.problem : { reason: "context_closed" }, canEdit: this.editable(),
-      canReset: this.editable() && !this.running && this.writable(), canRetry: this.retryAllowed(),
-      canContinueWithServer: this.continueAllowed(), canCancelStored: this.cancelStoredAllowed() });
+      canReset: this.editable() && !this.running && this.writable() && resetEpochOf(this.data) !== null, canRetry: this.retryAllowed(),
+      canContinueWithServer: this.continueAllowed(), canCancelStored: this.cancelStoredAllowed(),
+      canCancelReset: this.cancelResetAllowed() });
   }
   private emit(): void { if (this.live()) this.options.onUpdate(this.snapshot()); }
 
@@ -255,7 +367,16 @@ export class SettingsController {
         this.writeBlocked = error.status === 401 ? "expired" : "forbidden";
         this.data = null;
         this.problem = { reason: this.writeBlocked, code: error.code };
-      } else if (error instanceof KnownRefusal && this.sent() && this.currentAccess()) {
+      } else if (error instanceof ApiError && error.code === "DOCUMENT_STALE" && this.resetPending && this.currentAccess()
+        && this.replacementProved()) {
+        // I.11.4 :640: the window closed; the record is not touched, and nothing more of the reset is read or sent from here.
+        staleResets.add(this.scope.document);
+        this.problem = { reason: "context_closed", code: error.code };
+      } else if (error instanceof ApiError && error.code === "CLIENT_INCOMPATIBLE" && this.resetPending && this.currentAccess()) {
+        // The reset or its cancel met an incompatible build: the record stays; the screen asks to update (RQ-2 (а)).
+        this.noteIncompatible(error);
+        this.problem = { reason: "incompatible", code: error.code };
+      } else if (error instanceof KnownRefusal && this.pending && this.currentAccess()) {
         this.refusal = { commandId: this.sent()!.intent.command_id, reason: error.refusal, code: error.code,
           handle: handleNumber(this.currentAccess()!) };
         this.problem = { reason: error.refusal, code: error.code };
@@ -265,10 +386,12 @@ export class SettingsController {
         // While a known refusal stands, a failed check (a status read, a lost reply) does not replace its reason: the
         // screen keeps saying why no repeat is offered (an update, or the refused command).
         const refused = this.refused();
-        this.problem = refused ? { reason: refused, code: this.refusal!.code }
+        this.problem = this.heldCode() ? this.heldProblem() : refused ? { reason: refused, code: this.refusal!.code }
           : { reason: "network", ...(error instanceof ApiError ? { code: error.code } : {}) };
       }
       this.phase = this.sent() ? "unresolved" : "blocked";
+      this.resetCheckDue = !!this.resetPending && !this.heldCode() && !this.resetPending.mismatch && !this.writeBlocked
+        && !!this.problem && ["paused", "network"].includes(this.problem.reason);
     }).finally(() => {
       if (this.running === task) this.running = null;
       this.emit();
@@ -341,10 +464,18 @@ export class SettingsController {
   }
   private async clearSettled(): Promise<void> {
     if (!this.settled) return;
+    let final: SettingsResetFinalOnly | null = null;
     if (this.pending) await this.options.pendingStore.clear(this.pending, this.lifetime.signal);
-    else if (this.resetPending) await this.options.resetStore.clear(this.resetPending, this.lifetime.signal);
-    else return;
+    else if (this.resetPending) {
+      const stored = this.resetStored ?? this.resetPending;
+      // I.11.3a п.5: an earlier «отказан» goes only with an applied command; a newer reset that was not applied keeps it.
+      if (this.resetOutcome?.status !== "accepted" && unfinished(stored) && stored.final) {
+        final = { schemaVersion: 2, profileId: stored.profileId, clientInstanceId: stored.clientInstanceId, final: stored.final };
+        await this.options.resetStore.replace(stored, final, this.lifetime.signal);
+      } else await this.options.resetStore.clear(stored, this.lifetime.signal);
+    } else return;
     if (!this.live()) return;
+    if (!this.pending) { this.resetFinal = final; this.resetStored = final; }
     this.pending = null;
     this.resetPending = null;
     this.registry.release();
@@ -368,6 +499,7 @@ export class SettingsController {
     if (!this.pending) return;
     const intent = this.pending.intent;
     this.outcome = { commandId: intent.command_id, key: intent.payload.key, status, ...(code ? { code } : {}) };
+    if (status === "accepted") await this.dropFinal();
     this.settled = true;
     const key = intent.payload.key;
     const draft = storedOnly(key) ? undefined : this.drafts[key];
@@ -383,12 +515,49 @@ export class SettingsController {
     await this.clearSettled();
   }
 
+  /**
+   * I.11.3a п.5: the server applied the next settings command of the profile (a field save), so «отказан» goes. A failed
+   * removal keeps it; it blocks nothing and goes with the next applied command.
+   */
+  private async dropFinal(): Promise<void> {
+    const final = this.resetFinal;
+    if (!final) return;
+    try { await this.options.resetStore.clear(final, this.lifetime.signal); } catch { return; }
+    if (this.live() && this.resetFinal === final) { this.resetFinal = null; if (this.resetStored === final) this.resetStored = null; }
+  }
+
+  /**
+   * F1 (I.11.3a п.1–3): the server closed X for good (RESET_EPOCH_STALE / RESET_CANCELLED). «Отказан» (X, code) is written
+   * first, by the conditional replacement of the record; until it is stored nothing else happens — the record stays «sent»,
+   * the block names the storage (the error goes to `run`), no readback and no text. Then the fresh settings of the answer
+   * are taken and editing opens; X is never sent, cancelled or read again (п.4).
+   */
+  private async finalRefusal(code: ResetFinalCode, current: SettingsProjection | UnavailableCurrent, version: string): Promise<void> {
+    const reset = this.resetPending!, stored = this.resetStored ?? reset;
+    this.registry.settled("rejected");
+    const final: SettingsResetFinalOnly = { schemaVersion: 2, profileId: reset.profileId, clientInstanceId: reset.clientInstanceId,
+      final: { command_id: reset.intent.command_id.toLowerCase(), code } };
+    await this.options.resetStore.replace(stored, final, this.lifetime.signal);
+    if (!this.live()) return;
+    this.resetPending = null;
+    this.resetStored = final;
+    this.resetFinal = final;
+    this.registry.release();
+    if ("settings" in current) this.accept(current, version);
+    else { this.writeBlocked = "forbidden"; this.data = null; }
+    this.outcome = null;
+    this.resetOutcome = { commandId: reset.intent.command_id, status: "rejected", code, final: true };
+    this.refusal = null;
+    this.settled = false;
+    this.submittedRevision = null;
+    this.idle();
+  }
+
   private async checkPending(): Promise<void> {
-    const save = this.pending, reset = this.resetPending, pending = (save ?? reset)!;
+    const save = this.pending!, pending = save;
     // R6: the status of the sent ID is read only with the gate's ticket (after the identity check, if one is due).
-    const reply = await this.registry.read(pending.intent.command_id, ticket => this.access().run(({ token }) => save
-      ? this.options.api.status(token, this.scope.profileId, save.intent, ticket)
-      : this.options.api.resetStatus(token, this.scope.profileId, reset!.intent, ticket)));
+    const reply = await this.registry.read(pending.intent.command_id, ticket => this.access().run(({ token }) =>
+      this.options.api.status(token, this.scope.profileId, save.intent, ticket)));
     if (!this.live()) return;
     this.access();
     if (reply.outcome === "accepted") {
@@ -399,25 +568,205 @@ export class SettingsController {
     }
     // Not on the server: a definite answer about this ID (its record stays until it is sent again or cancelled).
     this.registry.settled("not_recorded");
-    if (reply.current.profile_id !== this.scope.profileId) this.writeBlocked = "profile_changed";
-    else if (reply.current.access.status !== "admitted") this.writeBlocked = "forbidden";
-    if (this.writeBlocked) {
-      this.data = null;
-      this.problem = { reason: this.writeBlocked };
+    if (this.notFoundBlocks(reply.current, reply.state_version)) {
+      this.problem = { reason: this.writeBlocked! };
     } else {
-      if (this.version === null || BigInt(reply.state_version) > BigInt(this.version)) {
-        this.version = reply.state_version;
-        this.data = null;
-      }
       await this.readCurrent();
       if (!this.live()) return;
-      if (save && await this.releaseOutdatedRefusal(save)) return;
+      if (await this.releaseOutdatedRefusal(save)) return;
       // A missing fact does not undo a known refusal of the last attempt: the repeat stays closed (KnownRefusal).
       const refused = this.refused();
       if (!this.problem) this.problem = pending.clientInstanceId !== this.scope.clientId ? { reason: "client_changed" }
         : refused ? { reason: refused, code: this.refusal!.code } : { reason: "not_found" };
     }
     this.phase = "unresolved";
+  }
+
+  /**
+   * The profile a not_found names (CON:32): another profile or a profile not admitted any more blocks every write; otherwise a
+   * newer shared version makes the data stale until the next read. True when writes are blocked.
+   */
+  private notFoundBlocks(current: Profile, version: string): boolean {
+    if (current.profile_id !== this.scope.profileId) this.writeBlocked = "profile_changed";
+    else if (current.access.status !== "admitted") this.writeBlocked = "forbidden";
+    if (this.writeBlocked) { this.data = null; return true; }
+    if (this.version === null || BigInt(version) > BigInt(this.version)) {
+      this.version = version;
+      this.data = null;
+    }
+    return false;
+  }
+
+  /**
+   * The status of the sent reset X by its ID, with include_refusal (P02-R I.11.3 step 4, I.8). It runs on every check of an
+   * unresolved reset — on opening, foreground, a refresh — and right after a reply to X that records no outcome of X (R16-01
+   * variant 1): the same path whether the window stayed open or not.
+   * - fact → «сброс выполнен»; F1 → «сброс не выполнен» (I.11.3a);
+   * - F2 → the explicit refusal is held until «Отменить прежний сброс» (I.11.3c п.6), nothing is sent;
+   * - the canonical not_found → the client cancels X on the server itself (CON:301), unless a refusal is held (I.11.3c п.2);
+   * - any other answer or a failed read decides nothing (C362): no cancel, the record stays, the check comes again later.
+   */
+  private async checkReset(): Promise<void> {
+    const reset = this.resetPending!;
+    if (reset.state && "cancel" in reset.state) return this.checkCancel();
+    const reply = await this.registry.read(reset.intent.command_id, ticket => this.access().run(({ token }) =>
+      this.options.api.resetStatus(token, this.scope.profileId, reset.intent, ticket)));
+    if (!this.live()) return;
+    this.access();
+    if (reply.outcome !== "not_found") {
+      const code = reply.outcome === "refused" ? reply.code : null;
+      if (code && !heldRefusal(code)) { await this.finalRefusal(code, reply.current, reply.state_version); return; }
+      if (code && heldRefusal(code)) await this.holdRefusal(code);
+      if (!this.live()) return;
+      if ("settings" in reply.current) this.accept(reply.current, reply.state_version);
+      else { this.writeBlocked = "forbidden"; this.data = null; }
+      if (code && heldRefusal(code)) { this.phase = "unresolved"; this.problem = this.writeBlocked ? { reason: this.writeBlocked } : this.heldProblem(); return; }
+      await this.resolve("accepted");
+      return;
+    }
+    // Nothing of X is recorded on the server: a definite answer about this ID (CON:32, :301).
+    this.registry.settled("not_recorded");
+    if (this.notFoundBlocks(reply.current, reply.state_version)) {
+      this.problem = { reason: this.writeBlocked! };
+      this.phase = "unresolved";
+      return;
+    }
+    if (this.heldCode()) {
+      // I.11.3c п.2: a held refusal is lifted only by the button; not_found starts nothing for it.
+      await this.readCurrent();
+      if (!this.live()) return;
+      this.problem = this.problem ?? this.heldProblem();
+      this.phase = "unresolved";
+      return;
+    }
+    // C362 (1): only this canonical not_found lets the client cancel the reset itself (R16-01 variant 1, CON:301).
+    await this.startCancel(false);
+  }
+
+  /**
+   * I.11.3c п.1, п.5: the explicit refusal F2 of the sent reset is written first, by the conditional replacement of I.11.1;
+   * a failed write keeps it in this document's memory only (nothing is sent for it then, and the screen names the storage).
+   */
+  private async holdRefusal(code: ResetHeldCode): Promise<void> {
+    const reset = this.resetPending!, stored = this.resetStored ?? reset;
+    this.registry.settled("rejected");
+    const held: SettingsResetPending = { ...reset, state: { refused: code } };
+    if (this.resetStored === reset && this.heldCode() === code) return;
+    try {
+      await this.options.resetStore.replace(stored, held, this.lifetime.signal);
+      this.resetStored = held;
+    } catch (error) {
+      if (error instanceof PendingStoreError && error.kind === "cancelled") throw error;
+      this.resetStored = stored;
+    }
+    if (this.live()) this.resetPending = held;
+  }
+
+  /**
+   * The cancel of the sent reset X with a new ID C (P02-R I.11.3 step 4, I.11.3b п.3): stored before it is sent (not stored —
+   * not sent). `explicit` marks the user's «Отменить прежний сброс»; otherwise the client cancels after the canonical
+   * not_found of X (CON:301, R16-01). Nothing is stored or sent while the gate holds writes (I9, M12).
+   */
+  private async startCancel(explicit: boolean): Promise<void> {
+    const reset = this.resetPending!, stored = this.resetStored ?? reset;
+    if (!this.registry.writable()) {
+      if (!this.dataIsCurrent()) await this.readCurrent();
+      throw new PausedBeforeSendError("paused");
+    }
+    if (!explicit) this.automaticSendAllowed();
+    const cancel: SettingsResetPending = { ...reset, state: { cancel: this.options.newId().toLowerCase(), explicit } };
+    if (!validId((cancel.state as { cancel: string }).cancel)) throw new Error("invalid settings reset cancel");
+    await this.options.resetStore.replace(stored, cancel, this.lifetime.signal);
+    if (!this.live()) return;
+    this.resetPending = cancel;
+    this.resetStored = cancel;
+    await this.sendCancel(!explicit);
+  }
+
+  /**
+   * One send of the stored cancel C of X; a lost answer leaves the record as it is (C is idempotent, I.7). `automatic`: sent
+   * by the client itself, so it leaves only from a shown page (C365 N3); the user's button is no automatic send.
+   */
+  private async sendCancel(automatic: boolean): Promise<void> {
+    const reset = this.resetPending!, state = reset.state as { cancel: string; explicit: boolean };
+    const source = this.access();
+    this.phase = "sending";
+    this.problem = null;
+    this.emit();
+    this.registry.hold(state.cancel);
+    const reply = await source.run(({ token, proof, documentId }) => {
+      if (automatic) this.automaticSendAllowed();
+      return this.options.api.resetCancel(token, proof, this.scope.profileId,
+        { command_id: state.cancel, kind: "settings.reset_cancel", client_instance_id: this.scope.clientId, document_id: documentId,
+          payload: { target_command_id: reset.intent.command_id } });
+    });
+    if (!this.live()) return;
+    if (this.access() !== source) throw new ClosedAccessError();
+    if (reply.outcome === "mismatch") {
+      // I.11.3 step 4: the cancel's ID is taken by another intent; the same target gets a new cancel ID, sent on the next check.
+      this.registry.settled("mismatch");
+      const renewed: SettingsResetPending = { ...reset, state: { cancel: this.options.newId().toLowerCase(), explicit: state.explicit } };
+      await this.options.resetStore.replace(reset, renewed, this.lifetime.signal);
+      if (!this.live()) return;
+      this.resetPending = renewed;
+      this.resetStored = renewed;
+      this.registry.hold((renewed.state as { cancel: string }).cancel);
+      this.accept(reply.current, reply.state_version);
+      this.phase = "unresolved";
+      this.problem = { reason: "network", code: reply.error.code };
+      return;
+    }
+    this.registry.settled("recorded");
+    await this.takeTarget(reply.target, reply.current, reply.state_version);
+  }
+
+  /** The stored cancel C of X is checked by its ID; nothing recorded of C → the same C is sent (I.11.3 step 4; P03 I9). */
+  private async checkCancel(): Promise<void> {
+    const reset = this.resetPending!, state = reset.state as { cancel: string; explicit: boolean };
+    const intent = { command_id: state.cancel, target_command_id: reset.intent.command_id };
+    const reply = await this.registry.read(state.cancel, ticket => this.access().run(({ token }) =>
+      this.options.api.resetCancelStatus(token, this.scope.profileId, intent, ticket)));
+    if (!this.live()) return;
+    this.access();
+    if (reply.outcome === "accepted") {
+      this.registry.settled("already_applied");
+      await this.takeTarget(reply.target, reply.current, reply.state_version);
+      return;
+    }
+    this.registry.settled("not_recorded");
+    if (this.notFoundBlocks(reply.current, reply.state_version)) {
+      this.problem = { reason: this.writeBlocked! };
+      this.phase = "unresolved";
+      return;
+    }
+    if (!this.registry.writable()) {
+      await this.readCurrent();
+      throw new PausedBeforeSendError("paused");
+    }
+    // The resend of a stored cancel after its not_found is the client's own (I.11.3 step 4), whoever stored it.
+    await this.sendCancel(true);
+  }
+
+  /**
+   * The outcome of X that its cancel read under the profile lock (I.9), with the fresh settings. The text follows that real
+   * outcome (R16-01): applied → «сброс выполнен»; any refusal → «сброс не выполнен» — except a refusal the server stored
+   * (F2) met by the client's own cancel: it is shown and held until the button, as R8-05 (R16-01, «при любом варианте»).
+   */
+  private async takeTarget(target: ResetTargetOutcome, current: SettingsProjection, version: string): Promise<void> {
+    const state = this.resetPending!.state as { cancel: string; explicit: boolean };
+    if (target !== "applied" && !state.explicit) {
+      const code = refusalCodeOf(target);
+      if (heldRefusal(code)) {
+        await this.holdRefusal(code);
+        if (!this.live()) return;
+        this.accept(current, version);
+        this.phase = "unresolved";
+        this.problem = this.heldProblem();
+        return;
+      }
+    }
+    this.accept(current, version);
+    await this.resolve(target === "applied" ? "accepted" : "rejected", target === "applied" ? undefined : refusalCodeOf(target));
   }
 
   /**
@@ -466,16 +815,19 @@ export class SettingsController {
         if (!this.live()) return;
         this.access();
         // One sent intent per document: both slots filled means the recorded state cannot be trusted.
-        if (save && reset) throw new PendingStoreError("invalid");
+        // «Отказан» alone (I.11.3a) is no sent intent and stands beside a save.
+        if (save && unfinished(reset)) throw new PendingStoreError("invalid");
         this.pending = save;
         // R2-09 / K19-024: an intent refused with 422 in an earlier opening keeps that refusal now (its record carries it):
         // no repeat is offered; the status read below may still prove a changed server state; otherwise only the cancel.
         if (save?.refused) this.refusal = { commandId: save.intent.command_id, reason: "command_refused",
           code: "VALIDATION_FAILED", handle: handleNumber(this.access()) };
-        this.resetPending = reset;
+        this.resetPending = unfinished(reset) ? reset : null;
+        this.resetFinal = reset && !unfinished(reset) ? reset : null;
+        this.resetStored = reset;
         this.loaded = true;
-        const loaded = save ?? reset;
-        if (loaded) this.registry.hold(loaded.intent.command_id);
+        const held = this.heldId();
+        if (held) this.registry.hold(held);
         this.restoreDraft();
       }
       if (this.settled) { await this.clearSettled(); if (!this.live()) return; }
@@ -483,7 +835,12 @@ export class SettingsController {
         await this.markMismatch();
         if (!this.live()) return;
         await this.readbackAfterMismatch();
-      } else if (this.sent()) await this.checkPending();
+      } else if (this.resetPending && this.staleHere()) {
+        // I.11.3 step 4 (:631): DOCUMENT_STALE — X is read only in a new document; this one sends and reads nothing of it.
+        this.problem = { reason: "context_closed", code: "DOCUMENT_STALE" };
+        this.phase = "unresolved";
+      } else if (this.resetPending) await this.checkReset();
+      else if (this.pending) await this.checkPending();
       else { await this.readCurrent(); if (this.live()) this.idle(); }
     });
   }
@@ -534,27 +891,85 @@ export class SettingsController {
       if (!this.sent()) { await this.readCurrent(); if (this.live()) this.idle(); }
     } else await this.resolve(reply.outcome, reply.outcome === "rejected" ? reply.error.code : undefined);
   }
+  /**
+   * The reset X is stored before it is sent, and sent once (never again: P02-R I.11.3 step 4, R-5). A reply the server decided
+   * is taken as it is (ResetReply). Any other — a bare 422/409, DOCUMENT_STALE, SESSION_BUSY, 5xx, no answer, an unreadable
+   * one — records no outcome of X, so it is no refusal (R16-01 variant 1): the status of X is read by its ID at once, in
+   * this same window, as on the next opening (checkReset). 401/403, a request the gate kept and a changed access go to `run`.
+   */
+  private async sendReset(source: OpenedAccess): Promise<void> {
+    const reset = this.resetPending;
+    if (!reset || !this.live()) return;
+    if (this.access() !== source) throw new ClosedAccessError();
+    const epoch = (reset.intent.payload as { expected_reset_epoch?: string }).expected_reset_epoch;
+    if (epoch === undefined) throw new Error("invalid settings reset intent");
+    this.phase = "sending";
+    this.problem = null;
+    this.emit();
+    // From now on a request of this ID may leave: its outcome is unknown until a definite answer (R1).
+    this.registry.hold(reset.intent.command_id);
+    // «Отказан» of an earlier reset is carried by this one until it is applied (I.11.3a п.5).
+    if (this.resetStored && !unfinished(this.resetStored)) await this.options.resetStore.replace(this.resetStored, reset, this.lifetime.signal);
+    else await this.options.resetStore.save(reset, this.lifetime.signal);
+    if (!this.live()) return;
+    this.resetStored = reset;
+    this.resetFinal = null;
+    if (this.access() !== source) throw new ClosedAccessError();
+    let reply: ResetReply;
+    try {
+      reply = await source.run(({ token, proof, documentId }) => this.options.api.reset(token, proof, this.scope.profileId,
+        { command_id: reset.intent.command_id, kind: "settings.reset", client_instance_id: reset.clientInstanceId,
+          document_id: documentId, payload: { expected_reset_epoch: epoch } }));
+    } catch (error) {
+      // A DOCUMENT_STALE the junction proved a replacement (the window closed, I.11.3 step 4, :640): no GET X, no cancel, the
+      // record as it is. A bare or unconfirmed one of a live window is an unknown outcome of X like any other (C437, R16-01).
+      if (!this.live() || !(error instanceof ApiError) || error.status === 401 || error.status === 403
+        || error.code === "DOCUMENT_STALE" && this.replacementProved()) throw error;
+      this.noteIncompatible(error);
+      this.phase = "checking";
+      this.emit();
+      await this.checkReset();
+      return;
+    }
+    if (!this.live()) return;
+    if (this.access() !== source) throw new ClosedAccessError();
+    if (reply.outcome === "refused" && heldRefusal(reply.code)) {
+      // This build sent X with an epoch in this document: only its contract version can be the incompatible one (I.5,
+      // I.9 step 0), so the cancel button is useless here (RQ-2 (а)). A later document cannot tell, and offers it.
+      if (reply.code === "CLIENT_INCOMPATIBLE") this.noteIncompatible(new ApiError("http", 409, reply.code));
+      // I.11.3c п.1: the held refusal is written first, before the reason is shown.
+      await this.holdRefusal(reply.code);
+      if (!this.live()) return;
+      this.accept(reply.current, reply.state_version);
+      this.phase = "unresolved";
+      this.problem = this.heldProblem();
+      return;
+    }
+    if (reply.outcome === "refused") {
+      // F1 (I.11.3a): «отказан» is written first; then the fresh settings of the answer, editing opens again.
+      await this.finalRefusal(reply.code as ResetFinalCode, reply.current, reply.state_version);
+      return;
+    }
+    await this.applyReply(reply);
+  }
+
   /** The intent is stored before it is sent; a retry sends the stored envelope again, never a new ID (TA 9). */
   private async sendPending(source: OpenedAccess): Promise<void> {
-    const save = this.pending, reset = this.resetPending;
-    if (!(save ?? reset) || !this.live()) return;
+    const save = this.pending;
+    if (!save || !this.live()) return;
     if (this.access() !== source) throw new ClosedAccessError();
     this.phase = "sending";
     this.problem = null;
     this.emit();
     // From now on a request of this ID may leave: its outcome is unknown until a definite answer (R1).
-    this.registry.hold((save ?? reset)!.intent.command_id);
-    if (save) await this.options.pendingStore.save(save, this.lifetime.signal);
-    else await this.options.resetStore.save(reset!, this.lifetime.signal);
+    this.registry.hold(save.intent.command_id);
+    await this.options.pendingStore.save(save, this.lifetime.signal);
     if (!this.live()) return;
     // A foreground refresh must resolve the saved intent before an explicit
     // retry. Finishing a storage write cannot transfer a send to its new handle.
     if (this.access() !== source) throw new ClosedAccessError();
-    const reply = await source.run(({ token, proof, documentId }) => save
-      ? this.options.api.save(token, proof, this.scope.profileId,
-        { ...structuredClone(save.intent), client_instance_id: save.clientInstanceId, document_id: documentId })
-      : this.options.api.reset(token, proof, this.scope.profileId,
-        { ...structuredClone(reset!.intent), client_instance_id: reset!.clientInstanceId, document_id: documentId }))
+    const reply = await source.run(({ token, proof, documentId }) => this.options.api.save(token, proof, this.scope.profileId,
+        { ...structuredClone(save.intent), client_instance_id: save.clientInstanceId, document_id: documentId }))
       .catch(async (error: unknown) => {
         // R2-09 / K19-024: the 422 of a stored save is kept with its record, so it stands between openings. A failed write
         // of the mark (or a record changed meanwhile) leaves the storage as it was; the refusal is then held in page memory.
@@ -588,18 +1003,42 @@ export class SettingsController {
       await this.sendPending(source);
     });
   }
-  /** One confirmed press creates one intent; a press while anything is sent or running creates none. */
+  /**
+   * One confirmed press creates one intent; a press while anything is sent or running creates none. The reset carries the
+   * epoch of this document's last read (P02-R I.5, I.11.3 step 6); a read without one (a core before P02-R) offers none.
+   */
   reset(): Promise<void> {
-    if (!this.editable() || this.running) return this.running ?? Promise.resolve();
+    const epoch = resetEpochOf(this.data);
+    if (!this.editable() || this.running || epoch === null) return this.running ?? Promise.resolve();
     const source = this.access();
     return this.run(async () => {
       if (this.access() !== source) throw new ClosedAccessError();
       this.outcome = null;
       this.resetOutcome = null;
       this.refusal = null;
-      this.resetPending = { schemaVersion: 1, profileId: this.scope.profileId, clientInstanceId: this.scope.clientId,
-        intent: { command_id: this.options.newId(), kind: "settings.reset", payload: {} } };
-      await this.sendPending(source);
+      const earlier = this.resetFinal?.final;
+      this.resetPending = { schemaVersion: 2, profileId: this.scope.profileId, clientInstanceId: this.scope.clientId,
+        intent: { command_id: this.options.newId(), kind: "settings.reset", payload: { expected_reset_epoch: epoch } },
+        ...(earlier ? { final: earlier } : {}) };
+      this.resetStored = this.resetFinal;
+      await this.sendReset(source);
+    });
+  }
+  /**
+   * P02-R I.11.3b п.3, R8-05 variant 1: «Отменить прежний сброс» — the user's explicit cancel of the reset the server refused
+   * and stored (F2). The cancel with a new ID is stored, then sent once; its answer names the reset's real outcome, and the
+   * fresh settings open for editing. A lost answer keeps it and it is checked by its ID later.
+   */
+  cancelReset(): Promise<void> {
+    if (!this.cancelResetAllowed()) return this.running ?? Promise.resolve();
+    const source = this.access();
+    return this.run(async () => {
+      if (this.access() !== source) throw new ClosedAccessError();
+      this.outcome = null;
+      this.resetOutcome = null;
+      this.phase = "sending";
+      this.emit();
+      await this.startCancel(true);
     });
   }
   retry(): Promise<void> {

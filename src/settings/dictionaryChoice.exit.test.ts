@@ -13,6 +13,16 @@ describe("the way from a frame that cannot show Today to Settings", () => {
     expect(markedMismatch(state({ resetPending: { mismatch: true } }))).toBe(true);
     expect(settingsExit(state({ resetPending: { mismatch: true } }))).toBe(true);
   });
+  it("P02-R: an unresolved reset (unknown, held or cancelling) leads to Settings once nothing runs; it never needs canRetry", () => {
+    const reset = { schemaVersion: 2, profileId: "p", clientInstanceId: "c",
+      intent: { command_id: "x", kind: "settings.reset", payload: { expected_reset_epoch: "1" } } };
+    for (const resetPending of [reset, { ...reset, state: { refused: "VALIDATION_FAILED" } }, { ...reset, state: { cancel: "y", explicit: true } }]) {
+      for (const phase of ["unresolved", "blocked", "ready"]) expect(settingsExit(state({ resetPending, phase }))).toBe(true);
+      for (const phase of ["loading", "checking", "sending"]) expect(settingsExit(state({ resetPending, phase, canRetry: true }))).toBe(false);
+    }
+    // A save of another field still needs its retry; a reset beside nothing pending does not lead anywhere by itself.
+    expect(settingsExit(state({ pending: save("retry_count"), phase: "unresolved" }))).toBe(false);
+  });
   it("an unmarked command still needs its retry (R2-01), and no command offers nothing", () => {
     expect(settingsExit(state({ pending: save("retry_count"), canRetry: true }))).toBe(true);
     expect(settingsExit(state({ pending: save("retry_count") }))).toBe(false);

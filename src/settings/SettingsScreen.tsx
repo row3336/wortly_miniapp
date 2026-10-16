@@ -4,7 +4,7 @@ import { BottomNav } from "../app/BottomNav";
 import type { FeedbackDocument } from "../feedback/useFeedbackDocument";
 import type { Language } from "../i18n/language";
 import { t as appText, navigationText } from "../i18n/messages";
-import { storedOnly, type MainSettingKey, type SettingKey } from "./settingsApi";
+import { resetEpochOf, storedOnly, type MainSettingKey, type SettingKey } from "./settingsApi";
 import type { SettingsController, SettingsSnapshot } from "./settingsController";
 import { catalogAllows, MaterialEditor, materialParts, type CatalogState } from "./MaterialEditor";
 import { SettingsFeedback } from "./SettingsFeedback";
@@ -17,7 +17,7 @@ import { notificationsCopy } from "./notificationsCopy";
 import "./settings.css";
 
 type Actions = Pick<SettingsController, "edit" | "save" | "acceptCurrent" | "keepMine" | "refresh" | "retry" | "reset" | "continueWithServer">
-  & Partial<Pick<SettingsController, "cancelStored">>;
+  & Partial<Pick<SettingsController, "cancelStored" | "cancelReset">>;
 export type SettingsScreenProps = {
   snapshot: SettingsSnapshot;
   catalog: CatalogState;
@@ -228,21 +228,26 @@ export function problemText(snapshot: SettingsSnapshot, language: Language): str
 
 /**
  * The one line that reports a sent reset, next to its button; the screen's top lines then stay silent about it, so a
- * state is shown and announced once. Д2.1.9 asks to retry, so it is the line only while the retry is available: not
- * during a status check, nor for client_changed, pending_changed or mismatch (their own top-line texts apply).
+ * state is shown and announced once. A reset is never sent again (P02-R R-5): an unconfirmed one offers only the check of
+ * its status (the R16-01 route then decides by itself); a refusal the server stored (F2) is held with its own button.
+ * Not for pending_changed or mismatch (their own top-line texts apply).
  */
-function resetLine(snapshot: SettingsSnapshot): "sending" | "unknown" | null {
+function resetLine(snapshot: SettingsSnapshot): "sending" | "checking" | "unknown" | "refused" | null {
   if (!snapshot.data || !snapshot.resetPending) return null;
-  if (snapshot.phase === "sending") return "sending";
-  return snapshot.canRetry && !!snapshot.problem && ["network", "not_found"].includes(snapshot.problem.reason) ? "unknown" : null;
+  const state = snapshot.resetPending.state, cancelling = !!state && "cancel" in state;
+  if (snapshot.phase === "sending") return cancelling ? "checking" : "sending";
+  if (snapshot.phase === "checking") return "checking";
+  if (state && "refused" in state) return "refused";
+  return !!snapshot.problem && ["network", "not_found"].includes(snapshot.problem.reason) ? "unknown" : null;
 }
 
 /**
  * Returning the initial settings (TA 12.4): the button opens the Q08 confirmation; only «Вернуть» sends, and the
- * result is shown once the server answered. An unknown outcome is retried with the same command from here.
+ * result is shown once the server answered. An unknown outcome is checked by its ID from here, never sent again; a refusal
+ * the server stored waits for «Отменить прежний сброс» (R8-05/R8-06 variant 1, R16-01 variant 1).
  */
-function SettingsReset({ snapshot, language, onReset, onRetry }: { snapshot: SettingsSnapshot; language: Language;
-  onReset(): void; onRetry(): void }) {
+function SettingsReset({ snapshot, language, onReset, onCheck, onCancelRefused }: { snapshot: SettingsSnapshot; language: Language;
+  onReset(): void; onCheck(): void; onCancelRefused?(): void }) {
   const t = settingsCopy[language].reset;
   const [asking, setAsking] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
@@ -256,10 +261,15 @@ function SettingsReset({ snapshot, language, onReset, onRetry }: { snapshot: Set
       <button type="button" className="settings-secondary" disabled={!snapshot.canReset} onClick={() => setAsking(true)}>{t.button}</button>
       <div className="settings-reset-status" ref={status} tabIndex={-1}>
         {line === "sending" && <span role="status">{t.sending}</span>}
+        {line === "checking" && <span role="status">{t.checking}</span>}
         {line === "unknown" && <p className="settings-error" role="alert">{t.unknown}</p>}
-        {line === "unknown" && <button className="settings-secondary" type="button" onClick={onRetry}>{settingsCopy[language].retry}</button>}
+        {line === "unknown" && <button className="settings-secondary" type="button" onClick={onCheck}>{t.check}</button>}
+        {line === "refused" && <p className="settings-error" role="alert">{t.refused}</p>}
+        {line === "refused" && snapshot.canCancelReset && onCancelRefused
+          && <button className="settings-secondary" type="button" onClick={onCancelRefused}>{t.cancelRefused}</button>}
+        {!snapshot.resetPending && resetEpochOf(snapshot.data) === null && <p className="settings-help">{t.serverUpdate}</p>}
         {outcome?.status === "accepted" && <span className="settings-saved" role="status">{t.done}</span>}
-        {outcome?.status === "rejected" && <p className="settings-error" role="alert">{t.failed}</p>}
+        {outcome?.status === "rejected" && <p className="settings-error" role="alert">{outcome.final ? t.notDone : t.failed}</p>}
       </div>
     </div>
     {asking && <SettingsResetDialog language={language} canConfirm={snapshot.canReset} onCancel={() => setAsking(false)}
@@ -334,7 +344,7 @@ export function SettingsScreen(props: SettingsScreenProps) {
       <button type="button" className="settings-secondary" disabled={busy} ref={refreshButton}
         onClick={() => { setLeaving(null); void actions.refresh(); }}>{t.refresh}</button>
     </header>
-    {busy && line !== "sending" && leaving !== "running" && leaving !== "settled" && <p role="status">{snapshot.phase === "sending" ? snapshot.resetPending ? t.reset.sending : t.saving
+    {busy && line !== "sending" && line !== "checking" && leaving !== "running" && leaving !== "settled" && <p role="status">{snapshot.phase === "sending" ? snapshot.resetPending ? t.reset.sending : t.saving
       : snapshot.data ? t.refreshing : t.loading}</p>}
     {leaving && <div className="settings-continue-status" ref={leavingStatus} tabIndex={-1}>
       {leaving === "done" ? <span className="settings-saved" role="status">{t.continued}</span>
@@ -342,7 +352,8 @@ export function SettingsScreen(props: SettingsScreenProps) {
         : <span role="status">{t.refreshing}</span>}
     </div>}
     {/* The reset's own line sits beside its button on the main view; the submenu has no such button, so it shows the problem here. */}
-    {snapshot.problem && (line !== "unknown" || notifications) && <div className="settings-error" role="alert">
+    {snapshot.problem && (line !== "unknown" && !(line === "refused" && snapshot.problem.reason === "reset_refused") || notifications)
+      && <div className="settings-error" role="alert">
       <p>{problemText(snapshot, language)}</p>
       {snapshot.canRetry && <button className="settings-secondary" type="button" onClick={() => { void actions.retry(); }}>{t.retry}</button>}
       {/* R2-09 / P5-013: the explicit cancel of a refused earlier change (kept between openings); a stored-only key (R14-02)
@@ -374,7 +385,8 @@ export function SettingsScreen(props: SettingsScreenProps) {
           : <SettingField key={setting} setting={setting} {...fieldProps} />)}</div>
       </section>)}
     {snapshot.data && <SettingsReset snapshot={snapshot} language={language} onReset={() => { clearResult(); void actions.reset(); }}
-      onRetry={() => { void actions.retry(); }} />}
+      onCheck={() => { void actions.refresh(); }}
+      onCancelRefused={actions.cancelReset ? () => { void actions.cancelReset?.(); } : undefined} />}
     {feedback && <SettingsFeedback feedback={feedback} language={language} />}
     {props.profileDeletion}
     <BottomNav current="settings" language={language} enabled={onDictionary ? ["today", "dictionary"] : ["today"]}

@@ -39,7 +39,8 @@ function storage(initial: Record<string, string>) {
 /** One opening of the app: a new document over the same device storage. */
 function opening(disk: ReturnType<typeof storage>, document: string, read: () => SettingsResponse = settingsResponse) {
   const api = { get: vi.fn<SettingsApi["get"]>(async () => read()), save: vi.fn<SettingsApi["save"]>(),
-    status: vi.fn<SettingsApi["status"]>(notFound), reset: vi.fn<SettingsApi["reset"]>(), resetStatus: vi.fn<SettingsApi["resetStatus"]>() };
+    status: vi.fn<SettingsApi["status"]>(notFound), reset: vi.fn<SettingsApi["reset"]>(), resetStatus: vi.fn<SettingsApi["resetStatus"]>(),
+    resetCancel: vi.fn<SettingsApi["resetCancel"]>(), resetCancelStatus: vi.fn<SettingsApi["resetCancelStatus"]>() };
   let access: OpenedAccess | null = null;
   const handle: OpenedAccess = createOpenedAccess({ opened: opened(document), token: "synthetic-token", proof: "synthetic-proof",
     generation: 1, isLive: () => access === handle, onDenied: vi.fn() });

@@ -33,7 +33,10 @@ export function dictionaryChoice(state: SettingsSnapshot, confirmed: SettingsPro
  */
 export function settingsExit(state: SettingsSnapshot): boolean {
   const other = state.pending !== null && state.pending.intent.payload.key !== "dictionary_language";
-  return (other || state.resetPending !== null) && state.canRetry || markedMismatch(state);
+  // A reset is never sent again (P02-R R-5): its check by ID, its cancel and its held refusal live in Settings, so an
+  // unresolved one leads there once nothing runs.
+  return other && state.canRetry || state.resetPending !== null && !["loading", "checking", "sending"].includes(state.phase)
+    || markedMismatch(state);
 }
 
 /**

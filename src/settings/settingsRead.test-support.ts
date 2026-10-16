@@ -6,7 +6,7 @@ const big = "9007199254740995";
  * of the first choice set the version back to "1" themselves.
  */
 export function settingsResponse(): SettingsResponse {
-  return { state_version: big, needs_setup: true, settings: {
+  return { state_version: big, needs_setup: true, reset_epoch: "1", settings: {
     ui_language: { value: "ru", version: big }, dictionary_language: { value: "uk", version: "2" },
     time_zone: { value: "Asia/Tokyo", version: "3" }, retry_gap: { value: null, version: "1" },
     retry_count: { value: 3, version: "2" }, learning_group_size: { value: null, version: "1" },

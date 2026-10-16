@@ -133,8 +133,8 @@ describe("saving at once (§8.2)", () => {
   it("an undetermined reset closes the submenu's fields until the server's outcome and says so here (N-AC25)", () => {
     const f = fixture(); f.snapshot.phase = "unresolved"; f.snapshot.canEdit = false; f.snapshot.canRetry = true;
     f.snapshot.problem = { reason: "network" };
-    f.snapshot.resetPending = { schemaVersion: 1, profileId: "p", clientInstanceId: "c",
-      intent: { command_id: "x", kind: "settings.reset", payload: {} } };
+    f.snapshot.resetPending = { schemaVersion: 2, profileId: "p", clientInstanceId: "c",
+      intent: { command_id: "x", kind: "settings.reset", payload: { expected_reset_epoch: "1" } } };
     render(<SettingsScreen {...f} />);
     for (const element of [...screen.getAllByRole("switch"), ...screen.getAllByRole("combobox")]) {
       expect((element as HTMLInputElement).disabled).toBe(true);

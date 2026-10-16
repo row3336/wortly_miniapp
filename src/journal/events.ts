@@ -21,6 +21,9 @@ export const COMMAND_KINDS = [
   "learning.preview_next", "learning.select", "learning.unselect", "onboarding.advance", "onboarding.complete",
   "onboarding.dismiss", "oral.grade", "oral.reveal", "result.correct", "result.grade", "result.undo",
   "session.cancel_start", "session.start", "session.stop", "session.stop_remote", "setting.save", "settings.reset",
+  // The kinds the core accepts since P02-R (ca6ccbb) and C4/C5 (a80d653), as its contract lists them; only the reset cancel is
+  // sent by this client so far (P02-R I.11.3, R16-01).
+  "settings.reset_barrier", "settings.reset_cancel", "synonym.clear", "synonym.link", "synonym.link_many", "synonym.unlink",
 ] as const;
 exact<Exactly<typeof COMMAND_KINDS[number], CommandSendEvent["kind"]>>();
 
@@ -29,7 +32,7 @@ export const ERROR_CODES = [
   "CAPABILITY_EXPIRED", "CLIENT_INCOMPATIBLE", "CLIENT_OPEN_REQUIRED", "CLIENT_REGISTRATION_CONFLICT",
   "COMMAND_PAYLOAD_MISMATCH", "DICTIONARY_LANGUAGE_LOCKED", "DOCUMENT_STALE", "FORBIDDEN", "INTERNAL_ERROR", "LEASE_HELD",
   "LEASE_LOST", "MAINTENANCE", "METHOD_NOT_ALLOWED", "NOT_FOUND", "NO_MATERIAL", "NOTIFICATIONS_NOT_OPENED", "PRECEDENCE_ANOMALY", "PROFILE_DELETED",
-  "RATE_LIMITED", "REQUEST_REFUSED", "SEARCH_CURSOR_STALE", "SESSION_BUSY", "SESSION_CLOSED", "SETUP_REQUIRED",
+  "RATE_LIMITED", "REQUEST_REFUSED", "RESET_CANCELLED", "RESET_EPOCH_STALE", "SEARCH_CURSOR_STALE", "SESSION_BUSY", "SESSION_CLOSED", "SETUP_REQUIRED",
   "VALIDATION_FAILED", "VERSION_CONFLICT", "WRITE_UNAVAILABLE",
 ] as const;
 export type ErrorCode = NonNullable<CommandReplyEvent["code"]>;

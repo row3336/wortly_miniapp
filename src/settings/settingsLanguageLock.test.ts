@@ -55,7 +55,9 @@ function fixture(initial: SettingsResponse) {
     save: vi.fn<SettingsApi["save"]>(async () => { throw new Error("unexpected save"); }),
     status: vi.fn<SettingsApi["status"]>(async () => missing()),
     reset: vi.fn<SettingsApi["reset"]>(async () => { throw new Error("unexpected reset"); }),
-    resetStatus: vi.fn<SettingsApi["resetStatus"]>(async () => missing()) };
+    resetStatus: vi.fn<SettingsApi["resetStatus"]>(async () => missing()),
+    resetCancel: vi.fn<SettingsApi["resetCancel"]>(async () => { throw new Error("unexpected reset cancel"); }),
+    resetCancelStatus: vi.fn<SettingsApi["resetCancelStatus"]>(async () => { throw new Error("unexpected reset cancel status"); }) };
   let access: OpenedAccess | null = null;
   const handle: OpenedAccess = createOpenedAccess({ opened: opened(), token: "synthetic-token", proof: "synthetic-proof",
     generation: 1, isLive: () => access === handle, onDenied: vi.fn() });

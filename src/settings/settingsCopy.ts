@@ -29,7 +29,15 @@ type Copy = {
   fields: Record<MainSettingKey, string>;
   /** Returning the initial settings: the button, its confirmation window (Q08) and the states after confirming. */
   reset: { button: string; title: string; resets: string; kept: string; confirm: string; cancel: string;
-    sending: string; done: string; failed: string; unknown: string };
+    sending: string; done: string; failed: string; unknown: string;
+    /**
+     * P02-R (R8-05/R8-06 variant 1, R16-01 variant 1): the line of a refusal the server stored (F2), held until the button; the
+     * button; the check by ID of an unconfirmed reset (it is never sent again, R-5); the check running; a core without
+     * reset_epoch (I.13 п.1). WORKING TEXT of the worker, to be shown to the owner.
+     */
+    refused: string; cancelRefused: string; check: string; checking: string; serverUpdate: string;
+    /** F1, «отказан» (I.11.3a п.2): the draft of tz_app.md:311 «Сброс не выполнен. Настройки обновлены…». WORKING TEXT. */
+    notDone: string };
   /**
    * A known 422 of this attempt (command_refused): the server refused this sending, while whether an earlier one was
    * applied is not confirmed. No repeat is promised. Working text, pending owner (M-SETTINGS-KNOWN-REFUSAL-2).
@@ -99,7 +107,11 @@ export const settingsCopy: Record<Language, Copy> = {
       kept: "Языки, выбранный учебный материал и настройки напоминаний сохранятся. Текущая группа, результаты и сроки повторов не изменятся.",
       confirm: "Вернуть", cancel: "Отмена", sending: "Возвращаем исходные настройки", done: "Исходные настройки возвращены.",
       failed: "Не удалось вернуть исходные настройки. Ничего не изменилось. Попробуй ещё раз.",
-      unknown: "Пока не удалось подтвердить возврат исходных настроек. Проверь состояние или повтори отправку.",
+      unknown: "Пока не удалось подтвердить возврат исходных настроек. Проверь состояние ещё раз.",
+      refused: "Сервер отклонил прежний сброс настроек. Ничего не изменилось. Чтобы снова менять настройки, отмени прежний сброс.",
+      cancelRefused: "Отменить прежний сброс", check: "Проверить ещё раз", checking: "Проверяем прежний сброс настроек",
+      serverUpdate: "Сброс настроек пока недоступен: нужно обновление сервера.",
+      notDone: "Сброс не выполнен. Настройки обновлены. Проверьте их и при необходимости повторите сброс.",
     },
     refusedAttempt: {
       save: "Сервер не принял эту отправку изменения. Принято ли оно раньше, пока не подтверждено. Проверь состояние.",
@@ -123,6 +135,7 @@ export const settingsCopy: Record<Language, Copy> = {
       profile_changed: "Профиль изменился. Открой Wortly снова через бота.",
       mismatch: "Не удалось подтвердить именно это изменение. Новые изменения пока недоступны.",
       not_found: "Подтверждение сохранения пока не найдено. Можно проверить ещё раз или повторить отправку.",
+      reset_refused: "Сервер отклонил прежний сброс настроек. Ничего не изменилось. Чтобы снова менять настройки, отмени прежний сброс.",
     },
   },
   uk: {
@@ -173,7 +186,11 @@ export const settingsCopy: Record<Language, Copy> = {
       kept: "Мови, вибраний навчальний матеріал і налаштування нагадувань збережуться. Поточна група, результати й терміни повторень не зміняться.",
       confirm: "Повернути", cancel: "Скасувати", sending: "Повертаємо початкові налаштування", done: "Початкові налаштування повернуто.",
       failed: "Не вдалося повернути початкові налаштування. Нічого не змінилося. Спробуй ще раз.",
-      unknown: "Поки не вдалося підтвердити повернення початкових налаштувань. Перевір стан або повтори надсилання.",
+      unknown: "Поки не вдалося підтвердити повернення початкових налаштувань. Перевір стан ще раз.",
+      refused: "Сервер відхилив попереднє скидання налаштувань. Нічого не змінилося. Щоб знову змінювати налаштування, скасуй попереднє скидання.",
+      cancelRefused: "Скасувати попереднє скидання", check: "Перевірити ще раз", checking: "Перевіряємо попереднє скидання налаштувань",
+      serverUpdate: "Скидання налаштувань поки недоступне: потрібне оновлення сервера.",
+      notDone: "Скидання не виконано. Налаштування оновлено. Перевірте їх і за потреби повторіть скидання.",
     },
     refusedAttempt: {
       save: "Сервер не прийняв це надсилання зміни. Чи прийнято її раніше, поки не підтверджено. Перевір стан.",
@@ -197,6 +214,7 @@ export const settingsCopy: Record<Language, Copy> = {
       profile_changed: "Профіль змінився. Відкрий Wortly знову через бота.",
       mismatch: "Не вдалося підтвердити саме цю зміну. Нові зміни поки недоступні.",
       not_found: "Підтвердження збереження поки не знайдено. Можна перевірити ще раз або повторити надсилання.",
+      reset_refused: "Сервер відхилив попереднє скидання налаштувань. Нічого не змінилося. Щоб знову змінювати налаштування, скасуй попереднє скидання.",
     },
   },
   en: {
@@ -247,7 +265,11 @@ export const settingsCopy: Record<Language, Copy> = {
       kept: "Languages, selected study material and reminder settings will be preserved. Your current group, results and review dates will not change.",
       confirm: "Restore", cancel: "Cancel", sending: "Restoring default settings", done: "Default settings restored.",
       failed: "Could not restore default settings. Nothing has changed. Please try again.",
-      unknown: "Restoring default settings has not been confirmed yet. Check its status or retry sending.",
+      unknown: "Restoring default settings has not been confirmed yet. Check its status again.",
+      refused: "The server refused the earlier settings reset. Nothing has changed. To change settings again, cancel the earlier reset.",
+      cancelRefused: "Cancel the earlier reset", check: "Check again", checking: "Checking the earlier settings reset",
+      serverUpdate: "Settings reset is not available yet: the server needs an update.",
+      notDone: "Reset was not completed. Settings have been refreshed. Review them and reset again if needed.",
     },
     refusedAttempt: {
       save: "The server did not accept this sending of the change. Whether it was accepted earlier is not confirmed yet. Check its status.",
@@ -271,6 +293,7 @@ export const settingsCopy: Record<Language, Copy> = {
       profile_changed: "The profile changed. Open Wortly again from the bot.",
       mismatch: "This particular change could not be confirmed. New changes are temporarily unavailable.",
       not_found: "Save confirmation has not been found yet. Check again or retry sending.",
+      reset_refused: "The server refused the earlier settings reset. Nothing has changed. To change settings again, cancel the earlier reset.",
     },
   },
 };

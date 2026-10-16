@@ -1806,7 +1806,7 @@ describe("Learning: a settings reset in flight", () => {
     try {
       render(<App />);
       await screen.findByText(loadingText, undefined, exchange);
-      await waitFor(() => expect(a.fetcher.mock.calls.some(([url]) => String(url).endsWith(`/commands/${id(61)}`))).toBe(true), exchange);
+      await waitFor(() => expect(a.fetcher.mock.calls.some(([url]) => new URL(String(url), "http://localhost").pathname.endsWith(`/commands/${id(61)}`))).toBe(true), exchange);
       await wait(); expect(screen.getByText(loadingText)).toBeTruthy(); expect(gateOpen()).toBe(false);
       status.open();
       await screen.findByText(failedText, undefined, exchange); expect(gateOpen()).toBe(false);
@@ -1837,7 +1837,7 @@ describe("Learning: a settings reset in flight", () => {
       await wait();
     } finally { flash.stop(); }
     expect(flash.seen).toEqual([]);
-    expect(a.fetcher.mock.calls.some(([url]) => String(url).endsWith(`/commands/${id(61)}`))).toBe(false);
+    expect(a.fetcher.mock.calls.some(([url]) => new URL(String(url), "http://localhost").pathname.endsWith(`/commands/${id(61)}`))).toBe(false);
     expect(a.studyPosts()).toEqual([]);
     expect(localStorage.getItem(SETTINGS_RESET_SLOT)).toBe(legacy); expect(localStorage.getItem(resetKey)).toBeNull();
   });

@@ -46,7 +46,8 @@ function fixture(read: () => SettingsResponse = settingsResponse, stored: Record
     set: vi.fn(async (key, value) => { values.set(key, value); }), remove: vi.fn(async key => { values.delete(key); }) };
   const api = { get: vi.fn<SettingsApi["get"]>(async () => read()),
     save: vi.fn<SettingsApi["save"]>(async (_token, _proof, _profile, request) => accepted(request)),
-    status: vi.fn<SettingsApi["status"]>(), reset: vi.fn<SettingsApi["reset"]>(), resetStatus: vi.fn<SettingsApi["resetStatus"]>() };
+    status: vi.fn<SettingsApi["status"]>(), reset: vi.fn<SettingsApi["reset"]>(), resetStatus: vi.fn<SettingsApi["resetStatus"]>(),
+    resetCancel: vi.fn<SettingsApi["resetCancel"]>(), resetCancelStatus: vi.fn<SettingsApi["resetCancelStatus"]>() };
   let access: OpenedAccess | null = null;
   const handle: OpenedAccess = createOpenedAccess({ opened: opened(document), token: "synthetic-token", proof: "synthetic-proof",
     generation: 1, isLive: () => access === handle, onDenied: vi.fn() });

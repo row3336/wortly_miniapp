@@ -4,6 +4,8 @@ export type Access = { "status": "admitted" | "pending" | "rejected"; "version":
 
 export type AccessCommandResponse = { "command": CommandFact; "current": Profile; };
 
+export type AccessDecisionUnavailableResponse = { "command": CommandFact; "current": UnavailableCurrent; };
+
 export type ActionUndoCommand = { "command_id": string; "kind": "action.undo"; "client_instance_id": string; "document_id": string; "context_id": string; "action_id": string; "expected_action_version": string; "payload": EmptyPayload; };
 
 export type AnswerSubmitCommand = { "command_id": string; "client_instance_id": string; "document_id": string; "session_id": string; "kind": "answer.submit"; "assignment_id": string; "payload": (TextAnswerPayload | ForgotAnswerPayload); };
@@ -13,6 +15,10 @@ export type AppOpenEvent = { "cts": string; "ev": "c.app.open"; "kind": "open" |
 export type AuthRequest = { "client_version": string; "contract_version": string; "init_data": string; "saved_language"?: ("uk" | "en" | "ru" | null); "browser_language"?: (string | null); };
 
 export type AuthResponse = { "access_token": string; "expires_at": string; "profile": Profile; "compatibility": Compatibility; };
+
+export type AvailabilityReady = { "status": "ready"; "retry_after_s": null; };
+
+export type AvailabilityRefused = { "status": "maintenance" | "unavailable"; "retry_after_s": (number | null); };
 
 export type BaseCounts = { "total": number; "words": number; "phrases": number; };
 
@@ -60,11 +66,11 @@ export type ClosedSessionBoundary = { "session_id": string; "status": "closed"; 
 
 export type CommandFact = { "id": string; "status": "applied" | "already_applied"; "applied_at": string; "target_id": (string | null); "object_version": string; };
 
-export type CommandReplyEvent = { "cts": string; "ev": "c.cmd.reply"; "cmd"?: (string | null); "trace": string; "status"?: (number | null); "code"?: ("ACCESS_PENDING" | "ACCESS_REJECTED" | "ANSWER_SPEC_UNAVAILABLE" | "ASSIGNMENT_STALE" | "AUTH_EXPIRED" | "AUTH_INVALID" | "CAPABILITY_EXPIRED" | "CLIENT_INCOMPATIBLE" | "CLIENT_OPEN_REQUIRED" | "CLIENT_REGISTRATION_CONFLICT" | "COMMAND_PAYLOAD_MISMATCH" | "DICTIONARY_LANGUAGE_LOCKED" | "DOCUMENT_STALE" | "FORBIDDEN" | "INTERNAL_ERROR" | "LEASE_HELD" | "LEASE_LOST" | "MAINTENANCE" | "METHOD_NOT_ALLOWED" | "NOTIFICATIONS_NOT_OPENED" | "NOT_FOUND" | "NO_MATERIAL" | "PRECEDENCE_ANOMALY" | "PROFILE_DELETED" | "RATE_LIMITED" | "REQUEST_REFUSED" | "SEARCH_CURSOR_STALE" | "SESSION_BUSY" | "SESSION_CLOSED" | "SETUP_REQUIRED" | "VALIDATION_FAILED" | "VERSION_CONFLICT" | "WRITE_UNAVAILABLE" | null); "outcome": "applied" | "already_applied" | "refused" | "unknown" | "network" | "timeout"; "ms"?: (number | null); };
+export type CommandReplyEvent = { "cts": string; "ev": "c.cmd.reply"; "cmd"?: (string | null); "trace": string; "status"?: (number | null); "code"?: ("ACCESS_PENDING" | "ACCESS_REJECTED" | "ANSWER_SPEC_UNAVAILABLE" | "ASSIGNMENT_STALE" | "AUTH_EXPIRED" | "AUTH_INVALID" | "CAPABILITY_EXPIRED" | "CLIENT_INCOMPATIBLE" | "CLIENT_OPEN_REQUIRED" | "CLIENT_REGISTRATION_CONFLICT" | "COMMAND_PAYLOAD_MISMATCH" | "DICTIONARY_LANGUAGE_LOCKED" | "DOCUMENT_STALE" | "FORBIDDEN" | "INTERNAL_ERROR" | "LEASE_HELD" | "LEASE_LOST" | "MAINTENANCE" | "METHOD_NOT_ALLOWED" | "NOTIFICATIONS_NOT_OPENED" | "NOT_FOUND" | "NO_MATERIAL" | "PRECEDENCE_ANOMALY" | "PROFILE_DELETED" | "RATE_LIMITED" | "REQUEST_REFUSED" | "RESET_CANCELLED" | "RESET_EPOCH_STALE" | "SEARCH_CURSOR_STALE" | "SESSION_BUSY" | "SESSION_CLOSED" | "SETUP_REQUIRED" | "VALIDATION_FAILED" | "VERSION_CONFLICT" | "WRITE_UNAVAILABLE" | null); "outcome": "applied" | "already_applied" | "refused" | "unknown" | "network" | "timeout"; "ms"?: (number | null); };
 
-export type CommandSendEvent = { "cts": string; "ev": "c.cmd.send"; "cmd": string; "trace": string; "kind": "access.decide" | "access.mode" | "access.reapply" | "action.undo" | "action.undo_offer.close" | "action.undo_offer.open" | "answer.submit" | "assignment.present" | "card.exclude" | "card.relearn" | "card.return" | "conjugation.schedule" | "context.close" | "context.open" | "feedback.send" | "field.save" | "field.undo" | "interval.increase" | "learning.known" | "learning.preview_next" | "learning.select" | "learning.unselect" | "onboarding.advance" | "onboarding.complete" | "onboarding.dismiss" | "oral.grade" | "oral.reveal" | "result.correct" | "result.grade" | "result.undo" | "session.cancel_start" | "session.start" | "session.stop" | "session.stop_remote" | "setting.save" | "settings.reset"; "attempt": number; };
+export type CommandSendEvent = { "cts": string; "ev": "c.cmd.send"; "cmd": string; "trace": string; "kind": "access.decide" | "access.mode" | "access.reapply" | "action.undo" | "action.undo_offer.close" | "action.undo_offer.open" | "answer.submit" | "assignment.present" | "card.exclude" | "card.relearn" | "card.return" | "conjugation.schedule" | "context.close" | "context.open" | "feedback.send" | "field.save" | "field.undo" | "interval.increase" | "learning.known" | "learning.preview_next" | "learning.select" | "learning.unselect" | "onboarding.advance" | "onboarding.complete" | "onboarding.dismiss" | "oral.grade" | "oral.reveal" | "result.correct" | "result.grade" | "result.undo" | "session.cancel_start" | "session.start" | "session.stop" | "session.stop_remote" | "setting.save" | "settings.reset" | "settings.reset_barrier" | "settings.reset_cancel" | "synonym.clear" | "synonym.link" | "synonym.link_many" | "synonym.unlink"; "attempt": number; };
 
-export type CommandStatusResponse = { "command": (StoredCommandFact | MissingCommandFact | RefusedStartFact); "current": (Profile | ModeState | UnavailableCurrent | SettingsProjection | SessionProjection | LearningSessionProjection | OralSessionProjection | ConjugationSessionProjection | UnavailableSession | RemoteSessionProjection | SessionStartCancelProjection | LearningCurrentProjection | ConjugationCatalog | FeedbackCurrent | OnboardingProjection); "state_version": string; "closed_session"?: (ClosedSessionBoundary | null); "verified_intent_hash"?: (string | null); "error"?: (ErrorDetail | null); };
+export type CommandStatusResponse = { "command": (StoredCommandFact | MissingCommandFact | RefusedStartFact | RefusedResetFact); "current": (Profile | ModeState | UnavailableCurrent | SettingsResetCancelProjection | SettingsProjection | SessionProjection | LearningSessionProjection | OralSessionProjection | ConjugationSessionProjection | UnavailableSession | RemoteSessionProjection | SessionStartCancelProjection | LearningCurrentProjection | ConjugationCatalog | FeedbackCurrent | OnboardingProjection); "state_version": string; "closed_session"?: (ClosedSessionBoundary | null); "verified_intent_hash"?: (string | null); "error"?: (ErrorDetail | null); };
 
 export type CommonFieldSavePayload = { "card_id": string; "field_name": ("translation" | "gender" | "singular" | "plural" | "article" | "infinitive" | "preterite" | "participle_ii" | "auxiliary" | "separability" | "positive" | "comparative" | "superlative"); "scope": "common"; "language": ("uk" | "en" | "ru" | null); "value": (Array<string> | CommonGrammarForm | "separable" | "inseparable" | "unknown"); };
 
@@ -206,7 +212,7 @@ export type DirectionCounts = { "l1-de": ReadyCount; "de-l1": ReadyCount; };
 
 export type EmptyPayload = {  };
 
-export type ErrorDetail = { "code": string; "estimated_end_at"?: (string | null); "wait_seconds"?: (number | null); "diagnostic_id"?: (string | null); };
+export type ErrorDetail = { "code": string; "estimated_end_at"?: (string | null); "wait_seconds"?: (number | null); "diagnostic_id"?: (string | null); "retry_after_s"?: (number | null); };
 
 export type ErrorResponse = { "error": ErrorDetail; };
 
@@ -378,6 +384,14 @@ export type PresentCommand = { "command_id": string; "client_instance_id": strin
 
 export type Profile = { "profile_id": string; "access": Access; "reapply_closed"?: boolean; "role": "owner" | "user"; "ui_language": "uk" | "en" | "ru"; "dictionary_language": "uk" | "en" | "ru"; "time_zone": (string | null); "state_version": string; };
 
+export type ProfileDeleteCommandFact = { "id": string; "kind": "profile.delete"; "status": "applied" | "already_applied"; "applied_at": string; };
+
+export type ProfileDeleteRequest = { "command_id": string; "confirmed_profile_id": string; "confirmation": "delete_profile"; "client_instance_id": string; };
+
+export type ProfileDeleteResponse = { "command": ProfileDeleteCommandFact; "deletion": ProfileDeletionState; "session": "revoked"; };
+
+export type ProfileDeletionState = { "request_id": string; "working_data": "deleted"; "archive": "pending"; "archive_deadline": string; "fully_deleted": boolean; };
+
 export type PublicAnswerSpec = { "kind": "word" | "forms" | "phrase"; "labels": Array<string>; "part_count": number; "case_sensitive": boolean; };
 
 export type PublicAssignment = { "id": string; "card_id": string; "status": "prefetched" | "presented"; "kind": "original" | "drill" | "learning" | "conjugation"; "prompt": QuestionPrompt; "answer_spec": PublicAnswerSpec; };
@@ -406,6 +420,8 @@ export type ReferencePreposition = { "category": GrammarTerm; "cases": Array<Gra
 
 export type ReferenceVerb = { "infinitive": (string | null); "infinitive_status": "applicable" | "not_applicable" | "unknown"; "preterite": (string | null); "preterite_status": "applicable" | "not_applicable" | "unknown"; "participle_ii": (string | null); "participle_ii_status": "applicable" | "not_applicable" | "unknown"; "auxiliary": ("haben" | "sein" | null); "auxiliary_status": "applicable" | "not_applicable" | "unknown"; "separability": "separable" | "inseparable" | "unknown"; };
 
+export type RefusedResetFact = { "id": string; "kind": "settings.reset"; "status": "rejected"; "outcome": "cancelled" | "rejected_stale_epoch" | "rejected_invalid" | "rejected_incompatible"; "refused_at": string; "http_status"?: (409 | 422 | null); };
+
 export type RefusedStartFact = { "id": string; "kind": "session.start"; "status": "rejected"; "refused_at": string; };
 
 export type RegisterRequest = { "client_instance_id": string; "registration_id": string; };
@@ -417,6 +433,8 @@ export type RejectedCommandFact = { "id": string; "status": "rejected"; };
 export type RemoteSessionCommandResponse = { "command": (SavedCommandFact | RejectedCommandFact); "current": (RemoteSessionProjection | UnavailableSession); "state_version": string; "error"?: (ErrorDetail | null); };
 
 export type RemoteSessionProjection = { "session_id": string; "status": "active" | "summary" | "closed"; "close_reason": ("midnight" | "pair_changed" | "timezone_date_changed" | "stop" | "remote_stop" | "summary_home" | "save_failed" | null); };
+
+export type ResetTarget = { "command_id": string; "outcome": "applied" | "cancelled" | "rejected_stale_epoch" | "rejected_invalid" | "rejected_incompatible"; };
 
 export type ResultCorrectCommand = { "command_id": string; "client_instance_id": string; "document_id": string; "session_id": string; "kind": "result.correct"; "assignment_id": string; "result_id": string; "expected_result_version": string; "payload": EmptyPayload; };
 
@@ -430,7 +448,7 @@ export type RevealedOralAssignment = { "id": string; "card_id": string; "status"
 
 export type SavedCommandFact = { "id": string; "kind": string; "status": "applied" | "already_applied"; "applied_at": string; "target_id": (string | null); "action_id": (string | null); "result_id": (string | null); "context_id": (string | null); "object_version": (string | null); };
 
-export type ScreenEvent = { "cts": string; "ev": "c.screen"; "cmd"?: (string | null); "kind": "result_shown" | "already_recorded" | "lost" | "unsaved_shown" | "refusal_shown" | "update_required"; "code"?: ("ACCESS_PENDING" | "ACCESS_REJECTED" | "ANSWER_SPEC_UNAVAILABLE" | "ASSIGNMENT_STALE" | "AUTH_EXPIRED" | "AUTH_INVALID" | "CAPABILITY_EXPIRED" | "CLIENT_INCOMPATIBLE" | "CLIENT_OPEN_REQUIRED" | "CLIENT_REGISTRATION_CONFLICT" | "COMMAND_PAYLOAD_MISMATCH" | "DICTIONARY_LANGUAGE_LOCKED" | "DOCUMENT_STALE" | "FORBIDDEN" | "INTERNAL_ERROR" | "LEASE_HELD" | "LEASE_LOST" | "MAINTENANCE" | "METHOD_NOT_ALLOWED" | "NOTIFICATIONS_NOT_OPENED" | "NOT_FOUND" | "NO_MATERIAL" | "PRECEDENCE_ANOMALY" | "PROFILE_DELETED" | "RATE_LIMITED" | "REQUEST_REFUSED" | "SEARCH_CURSOR_STALE" | "SESSION_BUSY" | "SESSION_CLOSED" | "SETUP_REQUIRED" | "VALIDATION_FAILED" | "VERSION_CONFLICT" | "WRITE_UNAVAILABLE" | null); "grade"?: ("correct" | "wrong" | "partial" | null); };
+export type ScreenEvent = { "cts": string; "ev": "c.screen"; "cmd"?: (string | null); "kind": "result_shown" | "already_recorded" | "lost" | "unsaved_shown" | "refusal_shown" | "update_required"; "code"?: ("ACCESS_PENDING" | "ACCESS_REJECTED" | "ANSWER_SPEC_UNAVAILABLE" | "ASSIGNMENT_STALE" | "AUTH_EXPIRED" | "AUTH_INVALID" | "CAPABILITY_EXPIRED" | "CLIENT_INCOMPATIBLE" | "CLIENT_OPEN_REQUIRED" | "CLIENT_REGISTRATION_CONFLICT" | "COMMAND_PAYLOAD_MISMATCH" | "DICTIONARY_LANGUAGE_LOCKED" | "DOCUMENT_STALE" | "FORBIDDEN" | "INTERNAL_ERROR" | "LEASE_HELD" | "LEASE_LOST" | "MAINTENANCE" | "METHOD_NOT_ALLOWED" | "NOTIFICATIONS_NOT_OPENED" | "NOT_FOUND" | "NO_MATERIAL" | "PRECEDENCE_ANOMALY" | "PROFILE_DELETED" | "RATE_LIMITED" | "REQUEST_REFUSED" | "RESET_CANCELLED" | "RESET_EPOCH_STALE" | "SEARCH_CURSOR_STALE" | "SESSION_BUSY" | "SESSION_CLOSED" | "SETUP_REQUIRED" | "VALIDATION_FAILED" | "VERSION_CONFLICT" | "WRITE_UNAVAILABLE" | null); "grade"?: ("correct" | "wrong" | "partial" | null); };
 
 export type SessionCancelStartCommand = { "command_id": string; "client_instance_id": string; "document_id": string; "session_id": string; "kind": "session.cancel_start"; "payload": EmptyPayload; };
 
@@ -488,11 +506,23 @@ export type SettingValue_Union_list_Annotated_int__Strict_strict_True_____NoneTy
 
 export type SettingsCommandResponse = { "command": (SavedCommandFact | RejectedCommandFact); "current": SettingsProjection; "state_version": string; "error"?: (ErrorDetail | null); };
 
-export type SettingsProjection = { "settings": SettingsValues; "needs_setup": boolean; "constraints": { [key: string]: SettingConstraint; }; "notifications": NotificationsState; };
+export type SettingsProjection = { "settings": SettingsValues; "needs_setup": boolean; "constraints": { [key: string]: SettingConstraint; }; "notifications": NotificationsState; "reset_epoch": string; };
 
-export type SettingsResetCommand = { "command_id": string; "kind": "settings.reset"; "client_instance_id": string; "document_id": string; "payload": EmptyPayload; };
+export type SettingsResetBarrierCommand = { "command_id": string; "kind": "settings.reset_barrier"; "client_instance_id": string; "document_id": string; "payload": EmptyPayload; };
 
-export type SettingsResponse = { "settings": SettingsValues; "needs_setup": boolean; "constraints": { [key: string]: SettingConstraint; }; "notifications": NotificationsState; "state_version": string; };
+export type SettingsResetCancelCommand = { "command_id": string; "kind": "settings.reset_cancel"; "client_instance_id": string; "document_id": string; "payload": SettingsResetCancelPayload; };
+
+export type SettingsResetCancelPayload = { "target_command_id": string; };
+
+export type SettingsResetCancelProjection = { "settings": SettingsValues; "needs_setup": boolean; "constraints": { [key: string]: SettingConstraint; }; "notifications": NotificationsState; "reset_epoch": string; "reset_target": ResetTarget; };
+
+export type SettingsResetCancelResponse = { "command": (SavedCommandFact | RejectedCommandFact); "current": (SettingsResetCancelProjection | SettingsProjection); "state_version": string; "error"?: (ErrorDetail | null); };
+
+export type SettingsResetCommand = { "command_id": string; "kind": "settings.reset"; "client_instance_id": string; "document_id": string; "payload": SettingsResetPayload; };
+
+export type SettingsResetPayload = { "expected_reset_epoch": string; };
+
+export type SettingsResponse = { "settings": SettingsValues; "needs_setup": boolean; "constraints": { [key: string]: SettingConstraint; }; "notifications": NotificationsState; "reset_epoch": string; "state_version": string; };
 
 export type SettingsValues = { "ui_language": SettingValue_Literal__uk____en____ru___; "dictionary_language": SettingValue_Literal__uk____en____ru___; "time_zone": SettingValue_Union_Annotated_str__Strict_strict_True____NoneType__; "retry_gap": SettingValue_Union_Annotated_int__Strict_strict_True____NoneType__; "retry_count": SettingValue_Union_Annotated_int__Strict_strict_True____NoneType__; "learning_group_size": SettingValue_Union_Annotated_int__Strict_strict_True____NoneType__; "learning_intervals_seconds": SettingValue_Union_list_Annotated_int__Strict_strict_True_____NoneType__; "learning_mix": SettingValue_Union_Annotated_bool__Strict_strict_True____NoneType__; "strict_case": SettingValue_Union_Annotated_bool__Strict_strict_True____NoneType__; "include_preterite": SettingValue_Union_Annotated_bool__Strict_strict_True____NoneType__; "include_comparative": SettingValue_Union_Annotated_bool__Strict_strict_True____NoneType__; "transition_mode": SettingValue_Union_Literal__normal____accelerated____NoneType__; "review_error_mode": SettingValue_Literal__strict____soft___; "learning_content": SettingValue_Literal__words____phrases____mixed___; "material": SettingValue_Union_Annotated_Union_LevelMaterial__TopicsMaterial___FieldInfo_annotation_NoneType__required_True__discriminator__mode_____NoneType__; "notify_learning": SettingValue_Annotated_bool__Strict_strict_True___; "notify_weekly": SettingValue_Annotated_bool__Strict_strict_True___; "notify_daily": SettingValue_Annotated_bool__Strict_strict_True___; "notify_evening": SettingValue_Annotated_bool__Strict_strict_True___; "weekly_report_hour": SettingValue_Annotated_int__Strict_strict_True___; "daily_report_hour": SettingValue_Annotated_int__Strict_strict_True___; "evening_reminder_hour": SettingValue_Annotated_int__Strict_strict_True___; };
 
