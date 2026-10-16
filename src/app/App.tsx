@@ -148,7 +148,7 @@ export function App({ learningPage }: { learningPage?: LearningPageStarts } = {}
           baseUrl: import.meta.env.VITE_WORTLY_API_BASE_URL || "",
           timeoutMs: Number(configuredTimeout),
           maxResponseBytes: Number(configuredLimit),
-          onDocumentStale: () => currentController?.documentStale(),
+          onDocumentStale: source => currentController?.documentStale(source),
           gate,
         };
         gate.attachProbe(pageGate.probe(options));

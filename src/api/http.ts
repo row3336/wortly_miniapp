@@ -1,6 +1,7 @@
 import { clientJournal, journalRecord, journalRefusal } from "../journal/clientJournal";
 import { isCommandKind, isErrorCode, journalId, ATTEMPT_MAX_MS, type CommandReplyEvent } from "../journal/events";
-import { PausedBeforeSendError, type ReadbackTicket, type RequestOrigin, type RequestStamp, type WriteGate } from "../commands/writeGate";
+import { PausedBeforeSendError, type DocMark, type ReadbackTicket, type RequestOrigin, type RequestStamp,
+  type WriteGate } from "../commands/writeGate";
 
 /** The contract version of this client, sent with every write and with sign-in/open (the server compares for equality). */
 export function clientContractVersion(): string {
@@ -39,8 +40,12 @@ export type HttpOptions = {
   baseUrl?: string;
   timeoutMs: number;
   maxResponseBytes: number;
-  /** Told of every DOCUMENT_STALE refusal before the caller reads it; the window, not each module, reacts. */
-  onDocumentStale?(): void;
+  /**
+   * Told of every DOCUMENT_STALE refusal before the caller reads it; the window, not each module, reacts. source (the
+   * DOCUMENT_STALE junction P02↔P03) says locally which request got it: the window decides by it whether that answer
+   * proves its document replaced or only asks for its foreground check.
+   */
+  onDocumentStale?(source: DocumentStaleSource): void;
   /** Overrides clientContractVersion() for the header of every POST. */
   contractVersion?: string;
   /** The trace of each attempt; crypto.randomUUID() by default. */
@@ -84,6 +89,21 @@ export type JsonTransport = (path: string, request: Request) => Promise<JsonRepl
  * sent (at most 64 characters) when it was present but not 1–9 digits, for the bounds of P03 §3.5. trace: the attempt's
  * X-Wortly-Trace-Id as the core echoed it, when the answer carried a well-formed one.
  */
+/**
+ * The request a 409 DOCUMENT_STALE answered, as this page sent it (no wire field): its route and method, the kind and
+ * command_id of a POST /commands, the document_id it named, whether the core's envelope attributed the refusal to that very
+ * command ({command: {id, status: "rejected"}}), and the gate's DocMark taken when it was let go.
+ */
+export type DocumentStaleSource = {
+  readonly method: "GET" | "POST";
+  readonly route: string;
+  readonly kind: string | null;
+  readonly commandId: string | null;
+  readonly documentId: string | null;
+  readonly attributed: boolean;
+  readonly mark: DocMark | null;
+};
+
 export type JsonReply = { status: number; ok: boolean; value: unknown; retryAfter?: number; retryAfterRaw?: string; trace?: string };
 
 /** The largest wait a client accepts from one announcement, in seconds (P03 §3.5, P3-01). */
@@ -203,6 +223,10 @@ export function createJsonTransport(options: HttpOptions): JsonTransport {
     let refusalStatus: number | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let timedOut = false;
+    let sentMark: DocMark | null = null;
+    // What this exchange actually sent (C408): taken from the serialized body in the same synchronous stretch as the gate's
+    // mark, before any await, so a later change of the caller's request object cannot change who answered.
+    let sent: SentRequest | null = null;
     const trace = newTraceId();
     const journal = commandAttempt(path, request, trace);
     const deadline = new Promise<never>((_, reject) => {
@@ -227,6 +251,8 @@ export function createJsonTransport(options: HttpOptions): JsonTransport {
         ...(request.origin ? { origin: request.origin } : {}) });
       if (refusal) throw new PausedBeforeSendError(refusal);
       if (gate && request.stamped) request.stamped(gate.stamp(path, request.body));
+      sentMark = gate?.docMark() ?? null;
+      sent = sentRequest(path, request.method, body);
       request.started?.();
       journal?.started();
       const response = await fetcher(url, {
@@ -273,7 +299,7 @@ export function createJsonTransport(options: HttpOptions): JsonTransport {
     // A lost admission or a deleted profile, seen on any route, ends the client journal at once (P04 r9 §8).
     journalRefusal(reply.status, errorCode(reply.value));
     // One place for every module: a newer window of this installation may own the document now (decision 2.3).
-    if (reply.status === 409 && errorCode(reply.value) === "DOCUMENT_STALE") options.onDocumentStale?.();
+    if (reply.status === 409 && errorCode(reply.value) === "DOCUMENT_STALE" && sent) options.onDocumentStale?.(staleSource(sent, reply, sentMark));
     return reply;
   };
   return send;
@@ -289,6 +315,33 @@ function observeReply(gate: WriteGate | undefined, path: string, request: Reques
   const code = errorCode(reply.value), command = commandOf(path, request);
   if (reply.status === 503 && code === "MAINTENANCE") gate.closeByMaintenance(readRetryAfter(reply).seconds, command);
   else gate.closeByFailure(reply.status === 503 && code === "WRITE_UNAVAILABLE" ? "unavailable" : "unknown", command);
+}
+
+/** The immutable snapshot of what one exchange sent: its method and route, and the kind, command_id and document_id of its body. */
+type SentRequest = { readonly method: "GET" | "POST"; readonly route: string; readonly kind: string | null;
+  readonly commandId: string | null; readonly documentId: string | null };
+
+/** Read from the serialized body that goes to fetch (the bytes sent), never from the caller's object afterwards. */
+function sentRequest(path: string, method: "GET" | "POST", serialized: string | undefined): SentRequest {
+  const route = path.split(/[?#]/, 1)[0];
+  let body: Record<string, unknown> | undefined;
+  if (serialized !== undefined) {
+    try { const parsed: unknown = JSON.parse(serialized); body = record(parsed) ? parsed : undefined; } catch { body = undefined; }
+  }
+  const post = method === "POST" && route === "/commands";
+  let documentId: string | null = typeof body?.document_id === "string" ? body.document_id : null;
+  if (documentId === null && path.includes("?")) {
+    try { documentId = new URLSearchParams(path.split("?", 2)[1]).get("document_id"); } catch { documentId = null; }
+  }
+  return Object.freeze({ method, route, kind: post && typeof body?.kind === "string" ? body.kind : null,
+    commandId: post && typeof body?.command_id === "string" ? body.command_id : null, documentId });
+}
+
+/** The local attribution of a DOCUMENT_STALE (DocumentStaleSource): what this exchange sent and what the core named. */
+function staleSource(sent: SentRequest, reply: JsonReply, mark: DocMark | null): DocumentStaleSource {
+  const command = record(reply.value) && record(reply.value.command) ? reply.value.command : null;
+  const attributed = sent.commandId !== null && command !== null && command.id === sent.commandId && command.status === "rejected";
+  return Object.freeze({ ...sent, attributed, mark });
 }
 
 /** The command a request is about (its POST or the readback of its status): the anchor of an episode (§2 п.1), Z3. */

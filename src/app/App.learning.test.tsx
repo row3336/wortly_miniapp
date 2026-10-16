@@ -2271,3 +2271,52 @@ describe("fix6 (C393/C394): the exits of a Learning start refusal on the real Ap
     expect(remote.stopId).toBeNull();
   }, 30_000);
 });
+
+// The DOCUMENT_STALE junction P02↔P03 on the real App: an attributed refusal of the settings reset X proves this document
+// replaced (core settings/reset.py:402); the window closes for good at once and leaves X to the next document's own check.
+describe("DOCUMENT_STALE junction: the settings reset refused DOCUMENT_STALE", () => {
+  const resetKey = settingsResetSlotOf(id(50));
+  it("(1) the window closes at once: no buttons, 0 GET X, 0 cancel, 0 probes or foreground; X kept; (4) the next page checks X, never resends it", async () => {
+    const a = app(); const base = a.fetcher.getMockImplementation()!;
+    let sentX: string | null = null, storedAtReply: string | null = null;
+    a.fetcher.mockImplementation(async (url, init) => {
+      const method = init?.method ?? "GET", path = new URL(String(url), "http://localhost").pathname;
+      const body = init?.body ? JSON.parse(String(init.body)) : null;
+      if (method === "POST" && path.endsWith("/commands") && body?.kind === "settings.reset") {
+        sentX = body.command_id; storedAtReply = localStorage.getItem(resetKey);
+        return response({ command: { id: body.command_id, status: "rejected" }, current: settingsResponse().settings,
+          state_version: a.version(), error: { code: "DOCUMENT_STALE" } }, 409);
+      }
+      return base(url, init);
+    });
+    render(<App />);
+    await screen.findByText(pairText, undefined, exchange);
+    fireEvent.click(screen.getByRole("button", { name: "Настройки" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Сброс настроек" }, exchange));
+    fireEvent.click(await screen.findByRole("button", { name: "Вернуть" }));
+    await screen.findByText("Wortly уже открыт", undefined, exchange);
+    expect(screen.queryAllByRole("button")).toEqual([]);
+    expect(latestPageGate()!.snapshot().closedWindow).not.toBeNull();
+    const count = a.fetcher.mock.calls.length;
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    fireEvent(document, new Event("visibilitychange")); fireEvent(window, new Event("pageshow"));
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 400)); });
+    expect(a.fetcher.mock.calls.length).toBe(count); // no GET X, no cancel, no probe, no foreground, no Today
+    expect(sentX).not.toBeNull();
+    expect(storedAtReply).not.toBeNull();
+    expect(localStorage.getItem(resetKey)).toBe(storedAtReply); // X stays stored as it was sent
+    // (4) A new page of the installation (a new document) checks X by its own ID and never sends it again.
+    cleanup();
+    const b = app(); const baseB = b.fetcher.getMockImplementation()!;
+    b.fetcher.mockImplementation(async (url, init) => {
+      const path = new URL(String(url), "http://localhost").pathname;
+      if ((init?.method ?? "GET") === "GET" && path.endsWith(`/commands/${sentX}`)) return response({ command: { id: sentX, status: "not_found" },
+        current: profile(b.version()), state_version: b.version() });
+      return baseB(url, init);
+    });
+    render(<App />);
+    await waitFor(() => expect(b.gets(`/commands/${sentX}`).length).toBeGreaterThan(0), exchange);
+    await settled();
+    expect(b.posts().filter(post => (post.kind as string) === "settings.reset")).toEqual([]);
+  }, LONG_SCENARIO_MS); // two App lives in one scenario (9c769fd: the named limit of long App scenarios)
+});

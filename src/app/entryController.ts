@@ -1,5 +1,6 @@
 import type { AuthResponse, OpenRequest, Profile, RegisterResponse } from "../api/generated";
 import { EntryApiError } from "../api/entryApi";
+import type { DocumentStaleSource } from "../api/http";
 import type { EntryApi } from "../api/entryApi";
 import type { Language } from "../i18n/language";
 import type { AsyncStorage } from "../platform/storage";
@@ -66,6 +67,13 @@ class IdentityRefused extends Error {
   constructor(public readonly reason: "identity" | "busy") { super(`identity_refused: ${reason}`); }
 }
 
+/**
+ * The commands whose attributed 409 DOCUMENT_STALE proves the installation's live document is another one (the DOCUMENT_STALE
+ * junction P02↔P03, C371/C408): core settings/reset.py checks exactly require_live_document (identity/origin.py:123–138,
+ * DOCUMENT_STALE only for document_id ≠ live) for a new reset (:402), its cancel (cancel_target, :463) and its barrier
+ * (raise_epoch, :472). Three explicit kinds, nothing wider.
+ */
+export const REPLACEMENT_PROOF_KINDS: ReadonlySet<string> = new Set(["settings.reset", "settings.reset_cancel", "settings.reset_barrier"]);
 const sameGateDoc = (a: GateDoc, b: GateDoc) => a.profileId === b.profileId && a.documentId === b.documentId && a.epoch === b.epoch;
 
 export type EntryControllerOptions = {
@@ -618,8 +626,13 @@ export class EntryController {
    * installation's windows share for a live window to check (C091 §1, Р2). What a newer window shows for that action
    * is the open question В-1; whether it may send it is В-2 (commandRefusal.ts).
    */
-  documentStale(): void {
-    if (this.disposed || this.replaced) return;
+  documentStale(source?: DocumentStaleSource): void {
+    if (this.disposed || this.replaced || this.closed) return;
+    // The DOCUMENT_STALE junction P02↔P03: an answer that proves the replacement of this very document closes it now —
+    // synchronously, before the module reads the refusal, so nothing more of the old document is sent (ВР-7, Z5′).
+    if (source && this.replacementProved(source)) { this.replace(); return; }
+    // A request of another document (a late answer after this window opened a new one) says nothing about this one.
+    if (source?.documentId != null && source.documentId !== this.documentId) return;
     this.staleHint = true;
     if (this.checking) return; // The running check answers this refusal too.
     // Synchronously: the module reads the refusal after this returns and must not be seen showing it (2.33).
@@ -627,6 +640,23 @@ export class EntryController {
     setTimeout(() => {
       void (this.staleHint ? this.foreground() : Promise.resolve()).finally(() => this.setChecking(false));
     }, 0);
+  }
+
+  /**
+   * A 409 DOCUMENT_STALE proves that this window's own current document was replaced only when (1) the core gives that
+   * code for that command solely when the installation's live document is another one — POST settings.reset (core
+   * settings/reset.py:402 → identity/origin.py require_live_document: document_id ≠ live), unlike a card context, which
+   * gets it for a closed context of the live document too (study/card_contexts.py:30–48); (2) the core's envelope names
+   * that very command as rejected; (3) the request was sent for the document this window has now: same document, same
+   * profile, no `opened` confirmed since (DocMark), and the window is still the one that sent it.
+   */
+  private replacementProved(source: DocumentStaleSource): boolean {
+    const mark = source.mark, doc = mark?.doc ?? null;
+    return source.method === "POST" && source.route === "/commands" && source.kind !== null
+      && REPLACEMENT_PROOF_KINDS.has(source.kind) && source.attributed
+      && mark !== null && doc !== null && this.gate.markCurrent(mark)
+      && source.documentId !== null && source.documentId === doc.documentId && source.documentId === this.documentId
+      && this.session !== null && doc.profileId === this.session.profile.profile_id;
   }
 
   private setChecking(checking: boolean): void {

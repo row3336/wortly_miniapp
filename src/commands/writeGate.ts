@@ -121,6 +121,12 @@ export const YA19_CONTRACT_APPROVED = false as const;
  */
 export interface RemoteReadContext { readonly remoteReadContext: true }
 
+/**
+ * The document a request left for, as the gate saw it at admit (the DOCUMENT_STALE junction P02↔P03): its document of
+ * reference and the count of confirmed `opened` of this page then. Local to the page — no wire field, no epoch.
+ */
+export interface DocMark { readonly doc: GateDoc | null; readonly opened: number }
+
 /** fix3: the П01 episode — a definite SESSION_BUSY of this page's own session.start for its working document. */
 export interface P01Episode { readonly p01: true; readonly doc: GateDoc; readonly commandId: string }
 
@@ -213,6 +219,8 @@ export class WriteGate {
   private recoveryForegroundInFlight = false;
   /** fix3: the П01 episode of a definite SESSION_BUSY of the page's own start, and the last command this gate let go. */
   private p01: P01Episode | null = null;
+  /** Confirmed `opened` of this page so far (DocMark). */
+  private openedCount = 0;
   private lastCommand: { commandId: string; documentId: string | null } | null = null;
   /** R10: the live context of the own stop_remote readback in busy/remote, and its readbacks a hidden window holds back. */
   private remote: RemoteReadContext | null = null;
@@ -371,6 +379,17 @@ export class WriteGate {
     const context: RemoteReadContext = Object.freeze({ remoteReadContext: true as const });
     this.remote = context;
     return context;
+  }
+
+  /** The document a request admit() has just let go is sent for (DocMark); the transport keeps it for its answer. */
+  docMark(): DocMark { return Object.freeze({ doc: this.gateDoc(), opened: this.openedCount }); }
+  /**
+   * The mark still names the page's current document: the window is not closed, its document of reference is the same
+   * and no `opened` was confirmed since — a late answer of an older document, profile or exchange is never current.
+   */
+  markCurrent(mark: DocMark): boolean {
+    return !this.closedWindow && !this.disposed && mark.doc !== null && sameDoc(mark.doc, this.gateDoc())
+      && mark.opened === this.openedCount;
   }
 
   /** The stamp of a request admit() has just let go (§2 п.3): the transport takes it in the same synchronous stretch. */
@@ -616,6 +635,7 @@ export class WriteGate {
   /** A confirmed `opened` of `doc`. Another document than gateDoc replaces the locks of the old one (Z5). */
   noteOpened(doc: GateDoc): void {
     if (this.closedWindow || this.disposed) return;
+    this.openedCount += 1;
     const current = this.gateDoc();
     if (current && !sameDoc(current, doc)) this.dropDocument();
     this.voidRemote(); // an ordinary context replaces the narrow one of R10
