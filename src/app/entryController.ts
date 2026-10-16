@@ -1172,7 +1172,8 @@ export class EntryController {
 
   checkRemoteStop(): Promise<void> {
     if (this.state.kind !== "remote") return this.running ?? Promise.resolve();
-    return this.remoteAction(remote => remote.refresh());
+    // C400: the user's explicit check — after not_found its repeat reads again by a new one-shot ticket (R10 п.1).
+    return this.remoteAction(remote => remote.refresh({ manual: true }));
   }
 
   retryRemoteStop(): Promise<void> {

@@ -261,3 +261,28 @@ describe("remote stop through the actual App and HTTP client", () => {
     expect(f.commands[1].command_id).not.toBe(f.commands[0].command_id);
   });
 });
+
+// C400 (R10 п.1, ред.21): one network GET per one-shot ticket; the user's repeated «Проверить результат» after not_found
+// reads again by a new ticket — never a paused screen with no request — and nothing else is sent by itself.
+describe("C400: the repeated explicit check of a lost stop through the actual App", () => {
+  it("not_found twice: two GETs of the same ID (one per press), no foreground, open or POST; the retry still sends the same intent", async () => {
+    const f = fixture(); f.state.lose = "before"; render(<App />);
+    await confirm(); await screen.findByRole("heading", { name: "Завершение пока не подтверждено" });
+    await pageGateOpen();
+    const stopId = f.commands[0].command_id;
+    const reads = () => f.fetcher.mock.calls.filter(([url, init]) => (init?.method ?? "GET") === "GET" && String(url).includes(`/commands/${stopId}`)).length;
+    const opens = () => f.fetcher.mock.calls.filter(([url]) => String(url).endsWith("/client/open")).length;
+    const before = opens();
+    for (let press = 1; press <= 2; press++) {
+      fireEvent.click(await screen.findByRole("button", { name: "Проверить результат" }));
+      await screen.findByRole("button", { name: "Повторить завершение" });
+      expect(reads(), `press ${press}`).toBe(press);
+    }
+    expect(opens()).toBe(before);
+    expect(f.commands).toHaveLength(1);
+    expect(localStorage.getItem("wortly.pending.remote_stop")).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Повторить завершение" }));
+    await screen.findByRole("heading", { name: "Сегодня", level: 1 });
+    expect(f.commands).toHaveLength(2); expect(f.commands[1]).toEqual(f.commands[0]);
+  });
+});

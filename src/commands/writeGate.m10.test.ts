@@ -333,6 +333,33 @@ describe("R10: the readback of the own stop_remote in busy/remote without opened
     expect(gate.remoteReadContextLive(context)).toBe(false);
     expect(fetcher).not.toHaveBeenCalled();
   });
+
+  // C400 (R10 п.1, ред.21): one network GET per one-shot ticket; after not_found the user's next explicit check gets a new one.
+  it("C400: after not_found a manual check gets a new one-shot ticket (one GET each); the old ticket stays refused", async () => {
+    const { gate, fetcher, request, context } = busy();
+    let first: Parameters<Parameters<WriteGate["runRemoteReadback"]>[2]>[0] | null = null;
+    await gate.runRemoteReadback(context, STOP, ticket => { first = ticket; return request(path, { method: "GET", readbackTicket: ticket }); });
+    gate.resolvePending(STOP, "not_recorded");
+    await gate.runRemoteReadback(context, STOP, ticket => request(path, { method: "GET", readbackTicket: ticket }), { manual: true });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(gate.admit({ method: "GET", path, readbackTicket: first! })).toBe("no_ticket");
+  });
+  it("C400: no automatic read after not_found, and no manual one after any other outcome or in a dead context", async () => {
+    const { gate, fetcher, request, context } = busy();
+    const read = (options?: { manual?: boolean }) => reason(gate.runRemoteReadback(context, STOP,
+      ticket => request(path, { method: "GET", readbackTicket: ticket }), options));
+    gate.resolvePending(STOP, "not_recorded");
+    expect(await read()).toBe("no_ticket");
+    expect(await read({ manual: false })).toBe("no_ticket");
+    for (const outcome of ["recorded", "already_applied", "terminated", "mismatch", "rejected"] as const) {
+      gate.registerPending("stop_remote", STOP); gate.resolvePending(STOP, outcome);
+      expect(await read({ manual: true }), outcome).toBe("no_ticket");
+    }
+    gate.registerPending("stop_remote", STOP); gate.resolvePending(STOP, "not_recorded");
+    gate.voidRemoteReadContext(context);
+    expect(await read({ manual: true })).toBe("cancelled");
+    expect(fetcher).not.toHaveBeenCalled();
+  });
 });
 
 describe("fix1: the anchor of an episode is the command whose request failed (§2 п.1; QA-G1/G2/G4)", () => {

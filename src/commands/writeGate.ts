@@ -203,7 +203,7 @@ export class WriteGate {
   private closedWindow: { doc: GateDoc | null } | null = null;
   private disposed = false;
 
-  private readonly registry = new Map<string, { family: string; resolved: boolean }>();
+  private readonly registry = new Map<string, { family: string; resolved: boolean; outcome?: DefiniteOutcome }>();
   private readonly tickets = new Map<ReadbackTicket, Issued>();
   private deferred: Deferred[] = [];
 
@@ -785,12 +785,17 @@ export class WriteGate {
   /**
    * R10 п.2: the one-shot ticket of the registered own `session.stop_remote` of commandId, bound to the context and to this
    * registration. Another family, an unknown or a settled ID, a dead context: no ticket (zero transfers). Hidden: waits.
+   * C400 (R10 п.1, ред.21): one network GET per one-shot ticket; the episode itself is what is spent once. After a check
+   * that found the ID not recorded (not_found) the manual path stays: the next explicit check (manual) of the same unchanged
+   * pending gets a new one-shot ticket in the same live context. Never an automatic read, never after another outcome.
    */
-  runRemoteReadback<T>(context: RemoteReadContext, commandId: string, fn: (ticket: ReadbackTicket) => Promise<T>): Promise<T> {
+  runRemoteReadback<T>(context: RemoteReadContext, commandId: string, fn: (ticket: ReadbackTicket) => Promise<T>,
+    options: { manual?: boolean } = {}): Promise<T> {
     if (this.closedWindow) return Promise.reject(new PausedBeforeSendError("closed_window"));
     if (this.disposed || context !== this.remote) return Promise.reject(new PausedBeforeSendError("cancelled"));
     const registration = this.registry.get(commandId);
-    if (!registration || registration.family !== "stop_remote" || registration.resolved) {
+    const recheck = options.manual === true && registration?.outcome === "not_recorded";
+    if (!registration || registration.family !== "stop_remote" || registration.resolved && !recheck) {
       return Promise.reject(new PausedBeforeSendError("no_ticket"));
     }
     return new Promise<T>((resolve, reject) => {
@@ -851,7 +856,7 @@ export class WriteGate {
     const entry = this.registry.get(commandId);
     const endsEpisode = !!this.episode?.withPending && DEFINITE.has(outcome) && this.anchor() === commandId;
     if (DEFINITE.has(outcome)) {
-      if (entry) entry.resolved = true;
+      if (entry) { entry.resolved = true; entry.outcome = outcome as DefiniteOutcome; }
       this.familyLocks.delete(commandId);
     } else this.familyLocks.add(commandId);
     this.lock?.round.delete(commandId);

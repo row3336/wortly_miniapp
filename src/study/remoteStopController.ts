@@ -122,8 +122,11 @@ export class RemoteStopController {
     });
   }
 
-  /** Reads only. Not-found is still unresolved, never permission for an automatic resend. */
-  refresh(): Promise<void> {
+  /**
+   * Reads only. Not-found is still unresolved, never permission for an automatic resend. manual (C400): the user's own
+   * «Проверить» — in R10 its repeat after not_found gets a new one-shot ticket; an automatic read never does.
+   */
+  refresh(options: { manual?: boolean } = {}): Promise<void> {
     return this.run(async () => {
       this.phase = "checking";
       this.problem = null;
@@ -148,7 +151,7 @@ export class RemoteStopController {
         const read = (ticket: ReadbackTicket) => this.options.check(intent, ticket);
         // A context that is no longer live refuses at once (cancelled): nothing waits for an opened that may never come.
         const reply = context
-          ? await this.options.gate.runRemoteReadback(context, intent.command_id, read)
+          ? await this.options.gate.runRemoteReadback(context, intent.command_id, read, { manual: options.manual === true })
           : await this.registry.read(intent.command_id, read);
         if (!this.live()) return;
         // R10 п.3 (AC-116): a reply that comes after its context was voided (unavailable, another identity or document,
