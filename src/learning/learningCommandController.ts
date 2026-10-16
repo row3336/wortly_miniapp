@@ -1,7 +1,8 @@
 import type { ClosedSessionBoundary, LearningAnswerResponse, LearningSessionProjection, UnavailableCurrent } from "../api/generated";
 import { oneOf, sameId, uuid, version } from "../api/wireValidation";
-import { LaneCore, missingProblem, retryStep, type CommandProblem, type LaneResolved, type LaneSnapshot,
+import { LaneCore, lostIntent, missingProblem, retryStep, type CommandProblem, type LaneResolved, type LaneSnapshot,
   type MissingStatus, type WithoutId } from "../commands/commandLane";
+import { lostMissingProblem, type LostCommand, type LostMissing } from "../commands/lostEnvelope";
 import { sendableIntent } from "../commands/closeIntent";
 import { refusedUnsent, type PendingSlot } from "../commands/pendingSlot";
 import { revisionRetryProblem } from "../commands/resultRevision";
@@ -48,6 +49,8 @@ type Options = {
   /** transmitted, when given, is called right before the request starts (automatic recovery, CT §6.1 п. 4). */
   send(intent: LearningCommandIntent, transmitted?: () => void): Promise<Reply>;
   check(intent: LearningCommandIntent): Promise<Status>;
+  /** Q27 (C458/C467): the status of a lost answer or grade by its ID only; without it a lost command stays unresolved. */
+  checkLost?(lost: LostCommand): Promise<Extract<LearningAnswerStatus, { outcome: "accepted" }> | LostMissing>;
   read(sessionId: string): Promise<LearningSessionRead>;
   readResult(intent: LearningResultIntent): Promise<LearningResultRead>;
   onUpdate(snapshot: LearningCommandSnapshot): void;
@@ -93,8 +96,9 @@ export class LearningCommandController extends LaneCore<LearningCommandIntent, L
     const fresh = minimum === null || this.floor !== null && BigInt(this.floor) >= BigInt(minimum);
     const ownPending = live && this.pending?.clientInstanceId === this.options.clientInstanceId && this.pending.pair === this.options.pair
       && !["profile_changed", "client_changed", "pair_changed", "forbidden", "expired"].includes(this.problem ?? "");
-    return { phase: live ? this.phase : "disposed", pending: this.pending !== null,
-      kind: this.pending?.intent.kind ?? null, sessionId: this.pending?.intent.session_id ?? null,
+    return { phase: live ? this.phase : "disposed", pending: this.pending !== null || this.lost !== null,
+      kind: this.pending?.intent.kind ?? this.lost?.kind as LearningCommandIntent["kind"] | undefined ?? null,
+      sessionId: this.pending?.intent.session_id ?? this.lost?.sessionId ?? null,
       outcome: this.outcome, resolved: live && this.resolved ? { ...this.resolved } : null,
       pendingIntent: ownPending ? copyLearningCommandIntent(this.pending!.intent) : null,
       rejectionCode: live ? this.rejectionCode : null,
@@ -108,7 +112,7 @@ export class LearningCommandController extends LaneCore<LearningCommandIntent, L
         && this.pending.pair === this.options.pair && sendableIntent(this.pending.intent)
         // 35.1-А: a start of another page (a reload, another window) is only checked by its ID, never sent again.
         && (this.pending.intent.kind !== "session.start" || this.page.owns(this.pending)),
-      conflict: this.pending?.mismatch === true };
+      conflict: this.pending?.mismatch === true || this.lost?.mismatch === true, lost: this.lostView() };
   }
   protected clearCurrent(): void { this.current = null; this.answer = null; this.closedSession = null; }
   private observe(stateVersion: string, current?: Current): boolean {
@@ -124,8 +128,11 @@ export class LearningCommandController extends LaneCore<LearningCommandIntent, L
     if (!this.outcome) return;
     if (this.pending && this.resolved?.commandId !== this.pending.intent.command_id) this.resolved = { commandId: this.pending.intent.command_id,
       kind: this.pending.intent.kind, sessionId: this.pending.intent.session_id };
+    if (!this.pending && this.lost && this.resolved?.commandId !== this.lost.commandId) this.resolved = { commandId: this.lost.commandId,
+      kind: this.lost.kind as LearningCommandIntent["kind"], sessionId: this.lost.sessionId };
     const cleared = this.pending;
     if (cleared) await this.options.pendingStore.clear(cleared, this.lifetime.signal);
+    else if (this.lost) await this.clearLostRecord();
     // The record of a known outcome is gone from the device: its page mark has nothing left to tell (35.1-А).
     if (cleared) this.page.forget(cleared.intent.command_id);
     if (!this.live()) return;
@@ -156,6 +163,55 @@ export class LearningCommandController extends LaneCore<LearningCommandIntent, L
     if (observed && otherPair && outcome === "accepted" && this.live() && current.status !== "closed") this.problem = "pair_changed";
   }
 
+  /**
+   * Q27 (C458/C467): a lost answer or grade is read by its own ID only — as the shared lane does (commandLane
+   * reconcileLost): acceptance is its ordinary recovery (a restored result), the final closure of its session proves it
+   * never applies, any other absence leaves it unresolved without a resend; its session is read before Stop is offered.
+   */
+  private async reconcileLost(lost: LostCommand): Promise<void> {
+    if (lost.mismatch) { this.problem = "mismatch"; this.phase = "unresolved"; return; }
+    if (!this.options.checkLost) { this.problem = "lost_envelope"; this.phase = "unresolved"; return; }
+    const reply = await this.options.checkLost(lost);
+    if (!this.live()) return;
+    if (reply.outcome === "accepted") {
+      this.outcome = "accepted";
+      const resolved: NonNullable<LearningCommandSnapshot["resolved"]> = { commandId: lost.commandId,
+        kind: lost.kind as LearningCommandIntent["kind"], sessionId: lost.sessionId, restored: true };
+      if (uuid(reply.command.result_id)) { resolved.assignmentId = lost.assignmentId; resolved.resultId = reply.command.result_id; }
+      this.resolved = resolved;
+      this.rejectionCode = null;
+      const current = reply.step, otherPair = "pair" in current && current.pair !== this.options.pair;
+      const observed = this.observe(reply.state_version, current);
+      if (!observed) this.clearCurrent();
+      else this.answer = this.current !== null && "pair" in this.current
+        ? structuredClone({ action: reply.action, result: reply.result, capabilities: reply.capabilities }) : null;
+      await this.clearSettled();
+      if (observed && otherPair && this.live() && current.status !== "closed") this.problem = "pair_changed";
+      return;
+    }
+    this.registry?.settled("not_recorded");
+    if (!this.observe(reply.state_version)) this.problem = "stale_response";
+    else {
+      const problem = lostMissingProblem(reply, lost, this.options);
+      if (problem === "not_applied") {
+        this.outcome = "not_applied"; this.closedSession = structuredClone(reply.closed_session!);
+        await this.clearSettled(); return;
+      }
+      if (problem !== null) this.problem = problem;
+      else {
+        const read = await this.options.read(lost.sessionId);
+        if (!this.live()) return;
+        if (!this.observe(read.state_version, read.current)) this.problem = "stale_response";
+        else {
+          const step = retryStep(read.current, lostIntent(lost), lost.pair);
+          this.lostOpen = typeof step !== "string";
+          this.problem = typeof step === "string" ? step === "not_found" ? "step_changed" : step : "lost_envelope";
+        }
+      }
+    }
+    this.phase = "unresolved";
+  }
+
   /** Reload checks the original ID. No missing fact can itself trigger a POST. */
   refresh(): Promise<void> {
     return this.run(async () => {
@@ -164,6 +220,7 @@ export class LearningCommandController extends LaneCore<LearningCommandIntent, L
       this.emit();
       if (!this.live() || !await this.loadPending()) return;
       if (this.outcome) { await this.clearSettled(); return; }
+      if (this.lost) { await this.reconcileLost(this.lost); return; }
       if (!this.pending) { this.phase = "idle"; return; }
       if (this.pending.mismatch) {
         this.registry?.settled("mismatch");

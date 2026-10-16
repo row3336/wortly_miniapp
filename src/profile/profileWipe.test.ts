@@ -3,34 +3,53 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { AsyncStorage } from "../platform/storage";
 import { memoryStorage } from "./profileStorage.test-support";
-import { IDB_STORES, NOT_PROFILE_RECORDS, PROFILE_KEYED, SHARED_SLOTS, wipeProfileRecords } from "./profileWipe";
+import { IDB_STORES, LEGACY_KEYS, NOT_PROFILE_RECORDS, PROFILE_KEYED, wipeProfileRecords } from "./profileWipe";
+import { PAYLOAD_PREFIX } from "../commands/pendingSlot";
 
 const X = "00000000-0000-4000-8000-0000000000AA", Y = "00000000-0000-4000-8000-0000000000bb";
 const x = X.toLowerCase();
 
 describe("wipeProfileRecords (P04 §8: the local records of a deleted profile)", () => {
-  it("removes the installation key, the reapply intent, the settings and the P02 reset records of X, and shared slots naming X", async () => {
+  it("removes only the exact keys of X: installation, reapply, settings, P02 reset, pointers and payloads; never a legacy key or Y", async () => {
+    const pointer = (base: string, id: string) => `${base}:profile:${id.toLowerCase()}`;
     const { storage, values } = memoryStorage({
       [`wortly.installation:${X}`]: "{}",
       [`wortly.reapply:${X}`]: "{}",
       [`wortly.pending.setting:profile:${x}`]: "{}",
       [`wortly.pending.settings-reset:profile:${x}`]: "{}",
+      [pointer("wortly.pending.learning_session", X)]: "{}",
+      [pointer("wortly.pending.written_start_cancel", X)]: "{}",
+      [`${PAYLOAD_PREFIX}learning_session:${x}:00000000-0000-4000-8000-000000000100`]: "{}",
+      [`${PAYLOAD_PREFIX}feedback:${x}:00000000-0000-4000-8000-000000000101`]: "{}",
+      // Legacy shared keys (even naming X) and every key of Y stay: no operation of X touches them.
       "wortly.pending.settings-reset": JSON.stringify({ profileId: X }),
       "wortly.pending.learning_session": JSON.stringify({ profileId: x }),
-      "wortly.pending.written_start_cancel": JSON.stringify({ profileId: X }),
-      "wortly.pending.feedback": JSON.stringify({ profileId: Y }),
+      [pointer("wortly.pending.feedback", Y)]: "{}",
+      [`${PAYLOAD_PREFIX}feedback:${Y.toLowerCase()}:00000000-0000-4000-8000-000000000102`]: "{}",
+      // X only in the command place of a payload of Y, or in a malformed payload key: not a payload of X.
+      [`${PAYLOAD_PREFIX}feedback:${Y.toLowerCase()}:${x}`]: "{}",
+      [`${PAYLOAD_PREFIX}feedback:${x}`]: "{}",
       [`wortly.installation:${Y}`]: "{}",
       [`wortly.pending.settings-reset:profile:${Y}`]: "{}",
       "wortly.uiLanguage": "uk",
-      "wortly.pending.oral_session": "not json",
     });
     const result = await wipeProfileRecords(storage, X);
     // Without an installation store nothing is «стёрто», whatever localStorage did (store §6).
-    expect(result).toEqual({ installation: { kind: "no-store" }, local: { removed: 7, failed: 0 }, wiped: false });
+    expect(result).toEqual({ installation: { kind: "no-store" }, local: { removed: 8, failed: 0 }, wiped: false });
     expect([...values.keys()].sort()).toEqual([
-      `wortly.installation:${Y}`, "wortly.pending.feedback", "wortly.pending.oral_session",
-      `wortly.pending.settings-reset:profile:${Y}`, "wortly.uiLanguage",
+      "wortly.pending.settings-reset", "wortly.pending.learning_session", pointer("wortly.pending.feedback", Y),
+      `${PAYLOAD_PREFIX}feedback:${Y.toLowerCase()}:00000000-0000-4000-8000-000000000102`,
+      `${PAYLOAD_PREFIX}feedback:${Y.toLowerCase()}:${x}`, `${PAYLOAD_PREFIX}feedback:${x}`,
+      `wortly.installation:${Y}`, `wortly.pending.settings-reset:profile:${Y}`, "wortly.uiLanguage",
     ].sort());
+  });
+
+  it("a storage that cannot list keys: the payloads of X stay and it is a failure (residual (A)), never «стёрто»", async () => {
+    const { storage: listing } = memoryStorage({ [`wortly.installation:${X}`]: "{}" });
+    const { keys: _keys, ...storage } = listing;
+    const result = await wipeProfileRecords(storage, X);
+    expect(result.local).toEqual({ removed: 1, failed: 1 });
+    expect(result.wiped).toBe(false);
   });
 
   it("never throws on an unwritable storage (P04 §3.7 (A)): the failures are counted, the result still comes", async () => {
@@ -67,7 +86,8 @@ describe("the inventory of local keys", () => {
       for (const match of readFileSync(file, "utf8").matchAll(/["'`](wortly\.[A-Za-z_.:${}\-]+)["'`]/g)) literals.add(match[1]);
     }
     const id = "00000000-0000-4000-8000-000000000001";
-    const known = new Set([...SHARED_SLOTS, ...NOT_PROFILE_RECORDS, ...PROFILE_KEYED.map(key => key(id))]);
+    // The two prefixes of the profile addresses (pendingSlot.ts) are classified as such: pointers and payloads (§2).
+    const known = new Set([...LEGACY_KEYS, ...NOT_PROFILE_RECORDS, ...PROFILE_KEYED.map(key => key(id)), "wortly.pending.", PAYLOAD_PREFIX]);
     const normalized = [...literals].map(literal => literal
       .replace("${profileId}", id).replace("${id}", id)
       .replace(/\$\{SETTINGS_RESET_SLOT\}:profile:\$\{profileId\.toLowerCase\(\)\}/, `wortly.pending.settings-reset:profile:${id}`)

@@ -7,6 +7,8 @@ import { settingsResponse } from "../settings/settingsRead.test-support";
 import { pageGateOpen } from "./pageGate.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+/** The pointer of the profile id(1) (pending profile addresses §2); the former shared key is never written. */
+const REMOTE_STOP = `wortly.pending.remote_stop:profile:${id(1)}`;
 const json = (value: unknown) => new Response(JSON.stringify(value));
 const today: TodayResponse = { state_version: "20", pair: "ru-de", local_date: "2026-09-30", status: "work_now",
   base: { total: 5, words: 4, phrases: 1 }, ordinary_status: "ready",
@@ -182,14 +184,15 @@ describe("remote stop through the actual App and HTTP client", () => {
     fireEvent.click(screen.getByRole("button", { name: "Отмена" })); expect(f.commands).toEqual([]);
     await confirm(); await screen.findByRole("heading", { name: "Сегодня", level: 1 });
     expect(f.commands).toHaveLength(1); expect(f.commands[0].session_id).toBe(id(50));
-    expect(localStorage.getItem("wortly.pending.remote_stop")).toBeNull();
+    expect(localStorage.getItem(REMOTE_STOP)).toBeNull();
     expect(document.body.textContent).not.toMatch(/synthetic|00000000/);
   });
 
   it("checks a lost reply without another POST", async () => {
     const f = fixture(); f.state.lose = "after"; render(<App />);
     await confirm(); await screen.findByRole("heading", { name: "Завершение пока не подтверждено" });
-    expect(localStorage.getItem("wortly.pending.remote_stop")).toContain(f.commands[0].command_id);
+    expect(localStorage.getItem(REMOTE_STOP)).toContain(f.commands[0].command_id);
+    expect(localStorage.getItem("wortly.pending.remote_stop")).toBeNull(); // the former shared key is never written
     // P03 (L2, M-P03-4): the lost reply closed the page gate; the reopening that follows a confirmed stop is an open
     // (a write until M-P03-10 makes it a foreground), so the check comes once the connection is back.
     await pageGateOpen();
@@ -280,7 +283,7 @@ describe("C400: the repeated explicit check of a lost stop through the actual Ap
     }
     expect(opens()).toBe(before);
     expect(f.commands).toHaveLength(1);
-    expect(localStorage.getItem("wortly.pending.remote_stop")).not.toBeNull();
+    expect(localStorage.getItem(REMOTE_STOP)).not.toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Повторить завершение" }));
     await screen.findByRole("heading", { name: "Сегодня", level: 1 });
     expect(f.commands).toHaveLength(2); expect(f.commands[1]).toEqual(f.commands[0]);

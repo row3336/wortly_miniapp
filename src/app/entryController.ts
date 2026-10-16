@@ -25,6 +25,7 @@ import { GatePending, pausedBeforeSend } from "../commands/gatePending";
 import type { GateDoc, GateEvent, P01Episode, RemoteReadContext, RequestOrigin, RequestStamp, WriteGate } from "../commands/writeGate";
 import { gateWait } from "../commands/gateWait";
 import { DeletedProfileCleanup } from "../profile/deletedProfileCleanup";
+import { dropForeignPayloads } from "../profile/profileWipe";
 import type { DeletionEnd } from "../profile/profileDeleteController";
 import { proofRefusalCandidate } from "../commands/proofRefusal";
 
@@ -1226,6 +1227,11 @@ export class EntryController {
     }
     // The core answered for this admitted profile and its registered installation: the journal may send now.
     journalAccess.admit(opened.profile.profile_id);
+    // Е02 (tz_app.md:179, project_pending_profile_slots.md §3.3): this account is admitted on this device — the content of
+    // every other account's unconfirmed command goes; their pointers (service IDs) and budgets stay for a check by ID
+    // (Q27). Only `wortly.payload.*:<other>:*`; never a pointer or a key of this profile. Never throws; a failure is
+    // repeated on the next open. Not closed (§5): the payload of a live account in another window goes as well.
+    void dropForeignPayloads(this.options.storage, opened.profile.profile_id);
     journalAccess.credentials({ token, proof: installation.proof, clientInstanceId: installation.clientInstanceId });
     const idbOk = journalAccess.idbOk();
     journalRecord({ ev: "c.app.open", kind: event, doc: this.documentId, ...(idbOk === null ? {} : { idb_ok: idbOk }) });

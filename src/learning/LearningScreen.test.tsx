@@ -7,6 +7,7 @@ import { LearningScreen } from "./LearningScreen";
 import { learningViewFixture } from "./learningView.test-support";
 import { current, deferred, id, missing, original, pending, primaryKey, response } from "./learningFixtures.test-support";
 import type { LearningViewController } from "./learningViewController";
+import { hasPending, seedRaw } from "../commands/pendingSeed.test-support";
 
 const owners: LearningViewController[] = [];
 afterEach(() => { cleanup(); owners.splice(0).forEach(owner => owner.dispose()); vi.useRealTimers(); });
@@ -123,7 +124,7 @@ describe("Learning screen with its real command owner", () => {
   });
   it("after a reload a missing receipt keeps the saved text and is only checked: the count is unknown (CT §6.1 п. 4)", async () => {
     const f = learningViewFixture(); owners.push(f.view); const intent = original();
-    f.values.set(primaryKey, JSON.stringify(pending(intent)));
+    seedRaw(f.values, primaryKey, JSON.stringify(pending(intent)), id(50));
     f.fetcher.mockImplementation(async (url, init) => init?.method === "GET" && String(url).includes(`/commands/${intent.command_id}`)
       ? response(missing(intent, "1")) : f.handler(url, init));
     render(<LiveScreen f={f} />); await act(() => f.view.refresh());
@@ -138,7 +139,7 @@ describe("Learning screen with its real command owner", () => {
   });
   it("a study result never offers a primary retry; Stop remains available", async () => {
     const f = learningViewFixture(); owners.push(f.view); const intent = original();
-    f.values.set(primaryKey, JSON.stringify(pending(intent)));
+    seedRaw(f.values, primaryKey, JSON.stringify(pending(intent)), id(50));
     f.fetcher.mockImplementation(async (url, init) => init?.method === "GET" && String(url).includes(`/commands/${intent.command_id}`)
       ? response(missing(intent, "1")) : f.handler(url, init));
     render(<LiveScreen f={f} />); await act(() => f.view.refresh());
@@ -152,7 +153,7 @@ describe("Learning screen with its real command owner", () => {
   });
   it("shows the saved answer separately when the current question has changed", async () => {
     const f = learningViewFixture(); owners.push(f.view); const intent = original();
-    f.values.set(primaryKey, JSON.stringify(pending(intent)));
+    seedRaw(f.values, primaryKey, JSON.stringify(pending(intent)), id(50));
     const next = { ...current(), assignment: { ...current().assignment!, id: id(90) } }; f.setStep(next);
     f.fetcher.mockResolvedValueOnce(response(missing(intent, "1"))).mockResolvedValueOnce(response({ current: next, state_version: "1" }));
     render(<LiveScreen f={f} />); await act(() => f.view.refresh());
@@ -228,7 +229,7 @@ describe("Learning screen with its real command owner", () => {
     await screen.findByText("Не удалось подтвердить это действие. Повторить его нельзя. Заверши занятие, чтобы продолжить.");
     expect(screen.queryByText("Проверяем, сохранилось ли действие.")).toBeNull();
     for (const name of ["Повторить отправку", "Проверить состояние"]) expect(screen.queryByRole("button", { name })).toBeNull();
-    expect(f.values.has(primaryKey)).toBe(true);
+    expect(hasPending(f.values, primaryKey)).toBe(true);
     click("Выйти"); await waitFor(() => expect(f.posts().map(post => post.kind)).toEqual(["answer.submit", "session.stop"]));
   });
   it("lost correction shows an unconfirmed change until its original receipt is read", async () => {
@@ -281,7 +282,7 @@ describe("Learning screen with its real command owner", () => {
     expect(screen.getByText("Есть ошибка")).toBeTruthy(); expect(screen.queryByRole("button", { name: "Повторить отправку" })).toBeNull();
     // The outcome is confirmed: the control only repeats the local cleanup and is named so, not as a check (CT §6.1 п. 2).
     expect(screen.queryByRole("button", { name: "Проверить состояние" })).toBeNull();
-    click("Продолжить"); await waitFor(() => expect(f.values.has(primaryKey)).toBe(false));
+    click("Продолжить"); await waitFor(() => expect(hasPending(f.values, primaryKey)).toBe(false));
     expect(f.posts().map(post => post.kind)).toEqual(["answer.submit"]);
     await waitFor(() => expect(screen.queryByRole("button", { name: "Продолжить" })).toBeNull());
   });
@@ -289,7 +290,7 @@ describe("Learning screen with its real command owner", () => {
     const { f } = await mount({ wrong: true });
     vi.mocked(f.storage.remove).mockRejectedValueOnce(new Error("storage unavailable")); await answer(f);
     const requests = f.fetcher.mock.calls.length;
-    click("Продолжить"); await waitFor(() => expect(f.values.has(primaryKey)).toBe(false));
+    click("Продолжить"); await waitFor(() => expect(hasPending(f.values, primaryKey)).toBe(false));
     await waitFor(() => expect(screen.queryByRole("button", { name: "Продолжить" })).toBeNull());
     expect(f.fetcher.mock.calls.length).toBe(requests);
     // The saved result stays on screen and continues as after its confirmation.
@@ -305,8 +306,8 @@ describe("Learning screen with its real command owner", () => {
     // A read that failed leaves the view without a usable step while the record of the saved answer is still kept.
     await act(() => f.view.refresh());
     expect(f.view.snapshot().phase).toBe("stale");
-    expect(f.values.has(primaryKey)).toBe(true);
-    click("Продолжить"); await waitFor(() => expect(f.values.has(primaryKey)).toBe(false));
+    expect(hasPending(f.values, primaryKey)).toBe(true);
+    click("Продолжить"); await waitFor(() => expect(hasPending(f.values, primaryKey)).toBe(false));
     await waitFor(() => expect(screen.queryByRole("button", { name: "Продолжить" })).toBeNull());
     expect(screen.queryByText("Действие сохранено. Не удалось обновить данные на этом устройстве.")).toBeNull();
     expect(screen.getByText("Не удалось обновить занятие.")).toBeTruthy();
@@ -342,11 +343,11 @@ describe("Learning screen with its real command owner", () => {
     click("Продолжить");
     await waitFor(() => expect(vi.mocked(f.storage.remove)).toHaveBeenCalledTimes(2));
     // Still refused: the record stays, the saved result is still named, nothing is resent and there is no way forward yet.
-    expect(f.values.has(primaryKey)).toBe(true);
+    expect(hasPending(f.values, primaryKey)).toBe(true);
     expect(screen.getByText("Действие сохранено. Не удалось обновить данные на этом устройстве.")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Продолжить" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Повторить отправку" })).toBeNull();
-    click("Продолжить"); await waitFor(() => expect(f.values.has(primaryKey)).toBe(false));
+    click("Продолжить"); await waitFor(() => expect(hasPending(f.values, primaryKey)).toBe(false));
     expect(f.posts().map(post => post.kind)).toEqual(["answer.submit"]);
     await waitFor(() => expect(screen.queryByRole("button", { name: "Продолжить" })).toBeNull());
   });

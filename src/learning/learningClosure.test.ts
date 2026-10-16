@@ -8,6 +8,7 @@ import { closed, current, fact, id, missing, pending, primaryKey, response, stop
 import { learningViewFixture } from "./learningView.test-support";
 import { LearningViewController } from "./learningViewController";
 import { readWithTicket, testGate } from "../commands/testGate.test-support";
+import { pendingRaw, hasPending, seedRaw, pointerKeyOf } from "../commands/pendingSeed.test-support";
 
 type Request = { method: string; path: string; kind: string | null; commandId: string | null };
 /** undefined: the synthetic server answers; "drop": fails before the server; "lose": the server applies, the reply is lost. */
@@ -81,11 +82,11 @@ describe("Н2: the record of a conflict after the confirmed closure (D-CP4 3.1.1
   it("4.8.7 «Выйти» confirmed: the record goes, a new session starts, and a reload finds nothing (QA H1)", async () => {
     const h = harness(); conflict(h); await answer(h);
     expect(h.view.snapshot().commands.recovery?.state.name).toBe("conflict");
-    expect(h.values.has(primaryKey)).toBe(true);
+    expect(hasPending(h.values, primaryKey)).toBe(true);
     await h.view.stop(); await tick();
     const s = h.view.snapshot();
     expect(s.phase).toBe("closed");
-    expect({ pending: s.commands.primary.pending, record: h.values.has(primaryKey), canBegin: s.commands.canBegin })
+    expect({ pending: s.commands.primary.pending, record: hasPending(h.values, primaryKey), canBegin: s.commands.canBegin })
       .toEqual({ pending: false, record: false, canBegin: true });
     // No check, no send of the conflicting action after the closure.
     expect(h.posts().map(entry => entry.kind)).toEqual(["answer.submit", "session.stop"]);
@@ -116,7 +117,7 @@ describe("Н2: the record of a conflict after the confirmed closure (D-CP4 3.1.1
     if (markFails) {
       const set = vi.mocked(h.storage.set), original = set.getMockImplementation()!;
       set.mockImplementation(async (key, value) => {
-        if (key === primaryKey && JSON.parse(value).mismatch) throw new Error("io");
+        if (key === pointerKeyOf(primaryKey, id(50)) && JSON.parse(value).record?.mismatch) throw new Error("io");
         return original(key, value);
       });
     }
@@ -126,10 +127,10 @@ describe("Н2: the record of a conflict after the confirmed closure (D-CP4 3.1.1
       const h = harness(); fullConflict(h, markFails);
       await answer(h); await h.run(10_000);
       expect(h.view.snapshot().commands.primary).toMatchObject({ pending: true, conflict: true });
-      expect(JSON.parse(h.values.get(primaryKey)!).mismatch).toBe(markFails ? undefined : true);
+      expect(JSON.parse(pendingRaw(h.values, primaryKey)!).mismatch).toBe(markFails ? undefined : true);
       await h.view.stop(); await tick(); await h.run(60_000);
       const s = h.view.snapshot();
-      expect({ phase: s.phase, record: h.values.has(primaryKey), pending: s.commands.primary.pending, canBegin: s.commands.canBegin,
+      expect({ phase: s.phase, record: hasPending(h.values, primaryKey), pending: s.commands.primary.pending, canBegin: s.commands.canBegin,
         checking: s.commands.closedAction?.state === "checking" }).toEqual({ phase: "closed", record: false, pending: false, canBegin: true, checking: false });
       expect(h.log.filter(entry => entry.method === "POST").map(entry => entry.kind)).toEqual(["answer.submit", "session.stop"]);
       await h.view.start(); await tick();
@@ -139,11 +140,11 @@ describe("Н2: the record of a conflict after the confirmed closure (D-CP4 3.1.1
   it("a conflict record of another session stays after the own session closes (QA Q-N2a)", async () => {
     const h = harness();
     const foreign = { command_id: id(400), session_id: id(9), assignment_id: id(6), kind: "answer.submit", payload: { text: "x" } };
-    h.values.set(primaryKey, JSON.stringify({ ...pending(foreign as never), mismatch: true }));
+    seedRaw(h.values, primaryKey, JSON.stringify({ ...pending(foreign as never), mismatch: true }), id(50));
     await h.view.refresh(); await tick();
     await h.view.stop(); await tick(); await h.run(10_000);
-    expect(h.values.has(primaryKey)).toBe(true);
-    expect(JSON.parse(h.values.get(primaryKey)!).intent.session_id).toBe(id(9));
+    expect(hasPending(h.values, primaryKey)).toBe(true);
+    expect(JSON.parse(pendingRaw(h.values, primaryKey)!).intent.session_id).toBe(id(9));
   });
   it("4.8.8 «Выйти» not confirmed (its reply lost, no check yet): the record of the conflict stays", async () => {
     const h = harness(); conflict(h); await answer(h);
@@ -156,18 +157,18 @@ describe("Н2: the record of a conflict after the confirmed closure (D-CP4 3.1.1
     await h.view.stop(); await tick(); await h.run(60_000);
     const s = h.view.snapshot();
     expect(s.phase).not.toBe("closed");
-    expect({ pending: s.commands.primary.pending, record: h.values.has(primaryKey) }).toEqual({ pending: true, record: true });
+    expect({ pending: s.commands.primary.pending, record: hasPending(h.values, primaryKey) }).toEqual({ pending: true, record: true });
   });
   it("a failed clear after the closure is tried again by the next refresh, not in a loop", async () => {
     const h = harness(); conflict(h); await answer(h);
     const remove = vi.mocked(h.storage.remove), base = remove.getMockImplementation()!;
     let failures = 1;
-    remove.mockImplementation(async key => { if (key === primaryKey && failures-- > 0) throw new Error("io"); return base(key); });
+    remove.mockImplementation(async key => { if (key === pointerKeyOf(primaryKey, id(50)) && failures-- > 0) throw new Error("io"); return base(key); });
     await h.view.stop(); await tick(); await h.run(30_000);
-    expect(h.values.has(primaryKey)).toBe(true);
-    expect(remove.mock.calls.filter(([key]) => key === primaryKey)).toHaveLength(1);
+    expect(hasPending(h.values, primaryKey)).toBe(true);
+    expect(remove.mock.calls.filter(([key]) => key === pointerKeyOf(primaryKey, id(50)))).toHaveLength(1);
     await h.view.refresh(); await tick();
-    expect({ pending: h.view.snapshot().commands.primary.pending, record: h.values.has(primaryKey) }).toEqual({ pending: false, record: false });
+    expect({ pending: h.view.snapshot().commands.primary.pending, record: hasPending(h.values, primaryKey) }).toEqual({ pending: false, record: false });
   });
 });
 
@@ -177,15 +178,15 @@ describe("Н3: a refused action whose record could not be cleared (D-CP4 3.1.2)"
     h.route(request => request.kind === "answer.submit" ? response({ error: { code: "VALIDATION_FAILED" } }, 422) : undefined);
     const remove = vi.mocked(h.storage.remove), base = remove.getMockImplementation()!;
     let failures = 1;
-    remove.mockImplementation(async key => { if (key === primaryKey && failures-- > 0) throw new Error("io"); return base(key); });
+    remove.mockImplementation(async key => { if (key === pointerKeyOf(primaryKey, id(50)) && failures-- > 0) throw new Error("io"); return base(key); });
     await answer(h); await h.run(60_000);
     expect(h.view.snapshot().commands.recovery?.state.name).toBe("refused");
-    expect({ record: h.values.has(primaryKey), canBegin: h.view.snapshot().commands.canBegin }).toEqual({ record: true, canBegin: false });
+    expect({ record: hasPending(h.values, primaryKey), canBegin: h.view.snapshot().commands.canBegin }).toEqual({ record: true, canBegin: false });
     // Event-driven only: a minute without events tries the cleanup once, never on a timer.
-    expect(remove.mock.calls.filter(([key]) => key === primaryKey)).toHaveLength(1);
+    expect(remove.mock.calls.filter(([key]) => key === pointerKeyOf(primaryKey, id(50)))).toHaveLength(1);
     const posts = h.posts().length;
     await h.view.refresh(); await tick();
-    expect(h.values.has(primaryKey)).toBe(false);
+    expect(hasPending(h.values, primaryKey)).toBe(false);
     h.view.setDraft("Haus");
     expect(h.view.snapshot()).toMatchObject({ phase: "question", canSubmit: true });
     expect(h.posts()).toHaveLength(posts);
@@ -195,11 +196,11 @@ describe("Н3: a refused action whose record could not be cleared (D-CP4 3.1.2)"
     h.route(request => request.kind === "answer.submit" ? response({ error: { code: "VALIDATION_FAILED" } }, 422) : undefined);
     const remove = vi.mocked(h.storage.remove), base = remove.getMockImplementation()!;
     let failures = 1;
-    remove.mockImplementation(async key => { if (key === primaryKey && failures-- > 0) throw new Error("io"); return base(key); });
+    remove.mockImplementation(async key => { if (key === pointerKeyOf(primaryKey, id(50)) && failures-- > 0) throw new Error("io"); return base(key); });
     await answer(h); await tick();
-    expect(h.values.has(primaryKey)).toBe(true);
+    expect(hasPending(h.values, primaryKey)).toBe(true);
     h.view.suspend(); h.view.resumeRecovery(); await tick();
-    expect(h.values.has(primaryKey)).toBe(false);
+    expect(hasPending(h.values, primaryKey)).toBe(false);
   });
 });
 
@@ -214,14 +215,14 @@ describe("Н4: the check of an action after the closure (D-CP4 3.1.3)", () => {
     await h.view.stop(); await tick();
     const stopAt = h.posts("session.stop")[0].at;
     expect(h.view.snapshot().phase).toBe("closed");
-    expect(h.values.has(primaryKey)).toBe(true);
+    expect(hasPending(h.values, primaryKey)).toBe(true);
     expect(h.view.snapshot().commands.closedAction?.state).toBe("checking");
     await h.run(4000);
     expect(h.checks().filter(entry => entry.at >= stopAt)).toHaveLength(1);
     await h.run(2000);
     const checks = h.checks().filter(entry => entry.at >= stopAt).map(entry => Math.round((entry.at - stopAt) / 1000));
     expect(checks).toEqual([0, 5]);
-    expect({ pending: h.view.snapshot().commands.primary.pending, record: h.values.has(primaryKey) }).toEqual({ pending: false, record: false });
+    expect({ pending: h.view.snapshot().commands.primary.pending, record: hasPending(h.values, primaryKey) }).toEqual({ pending: false, record: false });
     // Nothing more is sent: no answer after the closure.
     expect(h.posts("answer.submit")).toHaveLength(6);
     expect(h.view.snapshot().commands.closedAction?.state).toBe("ended");
@@ -241,7 +242,7 @@ describe("Н4: the check of an action after the closure (D-CP4 3.1.3)", () => {
     expect(h.log).toHaveLength(requests);
     h.route(() => undefined);
     h.view.resumeRecovery(); await tick();
-    expect({ pending: h.view.snapshot().commands.primary.pending, record: h.values.has(primaryKey) }).toEqual({ pending: false, record: false });
+    expect({ pending: h.view.snapshot().commands.primary.pending, record: hasPending(h.values, primaryKey) }).toEqual({ pending: false, record: false });
     expect(h.posts("answer.submit")).toHaveLength(6);
   });
   it("9.2.8: an answer found saved after this document's own Stop is named so (D-CP4 2.6.4)", async () => {
@@ -283,7 +284,7 @@ describe("Н4: the check of an action after the closure (D-CP4 3.1.3)", () => {
 describe("the closure record C in the Stop slot (D-CP4 4.6.1, 7.3)", () => {
   const closure = (n = 300): SaveFailedStopIntent => ({ command_id: id(n), session_id: id(3), kind: "session.stop",
     payload: { reason: "save_failed", unsaved_command_id: id(100) } });
-  const seed = (h: Harness, intent = closure()) => { h.values.set(stopKey, JSON.stringify(pending(intent as never))); return intent; };
+  const seed = (h: Harness, intent = closure()) => { seedRaw(h.values, stopKey, JSON.stringify(pending(intent as never)), id(50)); return intent; };
   const appliedStatus = (intent: SaveFailedStopIntent) => response({ current: closed(), state_version: "12",
     command: fact(intent as never, false, "already_applied") });
 
@@ -298,16 +299,16 @@ describe("the closure record C in the Stop slot (D-CP4 4.6.1, 7.3)", () => {
     await h.view.retry("stop"); await h.view.refresh(); await tick();
     s = h.view.snapshot();
     expect(s.commands.stop.pending).toBe(true);
-    expect(h.values.has(stopKey)).toBe(true);
+    expect(hasPending(h.values, stopKey)).toBe(true);
     expect(h.posts()).toEqual([]);
   });
   it("4.8.10a the session then closes and the check after the closure is not_found: the record goes", async () => {
     const h = harness(); seed(h);
     await h.view.refresh(); await tick();
-    expect(h.values.has(stopKey)).toBe(true);
+    expect(hasPending(h.values, stopKey)).toBe(true);
     h.setStep(closed()); h.setClosedOnServer();
     await h.view.refresh(); await tick();
-    expect({ pending: h.view.snapshot().commands.stop.pending, record: h.values.has(stopKey) }).toEqual({ pending: false, record: false });
+    expect({ pending: h.view.snapshot().commands.stop.pending, record: hasPending(h.values, stopKey) }).toEqual({ pending: false, record: false });
     expect(h.posts()).toEqual([]);
   });
   it("4.8.10b / 4.8.11 a check finds C applied: the ordinary outcome of a Stop, the record goes", async () => {
@@ -315,11 +316,11 @@ describe("the closure record C in the Stop slot (D-CP4 4.6.1, 7.3)", () => {
     let applied = false;
     h.route(request => applied && isCheck(request) && request.commandId === c.command_id ? appliedStatus(c) : undefined);
     await h.view.refresh(); await tick();
-    expect(h.values.has(stopKey)).toBe(true);
+    expect(hasPending(h.values, stopKey)).toBe(true);
     applied = true; h.setStep(closed());
     await h.view.refresh(); await tick();
     const s = h.view.snapshot();
-    expect({ phase: s.phase, pending: s.commands.stop.pending, outcome: s.commands.stop.outcome, record: h.values.has(stopKey) })
+    expect({ phase: s.phase, pending: s.commands.stop.pending, outcome: s.commands.stop.outcome, record: hasPending(h.values, stopKey) })
       .toEqual({ phase: "closed", pending: false, outcome: "accepted", record: false });
     expect(h.posts()).toEqual([]);
   });
@@ -331,7 +332,7 @@ describe("the closure record C in the Stop slot (D-CP4 4.6.1, 7.3)", () => {
     expect({ pending: s.commands.stop.pending, canRetry: s.commands.stop.canRetry }).toEqual({ pending: true, canRetry: false });
     await h.view.retry("stop"); await tick();
     expect(h.posts()).toEqual([]);
-    expect(h.values.has(stopKey)).toBe(true);
+    expect(hasPending(h.values, stopKey)).toBe(true);
   });
   it("a record that names itself as the unsaved action is not a closure record", async () => {
     const h = harness();

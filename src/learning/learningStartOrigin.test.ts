@@ -11,6 +11,7 @@ import { LearningDocumentCommands } from "./learningDocumentCommands";
 import { id, pending, primaryKey, profile, response } from "./learningFixtures.test-support";
 import { LearningPageStarts } from "./learningPageStarts";
 import { testGate } from "../commands/testGate.test-support";
+import { hasPending, seedRaw } from "../commands/pendingSeed.test-support";
 
 const begin: LearningTransition = { kind: "session.start", session_id: id(3), payload: { mode: "learning" } };
 
@@ -43,7 +44,7 @@ function device() {
 async function lostStart(d: ReturnType<typeof device>, page: LearningPageStarts) {
   const first = d.owner(d.wrapper(), page); await first.refresh();
   await first.begin(begin).catch(() => {});
-  expect(d.posts()).toHaveLength(1); expect(d.values.has(primaryKey)).toBe(true);
+  expect(d.posts()).toHaveLength(1); expect(hasPending(d.values, primaryKey)).toBe(true);
   first.dispose();
   return d.posts()[0];
 }
@@ -69,7 +70,7 @@ describe("35.1-А × 2.3 А: one page for the Learning start", () => {
 
   it("a start record this page never made (another window) is not its own, whatever wrapper reads it", async () => {
     const d = device(), page = new LearningPageStarts();
-    d.values.set(primaryKey, JSON.stringify(pending({ ...begin, command_id: id(90) })));
+    seedRaw(d.values, primaryKey, JSON.stringify(pending({ ...begin, command_id: id(90) })), id(50));
     const owner = d.owner(d.wrapper(), page); await owner.refresh();
     expect(owner.snapshot().primary).toMatchObject({ kind: "session.start", problem: "not_found", canRetry: false });
     await owner.retry("primary");

@@ -9,6 +9,7 @@ import { copyOralIntent, oralIntentHash, validOralIntent, type OralCommand } fro
 import { validOralCurrent } from "./oralProjection";
 import { createSessionReadApi } from "../study/sessionReadApi";
 import type { ReadbackTicket } from "../commands/writeGate";
+import type { LostAddress } from "../commands/lostEnvelope";
 export { validOralCurrent } from "./oralProjection";
 export type { OralCommand, OralIntent } from "./oralIntent";
 
@@ -28,6 +29,11 @@ export interface OralApi {
   read(token: string, proof: string, address: OralAddress): Promise<OralRead>;
   send(token: string, proof: string, command: OralCommand): Promise<OralReply>;
   status(token: string, proof: string, command: OralCommand, ticket: ReadbackTicket): Promise<OralStatus>;
+  /**
+   * Q27 (C467): the status of a lost self-assessment (oral.grade whose content is gone) by its ID only — the same ticket
+   * and strict reply checks, without the fingerprint of the body that is gone. Nothing of it is ever sent.
+   */
+  statusLost(token: string, proof: string, address: LostAddress, ticket: ReadbackTicket): Promise<OralStatus>;
 }
 
 function address(value: unknown): value is OralAddress {
@@ -47,10 +53,11 @@ function prepareCommand(token: string, proof: string, value: OralCommand): OralC
   return { ...copyOralIntent(intent), client_instance_id: access.client_instance_id, document_id: access.document_id };
 }
 
-function accepted(value: unknown, command: OralCommand): value is SavedCommandFact {
+function accepted(value: unknown, command: Pick<OralCommand, "command_id" | "kind" | "session_id"> & { assignment_id?: string }):
+  value is SavedCommandFact {
   if (!record(value)) return false;
   const grade = command.kind === "oral.grade";
-  const target = "assignment_id" in command ? command.assignment_id : command.session_id;
+  const target = "assignment_id" in command && command.assignment_id !== undefined ? command.assignment_id : command.session_id;
   return exactKeys(value, ["id", "kind", "status", "applied_at", "target_id", "action_id", "result_id", "context_id", "object_version"])
     && sameId(value.id, command.command_id) && value.kind === command.kind && sameId(value.target_id, target)
     && oneOf(value.status, ["applied", "already_applied"]) && eventTime(value.applied_at)
@@ -95,13 +102,29 @@ export function createOralApi(options: HttpOptions): OralApi {
       if (!reply.ok) throw httpError(reply);
       throw new ApiError("invalid_response");
     },
+    async statusLost(token, proof, original, ticket: ReadbackTicket) {
+      if (!token || !proof || !record(original) || original.kind !== "oral.grade"
+        || !exactKeys(original, ["command_id", "kind", "session_id", "assignment_id", "client_instance_id", "document_id"])
+        || ![original.command_id, original.session_id, original.assignment_id, original.client_instance_id, original.document_id]
+          .every(uuid)) throw new Error("invalid lost oral address");
+      return readStatus(token, proof, original, null, ticket);
+    },
     async status(token, proof, original, ticket: ReadbackTicket) {
       const command = prepareCommand(token, proof, original);
       const { client_instance_id: _client, document_id: _document, ...intent } = command;
-      const expectedHash = await oralIntentHash(intent);
+      return readStatus(token, proof, command, await oralIntentHash(intent), ticket);
+    },
+  };
+  /**
+   * GET /commands/{id} of an oral command. expectedHash null (Q27): no fingerprint is asked for, and a reply that claims
+   * one verified is refused; the accepted fact is then proven by its ID, kind and target only.
+   */
+  async function readStatus(token: string, proof: string,
+    command: { command_id: string; kind: string; session_id: string; assignment_id?: string; client_instance_id: string; document_id: string },
+    expectedHash: string | null, ticket: ReadbackTicket): Promise<OralStatus> {
       const parameters = query(command);
       parameters.set("session_id", command.session_id);
-      parameters.set("expected_intent_hash", expectedHash);
+      if (expectedHash !== null) parameters.set("expected_intent_hash", expectedHash);
       const reply = await request(`/commands/${command.command_id}?${parameters}`, { method: "GET", token, proof, readbackTicket: ticket });
       if (!reply.ok) throw httpError(reply);
       const value = reply.value;
@@ -109,7 +132,7 @@ export function createOralApi(options: HttpOptions): OralApi {
         || !version(value.state_version) || value.error != null
         || !exactKeys(value, ["command", "current", "state_version",
           ...(Object.hasOwn(value, "error") ? ["error"] : []),
-          ...(value.command.status === "already_applied" ? ["verified_intent_hash"] : []),
+          ...(value.command.status === "already_applied" && expectedHash !== null ? ["verified_intent_hash"] : []),
           ...(value.command.status === "not_found" && Object.hasOwn(value, "closed_session") ? ["closed_session"] : [])])) {
         throw new ApiError("invalid_response");
       }
@@ -124,8 +147,8 @@ export function createOralApi(options: HttpOptions): OralApi {
           ...(value.closed_session === undefined ? {} : { closed_session: value.closed_session as ClosedSessionBoundary }) };
       }
       // A UUID/target match cannot distinguish another payload after a failed local mismatch write.
-      if (accepted(fact, command) && fact.status === "already_applied"
-        && value.verified_intent_hash === expectedHash) {
+      if (accepted(fact, command as Pick<OralCommand, "command_id" | "kind" | "session_id">) && fact.status === "already_applied"
+        && (expectedHash === null ? !Object.hasOwn(value, "verified_intent_hash") : value.verified_intent_hash === expectedHash)) {
         if (validOralCurrent(value.current, command.session_id)) {
           return { outcome: "accepted", command: fact as StoredCommandFact, current: value.current, state_version: value.state_version };
         }
@@ -135,6 +158,5 @@ export function createOralApi(options: HttpOptions): OralApi {
         }
       }
       throw new ApiError("invalid_response");
-    },
-  };
+  }
 }

@@ -11,6 +11,7 @@ import { useSettingsDocument } from "../settings/useSettingsDocument";
 import { createOpenedAccess } from "./openedAccess";
 import { oralBucket, useOralHost, type OralHost, type OralHostOptions } from "./OralHost";
 import { testGate } from "../commands/testGate.test-support";
+import { pendingRaw, seedRaw } from "../commands/pendingSeed.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const studyKey = "wortly.pending.oral_session";
@@ -54,7 +55,7 @@ function setup(options: Options = {}) {
   let counter = 100, version = 8n;
   let current: OralSessionProjection | null = options.step ? projection(options.step, options.completed ?? 0, options.completed ?? 0, 2, id(3), options.reason) : null;
   const values = new Map<string, string>(), accepted = new Map<string, OralIntent>(), posts: OralCommand[] = [];
-  if (options.saved) values.set(studyKey, JSON.stringify({ schemaVersion: 1, profileId: id(50), clientInstanceId: id(1), pair: "ru-de", intent: options.saved }));
+  if (options.saved) seedRaw(values, studyKey, JSON.stringify({ schemaVersion: 1, profileId: id(50), clientInstanceId: id(1), pair: "ru-de", intent: options.saved }), id(50));
   const storage: AsyncStorage = { get: vi.fn(async k => values.get(k) ?? null),
     set: vi.fn(async (k, v) => { values.set(k, v); }), remove: vi.fn(async k => { values.delete(k); }) };
   const data = settingsResponse(); data.state_version = "1"; data.needs_setup = false;
@@ -185,7 +186,7 @@ describe("useOralHost: start, routing and Today", () => {
     await waitFor(() => expect(h.commandChecks()).toBeGreaterThanOrEqual(1));
     expect(h.onOral).toHaveBeenCalledOnce();
     expect(h.posts).toEqual([]); expect(h.onToday).not.toHaveBeenCalled();
-    expect(JSON.parse(h.values.get(studyKey)!).intent.command_id).toBe(id(90));
+    expect(JSON.parse(pendingRaw(h.values, studyKey)!).intent.command_id).toBe(id(90));
   });
 
   // Q29 (fix5): the refusal stays on the oral screen until the person leaves it; its «На Сегодня» names the refused start

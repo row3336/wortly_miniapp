@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { AsyncStorage } from "../platform/storage";
 import type { LearningSessionIntent } from "./learningSessionIntent";
 import { LearningSessionPendingStore, type LearningSessionPending } from "./learningSessionPending";
+import { pendingRaw, hasPending, seedRaw } from "../commands/pendingSeed.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const key = "wortly.pending.learning_session";
@@ -19,7 +20,7 @@ const pending = (intent = intents[0]): LearningSessionPending => ({ schemaVersio
   clientInstanceId: id(2), pair: "ru-de", intent: structuredClone(intent) });
 function setup(raw: string | null = null) {
   const values = new Map<string, string>();
-  if (raw !== null) values.set(key, raw);
+  if (raw !== null) seedRaw(values, key, raw, id(1));
   const storage: AsyncStorage = { get: vi.fn(async name => values.get(name) ?? null),
     set: vi.fn(async (name, value) => { values.set(name, value); }), remove: vi.fn(async name => { values.delete(name); }) };
   return { values, storage, store: new LearningSessionPendingStore(storage) };
@@ -31,7 +32,7 @@ describe("durable Learning transition intent", () => {
     await f.store.save(value, signal());
     const resumed = new LearningSessionPendingStore(f.storage);
     expect(await resumed.load(id(1), signal())).toEqual(value);
-    expect(f.values.get(key)).not.toMatch(/token|proof|document|draft/);
+    expect(pendingRaw(f.values, key)).not.toMatch(/token|proof|document|draft/);
     await resumed.clear(value, signal());
     expect(await f.store.load(id(1), signal())).toBeNull();
   });
@@ -43,7 +44,7 @@ describe("durable Learning transition intent", () => {
     await f.store.save(value, signal());
     expect(f.storage.set).toHaveBeenCalledOnce();
     await f.store.clear(value, signal());
-    expect(f.values.has(key)).toBe(false);
+    expect(hasPending(f.values, key)).toBe(false);
   });
 
   it("copies before storage awaits and returns detached data to callers", async () => {
@@ -54,7 +55,7 @@ describe("durable Learning transition intent", () => {
     const loaded = (await f.store.load(id(1), signal()))!;
     expect(loaded).toEqual(pending(intents[1])); loaded.intent.session_id = id(99);
     expect(await f.store.load(id(1), signal())).toEqual(pending(intents[1]));
-    expect(f.values.get(key)).not.toContain("not-persisted");
+    expect(pendingRaw(f.values, key)).not.toContain("not-persisted");
   });
 
   it.each(["session", "command", "client", "pair", "kind", "preview"])(
@@ -96,13 +97,17 @@ describe("durable Learning transition intent", () => {
     const raw = typeof input === "string" ? input : JSON.stringify(input), f = setup(raw);
     await expect(f.store.load(id(1), signal())).rejects.toMatchObject({ kind: "invalid" });
     await expect(f.store.save(pending(), signal())).rejects.toMatchObject({ kind: "invalid" });
-    expect(f.values.get(key)).toBe(raw); expect(f.storage.remove).not.toHaveBeenCalled();
+    expect(pendingRaw(f.values, key)).toBe(raw); expect(f.storage.remove).not.toHaveBeenCalled();
   });
 
-  it("account change clears only this account's pending slot", async () => {
+  // Profile addressing (project_pending_profile_slots.md ред.1.1 §2, §3.4): another account reads only its own pointer;
+  // the record of the earlier account stays under its pointer, untouched — load no longer «self-cleans» it.
+  it("account change reads only that account's pointer and leaves the earlier account's record untouched", async () => {
     const f = setup(JSON.stringify(pending())); f.values.set("wortly.pending.remote_stop", "unrelated");
+    const before = [...f.values];
     expect(await f.store.load(id(99), signal())).toBeNull();
-    expect([...f.values]).toEqual([["wortly.pending.remote_stop", "unrelated"]]);
+    expect([...f.values]).toEqual(before);
+    expect(f.storage.remove).not.toHaveBeenCalled(); expect(f.storage.set).not.toHaveBeenCalled();
   });
   it("a changed pair remains part of the original intent until the controller reconciles it", async () => {
     const original = { ...pending(), pair: "en-de" as const }, f = setup(JSON.stringify(original));

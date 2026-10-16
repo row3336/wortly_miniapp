@@ -5,7 +5,8 @@ import { validProfile } from "../api/entryApi";
 import { ApiError, createJsonTransport, errorCode, httpError, type HttpOptions } from "../api/http";
 import { attemptRefusal } from "../commands/commandRefusal";
 import { count, date, eventTime, exactKeys, oneOf, record, sameId, uuid, validClosedSessionBoundary, version } from "../api/wireValidation";
-import { validAnswerCapabilities, validAnswerFact, validSavedAnswer } from "../learning/learningAnswerApi";
+import { lostAnswerAddress, validAnswerCapabilities, validAnswerFact, validLostAnswerFact, validSavedAnswer,
+  type LostAnswerAddress } from "../learning/learningAnswerApi";
 import { validWrittenSessionCurrent } from "../study/sessionProjection";
 import { createSessionReadApi } from "../study/sessionReadApi";
 import { copyWrittenIntent, isAnswerKind, readableWrittenIntent, validWrittenIntent, writtenIntentHash, type WrittenCommand } from "./writtenIntent";
@@ -34,6 +35,11 @@ export interface WrittenApi {
   /** started, when given, is told right before the built request goes to fetch (after every local check). */
   send(token: string, proof: string, command: WrittenCommand, started?: () => void): Promise<WrittenReply>;
   status(token: string, proof: string, command: WrittenCommand, ticket: ReadbackTicket): Promise<WrittenStatus>;
+  /**
+   * Q27 (C458): the status of a lost answer by its ID only — the same ticket and strict reply checks, without the
+   * fingerprint (expected_intent_hash) of a body that is gone and without its text. Nothing of it is ever sent.
+   */
+  statusLost(token: string, proof: string, address: LostAnswerAddress, ticket: ReadbackTicket): Promise<WrittenStatus>;
 }
 
 const stepKeys = ["session_id", "status", "mode", "pair", "direction", "local_date", "bucket", "close_reason", "progress",
@@ -151,6 +157,35 @@ export function createWrittenApi(options: HttpOptions): WrittenApi {
         }
       }
       if (!reply.ok) throw httpError(reply);
+      throw new ApiError("invalid_response");
+    },
+    async statusLost(token, proof, original, ticket: ReadbackTicket) {
+      const address = lostAnswerAddress(token, proof, original);
+      const query = new URLSearchParams({ ...origin(address), session_id: address.session_id });
+      const reply = await request(`/commands/${address.command_id}?${query}`, { method: "GET", token, proof, readbackTicket: ticket });
+      if (!reply.ok) throw httpError(reply);
+      const value = reply.value;
+      if (reply.status !== 200 || !record(value) || !record(value.command) || !version(value.state_version)) throw new ApiError("invalid_response");
+      const fact = value.command;
+      if (fact.status === "not_found") {
+        if (exactKeys(fact, ["id", "status"]) && sameId(fact.id, address.command_id)
+          && exactKeys(value, ["command", "current", "state_version", ...(Object.hasOwn(value, "closed_session") ? ["closed_session"] : [])])
+          && validProfile(value.current) && uuid(value.current.profile_id)
+          && (!Object.hasOwn(value, "closed_session") || validClosedSessionBoundary(value.closed_session, address.session_id))) {
+          return { outcome: "not_found", command: { id: address.command_id, status: "not_found" }, current: value.current,
+            state_version: value.state_version,
+            ...(value.closed_session === undefined ? {} : { closed_session: value.closed_session as ClosedSessionBoundary }) };
+        }
+        throw new ApiError("invalid_response");
+      }
+      // Without a fingerprint the server verifies none: the reply must not claim one either.
+      if (fact.status !== "already_applied" || Object.hasOwn(value, "verified_intent_hash")) throw new ApiError("invalid_response");
+      if (exactKeys(value, [...answerKeys, "command", "state_version"])) {
+        const view = answerView(value, address);
+        if (view && validLostAnswerFact(fact, address, view)) {
+          return { ...view, outcome: "accepted", command: fact as StoredCommandFact, state_version: value.state_version };
+        }
+      }
       throw new ApiError("invalid_response");
     },
     async status(token, proof, original, ticket: ReadbackTicket) {

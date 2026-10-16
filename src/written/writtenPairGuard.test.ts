@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WrittenViewController } from "./writtenViewController";
 import { deferred, profile, response, writtenFixture } from "./writtenFixtures.test-support";
+import { hasPending } from "../commands/pendingSeed.test-support";
 
 const owners: WrittenViewController[] = [];
 /** The published fact that the server proved the session open in another pair (C151), never the shown problem. */
@@ -60,7 +61,7 @@ describe("R1: the window of the old pair starts a session the server creates in 
     expect(h.view.snapshot()).toMatchObject({ phase: "stale", problem: null, question: null,
       commands: { primary: { outcome: "accepted", pending: false } } });
     expect(mismatch(h.view)).toBe(true);
-    expect(h.values.has("wortly.pending.written_session")).toBe(false);
+    expect(hasPending(h.values, "wortly.pending.written_session")).toBe(false);
     expect(h.kinds()).toEqual(["session.start"]);
   });
   it("G3: a closure of that session proven later closes the view with its reason; its own facts are not lost", async () => {

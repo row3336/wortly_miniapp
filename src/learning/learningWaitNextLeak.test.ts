@@ -9,6 +9,7 @@ import { learningUndoServer } from "./learningUndo.test-support";
 import { LearningViewController } from "./learningViewController";
 import { hashInPlace } from "../commands/recoveryTime.test-support";
 import { testGate } from "../commands/testGate.test-support";
+import { seedRaw, pointerKeyOf } from "../commands/pendingSeed.test-support";
 
 const owners: LearningViewController[] = [];
 afterEach(() => { owners.splice(0).forEach(owner => owner.dispose()); vi.useRealTimers(); });
@@ -22,8 +23,8 @@ async function answered(wrong = false) {
 }
 /** The slot refuses the next action, then the other window's record goes and the person checks. */
 async function droppedThenChecked(f: Awaited<ReturnType<typeof answered>>, act: () => Promise<void>) {
-  f.values.set(primaryKey, foreign()); await act(); await tick();
-  f.values.delete(primaryKey); await f.view.refresh(); await tick();
+  seedRaw(f.values, primaryKey, foreign(), id(50)); await act(); await tick();
+  f.values.delete(pointerKeyOf(primaryKey, id(50))); await f.view.refresh(); await tick();
 }
 const kinds = (f: Awaited<ReturnType<typeof answered>>, from: number) => f.posts().slice(from).map(post => post.kind);
 async function wait(seconds: number) { for (let s = 0; s < seconds; s += 5) await tick(5000); }
@@ -84,8 +85,8 @@ describe("30.1-А: after a refused revision and the check the earlier result wai
     owners.push(view);
     await view.refresh(); await tick(); view.setDraft("Haus"); await view.submit(); await tick();
     expect(view.snapshot()).toMatchObject({ phase: "result_correct", canUndo: true });
-    s.values.set(primaryKey, foreign()); await view.undo(); await tick();
-    s.values.delete(primaryKey); await view.refresh(); await tick();
+    seedRaw(s.values, primaryKey, foreign(), id(50)); await view.undo(); await tick();
+    s.values.delete(pointerKeyOf(primaryKey, id(50))); await view.refresh(); await tick();
     const before = s.posts().length; await wait(30);
     expect(view.snapshot()).toMatchObject({ phase: "result_correct", timer: null, canNext: true });
     expect(s.posts()).toHaveLength(before);

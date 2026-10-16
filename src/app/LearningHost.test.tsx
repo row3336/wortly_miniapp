@@ -13,6 +13,7 @@ import type { LearningCommandIntent } from "../learning/learningCommandIntent";
 import { watchCommits } from "./flashWatch.test-support";
 import { LearningHost, type LearningHostProps } from "./LearningHost";
 import { testGate } from "../commands/testGate.test-support";
+import { hasPending, seedRaw, pointerKeyOf } from "../commands/pendingSeed.test-support";
 
 const fixtures: ReturnType<typeof learningViewFixture>[] = [];
 afterEach(() => {
@@ -42,8 +43,8 @@ function setup(options: { initialSessionId?: string | null; route?: Route; confi
   pendingReset?: Promise<void>; fixture?: ReturnType<typeof learningViewFixture>; saved?: { primary?: LearningCommandIntent; stop?: LearningCommandIntent } } = {}) {
   const seed = options.initialSessionId === undefined ? null : options.initialSessionId;
   const f = options.fixture ?? learningViewFixture("normal", seed); fixtures.push(f); f.view.dispose(); f.owner.dispose();
-  if (options.saved?.primary) f.values.set(primaryKey, JSON.stringify(pending(options.saved.primary)));
-  if (options.saved?.stop) f.values.set(stopKey, JSON.stringify(pending(options.saved.stop)));
+  if (options.saved?.primary) seedRaw(f.values, primaryKey, JSON.stringify(pending(options.saved.primary)), id(50));
+  if (options.saved?.stop) seedRaw(f.values, stopKey, JSON.stringify(pending(options.saved.stop)), id(50));
   // A setting save sent earlier whose outcome is unknown: its status read fails, so it stays unresolved. Both records sit
   // in this profile's own slots (R3-02, MA-09).
   if (options.pendingSave) f.values.set(settingsSlotOf(f.access().profile.profile_id), JSON.stringify({ schemaVersion: 1, profileId: f.access().profile.profile_id,
@@ -114,7 +115,7 @@ describe("LearningHost with real document owners and synthetic HTTP", () => {
     const h = setup({ saved: { primary: command } });
     await screen.findByRole("textbox"); expect(h.onLearning).toHaveBeenCalledOnce(); expect(h.f.posts()).toEqual([]);
     expect(h.f.fetcher.mock.calls.some(call => String(call[0]).includes(command.command_id) && call[1]?.method === "GET")).toBe(true);
-    expect(h.f.values.has(primaryKey)).toBe(false);
+    expect(hasPending(h.f.values, primaryKey)).toBe(false);
     h.unmount(); const next = setup({ initialSessionId: id(3), fixture: h.f });
     await screen.findByRole("textbox"); expect(next.f.posts()).toEqual([]);
     expect(next.f.fetcher.mock.calls.some(call => String(call[0]).includes(id(3)) && call[1]?.method === "GET")).toBe(true);
@@ -124,19 +125,19 @@ describe("LearningHost with real document owners and synthetic HTTP", () => {
     const h = setup({ saved: { stop: command }, confirmed: false });
     await screen.findByRole("button", { name: "Повторить завершение" });
     expect(h.onLearning).toHaveBeenCalledOnce(); expect(h.f.posts()).toEqual([]);
-    expect(h.f.values.has(stopKey)).toBe(true); expect(h.onToday).not.toHaveBeenCalled();
+    expect(hasPending(h.f.values, stopKey)).toBe(true); expect(h.onToday).not.toHaveBeenCalled();
     expect(h.f.fetcher.mock.calls.some(call => String(call[0]).includes(command.command_id) && call[1]?.method === "GET")).toBe(true);
   });
   it("keeps the same owner and draft across Settings, with no hidden presentation", async () => {
     const h = setup({ initialSessionId: id(3) }); const input = await screen.findByRole("textbox");
     await waitFor(() => expect((input as HTMLInputElement).readOnly).toBe(false));
     fireEvent.change(input, { target: { value: "unsent retained draft" } });
-    const reads = (h.f.storage.get as ReturnType<typeof vi.fn>).mock.calls.filter(call => call[0] === primaryKey).length;
+    const reads = (h.f.storage.get as ReturnType<typeof vi.fn>).mock.calls.filter(call => call[0] === pointerKeyOf(primaryKey, id(50))).length;
     fireEvent.click(screen.getByRole("button", { name: "Настройки" })); await screen.findByRole("heading", { level: 1, name: "Настройки" });
     expect(h.f.posts()).toEqual([]); fireEvent.click(screen.getByRole("button", { name: "Сегодня" }));
     await waitFor(() => expect((screen.getByRole("textbox") as HTMLInputElement).readOnly).toBe(false));
     expect((screen.getByRole("textbox") as HTMLInputElement).value).toBe("unsent retained draft");
-    expect((h.f.storage.get as ReturnType<typeof vi.fn>).mock.calls.filter(call => call[0] === primaryKey).length).toBe(reads);
+    expect((h.f.storage.get as ReturnType<typeof vi.fn>).mock.calls.filter(call => call[0] === pointerKeyOf(primaryKey, id(50))).length).toBe(reads);
     expect(h.settingsRead).toHaveBeenCalledOnce(); expect(h.f.posts()).toEqual([]);
   });
   it("recovers prefetched work while Settings is visible and presents it only after returning to Learning", async () => {
@@ -293,11 +294,11 @@ describe("LearningHost with real document owners and synthetic HTTP", () => {
       return router(...call);
     });
     fireEvent.click(screen.getByRole("button", { name: "Проверить" }));
-    await waitFor(() => expect(h.f.values.has(primaryKey)).toBe(true));
+    await waitFor(() => expect(hasPending(h.f.values, primaryKey)).toBe(true));
     fireEvent.click(screen.getByRole("button", { name: "Выйти" }));
     await waitFor(() => expect(h.onToday).toHaveBeenCalledOnce());
     expect(h.f.posts().map(post => post.kind).slice(-2)).toEqual(["answer.submit", "session.stop"]);
-    expect(h.f.values.has(primaryKey)).toBe(true); expect(h.f.values.has(stopKey)).toBe(false);
+    expect(hasPending(h.f.values, primaryKey)).toBe(true); expect(hasPending(h.f.values, stopKey)).toBe(false);
     await act(async () => { gate.resolve(late); });
     h.f.replace({ session: null }); act(() => window.dispatchEvent(new Event("pageshow"))); h.update();
     await screen.findByText("Активная пара: Русский ↔ Немецкий");
@@ -318,12 +319,12 @@ describe("LearningHost with real document owners and synthetic HTTP", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Проверить" }));
     await screen.findByText("Проверяем, сохранилось ли действие.");
-    const command = h.f.posts()[0]; expect(h.f.values.has(primaryKey)).toBe(true);
+    const command = h.f.posts()[0]; expect(hasPending(h.f.values, primaryKey)).toBe(true);
     h.unmount(); offline = false; h.f.replace({ session: null });
     const reloaded = setup({ fixture: h.f });
     await screen.findByRole("region", { name: "Есть ошибка" });
     expect(reloaded.f.storage).toBe(h.f.storage); expect(reloaded.onLearning).toHaveBeenCalledOnce();
-    expect(reloaded.f.posts()).toHaveLength(1); expect(reloaded.f.values.has(primaryKey)).toBe(false);
+    expect(reloaded.f.posts()).toHaveLength(1); expect(hasPending(reloaded.f.values, primaryKey)).toBe(false);
     expect(reloaded.f.fetcher.mock.calls.some(call => String(call[0]).includes(command.command_id) && call[1]?.method === "GET")).toBe(true);
     expect(screen.queryByRole("textbox")).toBeNull();
   });
@@ -352,11 +353,11 @@ describe("LearningHost with real document owners and synthetic HTTP", () => {
     // The answer is a study result: no manual check, its automatic recovery keeps checking it by ID (Я15).
     expect(screen.queryByRole("button", { name: "Проверить сохранённые действия" })).toBeNull();
     expect(h.f.posts().map(post => post.kind)).toEqual(["answer.submit", "session.stop"]);
-    expect(h.f.values.has(primaryKey)).toBe(true); expect(screen.queryByRole("button", { name: "На Сегодня" })).toBeNull();
+    expect(hasPending(h.f.values, primaryKey)).toBe(true); expect(screen.queryByRole("button", { name: "На Сегодня" })).toBeNull();
     // Once the server answers, the next check of the probe schedule finds it not applied in the closed session.
     checkingFails = false;
     const home = await screen.findByRole("button", { name: "На Сегодня" }, { timeout: 25_000 });
-    expect(h.f.values.has(primaryKey)).toBe(false); expect(h.f.posts()).toHaveLength(2);
+    expect(hasPending(h.f.values, primaryKey)).toBe(false); expect(h.f.posts()).toHaveLength(2);
     fireEvent.click(home);
     fireEvent.click(await screen.findByRole("button", { name: /Новая группа слов4/ })); await screen.findByTestId("approved-preview");
     expect(h.f.posts().map(post => post.kind)).toEqual(["answer.submit", "session.stop", "session.start"]);
@@ -458,7 +459,7 @@ describe("a study record after the confirmed closure (Н2, Н6)", () => {
     await screen.findByText("Не удалось подтвердить это действие. Повторить его нельзя. Заверши занятие, чтобы продолжить.");
     fireEvent.click(screen.getByRole("button", { name: "Выйти" }));
     await waitFor(() => expect(h.onToday).toHaveBeenCalledOnce());
-    await waitFor(() => expect(h.f.values.has(primaryKey)).toBe(false));
+    await waitFor(() => expect(hasPending(h.f.values, primaryKey)).toBe(false));
     h.f.replace({ session: null }); h.update(); await act(async () => {});
     fireEvent.click(await screen.findByRole("button", { name: /Новая группа слов/ }));
     await waitFor(() => expect(h.f.posts().map(post => post.kind)).toContain("session.start"));
@@ -491,7 +492,7 @@ describe("a study record after the confirmed closure (Н2, Н6)", () => {
     await act(() => vi.advanceTimersByTimeAsync(31_000));
     await screen.findByText("Занятие завершено. Последнее действие сохранено.");
     expect(screen.getByRole("button", { name: "На Сегодня" })).toBeTruthy();
-    expect(h.f.values.has(primaryKey)).toBe(false);
+    expect(hasPending(h.f.values, primaryKey)).toBe(false);
     expect(h.f.posts().filter(post => post.kind === "answer.submit")).toHaveLength(1);
   }, 30_000);
 });

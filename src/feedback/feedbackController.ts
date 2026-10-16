@@ -1,14 +1,18 @@
 import { ApiError } from "../api/http";
 import { ClosedAccessError, type OpenedAccess } from "../app/openedAccess";
 import { GatePending, pausedBeforeSend } from "../commands/gatePending";
-import { PendingStoreError, validId } from "../commands/pendingSlot";
+import { PendingStoreError, validId, type LostEnvelope } from "../commands/pendingSlot";
 import type { WriteGate } from "../commands/writeGate";
 import { blankText, overFeedbackLimit, validFeedbackIntent, type FeedbackApi, type FeedbackIntent, type FeedbackSendReply } from "./feedbackApi";
 import type { FeedbackPending, FeedbackPendingStore } from "./feedbackPending";
 
-/** paused: the write gate kept the request on the client (PAUSED_BEFORE_SEND, P03 §4.2): nothing left, the text stays. */
+/**
+ * paused: the write gate kept the request on the client (PAUSED_BEFORE_SEND, P03 §4.2): nothing left, the text stays.
+ * lost_envelope: a sent message of this profile whose text was deleted on this device (Е02) and whose command the
+ * server does not know (not_found): it is never sent again and gives no right to a new message (Q27, C458 п.4).
+ */
 export type FeedbackProblem = "network" | "not_sent" | "storage" | "invalid_pending" | "pending_changed" | "expired" | "forbidden"
-  | "paused";
+  | "paused" | "lost_envelope";
 export type FeedbackSnapshot = {
   phase: "loading" | "idle" | "sending" | "checking" | "unresolved" | "blocked" | "disposed";
   /** The field: the unsent text, or the text of the sent intent while its outcome is unknown. */
@@ -47,6 +51,11 @@ export class FeedbackController {
   private refusal: FeedbackSnapshot["refusal"] = null;
   private problem: FeedbackProblem | null = null;
   private pending: FeedbackPending | null = null;
+  /**
+   * Q27: the stored service data of a sent message whose text is gone (Е02). Only the status of its own ID is read;
+   * nothing is sent, the field stays closed until the server proves its outcome.
+   */
+  private lost: LostEnvelope | null = null;
   private loaded = false;
   /** The server confirmed the pending intent; only the local cleanup of its record remains. */
   private settled = false;
@@ -77,9 +86,11 @@ export class FeedbackController {
 
   snapshot(): FeedbackSnapshot {
     const available = !!this.currentAccess();
-    const idle = available && this.loaded && !this.pending && !this.running;
-    const retryable = this.pending ? this.settled || ["network", "not_sent", "storage", "paused"].includes(this.problem ?? "")
-      : !this.loaded && this.problem === "storage";
+    const idle = available && this.loaded && !this.pending && !this.lost && !this.running;
+    // A lost envelope: «Проверить снова» reads the same ID again; it never sends.
+    const retryable = this.lost ? ["network", "storage", "paused", "lost_envelope"].includes(this.problem ?? "")
+      : this.pending ? this.settled || ["network", "not_sent", "storage", "paused"].includes(this.problem ?? "")
+        : !this.loaded && this.problem === "storage";
     // I9/M01: while the gate does not let a write through, the send button waits (nothing is queued). «Повторить» reads
     // the same ID first and sends only after not_recorded, so it follows the narrower check predicate (C335): a family
     // lock of this ID (R3) never keeps it — that read is what lifts the lock (R5); the send itself still passes L2.
@@ -96,7 +107,13 @@ export class FeedbackController {
     if (this.running) return this.running;
     const task = Promise.resolve().then(action).catch((error: unknown) => {
       if (!this.live()) return;
-      if (error instanceof PendingStoreError) {
+      if (error instanceof PendingStoreError && error.kind === "lost_envelope" && error.lost) {
+        // The stored message of this profile lost its text (Е02) while the form was open: a new intent was refused
+        // before anything was written; only the status of the old ID is read from now on.
+        if (this.pending && this.pending.intent.command_id !== error.lost.commandId) this.pending = null;
+        this.adoptLost(error.lost, true);
+        this.problem = "lost_envelope";
+      } else if (error instanceof PendingStoreError) {
         this.problem = error.kind === "invalid" ? "invalid_pending" : error.kind === "changed" ? "pending_changed" : "storage";
       } else if (pausedBeforeSend(error)) {
         // Nothing left the client (a send) or nothing was read (a readback the gate holds or cancelled): not a lost reply.
@@ -104,7 +121,9 @@ export class FeedbackController {
       } else if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
         this.problem = error.status === 401 ? "expired" : "forbidden";
       } else this.problem = "network"; // a lost reply or a closed handle: the outcome stays unknown, never a new command
-      this.phase = this.pending ? "unresolved" : "blocked";
+      // The outcome of the lost message stays unknown: its own status, never «the text is kept, send again».
+      if (this.lost && (this.problem === "network" || this.problem === "storage")) this.problem = "lost_envelope";
+      this.phase = this.pending || this.lost ? "unresolved" : "blocked";
     }).finally(() => {
       if (this.running === task) this.running = null;
       this.emit();
@@ -157,18 +176,66 @@ export class FeedbackController {
     this.phase = "idle";
   }
 
+  private adoptLost(lost: LostEnvelope, keepText = false): void {
+    this.lost = lost;
+    this.loaded = true;
+    // The text of the lost message is gone; nothing of it is guessed or restored. A new unsent text typed here stays.
+    if (!keepText) this.text = "";
+    this.registry.hold(lost.commandId);
+  }
+
+  /**
+   * Q27 for a message: the status of exactly the stored command_id, by its stored profile and card, with the strict
+   * checks of status (feedbackApi.statusById). accepted — the message was recorded: the pointer is removed after this
+   * proof only; not_found — it stays closed (no new message, no resend); anything else stays unknown.
+   */
+  private async reconcileLost(lost: LostEnvelope): Promise<void> {
+    const payload = (lost.record.intent as { payload?: { card_id?: unknown } } | undefined)?.payload;
+    const cardId = typeof payload?.card_id === "string" ? payload.card_id : null;
+    if (lost.kind !== "feedback.send" || lost.profileId.toLowerCase() !== this.scope.profileId.toLowerCase()) {
+      throw new PendingStoreError("invalid");
+    }
+    const reply = await this.registry.read(lost.commandId, ticket =>
+      this.access().run(({ token }) => this.options.api.statusById(token, this.scope.profileId, { commandId: lost.commandId, cardId }, ticket)));
+    if (!this.live()) return;
+    this.access();
+    if (reply.outcome === "accepted") {
+      this.registry.settled("recorded");
+      await this.options.pendingStore.clearLost(lost, this.lifetime.signal);
+      if (!this.live()) return;
+      this.lost = null;
+      this.registry.release();
+      this.confirmed = true;
+      this.text = "";
+      this.problem = null;
+      this.phase = "idle";
+      return;
+    }
+    this.registry.settled("not_recorded");
+    this.problem = "lost_envelope";
+    this.phase = "unresolved";
+  }
+
   /** Reads the durable intent once, then asks the server about the same command_id. */
   private async reconcile(): Promise<void> {
     this.phase = "checking";
     this.problem = null;
     this.emit();
     if (!this.loaded) {
-      this.pending = await this.options.pendingStore.load(this.scope.profileId, this.lifetime.signal);
+      let lost: LostEnvelope | null = null;
+      try {
+        this.pending = await this.options.pendingStore.load(this.scope.profileId, this.lifetime.signal);
+      } catch (error) {
+        if (!(error instanceof PendingStoreError && error.kind === "lost_envelope" && error.lost)) throw error;
+        lost = error.lost;
+      }
       if (!this.live()) return;
       this.access();
       this.loaded = true;
+      if (lost) this.adoptLost(lost);
       if (this.pending) { this.text = this.pending.intent.payload.text; this.registry.hold(this.pending.intent.command_id); }
     }
+    if (this.lost) { await this.reconcileLost(this.lost); return; }
     if (this.settled) { await this.clearSettled(); return; }
     const pending = this.pending;
     if (!pending) { this.phase = "idle"; return; }
@@ -184,7 +251,7 @@ export class FeedbackController {
   }
   /** Nothing to resolve once the stored intent is loaded and absent: a foreground must not lock the field for nothing. */
   refresh(): Promise<void> {
-    if (this.loaded && !this.pending) return this.running ?? Promise.resolve();
+    if (this.loaded && !this.pending && !this.lost) return this.running ?? Promise.resolve();
     return this.run(() => this.reconcile());
   }
 

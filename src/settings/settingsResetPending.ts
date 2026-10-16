@@ -132,14 +132,13 @@ export class SettingsResetPendingStore {
     const key = settingsResetSlotOf(profileId);
     let slot = this.slots.get(key);
     if (!slot) {
-      // A record under this key that names another profile is damaged: reject it rather than let `load` delete it.
+      // A record under this key that names another profile is damaged: "invalid", never removed (pending slots §2).
       const owner = profileId.toLowerCase();
       slot = new PendingSlot(this.storage, key, value => {
         const checked = copy(value);
         if (checked.profileId.toLowerCase() !== owner) throw new PendingStoreError("invalid");
-        // The generic `load` compares profile IDs case-sensitively and deletes on a difference: keep one spelling.
         return { ...checked, profileId: owner };
-      });
+      }, "fixed");
       this.slots.set(key, slot);
     }
     return slot;

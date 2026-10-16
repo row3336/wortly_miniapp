@@ -13,6 +13,7 @@ import { validConjunctionHint } from "../study/questionContext";
 import { validCardExamples } from "./learningPreviewContent";
 import { personal } from "../study/referenceCardContent";
 import type { ReadbackTicket } from "../commands/writeGate";
+import type { LostAddress } from "../commands/lostEnvelope";
 
 export type LearningResultCommand = AnswerSubmitCommand | ResultCorrectCommand | ResultGradeCommand | ResultUndoCommand;
 export type LearningResultAddress = Pick<ResultCorrectCommand,
@@ -28,11 +29,21 @@ export type LearningAnswerStatus = { state_version: string } & (
   | (Current & { outcome: "accepted"; command: StoredCommandFact })
   | { outcome: "not_found"; command: MissingCommandFact; current: Profile; closed_session?: ClosedSessionBoundary }
 );
+/**
+ * Q27 (C458/C467): the address of a result command whose content is gone from this device (commands/lostEnvelope
+ * LostAddress: an answer, or a grade of a saved result) with the origin of the current open handle. Nothing of it can be
+ * sent: it only reads the status of exactly this command_id.
+ */
+export type LostAnswerAddress = LostAddress;
 export interface LearningAnswerApi {
   send(token: string, proof: string, command: AnswerSubmitCommand): Promise<LearningAnswerReply>;
   status(token: string, proof: string, command: AnswerSubmitCommand, ticket: ReadbackTicket): Promise<LearningAnswerStatus>;
+  /** Q27: the status of a lost answer by its ID; the same strict reply checks except the text that is gone. */
+  statusLost(token: string, proof: string, address: LostAnswerAddress, ticket: ReadbackTicket): Promise<LearningAnswerStatus>;
 }
 export interface LearningResultApi {
+  /** Q27: the status of a lost answer by its ID (LearningAnswerApi.statusLost). */
+  statusLost(token: string, proof: string, address: LostAnswerAddress, ticket: ReadbackTicket): Promise<LearningAnswerStatus>;
   read(token: string, proof: string, address: LearningResultAddress): Promise<LearningResultRead>;
   /** started, when given, is told right before the built request goes to fetch (after every local check). */
   send(token: string, proof: string, command: LearningResultCommand, started?: () => void): Promise<LearningAnswerReply>;
@@ -187,6 +198,38 @@ export function validAnswerFact(value: unknown, command: LearningResultCommand, 
   return detail === null || ("text" in command.payload ? detail.input.kind === "text" && detail.input.text === command.payload.text
     : detail.input.kind === "forgot");
 }
+/**
+ * Q27: the accepted fact of a lost answer or grade — the same fact and result checks as validAnswerFact, without the
+ * comparison with the content this device no longer has (the submitted text or «Забыл», the chosen grade). The server's
+ * saved result is the one this ID produced; nothing here is ever sent.
+ */
+export function validLostAnswerFact(value: unknown, address: LostAddress, view: AnswerView): value is SavedCommandFact {
+  if (address.kind !== "answer.submit" && address.kind !== "result.grade") return false;
+  if (!validResultFact(value, { command_id: address.command_id, kind: address.kind, assignment_id: address.assignment_id })) return false;
+  if (address.kind === "answer.submit" && value.object_version !== "1") return false;
+  if (address.kind === "result.grade") {
+    if (!sameId(value.result_id, address.result_id!)) return false;
+    const expected = BigInt(address.expected_result_version!), applied = BigInt(value.object_version);
+    // Re-selecting the saved grade is accepted without a new revision (К10-077), as validAnswerFact.
+    if (applied !== expected + 1n && applied !== expected) return false;
+  }
+  if (view.result === null || view.action === null) return ["unavailable", "not_found"].includes(view.step.status);
+  return sameId(value.action_id, view.action.action_id) && sameId(value.result_id, view.result.result_id)
+    && BigInt(value.object_version) <= BigInt(view.result.version);
+}
+/** Q27: a valid lost address (its kind and UUIDs, the version of a grade), or an error before any request. */
+export function lostAnswerAddress(token: string, proof: string, value: unknown): LostAnswerAddress {
+  const grade = record(value) && value.kind === "result.grade";
+  const keys = ["command_id", "kind", "session_id", "assignment_id", ...(grade ? ["result_id", "expected_result_version"] : []),
+    "client_instance_id", "document_id"];
+  if (!token || !proof || !record(value) || !exactKeys(value, keys) || !oneOf(value.kind, ["answer.submit", "result.grade"])
+    || !["command_id", "session_id", "assignment_id", "client_instance_id", "document_id", ...(grade ? ["result_id"] : [])]
+      .every(key => uuid(value[key]))
+    || grade && !version(value.expected_result_version)) {
+    throw new Error("invalid lost answer address");
+  }
+  return value as LostAnswerAddress;
+}
 function envelope(value: unknown): value is Record<string, unknown> & { state_version: string } {
   return record(value) && version(value.state_version)
     && exactKeys(value, ["command", "action", "result", "step", "capabilities", "state_version",
@@ -240,8 +283,19 @@ export function createLearningResultApi(options: HttpOptions): LearningResultApi
       if (!reply.ok) throw httpError(reply);
       throw new ApiError("invalid_response");
     },
+    async statusLost(token, proof, original, ticket: ReadbackTicket) {
+      const address = lostAnswerAddress(token, proof, original);
+      return readStatus(token, proof, address, ticket, (fact, view) => validLostAnswerFact(fact, address, view));
+    },
     async status(token, proof, original, ticket: ReadbackTicket) {
       const command = prepare(token, proof, original);
+      return readStatus(token, proof, command, ticket, (fact, view) => validAnswerFact(fact, command, view));
+    },
+  };
+  /** GET /commands/{id} of a result command: not_found with its profile, or the accepted fact the given check proves. */
+  async function readStatus(token: string, proof: string, command: { command_id: string; session_id: string;
+    assignment_id: string; result_id?: string; client_instance_id: string; document_id: string }, ticket: ReadbackTicket,
+  fact: (value: unknown, view: Current) => value is SavedCommandFact): Promise<LearningAnswerStatus> {
       const query = new URLSearchParams({ client_instance_id: command.client_instance_id,
         document_id: command.document_id, session_id: command.session_id });
       const reply = await request(`/commands/${command.command_id}?${query}`, { method: "GET", token, proof, readbackTicket: ticket });
@@ -262,13 +316,12 @@ export function createLearningResultApi(options: HttpOptions): LearningResultApi
       }
       if (envelope(value) && value.error == null) {
         const view = current(value, command);
-        if (view && validAnswerFact(value.command, command, view) && value.command.status === "already_applied") {
+        if (view && fact(value.command, view) && value.command.status === "already_applied") {
           return { ...view, outcome: "accepted", command: value.command as StoredCommandFact, state_version: value.state_version };
         }
       }
       throw new ApiError("invalid_response");
-    },
-  };
+  }
 }
 
 /** Preserve the submit-only interface for existing answer callers. */
@@ -283,5 +336,6 @@ export function createLearningAnswerApi(options: HttpOptions): LearningAnswerApi
       if (!record(command) || command.kind !== "answer.submit") throw new Error("invalid Learning answer");
       return api.status(token, proof, command, ticket);
     },
+    statusLost: (token, proof, address, ticket) => api.statusLost(token, proof, address, ticket),
   };
 }

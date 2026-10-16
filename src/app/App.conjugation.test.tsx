@@ -13,6 +13,7 @@ import { commandPosts, enabledExits, foregroundOpen, loseReply as loseStudyReply
   settle as pause, watchCommits } from "./pairMoved.test-support";
 import { besidesContext, launch, serveLaunchCard } from "./launchCard.test-support";
 import { pageGateOpen } from "./pageGate.test-support";
+import { lsPendingRaw } from "../commands/lsPending.test-support";
 
 /** The mode matrix below runs every suite plain and under StrictMode, as src/main.tsx does in development. */
 let strict = false;
@@ -443,7 +444,7 @@ describe("the conjugation test while the window checks its document", () => {
     await waitFor(() => expect(r.foregrounds()).toBe(1));
     await settled();
     expect(watch.seen).toEqual([]);
-    expect(JSON.parse(localStorage.getItem("wortly.pending.conjugation_session")!).intent).toMatchObject({ kind: "answer.submit" });
+    expect(JSON.parse(lsPendingRaw("wortly.pending.conjugation_session")!).intent).toMatchObject({ kind: "answer.submit" });
     await act(async () => { hold.open(); }); await settled();
     await screen.findByRole("heading", { name: "Wortly уже открыт" });
     watch.stop();

@@ -10,6 +10,7 @@ import { conjugationIntentHash, copyConjugationIntent, validConjugationIntent, t
   type ConjugationResultCommand, type ConjugationScheduleTransportCommand, type ConjugationSessionCommand } from "./conjugationIntent";
 import { conjugationResultCurrent, validConjugationCatalog, validConjugationCurrent, type ConjugationResultCurrent } from "./conjugationProjection";
 import type { ReadbackTicket } from "../commands/writeGate";
+import type { LostAddress } from "../commands/lostEnvelope";
 export type { ConjugationCommand, ConjugationIntent, ConjugationResultCommand,
   ConjugationScheduleTransportCommand, ConjugationSessionCommand } from "./conjugationIntent";
 
@@ -46,6 +47,11 @@ export interface ConjugationApi {
   status(token: string, proof: string, command: ConjugationSessionCommand, ticket: ReadbackTicket): Promise<ConjugationSessionStatus>;
   status(token: string, proof: string, command: ConjugationResultCommand, ticket: ReadbackTicket): Promise<ConjugationResultStatus>;
   status(token: string, proof: string, command: ConjugationCommand, ticket: ReadbackTicket): Promise<ConjugationStatus>;
+  /**
+   * Q27 (C458/C467): the status of a lost answer or grade (its content gone, Е02) by its ID only — the same ticket and strict
+   * reply checks, without the fingerprint of the body that is gone and without the comparison with that content.
+   */
+  statusLost(token: string, proof: string, address: LostAddress, ticket: ReadbackTicket): Promise<ConjugationResultStatus>;
 }
 
 function prepare(token: string, proof: string, original: ConjugationCommand): ConjugationCommand {
@@ -78,7 +84,8 @@ function current(value: Record<string, unknown> & { state_version: string }, com
   // The status-only unavailable projection is kept separate by the public status types.
   return { current: value.current, state_version: value.state_version } as Read;
 }
-function acceptance(value: unknown, command: ConjugationCommand, view: Read): value is SavedCommandFact {
+/** lost (Q27): the content of the command is gone — its answer text or «Забыл», its grade — and is not compared. */
+function acceptance(value: unknown, command: ConjugationCommand, view: Read, lost = false): value is SavedCommandFact {
   const target = command.kind === "conjugation.schedule" ? command.payload.base_verb_id
     : "assignment_id" in command ? command.assignment_id : command.session_id;
   if (!record(value) || !exactKeys(value, ["id", "kind", "status", "applied_at", "target_id", "action_id", "result_id", "context_id", "object_version"])
@@ -95,14 +102,14 @@ function acceptance(value: unknown, command: ConjugationCommand, view: Read): va
     if (!sameId(value.result_id, command.result_id)) return false;
     const expected = BigInt(command.expected_result_version), applied = BigInt(value.object_version);
     if (applied !== expected + 1n && !(command.kind === "result.grade" && applied === expected)) return false;
-    if (view.result?.version === value.object_version
+    if (!lost && view.result?.version === value.object_version
       && view.result.grade !== (command.kind === "result.correct" ? 4 : command.payload.grade)) return false;
   }
   if (view.result === null || view.action === null) return oneOf(view.step.status, ["unavailable", "not_found"]);
   if (!sameId(value.action_id, view.action.action_id) || !sameId(value.result_id, view.result.result_id)
     || BigInt(value.object_version) > BigInt(view.result.version)) return false;
   const detail = view.result.detail;
-  return command.kind !== "answer.submit" || detail === null
+  return lost || command.kind !== "answer.submit" || detail === null
     || ("text" in command.payload ? detail.input.kind === "text" && detail.input.text === command.payload.text : detail.input.kind === "forgot");
 }
 function missing(value: unknown, command: ConjugationCommand): MissingStatus | null {
@@ -194,6 +201,33 @@ export function createConjugationApi(options: HttpOptions): ConjugationApi {
         const view = current(value, command, true);
         if (view && acceptance(value.command, command, view) && value.command.status === "already_applied") {
           return { ...view, outcome: "accepted", command: value.command as StoredCommandFact };
+        }
+      }
+      throw new ApiError("invalid_response");
+    },
+    async statusLost(token: string, proof: string, original: LostAddress, ticket: ReadbackTicket): Promise<ConjugationResultStatus> {
+      const grade = record(original) && original.kind === "result.grade";
+      if (!token || !proof || !record(original) || !oneOf(original.kind, ["answer.submit", "result.grade"])
+        || !exactKeys(original, ["command_id", "kind", "session_id", "assignment_id", ...(grade ? ["result_id", "expected_result_version"] : []),
+          "client_instance_id", "document_id"])
+        || ![original.command_id, original.session_id, original.assignment_id, original.client_instance_id, original.document_id,
+          ...(grade ? [original.result_id] : [])].every(uuid)
+        || grade && !version(original.expected_result_version)) throw new Error("invalid lost conjugation address");
+      // The service address only (no payload, never sendable): enough for the target and result checks of the reply.
+      const command = { ...original, payload: {} } as unknown as ConjugationCommand;
+      const query = new URLSearchParams({ client_instance_id: original.client_instance_id, document_id: original.document_id,
+        session_id: original.session_id });
+      const reply = await request(`/commands/${original.command_id}?${query}`, { method: "GET", token, proof, readbackTicket: ticket });
+      if (!reply.ok) throw httpError(reply);
+      if (reply.status !== 200) throw new ApiError("invalid_response");
+      const absent = missing(reply.value, command);
+      if (absent) return absent as ConjugationResultStatus;
+      const value = reply.value;
+      // Without a fingerprint the server verifies none: a reply that claims one is refused.
+      if (envelope(value, ["command", "action", "result", "step", "capabilities"])) {
+        const view = current(value, command, true);
+        if (view && acceptance(value.command, command, view, true) && value.command.status === "already_applied") {
+          return { ...view, outcome: "accepted", command: value.command as StoredCommandFact } as ConjugationResultStatus;
         }
       }
       throw new ApiError("invalid_response");

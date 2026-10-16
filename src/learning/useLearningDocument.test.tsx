@@ -5,6 +5,7 @@ import { useLearningDocument } from "./useLearningDocument";
 import { learningViewFixture } from "./learningView.test-support";
 import { current, deferred, id, primaryKey, profile, response } from "./learningFixtures.test-support";
 import { testGate } from "../commands/testGate.test-support";
+import { pendingRaw, hasPending } from "../commands/pendingSeed.test-support";
 
 type Options = Parameters<typeof useLearningDocument>[0];
 type Fixture = ReturnType<typeof learningViewFixture>;
@@ -61,7 +62,7 @@ describe("React owner for an opened Learning document", () => {
     f.replace({ session: null }); rerender({ ...options, access: f.access() });
     await act(async () => { gate.resolve(null); await starting; });
     expect(f.posts()).toEqual([]);
-    expect(f.values.has(primaryKey)).toBe(true);
+    expect(hasPending(f.values, primaryKey)).toBe(true);
     await act(() => result.current.actions.start());
     expect(f.posts()).toEqual([]);
   });
@@ -148,7 +149,7 @@ describe("React owner for an opened Learning document", () => {
     rerender({ ...options, transitionMode: null });
     await act(async () => { gate.resolve(response); await sending; });
     expect(result.current.state).toMatchObject({ phase: "result_correct", timer: null, canNext: false, grades: [] });
-    expect(f.values.has(primaryKey)).toBe(false); expect(f.posts()).toHaveLength(1);
+    expect(hasPending(f.values, primaryKey)).toBe(false); expect(f.posts()).toHaveLength(1);
     rerender(options); await waitFor(() => expect(result.current.state?.canNext).toBe(true));
     expect(result.current.state).toMatchObject({ phase: "result_correct", timer: null }); expect(f.posts()).toHaveLength(1);
     // The wait ends with «Далее»: the next result gets the confirmed mode's timer.
@@ -523,7 +524,7 @@ describe("React owner for an opened Learning document", () => {
     await waitFor(() => expect(result.current.state?.phase).toBe("idle"));
     expect(result.current.state?.draft).toBe(""); expect(result.current.state?.commands.live).toBe(true); expect(f.posts()).toEqual([]);
     f.fetcher.mockImplementationOnce(async (...call) => {
-      expect(JSON.parse(f.values.get(primaryKey)!).pair).toBe("en-de");
+      expect(JSON.parse(pendingRaw(f.values, primaryKey)!).pair).toBe("en-de");
       const reply = await f.handler(...call), data = await reply.json();
       data.current.pair = "en-de"; data.current.preview.content.pair = "en-de";
       data.current.preview.content.translations.common = ["Hello"]; return response(data);
@@ -571,11 +572,11 @@ describe("React owner for an opened Learning document", () => {
     act(() => result.current.actions.setDraft("exact input")); const gate = deferred<Response>(); f.fetcher.mockReturnValueOnce(gate.promise);
     let sending!: Promise<void>; act(() => { sending = result.current.actions.submit(); });
     await waitFor(() => expect(f.posts()).toHaveLength(1)); const old = await f.handler(...lastCall(f)); unmount();
-    expect(f.values.has(primaryKey)).toBe(true);
+    expect(hasPending(f.values, primaryKey)).toBe(true);
     const next = renderHook(props => useLearningDocument(props), { initialProps: options });
     await waitFor(() => expect(next.result.current.state?.phase).toBe("result_wrong"));
     await act(async () => { gate.resolve(old); await sending; });
-    expect(next.result.current.state?.phase).toBe("result_wrong"); expect(f.posts()).toHaveLength(1); expect(f.values.has(primaryKey)).toBe(false);
+    expect(next.result.current.state?.phase).toBe("result_wrong"); expect(f.posts()).toHaveLength(1); expect(hasPending(f.values, primaryKey)).toBe(false);
   });
   it("foreground while an old-handle answer is still in flight reconciles its receipt without resending", async () => {
     const { f, options, result, rerender } = setup(); f.wrong(); await waitFor(() => expect(result.current.state?.phase).toBe("question"));
@@ -585,6 +586,6 @@ describe("React owner for an opened Learning document", () => {
     f.replace({}, "fresh-synthetic-token"); rerender({ ...options, access: f.access() });
     await act(async () => { gate.resolve(old); await sending; });
     await waitFor(() => expect(result.current.state?.phase).toBe("result_wrong"));
-    expect(f.posts()).toHaveLength(1); expect(f.values.has(primaryKey)).toBe(false);
+    expect(f.posts()).toHaveLength(1); expect(hasPending(f.values, primaryKey)).toBe(false);
   });
 });

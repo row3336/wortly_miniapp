@@ -10,6 +10,7 @@ import {
   useManualSelectionDocument, type ManualSelectionDocumentActions, type ManualSelectionDocumentOptions, type ManualSelectionDocumentState,
 } from "./useManualSelectionDocument";
 import { testGate } from "../commands/testGate.test-support";
+import { pendingRaw, hasPending, seedRaw } from "../commands/pendingSeed.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const A = id(41), B = id(42), PROFILE = id(3), CLIENT = id(1);
@@ -73,7 +74,7 @@ function server(start = 9007199254740993n) {
 function fixture(options: { start?: bigint; profileVersion?: string; seeded?: ManualPending } = {}) {
   const srv = server(options.start);
   const values = new Map<string, string>([["unrelated", "keep"]]);
-  if (options.seeded) values.set(pendingKey, JSON.stringify(options.seeded));
+  if (options.seeded) seedRaw(values, pendingKey, JSON.stringify(options.seeded), PROFILE);
   const storage: AsyncStorage = { get: vi.fn(async key => values.get(key) ?? null),
     set: vi.fn(async (key, value) => { values.set(key, value); }), remove: vi.fn(async key => { values.delete(key); }) };
   let active: OpenedAccess | null = null, serial = 0, next = 100;
@@ -137,7 +138,7 @@ describe("manual selection document with real access, controller, store and Lear
     const held = deferred<Response>();
     f.srv.routes.push((path, init) => {
       if (init.method !== "POST") return undefined;
-      expect(JSON.parse(f.values.get(pendingKey)!)).toEqual({ ...stored(A), intent: { ...stored(A).intent, command_id: id(100) } });
+      expect(JSON.parse(pendingRaw(f.values, pendingKey)!)).toEqual({ ...stored(A), intent: { ...stored(A).intent, command_id: id(100) } });
       expect((init.headers as Record<string, string>)["X-Origin-Proof"]).toBe("synthetic-manual-proof-1");
       return held.promise.then(() => f.srv.handle(path, init));
     });
@@ -145,7 +146,7 @@ describe("manual selection document with real access, controller, store and Lear
     await waitFor(() => expect(posts(f)).toHaveLength(1));
     expect(state(ui)).toMatchObject({ phase: "sending", pending: { cardId: A, kind: "learning.select" }, canChange: false, canRetry: false });
     await act(async () => { held.resolve(new Response()); await sending; });
-    expect(posts(f)).toHaveLength(1); expect(f.values.has(pendingKey)).toBe(false);
+    expect(posts(f)).toHaveLength(1); expect(hasPending(f.values, pendingKey)).toBe(false);
     expect(state(ui)).toEqual({ phase: "ready", problem: null, pending: null, canChange: true, canRetry: false,
       outcome: { commandId: id(100), cardId: A, status: "accepted", stateVersion: "9007199254740994" } });
     ui.rerender({ ...f.options }); expect(ui.result.current.actions).toBe(actions);
@@ -163,7 +164,7 @@ describe("manual selection document with real access, controller, store and Lear
     await act(() => ui.result.current.actions.change(B, true));
     expect(state(ui)).toMatchObject({ phase: "ready", pending: null, canChange: true,
       outcome: { cardId: B, status: "rejected", code: "VERSION_CONFLICT", stateVersion: "9007199254740998" } });
-    expect(f.denied).not.toHaveBeenCalled(); expect(f.values.has(pendingKey)).toBe(false);
+    expect(f.denied).not.toHaveBeenCalled(); expect(hasPending(f.values, pendingKey)).toBe(false);
   });
 
   it.each(([401, 403] as const).flatMap(status => (["get", "change", "status"] as const).map(path => ({ status, path }))))(
@@ -181,7 +182,7 @@ describe("manual selection document with real access, controller, store and Lear
       expect(f.options.access.isLive()).toBe(false);
       expect(state(ui)).toEqual({ phase: "blocked", problem: { reason: status === 401 ? "expired" : "forbidden",
         code: status === 401 ? "UNAUTHORIZED" : "ACCESS_DENIED" }, pending: null, outcome: null, canChange: false, canRetry: false });
-      if (path !== "get") expect(JSON.parse(f.values.get(pendingKey)!).intent.payload.card_id).toBe(A);
+      if (path !== "get") expect(JSON.parse(pendingRaw(f.values, pendingKey)!).intent.payload.card_id).toBe(A);
       const count = f.srv.fetcher.mock.calls.length;
       await act(async () => { await ui.result.current.actions.refresh(); await ui.result.current.actions.retry(A); await ui.result.current.actions.change(B, true); });
       expect(f.srv.fetcher).toHaveBeenCalledTimes(count); expect(f.denied).toHaveBeenCalledTimes(1);
@@ -267,12 +268,12 @@ describe("manual selection document with real access, controller, store and Lear
     expect(state(first.ui)).toMatchObject({ phase: "unresolved", pending: { cardId: A, kind: "learning.select" }, canRetry: true,
       problem: { reason: "network" } });
     first.ui.unmount();
-    const saved = f.values.get(pendingKey);
+    const saved = pendingRaw(f.values, pendingKey);
     const options = { ...f.options, access: f.access({ document_id: id(20), document_epoch: "2" }) };
     const ui = renderHook(useManualSelectionDocument, { initialProps: options });
     await waitFor(() => expect(state(ui)).toMatchObject({ phase: "unresolved", pending: { cardId: A }, canRetry: true }));
     await flush();
-    expect(posts(f)).toHaveLength(1); expect(f.values.get(pendingKey)).toBe(saved);
+    expect(posts(f)).toHaveLength(1); expect(pendingRaw(f.values, pendingKey)).toBe(saved);
     await act(() => ui.result.current.actions.retry(B));
     expect(posts(f)).toHaveLength(1);
     await act(() => ui.result.current.actions.retry(A.toUpperCase()));
@@ -292,7 +293,7 @@ describe("manual selection document with real access, controller, store and Lear
     const ui = renderHook(useManualSelectionDocument, { initialProps: { ...f.options, access: f.access() } });
     await waitFor(() => expect(state(ui)).toMatchObject({ phase: "ready", pending: null,
       outcome: { commandId: id(100), cardId: A, status: "accepted", stateVersion: "9007199254740994" } }));
-    expect(posts(f)).toHaveLength(1); expect(f.values.has(pendingKey)).toBe(false);
+    expect(posts(f)).toHaveLength(1); expect(hasPending(f.values, pendingKey)).toBe(false);
   });
 
   it("a pending intent for one card blocks every card; only that card can retry it", async () => {
@@ -317,13 +318,16 @@ describe("manual selection document with real access, controller, store and Lear
     const ui = renderHook(useManualSelectionDocument, { initialProps: options });
     await waitFor(() => expect(state(ui)).toMatchObject({ phase: "unresolved", canRetry: false, canChange: false, problem: { reason } }));
     await act(() => ui.result.current.actions.retry(A));
-    expect(posts(f)).toEqual([]); expect(JSON.parse(f.values.get(pendingKey)!)).toEqual(seeded);
+    expect(posts(f)).toEqual([]); expect(JSON.parse(pendingRaw(f.values, pendingKey)!)).toEqual(seeded);
   });
 
-  it("an intent of another profile is removed without status or POST", async () => {
-    const f = fixture({ seeded: stored(A, { profileId: id(66) }) }), { ui } = mount(f);
+  // §3.4: another profile's intent stays under its own pointer; this document neither checks, sends nor removes it.
+  it("an intent of another profile is left under its own pointer, without status or POST", async () => {
+    const f = fixture({ seeded: stored(A, { profileId: id(66) }) });
+    const before = [...f.values];
+    const { ui } = mount(f);
     await ready(ui);
-    expect(f.calls()).toEqual(["GET /api/v1/learning/current"]); expect(f.values.has(pendingKey)).toBe(false);
+    expect(f.calls()).toEqual(["GET /api/v1/learning/current"]); expect([...f.values]).toEqual(before);
     expect(f.values.get("unrelated")).toBe("keep");
   });
 
@@ -340,7 +344,7 @@ describe("manual selection document with real access, controller, store and Lear
     const ui = renderHook(useManualSelectionDocument, { initialProps: { ...f.options, access: f.access() } });
     await waitFor(() => expect(state(ui)).toMatchObject({ phase: "unresolved", problem: { reason: "mismatch" }, canRetry: false }));
     await act(() => ui.result.current.actions.retry(A));
-    expect(posts(f)).toHaveLength(1); expect(JSON.parse(f.values.get(pendingKey)!).mismatch).toBe(true);
+    expect(posts(f)).toHaveLength(1); expect(JSON.parse(pendingRaw(f.values, pendingKey)!).mismatch).toBe(true);
   });
 
   it.each(["visibilitychange", "pageshow"])("%s stops accepting the old handle's results and rights until a new access", async event => {
@@ -483,7 +487,7 @@ describe("F2: an outcome carries the top-level state_version of its own reply, n
     await waitFor(() => expect(state(ui).outcome).not.toBeNull());
     expect(state(ui)).toEqual({ phase: "blocked", problem: { reason: "forbidden" }, pending: null, canChange: false, canRetry: false,
       outcome: { commandId: id(90), cardId: A, status: "accepted", stateVersion: "9007199254740999" } });
-    expect(f.denied).not.toHaveBeenCalled(); expect(f.values.has(pendingKey)).toBe(false); expect(posts(f)).toEqual([]);
+    expect(f.denied).not.toHaveBeenCalled(); expect(hasPending(f.values, pendingKey)).toBe(false); expect(posts(f)).toEqual([]);
   });
 });
 

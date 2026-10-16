@@ -5,7 +5,8 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, expect, it, vi } from "vitest";
 import { useWrittenDocument } from "./useWrittenDocument";
 import { WrittenScreen } from "./WrittenScreen";
-import { tick, writtenFixture } from "./writtenFixtures.test-support";
+import { id, tick, writtenFixture } from "./writtenFixtures.test-support";
+import { pendingRaw, hasPending, pointerKeyOf } from "../commands/pendingSeed.test-support";
 
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 const record = "wortly.pending.written_session";
@@ -31,7 +32,8 @@ async function conflictSetup(markFails: boolean) {
   if (markFails) {
     const set = vi.mocked(f.storage.set), base = set.getMockImplementation()!;
     set.mockImplementation(async (key, value) => {
-      if (key === record && JSON.parse(value).mismatch) throw new Error("io");
+      // The conflict mark is a field of this profile's pointer record (profile addressing).
+      if (key === pointerKeyOf(record, id(50)) && JSON.parse(value).record?.mismatch) throw new Error("io");
       return base(key, value);
     });
   }
@@ -58,10 +60,10 @@ for (const markFails of [false, true]) {
   it(`a full-body conflict${markFails ? " whose mark could not be stored" : ""} is cleared after the confirmed «Выйти» (QA Q-W${markFails ? 2 : 1})`, async () => {
     const { f, step } = await conflictSetup(markFails);
     await step(10_000);
-    expect(JSON.parse(f.values.get(record)!).mismatch).toBe(markFails ? undefined : true);
+    expect(JSON.parse(pendingRaw(f.values, record)!).mismatch).toBe(markFails ? undefined : true);
     fireEvent.click(screen.getByRole("button", { name: "Выйти" })); await step(); await step(1000); await step(35_000);
     expect(f.posts().map(post => post.kind)).toContain("session.stop");
-    expect(f.values.has(record)).toBe(false);
+    expect(hasPending(f.values, record)).toBe(false);
     expect(f.posts().filter(post => post.kind === "answer.submit")).toHaveLength(1);
     // Nothing is left to recover: no machine holds the lanes, and a new quiz can start (QA CP4a-1 Д1).
     expect({ recovery: seen.state?.commands.recovery ?? null, canBegin: seen.state?.commands.canBegin })

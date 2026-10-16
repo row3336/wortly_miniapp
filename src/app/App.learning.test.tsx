@@ -23,6 +23,7 @@ import { gate, refuseOnce, replaceDocument, watchFlash } from "./flashWatch.test
 import { staleCommand, staleRefusal } from "./openRules.test-support";
 import { cardIdOf } from "../dictionary/card/cardTestData.test-support";
 import { besidesContext, launch, serveLaunchCard } from "./launchCard.test-support";
+import { lsPendingRaw, lsSeedRaw } from "../commands/lsPending.test-support";
 
 /**
  * 2.3-А with a known send count (QA-R1-V3 F6): the page's send counter as the owners get it. Transparent unless a test
@@ -1307,10 +1308,10 @@ describe("Learning: a start the server refused for good (C168 SETUP_REQUIRED, C1
     const a = app(); loseRefusedStart(a, code); const view = render(<App />);
     fireEvent.click(await startButton(a));
     await activeButton(/Проверить/, exchange);
-    expect(localStorage.getItem("wortly.pending.learning_session")).not.toBeNull();
+    expect(lsPendingRaw("wortly.pending.learning_session")).not.toBeNull();
     view.unmount(); const before = checks(a).length; render(<App />);
     await screen.findByText(pairText, undefined, exchange); await settled();
-    await waitFor(() => expect(localStorage.getItem("wortly.pending.learning_session")).toBeNull());
+    await waitFor(() => expect(lsPendingRaw("wortly.pending.learning_session")).toBeNull());
     const check = checks(a).slice(before);
     expect(check).toHaveLength(1);
     expect(new URL(String(check[0][0]), "http://localhost").searchParams.get("include_refusal")).toBe("true");
@@ -1324,7 +1325,7 @@ describe("Learning: a start the server refused for good (C168 SETUP_REQUIRED, C1
     await activeButton(/Проверить/, exchange);
     view.unmount(); render(<App />);
     await screen.findByRole("heading", { name: "Изучение слов" }, exchange); await settled();
-    expect(localStorage.getItem("wortly.pending.learning_session")).not.toBeNull();
+    expect(lsPendingRaw("wortly.pending.learning_session")).not.toBeNull();
     expect(screen.queryByRole("button", { name: "На Сегодня" })).toBeNull();
     expect(stops(a)).toEqual([]); expect(starts(a)).toHaveLength(1);
   });
@@ -1351,7 +1352,7 @@ describe("Learning: a start the server refused for good (C168 SETUP_REQUIRED, C1
     const a = app(); loseRefusedStart(a, "SESSION_CLOSED"); render(<App />);
     fireEvent.click(await startButton(a));
     fireEvent.click(await activeButton(/Проверить/, exchange));
-    await waitFor(() => expect(localStorage.getItem("wortly.pending.learning_session")).toBeNull()); await settled();
+    await waitFor(() => expect(lsPendingRaw("wortly.pending.learning_session")).toBeNull()); await settled();
     expect(screen.getByText("Занятие завершено.")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "На Сегодня" })).toBeNull();
     expect(screen.queryByText(pairText)).toBeNull();
@@ -1363,7 +1364,7 @@ describe("Learning: a start the server refused for good (C168 SETUP_REQUIRED, C1
     loseRefusedStart(a, "SETUP_REQUIRED", { currentOf: y => ({ ...current(y), pair: "ru-de" }) }); render(<App />);
     fireEvent.click(await startButton(a));
     fireEvent.click(await activeButton(/Проверить/, exchange));
-    await waitFor(() => expect(localStorage.getItem("wortly.pending.learning_session")).toBeNull()); await settled();
+    await waitFor(() => expect(lsPendingRaw("wortly.pending.learning_session")).toBeNull()); await settled();
     expect(await screen.findByRole("textbox")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "На Сегодня" })).toBeNull();
     expect((screen.getByRole("button", { name: "Выйти" }) as HTMLButtonElement).disabled).toBe(false);
@@ -1946,9 +1947,9 @@ describe("Learning R1: the window refreshes itself into the session of the new p
       const installation = appInstallationRecords()[0] as { profileId: string; clientInstanceId: string };
       const mark = a.fetcher.mock.calls.length;
       world.moved = true; fireEvent.click(start);
-      localStorage.setItem("wortly.pending.written_session", JSON.stringify({ schemaVersion: 1, profileId: installation.profileId,
+      lsSeedRaw("wortly.pending.written_session", JSON.stringify({ schemaVersion: 1, profileId: installation.profileId,
         clientInstanceId: installation.clientInstanceId, pair: "uk-de", intent: { command_id: X, session_id: Z, kind: "answer.submit",
-          assignment_id: "7a1b2c3d-0000-4000-8000-00000000dd03", payload: { text: "Haus" } } }));
+          assignment_id: "7a1b2c3d-0000-4000-8000-00000000dd03", payload: { text: "Haus" } } }), id(50));
       expect(await screen.findByText("Hallo", undefined, exchange)).toBeTruthy();
       await pause(4000);
       // The automatic recovery took X with the page's count (the decision about a send was reached).
@@ -2089,7 +2090,7 @@ describe("Learning Stop refused as DOCUMENT_STALE (C188)", () => {
     expect(screen.queryByRole("button")).toBeNull();
     expect(screen.queryByText("Завершаем занятие…")).toBeNull();
     expect(requestsSince(a, mark)).toEqual(["POST /api/v1/commands", "POST /api/v1/client/open"]);
-    expect(JSON.parse(localStorage.getItem("wortly.pending.learning_stop")!).intent).toMatchObject({ kind: "session.stop" });
+    expect(JSON.parse(lsPendingRaw("wortly.pending.learning_stop")!).intent).toMatchObject({ kind: "session.stop" });
   });
 
   it("live window: the Stop is checked, its manual retry sends the same ID once, and Today then loads its plan", async () => {
@@ -2110,7 +2111,7 @@ describe("Learning Stop refused as DOCUMENT_STALE (C188)", () => {
     expect(stops()[1].command_id).toBe(stops()[0].command_id);
     expect(requestsSince(a, mark)).toContain("GET /api/v1/today");
     expect(screen.queryByText("Не удалось загрузить план")).toBeNull();
-    expect(localStorage.getItem("wortly.pending.learning_stop")).toBeNull();
+    expect(lsPendingRaw("wortly.pending.learning_stop")).toBeNull();
   });
 });
 
@@ -2251,12 +2252,12 @@ describe("fix6 (C393/C394): the exits of a Learning start refusal on the real Ap
     const stop = a.posts().filter(post => (post.kind as string) === "session.stop_remote");
     expect(stop).toHaveLength(1);
     const { client_instance_id: _client, document_id: _document, ...sent } = stop[0];
-    expect(JSON.parse(localStorage.getItem("wortly.pending.remote_stop")!).intent).toEqual(sent); // the same intent, not rewritten
+    expect(JSON.parse(lsPendingRaw("wortly.pending.remote_stop")!).intent).toEqual(sent); // the same intent, not rewritten
     fireEvent.click(check);
     await screen.findByText(pairText, undefined, exchange); await settled();
     expect(a.gets(`/commands/${remote.stopId}`)).toHaveLength(1);
     expect(a.posts().filter(post => (post.kind as string) === "session.stop_remote")).toHaveLength(1);
-    expect(localStorage.getItem("wortly.pending.remote_stop")).toBeNull();
+    expect(lsPendingRaw("wortly.pending.remote_stop")).toBeNull();
   }, 30_000);
 
   it("(2, control) the native Back of the same refusal names nothing: the window closes (N14, C388) — no Stop, 0 requests after", async () => {

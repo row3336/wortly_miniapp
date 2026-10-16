@@ -68,6 +68,8 @@ export function CommandRecovery({ className, language, lanes, canRetryPrimary, c
   const checking = lanes.some(lane => ["sending", "checking", "loading"].includes(lane.phase));
   const copy = messages(language);
   const incompatible = lanes.some(lane => lane.problem === "incompatible");
+  // Q27 (C458): the lost answer is never sent again; the line says so, the screen's «Выйти» ends the session.
+  const lost = lanes.some(lane => lane.problem === "lost_envelope");
   const paused = lanes.find(lane => lane.problem === "maintenance");
   const wait = paused ? maintenanceWait(language, paused.pauseSeconds) : null;
   // The local cleanup of a confirmed outcome reads and sends nothing: the gate does not hold it.
@@ -79,6 +81,7 @@ export function CommandRecovery({ className, language, lanes, canRetryPrimary, c
   return <div className={className}>
     {/* The controls are a wrapping flex row; .command-note (styles/app.css) gives the note its own row. */}
     {incompatible && <p role="status" className="command-note">{copy.commandIncompatible}</p>}
+    {lost && <p role="status" className="command-note">{recoveryCopy[language].lost}</p>}
     {!incompatible && gateLine && <p role="status" className="command-note">{gateLine}</p>}
     {!incompatible && !gateLine && paused && <p role="status" className="command-note">{copy.commandMaintenance}{wait ? ` ${wait}` : ""}</p>}
     <button type="button" disabled={checkDisabled} onClick={() => { if (!checkDisabled) onCheck(); }}>{localOnly ? t.updateDevice : t.check}</button>

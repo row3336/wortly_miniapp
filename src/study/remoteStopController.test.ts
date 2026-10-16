@@ -8,6 +8,8 @@ import { testGate } from "../commands/testGate.test-support";
 import type { WriteGate } from "../commands/writeGate";
 import { WriteGate as RealWriteGate } from "../commands/writeGate";
 import { ManualClock } from "../commands/writeGate.test-support";
+import { pendingRaw, seedRaw } from "../commands/pendingSeed.test-support";
+const seedRawAt = (profileId: string, values: Map<string, string>, base: string, raw: string) => seedRaw(values, base, raw, profileId);
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const pending = (): RemoteStopPending => ({ schemaVersion: 1, profileId: id(1), clientInstanceId: id(2),
@@ -28,7 +30,7 @@ const notFound = (): RemoteStopStatus => ({ outcome: "not_found", state_version:
 
 function fixture(raw?: RemoteStopPending, writeGate?: WriteGate) {
   const values = new Map<string, string>();
-  if (raw) values.set("wortly.pending.remote_stop", JSON.stringify(raw));
+  if (raw) seedRawAt(id(1), values, "wortly.pending.remote_stop", JSON.stringify(raw));
   const storage: AsyncStorage = {
     get: vi.fn(async key => values.get(key) ?? null),
     set: vi.fn(async (key, value) => { values.set(key, value); }),
@@ -57,7 +59,7 @@ describe("remote stop confirmation and recovery", () => {
     const f = fixture(); await f.controller.refresh();
     let finish!: (reply: RemoteStopReply) => void;
     f.send.mockImplementationOnce(async () => {
-      expect(JSON.parse(f.values.get("wortly.pending.remote_stop")!)).toEqual(pending());
+      expect(JSON.parse(pendingRaw(f.values, "wortly.pending.remote_stop")!)).toEqual(pending());
       return new Promise(resolve => { finish = resolve; });
     });
     const sending = f.controller.confirm(id(4));
@@ -159,7 +161,7 @@ describe("remote stop confirmation and recovery", () => {
     f.controller.dispose(); const next = f.make(); await next.refresh(); await next.retry();
     expect(next.snapshot()).toMatchObject({ problem: "mismatch", canRetry: false });
     expect(f.check).not.toHaveBeenCalled(); expect(f.send).toHaveBeenCalledOnce();
-    expect(JSON.parse(f.values.get("wortly.pending.remote_stop")!).mismatch).toBe(true);
+    expect(JSON.parse(pendingRaw(f.values, "wortly.pending.remote_stop")!).mismatch).toBe(true);
   });
 
   it("disposal before storage completes prevents POST", async () => {
@@ -180,11 +182,11 @@ describe("remote stop confirmation and recovery", () => {
   });
 
   it("bad persisted data blocks commands and is not silently erased", async () => {
-    const f = fixture(); f.values.set("wortly.pending.remote_stop", "damaged");
+    const f = fixture(); seedRawAt(id(1), f.values, "wortly.pending.remote_stop", "damaged");
     await f.controller.refresh(); await f.controller.confirm(id(4));
     expect(f.controller.snapshot()).toMatchObject({ phase: "blocked", problem: "invalid_pending", canRetry: false });
     expect(f.send).not.toHaveBeenCalled(); expect(f.check).not.toHaveBeenCalled();
-    expect(f.values.get("wortly.pending.remote_stop")).toBe("damaged");
+    expect(pendingRaw(f.values, "wortly.pending.remote_stop")).toBe("damaged");
   });
 });
 

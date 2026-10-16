@@ -30,7 +30,7 @@ export function SettingsFeedback({ feedback, language }: Props) {
       </div>
       <div className="settings-actions">
         <button type="button" className="settings-primary" disabled={!state.canSend} onClick={() => { void actions.send(); }}>{t.send}</button>
-        {state.canRetry && <button type="button" className="settings-secondary" onClick={() => { void actions.retry(); }}>{t.retry}</button>}
+        {state.canRetry && <button type="button" className="settings-secondary" onClick={() => { void actions.retry(); }}>{state.problem === "lost_envelope" ? t.checkAgain : t.retry}</button>}
       </div>
     </div>
   </section>;

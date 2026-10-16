@@ -11,6 +11,7 @@ import { WrittenScreen } from "./WrittenScreen";
 import type { WrittenIntent } from "./writtenIntent";
 import { writtenPrimaryKey } from "./writtenPending";
 import { id, pending, profile, response, tick, writtenFixture, type ServerOptions } from "./writtenFixtures.test-support";
+import { pendingRaw, hasPending, seedRaw, pointerKeyOf } from "../commands/pendingSeed.test-support";
 
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 
@@ -46,12 +47,12 @@ async function open(options: ServerOptions = {}) {
   };
   /** The record exactly as given (its own session): used for a record of an earlier session. */
   const occupyAs = async (intent: WrittenIntent) => {
-    f.values.set(writtenPrimaryKey, JSON.stringify(pending(intent)));
+    seedRaw(f.values, writtenPrimaryKey, JSON.stringify(pending(intent)), id(1));
     await pageSendCounter(f.storage).save(intent.command_id, X_MARKS);
   };
   const overlay = () => document.querySelector(".recovery-overlay");
   const visible = () => [...document.querySelectorAll("p")].map(item => item.textContent);
-  const slotId = () => JSON.parse(f.values.get(writtenPrimaryKey)!).intent.command_id as string;
+  const slotId = () => JSON.parse(pendingRaw(f.values, writtenPrimaryKey)!).intent.command_id as string;
   const lastNewId = () => f.newId.mock.results.at(-1)!.value as string;
   const button = (name: string) => screen.queryAllByRole("button").find(item => item.textContent === name) as HTMLButtonElement | undefined;
   const learningPosts = () => f.posts().filter(post => post.kind !== "session.start" && post.kind !== "assignment.present" || post.assignment_id !== id(6));
@@ -77,7 +78,7 @@ function checkedOnlyX(h: Awaited<ReturnType<typeof open>>, dropped: string) {
 }
 /** The check of X proved its step outdated (CT §6.1 п. 7, step_stale): the record and the count of X are gone, nothing of Y appears. */
 async function xClearedAsStale(h: Awaited<ReturnType<typeof open>>, dropped: string) {
-  expect(h.values.has(writtenPrimaryKey)).toBe(false);
+  expect(hasPending(h.values, writtenPrimaryKey)).toBe(false);
   expect(await pageSendCounter(h.storage).load(X.command_id)).toBeNull();
   expect(await pageSendCounter(h.storage).load(dropped)).toBeNull();
 }
@@ -116,7 +117,7 @@ describe("written quiz, B: a new action meets the record of another window", () 
   it("the dropped action is gone for good: no later timer or check sends or asks for it, and a new Z passes once the server recorded X", async () => {
     const h = await open();
     await h.occupy();
-    const x = JSON.parse(h.values.get(writtenPrimaryKey)!).intent as WrittenIntent;
+    const x = JSON.parse(pendingRaw(h.values, writtenPrimaryKey)!).intent as WrittenIntent;
     await h.answer("Haus");
     const dropped = h.lastNewId();
     await h.step(180_000);
@@ -128,7 +129,7 @@ describe("written quiz, B: a new action meets the record of another window", () 
     await h.server.handle("http://localhost/api/v1/commands", { method: "POST",
       body: JSON.stringify({ ...x, client_instance_id: "other-window", document_id: "other-window" }) });
     await h.step(40_000);
-    expect(h.values.has(writtenPrimaryKey)).toBe(false);
+    expect(hasPending(h.values, writtenPrimaryKey)).toBe(false);
     expect(await pageSendCounter(h.storage).load(X.command_id)).toBeNull();
     await nextBeforeZ(h);
     fireEvent.change(screen.getByRole("textbox"), { target: { value: "Haus" } });
@@ -259,7 +260,7 @@ describe("written quiz, B: the record of a closed earlier session blocks a new a
     await h.step(1000); await h.step(120_000);
     checkedOnlyX(h, dropped);
     expect(h.posts().length).toBe(before);
-    expect(h.values.has(writtenPrimaryKey)).toBe(false);
+    expect(hasPending(h.values, writtenPrimaryKey)).toBe(false);
     expect(h.overlay()).toBeNull();
     expect(document.body.textContent).not.toContain(OFFLINE);
     expect(await pageSendCounter(h.storage).load(dropped)).toBeNull();
@@ -280,11 +281,11 @@ describe("written quiz, B: X vanished locally, the block ends only by a fact of 
   async function blockedThenVanished() {
     const h = await open({ cards: [6, 7, 8] });
     await h.occupy();
-    const x = JSON.parse(h.values.get(writtenPrimaryKey)!).intent as WrittenIntent;
+    const x = JSON.parse(pendingRaw(h.values, writtenPrimaryKey)!).intent as WrittenIntent;
     await h.answer("Haus");
     const dropped = h.lastNewId();
     await h.step(1000);
-    h.values.delete(writtenPrimaryKey);
+    h.values.delete(pointerKeyOf(writtenPrimaryKey, id(1)));
     await h.step(60_000);
     return { h, x, dropped };
   }

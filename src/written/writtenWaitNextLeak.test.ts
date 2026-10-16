@@ -5,6 +5,7 @@ import type { WrittenIntent } from "./writtenIntent";
 import { writtenPrimaryKey } from "./writtenPending";
 import { WrittenViewController } from "./writtenViewController";
 import { id, pending, tick, writtenFixture } from "./writtenFixtures.test-support";
+import { seedRaw, pointerKeyOf } from "../commands/pendingSeed.test-support";
 
 const owners: WrittenViewController[] = [];
 afterEach(() => { owners.splice(0).forEach(owner => owner.dispose()); vi.useRealTimers(); });
@@ -21,8 +22,8 @@ async function answered(text: string) {
   const foreign = JSON.stringify(pending({ ...sent, command_id: id(777) } as WrittenIntent));
   const kinds = (from: number) => f.posts().slice(from).map(post => post.kind);
   const droppedThenChecked = async (act: () => Promise<void>) => {
-    f.values.set(writtenPrimaryKey, foreign); await act(); await tick();
-    f.values.delete(writtenPrimaryKey); await view.refresh(); await tick();
+    seedRaw(f.values, writtenPrimaryKey, foreign, id(1)); await act(); await tick();
+    f.values.delete(pointerKeyOf(writtenPrimaryKey, id(1))); await view.refresh(); await tick();
   };
   return { ...f, view, kinds, droppedThenChecked };
 }

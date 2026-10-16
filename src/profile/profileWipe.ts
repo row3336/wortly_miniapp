@@ -1,6 +1,6 @@
 import type { AsyncStorage } from "../platform/storage";
 import type { ForgetOutcome, InstallationStore } from "../app/installationStore";
-import { validId } from "../commands/pendingSlot";
+import { PAYLOAD_PREFIX, pointerKeyOf, validId } from "../commands/pendingSlot";
 import { startCancelKey, type StartCancelMode } from "../commands/startCancelPending";
 import { SETTINGS_SLOT, settingsSlotOf } from "../settings/settingsPending";
 import { SETTINGS_RESET_SLOT, settingsResetSlotOf } from "../settings/settingsResetPending";
@@ -18,24 +18,34 @@ import { writtenPrimaryKey, writtenStopKey } from "../written/writtenPending";
  *
  * Not X's record: `wortly.uiLanguage` (the device's language preference, used to show the result itself).
  */
-export const PROFILE_KEYED: readonly ((profileId: string) => string)[] = Object.freeze([
-  (id: string) => `wortly.installation:${id}`,
-  (id: string) => `wortly.reapply:${id}`,
-  settingsSlotOf,
-  settingsResetSlotOf,
-]);
 
 const START_CANCEL_MODES: readonly StartCancelMode[] = ["written", "learning", "oral", "conjugation"];
 
-/** Shared slots of one record each; a record names its profile in `profileId`. */
-export const SHARED_SLOTS: readonly string[] = Object.freeze([
-  SETTINGS_SLOT, SETTINGS_RESET_SLOT,
+/**
+ * The base keys of the 16 kinds that used to share one slot (project_pending_profile_slots.md ред.1.1 §2): each now has a
+ * pointer per profile `<base>:profile:<pid>` and, for a user's input, payloads `wortly.payload.<L>:<pid>:<command_id>`.
+ */
+export const LANE_KEYS: readonly string[] = Object.freeze([
   "wortly.pending.feedback", "wortly.pending.remote_stop", "wortly.pending.manual",
   "wortly.pending.learning_session", "wortly.pending.learning_stop",
   "wortly.pending.oral_session", "wortly.pending.oral_stop",
   writtenPrimaryKey, writtenStopKey,
   "wortly.pending.conjugation_catalog", "wortly.pending.conjugation_session", "wortly.pending.conjugation_stop",
   ...START_CANCEL_MODES.map(startCancelKey),
+]);
+
+/**
+ * The 18 legacy shared keys (§4): the 16 bases and the two legacy settings keys. They are only READ (the preflight of a
+ * new intent); no wipe, Е02 or other operation writes or removes them.
+ */
+export const LEGACY_KEYS: readonly string[] = Object.freeze([...LANE_KEYS, SETTINGS_SLOT, SETTINGS_RESET_SLOT]);
+
+export const PROFILE_KEYED: readonly ((profileId: string) => string)[] = Object.freeze([
+  (id: string) => `wortly.installation:${id}`,
+  (id: string) => `wortly.reapply:${id}`,
+  settingsSlotOf,
+  settingsResetSlotOf,
+  ...LANE_KEYS.map(base => (id: string) => pointerKeyOf(base, id)),
 ]);
 
 /**
@@ -52,16 +62,6 @@ export const IDB_STORES: Readonly<Record<string, "forget" | "revoke" | "kept">> 
 
 /** Keys of this module that are deliberately kept: device data, not records of a profile. */
 export const NOT_PROFILE_RECORDS: readonly string[] = Object.freeze(["wortly.uiLanguage"]);
-
-function namesProfile(raw: string | null, profileId: string): boolean {
-  if (raw === null) return false;
-  try {
-    const value: unknown = JSON.parse(raw);
-    return typeof value === "object" && value !== null && !Array.isArray(value)
-      && typeof (value as { profileId?: unknown }).profileId === "string"
-      && (value as { profileId: string }).profileId.toLowerCase() === profileId.toLowerCase();
-  } catch { return false; }
-}
 
 /**
  * The outcome per store (project_installation_store.md ред.1.5 §6): installation — what `forget` of the IndexedDB
@@ -82,9 +82,10 @@ export type WipeResult = {
  * localStorage keys and slots as before. Never throws: an unwritable storage keeps them (accepted residual of (A), §3.7 —
  * the key is the old profile_id, which a new profile never reads); the failures are only counted.
  *
- * Not closed here (store §6, separate canon project_pending_profile_slots.md ред.1.1): the shared pending slots below are
- * read and then removed — a valid pending of ANOTHER profile written by another window between the two steps is lost
- * (C422/C424, P2). This step does not fix that race.
+ * Pending (project_pending_profile_slots.md ред.1.1 §3.3): only the exact keys of X — its pointers and its payloads
+ * `wortly.payload.*:<x>:*` — are removed; no key of another profile and no legacy shared key is read for removal or
+ * removed, so a pending of Y written at any moment stays (C422/C424). A storage that cannot list its keys leaves the
+ * payloads of X (counted as a failure: residual (A)), and the cleanup is repeated by knowledge (deletedProfileCleanup).
  */
 export async function wipeProfileRecords(storage: AsyncStorage, profileId: string, store?: InstallationStore): Promise<WipeResult> {
   const local = { removed: 0, failed: 0 };
@@ -107,12 +108,36 @@ export async function wipeProfileRecords(storage: AsyncStorage, profileId: strin
       local.removed++;
     } catch { local.failed++; }
   }
-  for (const key of SHARED_SLOTS) {
-    try {
-      if (!namesProfile(await storage.get(key), profileId)) continue;
-      await storage.remove(key);
-      local.removed++;
-    } catch { local.failed++; }
-  }
+  // Exactly the payloads of X: `wortly.payload.<L>:<x>:<command_id>` with X in the profile place (§3.3).
+  const mine = profileId.toLowerCase();
+  try {
+    if (!storage.keys) throw new Error("no listing");
+    for (const key of await storage.keys(PAYLOAD_PREFIX)) {
+      const parts = key.slice(PAYLOAD_PREFIX.length).split(":");
+      if (parts.length !== 3 || parts[1] !== mine) continue;
+      try { await storage.remove(key); local.removed++; } catch { local.failed++; }
+    }
+  } catch { local.failed++; }
   return { ...result, wiped: installation.kind === "removed" && local.failed === 0 };
+}
+
+/**
+ * Е02 (tz_app.md:179): on the admission of profileId the text and envelope of another account's unconfirmed commands go —
+ * its payloads `wortly.payload.*:<other>:*`; its pointers (service IDs, marks) and its budget stay until the outcome, so
+ * that account, back again, checks by ID (lost_envelope, Q27). Never throws; returns how many were removed and failed.
+ * Not closed: two live accounts on two windows — the payload of a live one is removed as well (§5).
+ */
+export async function dropForeignPayloads(storage: AsyncStorage, profileId: string): Promise<{ removed: number; failed: number }> {
+  const result = { removed: 0, failed: 0 };
+  if (!validId(profileId)) return result;
+  const mine = profileId.toLowerCase();
+  try {
+    if (!storage.keys) throw new Error("no listing");
+    for (const key of await storage.keys(PAYLOAD_PREFIX)) {
+      const parts = key.slice(PAYLOAD_PREFIX.length).split(":");
+      if (parts.length !== 3 || parts[1] === mine) continue;
+      try { await storage.remove(key); result.removed++; } catch { result.failed++; }
+    }
+  } catch { result.failed++; }
+  return result;
 }

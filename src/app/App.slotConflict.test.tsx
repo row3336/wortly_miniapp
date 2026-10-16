@@ -8,6 +8,8 @@ import { learningViewFixture } from "../learning/learningView.test-support";
 import { id, profile, response } from "../learning/learningFixtures.test-support";
 import { settingsResponse } from "../settings/settingsRead.test-support";
 import { App } from "./App";
+import { lsPendingRaw, lsSeedRaw } from "../commands/lsPending.test-support";
+import { pointerKeyOf, seedRaw } from "../commands/pendingSeed.test-support";
 
 type Fetch = (url: string | URL | Request, init?: RequestInit) => Promise<Response>;
 const compatibility = { compatible: true, contract_version: "1" };
@@ -104,7 +106,7 @@ describe("Learning: a new action meets the old window's record", () => {
     const s = learning(id(3)); render(<App />);
     const input = await editable(); await settled();
     const x = lx(s.client(), { command_id: id(777), kind: "answer.submit", session_id: id(3), assignment_id: id(6), payload: { text: "Alt" } });
-    localStorage.setItem(LSLOT, x);
+    lsSeedRaw(LSLOT, x, conjugationId(50));
     const from = s.study().length;
     fireEvent.change(input, { target: { value: "Haus" } });
     fireEvent.click(screen.getByRole("button", { name: "Проверить" }));
@@ -113,12 +115,12 @@ describe("Learning: a new action meets the old window's record", () => {
     expect((screen.getByRole("textbox") as HTMLInputElement)).toMatchObject({ value: "Haus", readOnly: false });
     fireEvent.click(screen.getByRole("button", { name: "Проверить состояние" })); await settled(10);
     expect(s.study().slice(from).filter(line => line.startsWith("POST") || line.startsWith("GET status"))).toEqual([]);
-    expect(localStorage.getItem(LSLOT)).toBe(x);
+    expect(lsPendingRaw(LSLOT)).toBe(x);
   });
   it("a start: the view stays before the start; the check asks for nothing", async () => {
     const s = learning(null); render(<App />);
     const start = await screen.findByRole("button", { name: /Новая группа слов/ }, exchange); await settled();
-    localStorage.setItem(LSLOT, lx(s.client(), { command_id: id(777), kind: "answer.submit", session_id: id(3), assignment_id: id(6), payload: { text: "Alt" } }));
+    lsSeedRaw(LSLOT, lx(s.client(), { command_id: id(777), kind: "answer.submit", session_id: id(3), assignment_id: id(6), payload: { text: "Alt" } }), conjugationId(50));
     const from = s.study().length;
     fireEvent.click(start); await settled(10);
     for (const line of falseLines) expect(shown(line)).toBe(false);
@@ -134,7 +136,10 @@ describe("Conjugation: a new action meets the old window's record", () => {
     let reads = -1;
     const original = Storage.prototype.getItem, set = Storage.prototype.setItem;
     vi.spyOn(Storage.prototype, "getItem").mockImplementation(function (this: Storage, key: string) {
-      if (key === CSLOT && reads >= 0 && ++reads === 2) set.call(this, CSLOT, value);
+      // The record of this profile is its pointer (profile addressing): X lands right before the save reads it again.
+      if (key === pointerKeyOf(CSLOT, conjugationId(50)) && reads >= 0 && ++reads === 2) {
+        seedRaw({ set: (k: string, v: string) => set.call(this, k, v) } as unknown as Map<string, string>, CSLOT, value, conjugationId(50));
+      }
       return original.call(this, key);
     });
     return { arm: () => { reads = 0; } };
@@ -150,7 +155,7 @@ describe("Conjugation: a new action meets the old window's record", () => {
     for (const line of falseLines) expect(shown(line)).toBe(false);
     expect(screen.queryByRole("button", { name: "Повторить действие" })).toBeNull();
     expect(s.study().slice(from)).toEqual([]);
-    expect(localStorage.getItem(CSLOT)).toBe(x);
+    expect(lsPendingRaw(CSLOT)).toBe(x);
   });
   it("a start (X written between load and save): no session of Y is read; only X is checked by its own ID", async () => {
     const s = conjugation([], null); render(<App />);

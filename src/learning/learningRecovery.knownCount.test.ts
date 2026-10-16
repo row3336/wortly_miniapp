@@ -8,6 +8,7 @@ import { noteCreatedHere } from "../commands/pageOrigin";
 import { tick } from "../commands/recoveryTime.test-support";
 import { MemorySendCounter } from "../commands/sendCounter";
 import { action, current, fixture, missing, original, primaryKey, response, resultRead } from "./learningFixtures.test-support";
+import { hasPending } from "../commands/pendingSeed.test-support";
 
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 
@@ -34,7 +35,7 @@ async function resumeKnownCount(kind: "answer.submit" | "result.correct", k: num
   const snapshot = f.owner.snapshot();
   const states = new Set(f.onUpdate.mock.calls.map(([update]) => update.recovery?.state.name).filter(Boolean));
   f.owner.dispose();
-  return { posts, checks, read: read.filter(Boolean), snapshot, states, kept: f.values.has(primaryKey),
+  return { posts, checks, read: read.filter(Boolean), snapshot, states, kept: hasPending(f.values, primaryKey),
     marks: await pageSendCounter(f.storage).load(command.command_id) };
 }
 

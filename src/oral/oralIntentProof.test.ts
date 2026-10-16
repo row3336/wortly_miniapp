@@ -5,6 +5,7 @@ import { OralCommandController } from "./oralCommandController";
 import { OralSessionPendingStore } from "./oralPending";
 import type { AsyncStorage } from "../platform/storage";
 import { readWithTicket, testGate } from "../commands/testGate.test-support";
+import { pendingRaw } from "../commands/pendingSeed.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const session = "abcdefab-abcd-4abc-8abc-abcdefabcdef", assignment = "fedcbafe-dcba-4fed-8fed-fedcbafedcba";
@@ -20,10 +21,15 @@ const wire = (value: unknown, status = 200) => new Response(JSON.stringify(value
 const apiFor = (fetcher: typeof fetch) => createOralApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 10000, gate: testGate() });
 
 function lifecycle(lostReply = false) {
-  let raw: string | null = null;
-  const storage: AsyncStorage = { get: async () => raw,
-    set: async (_key, value) => { if (JSON.parse(value).mismatch) throw Error("synthetic marker failure"); raw = value; },
-    remove: async () => { raw = null; } };
+  // The profile's pointer and the payload of its self-assessment (profile addressing, C467); raw() is the joined record.
+  const values = new Map<string, string>();
+  const storage: AsyncStorage = { get: async key => values.get(key) ?? null,
+    set: async (key, value) => {
+      if (key.startsWith("wortly.pending.") && JSON.parse(value).record?.mismatch) throw Error("synthetic marker failure");
+      values.set(key, value);
+    },
+    remove: async key => { values.delete(key); } };
+  const raw = () => pendingRaw(values, "wortly.pending.oral_session") ?? null;
   const fetcher = vi.fn<typeof fetch>(async (url, init) => {
     if (init?.method === "POST") {
       if (lostReply) throw Error("lost reply after server acceptance");
@@ -40,7 +46,7 @@ function lifecycle(lostReply = false) {
     send: value => api.send("synthetic", "synthetic", { ...value, client_instance_id: id(1), document_id: id(2) }),
     check: value => readWithTicket({ ...value, client_instance_id: id(1), document_id: id(2) }, (__command, __ticket) => api.status("synthetic", "synthetic", __command, __ticket)),
     read: async () => { throw Error("no current read needed for a known fact or mismatch"); } });
-  return { make, fetcher, raw: () => raw };
+  return { make, fetcher, raw };
 }
 
 describe("oral exact intent recovery", () => {

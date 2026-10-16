@@ -9,6 +9,7 @@ import { ConjugationDocumentController, type ConjugationDocumentOptions, type Co
 import { testGate } from "../commands/testGate.test-support";
 import { WriteGate } from "../commands/writeGate";
 import { ManualClock } from "../commands/writeGate.test-support";
+import { pendingRaw, hasPending, seedRaw, pointerKeyOf } from "../commands/pendingSeed.test-support";
 
 const id = (n: number) => `cccccccc-dddd-4000-8000-${String(n).padStart(12, "0")}`;
 const S1 = id(3), S2 = id(4), B1 = id(21), B2 = id(22), B3 = id(23), R1 = id(31);
@@ -59,7 +60,7 @@ const pendingRecord = (intent: ConjugationIntent) => JSON.stringify({ schemaVers
 function fixture(config: { seed?: string | null; saved?: ConjugationIntent[]; sessions?: Session[]; minimum?: () => string | null;
   terminal?: string[]; lastAnswer?: boolean } = {}) {
   const values = new Map<string, string>();
-  for (const intent of config.saved ?? []) values.set(intent.kind === "session.stop" ? stopKey : studyKey, pendingRecord(intent));
+  for (const intent of config.saved ?? []) seedRaw(values, intent.kind === "session.stop" ? stopKey : studyKey, pendingRecord(intent), id(50));
   const storage: AsyncStorage = { get: vi.fn(async k => values.get(k) ?? null), set: vi.fn(async (k, v) => { values.set(k, v); }),
     remove: vi.fn(async k => { values.delete(k); }) };
   const sessions = new Map<string, Session>((config.sessions ?? [{ id: S1, status: "active", assignment: B1, presented: true, results: [] }])
@@ -140,14 +141,16 @@ function fixture(config: { seed?: string | null; saved?: ConjugationIntent[]; se
     if (url.pathname.includes("/commands/")) {
       const commandId = url.pathname.split("/").at(-1)!, intent = accepted.get(commandId);
       if (!intent) return response({ command: { id: commandId, status: "not_found" }, current: profile(stateVersion), state_version: stateVersion });
-      const hash = await conjugationIntentHash(intent);
-      if (hash !== url.searchParams.get("expected_intent_hash")) return response({ error: { code: "COMMAND_PAYLOAD_MISMATCH" } }, 409);
+      // As the core (study/command_status.py): without expected_intent_hash nothing is verified and none is claimed (Q27).
+      const asked = url.searchParams.get("expected_intent_hash"), hash = asked === null ? undefined : await conjugationIntentHash(intent);
+      if (asked !== null && hash !== asked) return response({ error: { code: "COMMAND_PAYLOAD_MISMATCH" } }, 409);
       const { body, r } = envelopeFor(intent);
       // The acceptance fact stays readable but grants no document access (core command_status: unavailable).
       if (server.unavailableStatus) return response({ action: null, result: null, step: { status: "unavailable" }, command: fact(intent, "already_applied", r),
         capabilities: { answer_target: null, correct_target: null, grades: null, undo_target: null, stop: false, summary_home: false },
-        verified_intent_hash: hash, state_version: stateVersion });
-      return response({ ...body, command: fact(intent, "already_applied", r), verified_intent_hash: hash, state_version: stateVersion });
+        ...(hash === undefined ? {} : { verified_intent_hash: hash }), state_version: stateVersion });
+      return response({ ...body, command: fact(intent, "already_applied", r), ...(hash === undefined ? {} : { verified_intent_hash: hash }),
+        state_version: stateVersion });
     }
     const sessionId = url.pathname.split("/").at(-1)!, s = sessions.get(sessionId) ?? { id: sessionId, status: "active", assignment: B1, presented: true, results: [] };
     const version = server.staleNext ?? stateVersion; server.staleNext = null;
@@ -217,12 +220,12 @@ describe("1. confirmed seed, historical receipts and explicit Start", () => {
     // Commit S2's present on the model server, then persist it as if the reply had been lost.
     await f.options.transport.fetcher("/api/v1/commands", { method: "POST", body: JSON.stringify({ ...present, client_instance_id: id(1), document_id: id(2) }) });
     f.posted.length = 0;
-    await f.storage.set(studyKey, pendingRecord(present));
+    seedRaw(f.values, studyKey, pendingRecord(present), id(50));
     await f.controller.refresh();
     expect(f.posted).toEqual([]);
     expect(s(f.controller)).toMatchObject({ sessionId: S1, phase: "question", canSubmit: true, display: { kind: "step", assignmentId: B1 } });
     expect(s(f.controller).commands.study).toMatchObject({ outcome: "accepted", pending: false });
-    expect(f.values.has(studyKey)).toBe(false);
+    expect(hasPending(f.values, studyKey)).toBe(false);
   });
   it("without a seed an unresolved start is never auto-elected; only a manual exact retry selects its session", async () => {
     const start: ConjugationIntent = { command_id: id(61), kind: "session.start", session_id: S2, payload: { mode: "conjugation" } };
@@ -489,10 +492,10 @@ describe("7. manual exact retry, storage and GET-only refresh", () => {
     const f = fixture();
     await f.options.transport.fetcher("/api/v1/commands", { method: "POST", body: JSON.stringify({ ...answer, payload: { text: "b" }, client_instance_id: id(1), document_id: id(2) }) });
     f.posted.length = 0;
-    await f.storage.set(studyKey, pendingRecord(answer));
+    seedRaw(f.values, studyKey, pendingRecord(answer), id(50));
     await f.controller.refresh();
     expect(s(f.controller)).toMatchObject({ problem: "mismatch", canRetry: { study: false }, canSubmit: false });
-    expect(JSON.parse(f.values.get(studyKey)!).intent).toMatchObject({ command_id: id(62), payload: { text: "a" } });
+    expect(JSON.parse(pendingRaw(f.values, studyKey)!).intent).toMatchObject({ command_id: id(62), payload: { text: "a" } });
     expect(f.posted).toEqual([]);
   });
 });
@@ -709,7 +712,7 @@ describe("F1 regression: enabled/visible gate every new mutation, Stop included"
     disable(f);
     save.resolve(); await task;
     expect(f.posted).toEqual([]);
-    const stored = JSON.parse(f.values.get(stopKey)!).intent;
+    const stored = JSON.parse(pendingRaw(f.values, stopKey)!).intent;
     expect(stored).toMatchObject({ kind: "session.stop", session_id: S1, payload: { reason: "stop" } });
     expect(s(f.controller)).toMatchObject({ canRetry: { stop: false }, canStop: false });
     enable(f);
@@ -1193,7 +1196,7 @@ describe("M-UNDO-CONJ: «Шаг назад» (result.undo) of the form on screen
     expect(f.gets.some(g => g.includes(`/commands/${commandId}`) && g.includes("expected_intent_hash="))).toBe(true);
     expect(s(f.controller)).toMatchObject({ commands: { study: { outcome: "accepted", pending: false } }, resultA: null, acceptedAddress: null,
       display: { kind: "none" }, currentStep: { step: { assignment: { id: REISSUED, status: "prefetched" } } } });
-    expect(f.values.has(studyKey)).toBe(false);
+    expect(hasPending(f.values, studyKey)).toBe(false);
   });
 
   it("an acceptance that carries no view (unavailable) still retires the answer: its address never comes back as A", async () => {
@@ -1242,7 +1245,7 @@ describe("M-UNDO-CONJ: «Шаг назад» (result.undo) of the form on screen
     f.server.failPost = true;
     await f.controller.undo();
     f.server.failPost = false;
-    const stored = f.values.get(studyKey)!;
+    const stored = pendingRaw(f.values, studyKey)!;
     expect(JSON.parse(stored).intent).toMatchObject({ kind: "result.undo", result_id: R1 });
     const g = fixture({ saved: [JSON.parse(stored).intent], sessions: [structuredClone(f.sessions.get(S1)!)] });
     await g.controller.refresh();
@@ -1437,13 +1440,13 @@ describe("V-1 (C083): «На Сегодня» waits for a ready study lane and a
     // Commit the summary_home on the model server, then persist it as if its reply had been lost.
     await f.options.transport.fetcher("/api/v1/commands", { method: "POST", body: JSON.stringify({ ...savedHome, client_instance_id: id(1), document_id: id(2) }) });
     f.posted.length = 0;
-    await f.storage.set(stopKey, pendingRecord(savedHome));
+    seedRaw(f.values, stopKey, pendingRecord(savedHome), id(50));
     const controller = new ConjugationDocumentController({ ...f.options, initialResultAddress: address });
     await controller.refresh();
     expect(f.posted).toEqual([]);
     expect(s(controller)).toMatchObject({ phase: "closed", display: { kind: "closed" }, terminalSessionIds: [S1], canSummaryHome: false,
       canUndo: false, canSubmit: false, commands: { stop: { outcome: "accepted", pending: false } } });
-    expect(f.values.has(stopKey)).toBe(false);
+    expect(hasPending(f.values, stopKey)).toBe(false);
   });
 
   it("a definite refusal of the undo: summary_home returns after the re-read and is sent exactly once", async () => {
@@ -1489,7 +1492,7 @@ describe("a new conjugation intent meets another window's record in the shared s
     let reads = 0;
     const base = vi.mocked(f.storage.get).getMockImplementation()!;
     vi.mocked(f.storage.get).mockImplementation(async key => {
-      if (key === studyKey && ++reads === 2) f.values.set(studyKey, other);
+      if (key === pointerKeyOf(studyKey, id(50)) && ++reads === 2) seedRaw(f.values, studyKey, other, id(50));
       return base(key);
     });
   };
@@ -1501,7 +1504,7 @@ describe("a new conjugation intent meets another window's record in the shared s
     expect(s(f.controller).commands.study).toMatchObject({ pending: false, outcome: null, problem: "pending_changed", canRetry: false });
     await f.controller.refresh();
     expect(f.posted).toEqual([]); expect(f.gets.slice(gets).some(url => url.includes("/commands/"))).toBe(false);
-    expect(f.values.get(studyKey)).toBe(other);
+    expect(pendingRaw(f.values, studyKey)).toBe(other);
   });
   it("a start leaves the document as it was: no session of Y's ID is selected, read or checked", async () => {
     const f = fixture({ seed: null, sessions: [] }); await f.controller.refresh();
@@ -1512,7 +1515,7 @@ describe("a new conjugation intent meets another window's record in the shared s
     expect(s(f.controller)).toMatchObject({ phase: "idle", sessionId: null, commands: { study: { pending: false, problem: "pending_changed" } } });
     await f.controller.refresh();
     expect(f.posted).toEqual([]); expect(f.gets.slice(gets)).toEqual([]);
-    expect(f.values.get(studyKey)).toBe(other);
+    expect(pendingRaw(f.values, studyKey)).toBe(other);
   });
 });
 
@@ -1526,7 +1529,7 @@ describe("the conjugation document after a dropped start", () => {
     let open!: () => void; const gate = new Promise<void>(done => { open = done; });
     const base = vi.mocked(f.storage.get).getMockImplementation()!;
     vi.mocked(f.storage.get).mockImplementation(async key => {
-      if (key === studyKey && reads >= 0 && ++reads === 2) { f.values.set(studyKey, other); await gate; }
+      if (key === pointerKeyOf(studyKey, id(50)) && reads >= 0 && ++reads === 2) { seedRaw(f.values, studyKey, other, id(50)); await gate; }
       return base(key);
     });
     return { arm: () => { reads = 0; }, release: () => open() };
@@ -1567,15 +1570,15 @@ describe("the conjugation document after a dropped start", () => {
     f.controller.dispose(); const updates = f.updates.mock.calls.length;
     h.release(); await starting; await macrotasks();
     expect(f.updates.mock.calls.length).toBe(updates);
-    expect(f.posted).toEqual([]); expect(f.values.get(studyKey)).toBe(other); expect(y).not.toBeNull();
+    expect(f.posted).toEqual([]); expect(pendingRaw(f.values, studyKey)).toBe(other); expect(y).not.toBeNull();
   });
   it("an unreadable record in the slot: the start sends nothing, the document is idle again and reads no session of Y", async () => {
     const f = fixture({ seed: null, sessions: [] }); await f.controller.refresh();
-    f.values.set(studyKey, "{not json"); const gets = f.gets.length;
+    seedRaw(f.values, studyKey, "{not json", id(50)); const gets = f.gets.length;
     await f.controller.start(); await macrotasks();
     expect(s(f.controller)).toMatchObject({ phase: "idle", sessionId: null, commands: { study: { pending: false, problem: "invalid_pending" } } });
     await f.controller.refresh();
-    expect(f.posted).toEqual([]); expect(f.gets.slice(gets)).toEqual([]); expect(f.values.get(studyKey)).toBe("{not json");
+    expect(f.posted).toEqual([]); expect(f.gets.slice(gets)).toEqual([]); expect(pendingRaw(f.values, studyKey)).toBe("{not json");
   });
 });
 
@@ -1594,5 +1597,83 @@ describe("fix1 (X23, C335): the manual mutations of the conjugation screen wait 
     await clock.advanceTo(5_000);
     expect(controller.snapshot()).toMatchObject({ canSubmit: true });
     controller.dispose();
+  });
+});
+
+// Q27 (CON §6.1 п.5, project_pending_profile_slots.md ред.1.1 §3.1–§3.2, C458/C466/C467): the answer of the conjugation test
+// is content — after Е02 its pointer, command_id and budget stay while its payload is gone. A new document owner reads the
+// status of the SAME command_id (without a fingerprint): never a resend, never a new ID.
+describe("Q27 conjugation: a lost answer is read by its own ID only", () => {
+  async function unknownAnswer(f: ReturnType<typeof fixture>, committed: boolean, payload: { text: string } | { forgot: true }) {
+    const handler = f.fetcher.getMockImplementation()!;
+    await f.controller.refresh();
+    f.fetcher.mockImplementation(async (input, init) => {
+      const url = new URL(String(input), "https://model.invalid"), method = init?.method ?? "GET";
+      if (method === "GET" && url.pathname.includes("/commands/")) throw new TypeError("network");
+      return handler(input, init);
+    });
+    if (committed) f.server.lostReply = true; else f.server.failPost = true;
+    await f.controller.submit("text" in payload ? payload : { forgot: true }, B1);
+    f.server.lostReply = false; f.server.failPost = false;
+    const sent = f.posted.find(post => post.kind === "answer.submit")!;
+    expect(sent).toBeDefined();
+    expect(hasPending(f.values, studyKey)).toBe(true);
+    f.controller.dispose(); f.fetcher.mockImplementation(handler);
+    // Е02: the content payload of the answer goes; its pointer, ID and budget stay.
+    const payloads = [...f.values.keys()].filter(name => name.startsWith("wortly.payload.conjugation_session:"));
+    expect(payloads).toHaveLength(1);
+    for (const name of payloads) f.values.delete(name);
+    return sent;
+  }
+  const readsOf = (f: ReturnType<typeof fixture>, commandId: string, from: number) =>
+    f.gets.slice(from).filter(url => url.includes(`/commands/${commandId}`));
+
+  it("recorded by the server: the result is restored by its ID; no new ID, no POST of the answer; the pointer goes", async () => {
+    const f = fixture();
+    const sent = await unknownAnswer(f, true, { text: "kommst" });
+    const ids = f.newId.mock.calls.length, posts = f.posted.length, from = f.gets.length;
+    const next = new ConjugationDocumentController(f.options); await next.refresh();
+    const reads = readsOf(f, sent.command_id, from);
+    expect(reads.length).toBeGreaterThan(0); expect(reads.every(url => !url.includes("expected_intent_hash"))).toBe(true);
+    expect(s(next).commands.study).toMatchObject({ pending: false, outcome: "accepted", resolved: { commandId: sent.command_id } });
+    expect(f.posted).toHaveLength(posts); expect(f.newId.mock.calls.length).toBe(ids);
+    expect(hasPending(f.values, studyKey)).toBe(false);
+    next.dispose();
+  });
+
+  it.each([["a typed answer", { text: "kommst" }], ["«Забыл»", { forgot: true as const }]])(
+    "never reached the server (%s): not_found → unresolved, never resent; Stop follows the session's own right", async (_name, payload) => {
+      const f = fixture();
+      const sent = await unknownAnswer(f, false, payload);
+      const ids = f.newId.mock.calls.length, posts = f.posted.length, from = f.gets.length;
+      const next = new ConjugationDocumentController(f.options); await next.refresh();
+      expect(s(next).commands.study).toMatchObject({ pending: true, outcome: null, problem: "lost_envelope", canRetry: false,
+        pendingIntent: null, lost: { commandId: sent.command_id, sessionOpen: true } });
+      expect(readsOf(f, sent.command_id, from).every(url => !url.includes("expected_intent_hash"))).toBe(true);
+      expect(f.posted).toHaveLength(posts); expect(f.newId.mock.calls.length).toBe(ids);
+      expect(s(next).canStop).toBe(true);
+      await next.stop("stop");
+      expect(f.posted.slice(posts).map(post => post.kind)).toEqual(["session.stop"]);
+      expect(f.posted.filter(post => post.kind === "answer.submit")).toHaveLength(1);
+      next.dispose();
+    });
+
+  it("the saved answer's own text in the result is never compared with content this device no longer has", async () => {
+    const f = fixture();
+    const sent = await unknownAnswer(f, true, { text: "kommst" });
+    const handler = f.fetcher.getMockImplementation()!;
+    f.fetcher.mockImplementation(async (input, init) => {
+      const reply = await handler(input, init);
+      if ((init?.method ?? "GET") !== "GET" || !String(input).includes(`/commands/${sent.command_id}`)) return reply;
+      const value = await reply.json();
+      value.result.detail = { input: { kind: "text", text: "kommst" }, conjunction_hint: null, examples: null,
+        variants: [{ parts: ["kommst"] }], initial_check: { correct: true, variant_index: 0, correct_answer: "kommst", other_answers: [],
+          matched_spans: [{ start: 0, end: 6 }], span_unit: "unicode_code_point", span_bounds: "start_inclusive_end_exclusive" } };
+      return new Response(JSON.stringify(value), { status: 200 });
+    });
+    const next = new ConjugationDocumentController(f.options); await next.refresh();
+    expect(s(next).commands.study).toMatchObject({ pending: false, outcome: "accepted", resolved: { commandId: sent.command_id } });
+    expect(hasPending(f.values, studyKey)).toBe(false);
+    next.dispose();
   });
 });

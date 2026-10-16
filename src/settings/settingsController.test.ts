@@ -448,54 +448,27 @@ describe("settings recovery storage", () => {
     expect(a.api.status.mock.calls[0][2]).toMatchObject({ command_id: pending().intent.command_id });
     expect(a.api.save).not.toHaveBeenCalled(); expect(a.newId).not.toHaveBeenCalled();
   });
-  it("a legacy global save of this profile is recovered by status for the same command_id and then cleared, without a new send", async () => {
-    const disk = persisted(); const legacy = "wortly.pending.setting"; disk.values.set(legacy, JSON.stringify(pending()));
+  it("pending profile addresses §3.4/§4: a legacy global save is never routed to, checked, sent, cleared or changed; a NEW save is closed", async () => {
+    const disk = persisted(); const legacy = "wortly.pending.setting"; const raw = JSON.stringify(pending()); disk.values.set(legacy, raw);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const a = fixture({ disk }); await a.controller.refresh();
+    // The legacy record is not this profile's pending: no status read for it, no repeat of its ID.
+    expect(a.api.status).not.toHaveBeenCalled();
+    expect(a.controller.snapshot()).toMatchObject({ pending: null, canEdit: true });
+    a.controller.edit("retry_count", 5); await a.controller.save("retry_count");
+    // The preflight closes the new save before anything is stored or sent: a storage problem with its retry.
+    expect(a.api.save).not.toHaveBeenCalled();
+    expect(a.controller.snapshot()).toMatchObject({ problem: { reason: "storage" } });
+    expect(disk.values.get(legacy)).toBe(raw); expect([...disk.values.keys()]).toEqual([legacy]);
+    warn.mockRestore();
+  });
+  it("§4: the own stored save of the profile is still checked by its ID while a legacy key is on the device (no new intent)", async () => {
+    const disk = persisted(); disk.values.set(slot, JSON.stringify(pending())); disk.values.set("wortly.pending.setting", "{}");
     const a = fixture({ disk }); a.api.status.mockResolvedValueOnce(applied());
     await a.controller.refresh();
     expect(a.api.status).toHaveBeenCalledOnce(); expect(a.api.status.mock.calls[0][2]).toMatchObject({ command_id: pending().intent.command_id });
-    expect(a.api.save).not.toHaveBeenCalled(); expect(a.newId).not.toHaveBeenCalled();
-    expect(a.controller.snapshot()).toMatchObject({ pending: null, canEdit: true, outcome: { status: "accepted" } });
-    expect(disk.values.has(legacy)).toBe(false); expect(disk.values.size).toBe(0);
-  });
-  it("a legacy global save stays (same ID, no resend) while its status is unknown, is ignored by another profile, and repeats only on explicit retry", async () => {
-    const disk = persisted(); const legacy = "wortly.pending.setting"; const raw = JSON.stringify(pending()); disk.values.set(legacy, raw);
-    const a = fixture({ disk }); await a.controller.refresh();
-    expect(a.controller.snapshot()).toMatchObject({ phase: "unresolved", problem: { reason: "not_found" }, pending: { intent: { command_id: id(100) } } });
-    expect(a.api.save).not.toHaveBeenCalled(); expect(disk.values.get(legacy)).toBe(raw); expect(disk.values.size).toBe(1);
-    const other = opened(); other.profile.profile_id = id(99);
-    const b = fixture({ disk, opened: other }); await b.controller.refresh();
-    expect(b.controller.snapshot()).toMatchObject({ problem: null, pending: null, canEdit: true });
-    expect(disk.values.get(legacy)).toBe(raw);
-    await a.controller.retry();
-    expect(a.api.save).toHaveBeenCalledOnce(); expect(a.api.save.mock.calls[0][3]).toMatchObject({ command_id: id(100) });
-    expect(a.newId).not.toHaveBeenCalled(); expect(disk.values.has(legacy)).toBe(false);
-  });
-  it("a legacy global mismatch survives a visit of another profile and still blocks the owner without status or send", async () => {
-    const disk = persisted(); const legacy = "wortly.pending.setting"; const raw = JSON.stringify({ ...pending(), mismatch: true });
-    disk.values.set(legacy, raw);
-    const a = fixture({ disk }); await a.controller.refresh(); await a.controller.retry();
-    expect(a.controller.snapshot()).toMatchObject({ canRetry: false, problem: { reason: "mismatch" }, pending: { mismatch: true } });
-    const other = opened(); other.profile.profile_id = id(99);
-    const b = fixture({ disk, opened: other }); await b.controller.refresh();
-    expect(b.controller.snapshot()).toMatchObject({ problem: null, pending: null, canEdit: true });
-    expect(disk.values.get(legacy)).toBe(raw);
-    const again = fixture({ disk }); await again.controller.refresh(); await again.controller.retry();
-    expect(again.controller.snapshot()).toMatchObject({ canRetry: false, problem: { reason: "mismatch" } });
-    for (const f of [a, again]) { expect(f.api.status).not.toHaveBeenCalled(); expect(f.api.save).not.toHaveBeenCalled(); }
-  });
-  it("a legacy global save of another client is looked up by status only (client_changed), never repeated, and stays", async () => {
-    const disk = persisted(); const legacy = "wortly.pending.setting"; const raw = JSON.stringify(pending()); disk.values.set(legacy, raw);
-    const data = opened(); data.client_instance_id = id(22);
-    const f = fixture({ disk, opened: data }); await f.controller.refresh(); await f.controller.retry();
-    expect(f.controller.snapshot()).toMatchObject({ canRetry: false, problem: { reason: "client_changed" } });
-    expect(f.api.status).toHaveBeenCalledOnce(); expect(f.api.save).not.toHaveBeenCalled(); expect(disk.values.get(legacy)).toBe(raw);
-  });
-  it("a legacy global save plus an occupied profile slot of the same profile blocks as invalid pending and keeps both", async () => {
-    const disk = persisted(); const own = pending(); own.intent.command_id = id(777);
-    disk.values.set("wortly.pending.setting", JSON.stringify(pending())); disk.values.set(slot, JSON.stringify(own));
-    const a = fixture({ disk }); await a.controller.refresh();
-    expect(a.controller.snapshot()).toMatchObject({ problem: { reason: "invalid_pending" }, canEdit: false });
-    expect(a.api.status).not.toHaveBeenCalled(); expect(a.api.save).not.toHaveBeenCalled(); expect(disk.values.size).toBe(2);
+    expect(a.api.save).not.toHaveBeenCalled();
+    expect(disk.values.has(slot)).toBe(false); expect(disk.values.get("wortly.pending.setting")).toBe("{}");
   });
 
   it.each(["learning_poll_seconds", "learning_ready_percent"])(
@@ -1672,13 +1645,15 @@ describe("Q36: leaving a mismatched setting.save with the server's current setti
     expect(third.api.status).not.toHaveBeenCalled();
   });
 
-  it("a legacy-key mismatch of the owner is left the same way and only its own record is removed", async () => {
+  it("a mismatch of the owner under its profile key is left the same way; a legacy key and another profile's record stay", async () => {
     const disk = persisted(); const legacy = "wortly.pending.setting";
-    disk.values.set(legacy, JSON.stringify({ ...pending(), mismatch: true })); disk.values.set(`wortly.pending.setting:profile:${id(99)}`, "other-profile-record");
+    disk.values.set(slot, JSON.stringify({ ...pending(), mismatch: true })); disk.values.set(legacy, "legacy-record");
+    disk.values.set(`wortly.pending.setting:profile:${id(99)}`, "other-profile-record");
     const f = fixture({ disk }); f.api.get.mockResolvedValue(serverData()); await f.controller.refresh();
     expect(f.controller.snapshot()).toMatchObject({ canContinueWithServer: true });
     await f.controller.continueWithServer();
-    expect(disk.values.has(legacy)).toBe(false); expect(disk.values.get(`wortly.pending.setting:profile:${id(99)}`)).toBe("other-profile-record");
+    expect(disk.values.has(slot)).toBe(false); expect(disk.values.get(legacy)).toBe("legacy-record");
+    expect(disk.values.get(`wortly.pending.setting:profile:${id(99)}`)).toBe("other-profile-record");
     expect(f.controller.snapshot()).toMatchObject({ pending: null, canEdit: true });
   });
 

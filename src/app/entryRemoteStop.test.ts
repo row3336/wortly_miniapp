@@ -10,6 +10,7 @@ import type { EntrySnapshot } from "./entryController";
 import type { TodayApi } from "../today/todayApi";
 import { ClosedAccessError } from "./openedAccess";
 import { freshTestGate } from "../commands/testGate.test-support";
+import { hasPending } from "../commands/pendingSeed.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const profile = (version = "1"): Profile => ({ profile_id: id(1), role: "user", ui_language: "ru",
@@ -116,14 +117,14 @@ describe("Entry remote confirmation integration", () => {
     f.controller.requestRemoteStop(); expect(f.latest()).toEqual({ kind: "remote_confirm", targetId: id(50) });
     f.controller.cancelRemoteStop();
     expect(f.remoteApi.stop).not.toHaveBeenCalled();
-    expect(f.values.has("wortly.pending.remote_stop")).toBe(false);
+    expect(hasPending(f.values, "wortly.pending.remote_stop")).toBe(false);
     await f.controller.confirmRemoteStop(); expect(f.remoteApi.stop).not.toHaveBeenCalled();
     f.controller.requestRemoteStop(); await f.controller.confirmRemoteStop();
     expect(f.remoteApi.stop).toHaveBeenCalledOnce();
     expect(f.api.open).toHaveBeenCalledTimes(2);
     expect(f.latest()).toEqual({ kind: "opened" });
     expect(f.controller.getOpenedAccess()).not.toBeNull();
-    expect(f.values.has("wortly.pending.remote_stop")).toBe(false);
+    expect(hasPending(f.values, "wortly.pending.remote_stop")).toBe(false);
     expect(JSON.stringify(f.updates)).not.toMatch(/synthetic-token|synthetic-proof/);
   });
 
@@ -225,7 +226,7 @@ describe("Entry remote confirmation integration", () => {
     f.controller.requestRemoteStop(); await f.controller.confirmRemoteStop();
     expect(f.latest()).toEqual(status === 401 ? { kind: "expired", reentry: true, checkable: true } : { kind: "unavailable" });
     expect(f.controller.getOpenedAccess()).toBeNull(); expect(f.release).toHaveBeenCalledOnce();
-    expect(f.values.has("wortly.pending.remote_stop")).toBe(true);
+    expect(hasPending(f.values, "wortly.pending.remote_stop")).toBe(true);
   });
 
   it("a stale open reply after confirmation cannot admit the application", async () => {
@@ -246,7 +247,7 @@ describe("Entry remote confirmation integration", () => {
     vi.mocked(f.api.open).mockRejectedValueOnce(new ApiError("network"));
     f.controller.requestRemoteStop(); await f.controller.confirmRemoteStop();
     expect(f.latest()).toEqual({ kind: "unavailable", route: "own", checkable: true });
-    expect(f.values.has("wortly.pending.remote_stop")).toBe(false);
+    expect(hasPending(f.values, "wortly.pending.remote_stop")).toBe(false);
     // P03 §4.13 Б: the manual check is one foreground of the own document — never `event="open"` (п.8б).
     await f.controller.retry();
     expect(f.latest()).toEqual({ kind: "opened" });
@@ -268,6 +269,6 @@ describe("Entry remote confirmation integration", () => {
     f.controller.dispose(); const length = f.updates.length;
     finish({ ...result, command: { ...result.command, status: "already_applied" } }); await checking;
     expect(f.updates).toHaveLength(length); expect(f.api.open).toHaveBeenCalledOnce();
-    expect(f.values.has("wortly.pending.remote_stop")).toBe(true);
+    expect(hasPending(f.values, "wortly.pending.remote_stop")).toBe(true);
   });
 });

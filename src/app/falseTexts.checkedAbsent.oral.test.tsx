@@ -7,6 +7,7 @@ import type { OpenRequest, OralSessionProjection, Profile, TodayResponse } from 
 import { settingsResponse } from "../settings/settingsRead.test-support";
 import { App } from "./App";
 import { openDocument, staleCommand, staleDocument, staleRefusal } from "./openRules.test-support";
+import { lsPendingRaw } from "../commands/lsPending.test-support";
 
 type Fetch = (url: string | URL | Request, init?: RequestInit) => Promise<Response>;
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -104,7 +105,7 @@ function seen(container: HTMLElement): string {
     .map(e => `[${e.textContent}${(e as HTMLButtonElement).disabled ? " (off)" : ""}]`);
   return JSON.stringify({ lines, buttons });
 }
-const slot = () => { const raw = localStorage.getItem(SLOT); return raw === null ? "empty" : `${JSON.parse(raw).intent.kind} id=${JSON.parse(raw).intent.command_id.slice(-4)}`; };
+const slot = () => { const raw = lsPendingRaw(SLOT); return raw === null ? "empty" : `${JSON.parse(raw).intent.kind} id=${JSON.parse(raw).intent.command_id.slice(-4)}`; };
 const button = (container: HTMLElement, name: string) => within(container).queryAllByRole("button").find(e => e.textContent === name && !isInaccessible(e)) as HTMLButtonElement | undefined;
 
 beforeEach(() => {

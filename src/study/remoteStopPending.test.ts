@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AsyncStorage } from "../platform/storage";
 import { RemoteStopPendingStore, type RemoteStopPending } from "./remoteStopPending";
+import { seedRaw } from "../commands/pendingSeed.test-support";
+const seedRawAt = (profileId: string, values: Map<string, string>, base: string, raw: string) => seedRaw(values, base, raw, profileId);
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const signal = () => new AbortController().signal;
@@ -8,7 +10,7 @@ const pending = (): RemoteStopPending => ({ schemaVersion: 1, profileId: id(1), 
   intent: { command_id: id(3), kind: "session.stop_remote", session_id: id(4), payload: { confirmed: true } } });
 function setup(raw: string | null = null) {
   const values = new Map<string, string>();
-  if (raw !== null) values.set("wortly.pending.remote_stop", raw);
+  if (raw !== null) seedRawAt(id(1), values, "wortly.pending.remote_stop", raw);
   const storage: AsyncStorage = {
     get: vi.fn(async key => values.get(key) ?? null),
     set: vi.fn(async (key, value) => { values.set(key, value); }),
@@ -74,16 +76,19 @@ describe("remote stop recovery intent", () => {
     JSON.stringify({ ...pending(), intent: { ...pending().intent, payload: { confirmed: true, proof: "synthetic" } } }),
   ])("does not mistake damaged or secret-bearing data for an empty slot %#", async (raw) => {
     const { store, values } = setup(raw);
+    const before = JSON.stringify([...values.entries()]);
     await expect(store.load(id(1), signal())).rejects.toMatchObject({ kind: "invalid" });
     await expect(store.save(pending(), signal())).rejects.toMatchObject({ kind: "invalid" });
-    expect([...values.values()]).toEqual([raw]);
+    expect(JSON.stringify([...values.entries()])).toBe(before); // nothing healed, nothing removed
   });
 
-  it("removes only the old account's remote intent when the account changes", async () => {
+  it("another account's load touches nothing: the old account's remote intent and every other key stay (no self-cleaning)", async () => {
     const { store, values } = setup(JSON.stringify(pending()));
     values.set("wortly.pending.setting", "unrelated");
+    const before = JSON.stringify([...values.entries()]);
     expect(await store.load(id(99), signal())).toBeNull();
-    expect([...values.entries()]).toEqual([["wortly.pending.setting", "unrelated"]]);
+    expect(JSON.stringify([...values.entries()])).toBe(before);
+    expect(await store.load(id(1), signal())).toEqual(pending());
   });
 
   it("does not write after Entry disposal during a pending read", async () => {

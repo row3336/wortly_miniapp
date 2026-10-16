@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { id } from "../learning/learningFixtures.test-support";
 import { FeedbackPendingStore } from "./feedbackPending";
-import { feedbackWorld, makeController, pendingRecord, slot, TEXT } from "./feedbackFixtures.test-support";
+import { feedbackWorld, makeController, pendingRecord, slot, TEXT , seedFeedback, storedFeedback } from "./feedbackFixtures.test-support";
 
 afterEach(() => { vi.restoreAllMocks(); });
 async function ready(world = feedbackWorld()) {
@@ -35,7 +35,7 @@ describe("success is shown only after the server confirms the message", () => {
     const sending = controller.send();
     await vi.waitFor(() => expect(world.posts).toHaveLength(1));
     expect(controller.snapshot()).toMatchObject({ phase: "sending", confirmed: false, text: TEXT, canSend: false, canEdit: false });
-    expect(JSON.parse(world.f.values.get(slot)!).intent.payload.text).toBe(TEXT);
+    expect((storedFeedback(world.f.values) as { intent: { payload: { text: string } } }).intent.payload.text).toBe(TEXT);
     gate.resolve(); await sending;
     expect(controller.snapshot()).toMatchObject({ phase: "idle", confirmed: true, text: "", problem: null, refusal: null, canEdit: true });
     expect(world.f.values.has(slot)).toBe(false);
@@ -107,14 +107,14 @@ describe("a failed send keeps the text and the same command_id", () => {
 describe("a reload resolves the stored intent by its own command_id and never sends by itself", () => {
   it("restores the text and confirms an applied command", async () => {
     const world = feedbackWorld(); world.facts.set(id(300), { text: TEXT, card_id: null, inbox: id(901) });
-    world.f.values.set(slot, pendingRecord(id(300)));
+    seedFeedback(world.f.values, pendingRecord(id(300)));
     const { controller } = await ready(world);
     expect(world.gets).toEqual([id(300)]); expect(world.posts).toHaveLength(0);
     expect(controller.snapshot()).toMatchObject({ confirmed: true, text: "", phase: "idle" });
     expect(world.f.values.has(slot)).toBe(false);
   });
   it("a command the server does not know stays unsent until an explicit retry of the same intent", async () => {
-    const world = feedbackWorld(); world.f.values.set(slot, pendingRecord(id(300)));
+    const world = feedbackWorld(); seedFeedback(world.f.values, pendingRecord(id(300)));
     const { controller } = await ready(world);
     expect(controller.snapshot()).toMatchObject({ phase: "unresolved", problem: "not_sent", text: TEXT, canRetry: true, confirmed: false });
     expect(world.posts).toHaveLength(0);
@@ -122,20 +122,20 @@ describe("a reload resolves the stored intent by its own command_id and never se
     expect(world.posts.map(post => post.command_id)).toEqual([id(300)]); expect(controller.snapshot().confirmed).toBe(true);
   });
   it("an unreachable check leaves the text and the intent", async () => {
-    const world = feedbackWorld(); world.f.values.set(slot, pendingRecord(id(300))); world.state.statusFailures = 1;
+    const world = feedbackWorld(); seedFeedback(world.f.values, pendingRecord(id(300))); world.state.statusFailures = 1;
     const { controller } = await ready(world);
     expect(controller.snapshot()).toMatchObject({ phase: "unresolved", problem: "network", text: TEXT, canRetry: true });
     expect(world.posts).toHaveLength(0); expect(world.f.values.has(slot)).toBe(true);
   });
   it("a record of another profile is dropped and never checked", async () => {
     const world = feedbackWorld();
-    world.f.values.set(slot, JSON.stringify({ ...JSON.parse(pendingRecord(id(300))), profileId: id(51) }));
+    seedFeedback(world.f.values, JSON.stringify({ ...JSON.parse(pendingRecord(id(300))), profileId: id(51) }));
     const { controller } = await ready(world);
     expect(world.gets).toHaveLength(0); expect(world.f.values.has(slot)).toBe(false);
     expect(controller.snapshot()).toMatchObject({ phase: "idle", canEdit: true });
   });
   it("a damaged record blocks sending and is neither deleted nor replaced", async () => {
-    const world = feedbackWorld(); world.f.values.set(slot, "broken");
+    const world = feedbackWorld(); seedFeedback(world.f.values, "broken");
     const { controller } = await ready(world);
     expect(controller.snapshot()).toMatchObject({ phase: "blocked", problem: "invalid_pending", canSend: false, canEdit: false, canRetry: false });
     controller.edit(TEXT); await controller.send();

@@ -4,6 +4,8 @@ import type { AsyncStorage } from "../platform/storage";
 import { PendingStoreError } from "./pendingSlot";
 import { copyStartCancelPending, startCancelKey, startCancelStore, StartCancelPendingStore, validStartCancelPending,
   type StartCancelPending } from "./startCancelPending";
+import { pendingRaw, seedRaw } from "./pendingSeed.test-support";
+const seedRawAt = (profileId: string, values: Map<string, string>, base: string, raw: string) => seedRaw(values, base, raw, profileId);
 
 const RECORD: StartCancelPending = { schemaVersion: 1, profileId: "00000000-0000-4000-8000-000000000001",
   clientInstanceId: "00000000-0000-4000-8000-000000000002", pair: "ru-de", sessionId: "00000000-0000-4000-8000-000000000003",
@@ -47,10 +49,10 @@ describe("the cancel record", () => {
     expect(startCancelKey("conjugation")).toBe("wortly.pending.conjugation_start_cancel");
   });
 
-  it("saves, loads and clears; a record of another profile is removed on load (2.8.2.5)", async () => {
+  it("saves, loads and clears; another profile's load never removes this record (pending profile addresses)", async () => {
     const storage = memory(), store = new StartCancelPendingStore(storage, "written");
     await store.save(RECORD, signal());
-    expect(JSON.parse(storage.values.get("wortly.pending.written_start_cancel")!)).toEqual(RECORD);
+    expect(JSON.parse(pendingRaw(storage.values, "wortly.pending.written_start_cancel")!)).toEqual(RECORD);
     expect(await store.load(RECORD.profileId, signal())).toEqual(RECORD);
     // A second cancel of another start cannot overwrite the first one.
     await expect(store.save({ ...RECORD, cancelCommandId: "00000000-0000-4000-8000-000000000006" }, signal()))
@@ -59,12 +61,13 @@ describe("the cancel record", () => {
     expect(storage.values.size).toBe(0);
     await store.save(RECORD, signal());
     expect(await store.load(OTHER_PROFILE, signal())).toBeNull();
-    expect(storage.values.size).toBe(0);
+    expect(storage.values.size).toBe(1);
+    expect(await store.load(RECORD.profileId, signal())).toEqual(RECORD);
   });
 
   it("a corrupt stored value is an invalid record, not an absent one", async () => {
     const storage = memory(), store = new StartCancelPendingStore(storage, "learning");
-    storage.values.set("wortly.pending.learning_start_cancel", JSON.stringify({ ...RECORD, cancelCommandId: RECORD.startCommandId }));
+    seedRawAt(RECORD.profileId, storage.values, "wortly.pending.learning_start_cancel", JSON.stringify({ ...RECORD, cancelCommandId: RECORD.startCommandId }));
     await expect(store.load(RECORD.profileId, signal())).rejects.toMatchObject({ kind: "invalid" });
   });
 

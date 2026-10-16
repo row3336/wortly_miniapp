@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useWrittenDocument } from "./useWrittenDocument";
 import { WrittenScreen } from "./WrittenScreen";
 import { response, tick, writtenFixture } from "./writtenFixtures.test-support";
+import { hasPending } from "../commands/pendingSeed.test-support";
 
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 
@@ -180,7 +181,7 @@ describe("an ended recovery (CT §6.1 п. 7, 10; QA CP2 Н2)", () => {
     expect(h.overlay()).toBeNull();
     h.noManual();
     // The conflicting record stays until a confirmed closure (Я17, CP4).
-    expect(h.values.has("wortly.pending.written_session")).toBe(true);
+    expect(hasPending(h.values, "wortly.pending.written_session")).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Выйти" })); await h.step();
     expect(h.posts().map(post => post.kind)).toContain("session.stop");
     expect(h.answers()).toHaveLength(1);
@@ -213,7 +214,7 @@ describe("a confirmed answer whose local record could not be cleared (QA CP2b Н
     h.noManual();
     const posts = h.posts().length;
     fireEvent.click(screen.getByRole("button", { name: "Продолжить" })); await h.step();
-    expect(h.values.has("wortly.pending.written_session")).toBe(false);
+    expect(hasPending(h.values, "wortly.pending.written_session")).toBe(false);
     expect(h.posts()).toHaveLength(posts);
     expect(screen.queryByRole("button", { name: "Продолжить" })).toBeNull();
   });
@@ -226,7 +227,7 @@ describe("a confirmed answer whose local record could not be cleared (QA CP2b Н
     const requests = h.fetcher.mock.calls.length;
     fireEvent.click(screen.getByRole("button", { name: "Продолжить" })); await h.step();
     expect(h.fetcher.mock.calls.length).toBe(requests);
-    expect(h.values.has("wortly.pending.written_session")).toBe(false);
+    expect(hasPending(h.values, "wortly.pending.written_session")).toBe(false);
     await h.step(3000);
     expect(screen.getByText("слово 7")).toBeTruthy();
     expect(h.answers()).toHaveLength(1);
@@ -239,12 +240,12 @@ describe("a confirmed answer whose local record could not be cleared (QA CP2b Н
     await h.answer("Haus");
     const requests = h.fetcher.mock.calls.length;
     fireEvent.click(screen.getByRole("button", { name: "Продолжить" })); await h.step();
-    expect(h.values.has("wortly.pending.written_session")).toBe(true);
+    expect(hasPending(h.values, "wortly.pending.written_session")).toBe(true);
     expect(screen.getByText("Не удалось обновить данные на этом устройстве.")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Продолжить" })).toBeTruthy();
     h.noManual();
     fireEvent.click(screen.getByRole("button", { name: "Продолжить" })); await h.step();
-    expect(h.values.has("wortly.pending.written_session")).toBe(false);
+    expect(hasPending(h.values, "wortly.pending.written_session")).toBe(false);
     expect(h.fetcher.mock.calls.length).toBe(requests);
     expect(h.answers()).toHaveLength(1);
   });
@@ -259,7 +260,7 @@ describe("a confirmed answer whose local record could not be cleared (QA CP2b Н
     remove.mockImplementation(async key => { if (key.includes("written_session") && failures-- > 0) throw new Error("io"); return base(key); });
     fireEvent.click(screen.getByRole("button", { name: "Легко" })); await h.step();
     expect(h.posts().map(post => post.kind)).toContain("result.grade");
-    expect(h.values.has("wortly.pending.written_session")).toBe(true);
+    expect(hasPending(h.values, "wortly.pending.written_session")).toBe(true);
     expect(screen.queryByRole("button", { name: "Продолжить" })).toBeNull();
     expect(screen.getByRole("button", { name: "Проверить состояние" })).toBeTruthy();
   });
@@ -285,7 +286,7 @@ describe("the closure record C in the written Stop slot (D-CP4 4.6.1)", () => {
     }
     render(<Harness />);
     await act(() => tick(0));
-    expect(f.values.has("wortly.pending.written_stop")).toBe(true);
+    expect(hasPending(f.values, "wortly.pending.written_stop")).toBe(true);
     expect(f.gets("/commands/00000000-0000-4000-8000-000000000300").length).toBeGreaterThan(0);
     expect(screen.queryByRole("button", { name: "Повторить завершение" })).toBeNull();
     expect(f.posts()).toEqual([]);

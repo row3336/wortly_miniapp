@@ -5,6 +5,7 @@ import { tick } from "../commands/recoveryTime.test-support";
 import { current, id, missing, primaryKey, response } from "./learningFixtures.test-support";
 import { learningViewFixture } from "./learningView.test-support";
 import type { LearningViewController } from "./learningViewController";
+import { hasPending } from "../commands/pendingSeed.test-support";
 
 type Request = { method: string; path: string; kind: string | null };
 /** undefined: the synthetic server answers; "drop": the request fails before the server; a Response replaces the answer. */
@@ -117,7 +118,7 @@ describe("a preview step: «Дальше» and «Уже знаю»", () => {
     expect(h.recovery()?.state).toEqual({ name: "refused", code: "VALIDATION_FAILED" });
     expect(h.view.snapshot()).toMatchObject({ phase: "preview", canAdvancePreview: true, problem: null,
       commands: { primary: { pending: false } } });
-    expect(h.values.has(primaryKey)).toBe(false);
+    expect(hasPending(h.values, primaryKey)).toBe(false);
     await h.run(60_000);
     expect(h.sends("learning.known")).toHaveLength(1);
     refuse = false; await h.view.advancePreview(true); await tick();
@@ -158,7 +159,7 @@ describe("the mark that a question was shown (assignment.present; owner answers 
     expect(h.recovery()).toMatchObject({ commandId: lost.command_id, state: { name: "settled", outcome: "accepted" }, sends: 2 });
     expect(h.view.snapshot()).toMatchObject({ phase: "question", question: { id: id(7), status: "presented" }, draft: "Baum",
       canSubmit: true, problem: null });
-    expect(h.values.has(primaryKey)).toBe(false);
+    expect(hasPending(h.values, primaryKey)).toBe(false);
   });
   it("six lost presents: exactly six POSTs 2, 5, 10, 20, 30 s apart with one body, then nothing; B's answer is never sent", async () => {
     const h = harness();
@@ -183,7 +184,7 @@ describe("refusals and Stop", () => {
     expect(h.sends("answer.submit")).toHaveLength(1);
     expect(h.recovery()?.state.name).toBe("conflict");
     expect(h.view.snapshot()).toMatchObject({ canSubmit: false, canStop: true, commands: { canBegin: false, primary: { pending: true } } });
-    expect(h.values.has(primaryKey)).toBe(true);
+    expect(hasPending(h.values, primaryKey)).toBe(true);
   });
   it("Stop with summary_home stays manual: a lost one is never repeated by itself, only by its explicit retry", async () => {
     const h = harness(); h.setStep({ ...current(), status: "summary", assignment: null });
@@ -215,7 +216,7 @@ describe("a step that moved on elsewhere (step_stale) and the commands that stay
     expect(endedStale(h, h.sends(kind)[0].command_id)).toBe(true);
     // The question is then shown by its own present, which the machine now owns (Q25.1).
     expect(h.recovery()).toMatchObject({ commandId: h.sends("assignment.present")[0].command_id, state: { name: "settled", outcome: "accepted" } });
-    expect(h.values.has(primaryKey)).toBe(false);
+    expect(hasPending(h.values, primaryKey)).toBe(false);
     expect(h.sends(kind)).toHaveLength(1);
     expect(h.sends("assignment.present")).toHaveLength(1);
     expect(h.view.snapshot()).toMatchObject({ phase: "question", question: { status: "presented" }, problem: null,
@@ -230,7 +231,7 @@ describe("a step that moved on elsewhere (step_stale) and the commands that stay
     await h.run(5000);
     expect(endedStale(h, h.sends("answer.submit")[0].command_id)).toBe(true);
     expect(h.recovery()).toMatchObject({ commandId: h.sends("assignment.present")[0].command_id, state: { name: "settled", outcome: "accepted" } });
-    expect(h.values.has(primaryKey)).toBe(false);
+    expect(hasPending(h.values, primaryKey)).toBe(false);
     expect(h.sends("answer.submit")).toHaveLength(1);
     expect(h.view.snapshot()).toMatchObject({ phase: "question", question: { id: id(7), status: "presented" }, problem: null,
       commands: { primary: { pending: false } } });

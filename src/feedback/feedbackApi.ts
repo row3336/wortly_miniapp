@@ -20,6 +20,11 @@ export type FeedbackStatusReply = { outcome: "accepted"; inboxId: string } | { o
 export interface FeedbackApi {
   send(token: string, proof: string, origin: { clientInstanceId: string; documentId: string }, intent: FeedbackIntent): Promise<FeedbackSendReply>;
   status(token: string, profileId: string, intent: FeedbackIntent, ticket: ReadbackTicket): Promise<FeedbackStatusReply>;
+  /**
+   * The status of a sent message whose text is gone (lost_envelope, Q27): read by its stored command_id with the same
+   * strict checks as status — the profile of a not_found, the inbox and card of an applied fact — never a send.
+   */
+  statusById(token: string, profileId: string, target: { commandId: string; cardId: string | null }, ticket: ReadbackTicket): Promise<FeedbackStatusReply>;
 }
 
 /** The server rejects an empty or blank text (422), so the client never sends one. */
@@ -65,11 +70,14 @@ function wireCommand(intent: FeedbackIntent, origin: { clientInstanceId: string;
  * A deleted inbox record leaves the fact valid with an unavailable projection.
  */
 function savedInbox(fact: unknown, current: unknown, intent: FeedbackIntent): string | null {
-  if (!record(fact) || !sameId(fact.id, intent.command_id) || fact.kind !== "feedback.send"
+  return savedInboxOf(fact, current, intent.command_id, intent.payload.card_id ?? null);
+}
+function savedInboxOf(fact: unknown, current: unknown, commandId: string, cardId: string | null): string | null {
+  if (!record(fact) || !sameId(fact.id, commandId) || fact.kind !== "feedback.send"
     || !oneOf(fact.status, ["applied", "already_applied"]) || !eventTime(fact.applied_at) || !uuid(fact.target_id)) return null;
   if (record(current) && exactKeys(current, ["status"]) && current.status === "unavailable") return fact.target_id;
   return record(current) && exactKeys(current, ["inbox_id", "card_id"]) && sameId(current.inbox_id, fact.target_id)
-    && current.card_id === (intent.payload.card_id ?? null) ? fact.target_id : null;
+    && current.card_id === cardId ? fact.target_id : null;
 }
 
 export function createFeedbackApi(options: HttpOptions): FeedbackApi {
@@ -105,6 +113,23 @@ export function createFeedbackApi(options: HttpOptions): FeedbackApi {
       if (fact.status === "not_found" && sameId(fact.id, intent.command_id) && validProfile(value.current)
         && sameId(value.current.profile_id, profileId)) return { outcome: "not_found" };
       const inboxId = fact.status === "already_applied" ? savedInbox(fact, value.current, intent) : null;
+      if (inboxId !== null) return { outcome: "accepted", inboxId };
+      throw new ApiError("invalid_response");
+    },
+    async statusById(token, profileId, target, ticket: ReadbackTicket) {
+      if (!token || !uuid(profileId) || !uuid(target.commandId) || (target.cardId !== null && !uuid(target.cardId))) {
+        throw new Error("invalid feedback subject");
+      }
+      const reply = await request(`/commands/${target.commandId}`, { method: "GET", token, readbackTicket: ticket });
+      if (!reply.ok) throw httpError(reply);
+      const value = reply.value;
+      if (reply.status !== 200 || !record(value) || !record(value.command) || !version(value.state_version) || value.error != null) {
+        throw new ApiError("invalid_response");
+      }
+      const fact = value.command;
+      if (fact.status === "not_found" && sameId(fact.id, target.commandId) && validProfile(value.current)
+        && sameId(value.current.profile_id, profileId)) return { outcome: "not_found" };
+      const inboxId = fact.status === "already_applied" ? savedInboxOf(fact, value.current, target.commandId, target.cardId) : null;
       if (inboxId !== null) return { outcome: "accepted", inboxId };
       throw new ApiError("invalid_response");
     },

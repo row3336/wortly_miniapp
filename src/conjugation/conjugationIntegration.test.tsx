@@ -13,6 +13,7 @@ import { ConjugationTestFlow, type FlowInput } from "./conjugationTestFlow";
 import { ConjugationTestScreen } from "./ConjugationTestScreen";
 import { useConjugationDocument, type ConjugationDocumentHookOptions } from "./useConjugationDocument";
 import { testGate } from "../commands/testGate.test-support";
+import { hasPending } from "../commands/pendingSeed.test-support";
 
 const id = (n: number) => `abababab-cdcd-4000-8000-${String(n).padStart(12, "0")}`;
 const S1 = id(3), B1 = id(21), B2 = id(22), B3 = id(23);
@@ -302,7 +303,7 @@ describe("QA-6 guard of the unknown-answer view (Ф10, kills mutation 14)", () =
     await other.submit({ text: "kommst" }, B2);
     m.server.failPost = false;
     other.dispose();
-    expect(m.values.has(studyKey)).toBe(true);
+    expect(hasPending(m.values, studyKey)).toBe(true);
     // The flow's host gets a new owner of the same tuple; it reconciles the retained intent by GET only.
     const a3 = m.access(3);
     d.setAccess(a3); d.show({ state: null });
@@ -391,13 +392,13 @@ describe("QA-4 hook + flow + screen", () => {
     const held = m.hold((_url, method) => method === "POST");
     fireEvent.click(screen.getByRole("button", { name: "Проверить" }));
     await held.entered;
-    expect(m.values.has(studyKey)).toBe(true);
+    expect(hasPending(m.values, studyKey)).toBe(true);
     view.unmount();
     expect(sink.disposed).toBe(1);
     const fetchesAtUnmount = m.fetches.length;
     held.release(); await macrotasks();
     expect(m.fetches.length).toBe(fetchesAtUnmount);
-    expect(m.values.has(studyKey)).toBe(true); // reconciled by the next document, not lost
+    expect(hasPending(m.values, studyKey)).toBe(true); // reconciled by the next document, not lost
     expect(errors).not.toHaveBeenCalled();
     errors.mockRestore();
     // Next document of the same tuple: GET proof of the same ID, result shown, no second POST.

@@ -9,6 +9,7 @@ import type { OpenRequest, OralSessionProjection, Profile, TodayResponse } from 
 import { settingsResponse } from "../settings/settingsRead.test-support";
 import { App } from "./App";
 import { openDocument, staleCommand, staleDocument, staleRefusal } from "./openRules.test-support";
+import { lsPendingRaw } from "../commands/lsPending.test-support";
 
 type Fetch = (url: string | URL | Request, init?: RequestInit) => Promise<Response>;
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -106,7 +107,7 @@ function seen(container: HTMLElement): string {
     .map(e => `[${e.textContent}${(e as HTMLButtonElement).disabled ? " (off)" : ""}]`);
   return JSON.stringify({ lines, buttons });
 }
-const slot = () => { const raw = localStorage.getItem(SLOT); return raw === null ? "empty" : `${JSON.parse(raw).intent.kind} id=${JSON.parse(raw).intent.command_id.slice(-4)}`; };
+const slot = () => { const raw = lsPendingRaw(SLOT); return raw === null ? "empty" : `${JSON.parse(raw).intent.kind} id=${JSON.parse(raw).intent.command_id.slice(-4)}`; };
 const button = (container: HTMLElement, name: string) => within(container).queryAllByRole("button").find(e => e.textContent === name && !isInaccessible(e)) as HTMLButtonElement | undefined;
 
 beforeEach(() => {
@@ -138,7 +139,7 @@ describe("D-FALSE-TEXTS B, oral: a new action meets the record of another window
 
   it("24.1 А: the blocked new reveal Y ends unsent, then X alone is checked at once; nothing is sent from B, X stays on not_found", async () => {
     const { d, b } = await lostReplyOfA("not_found");
-    const x = slotId(), raw = localStorage.getItem(SLOT), earlier = statuses(d).length;
+    const x = slotId(), raw = lsPendingRaw(SLOT), earlier = statuses(d).length;
     fireEvent.click(button(b.container, "Раскрыть")!); await settle(); await settle();
     // At once, with no tap on «Проверить состояние»: a status request of X, and only of X (Y is never read).
     expect(statuses(d).length).toBeGreaterThan(earlier);
@@ -146,7 +147,7 @@ describe("D-FALSE-TEXTS B, oral: a new action meets the record of another window
     // 23.1 А: X is never sent from B; Y is never sent at all. Every POST is A's original one.
     expect(d.log.filter(entry => entry.startsWith("POST"))).toEqual([`POST oral.reveal doc=A id=${x}`]);
     // not_found alone never clears X, and the unknown outcome lets nothing continue.
-    expect(localStorage.getItem(SLOT)).toBe(raw);
+    expect(lsPendingRaw(SLOT)).toBe(raw);
     const reveal = button(b.container, "Раскрыть");
     expect(reveal === undefined || reveal.disabled).toBe(true);
     expect(button(b.container, "Повторить действие")).toBeUndefined();
@@ -156,7 +157,7 @@ describe("D-FALSE-TEXTS B, oral: a new action meets the record of another window
     fireEvent.click(button(b.container, "Проверить состояние")!); await settle(); await settle();
     expect(statuses(d).every(entry => entry.startsWith(`GET status ${x} `))).toBe(true);
     expect(d.log.filter(entry => entry.startsWith("POST"))).toEqual([`POST oral.reveal doc=A id=${x}`]);
-    expect(localStorage.getItem(SLOT)).toBe(raw);
+    expect(lsPendingRaw(SLOT)).toBe(raw);
     expect(button(b.container, "Повторить действие")).toBeUndefined();
     expect(button(b.container, "Правильно")).toBeUndefined();
   });
@@ -166,11 +167,11 @@ describe("D-FALSE-TEXTS B, oral: a new action meets the record of another window
     const x = slotId();
     fireEvent.click(button(b.container, "Раскрыть")!); await settle(); await settle();
     // A's reveal reached the core although its reply was lost: the check by the same ID now finds it applied.
-    d.server.recorded = JSON.parse(localStorage.getItem(SLOT)!).intent.command_id as string; d.server.version += 1;
+    d.server.recorded = JSON.parse(lsPendingRaw(SLOT)!).intent.command_id as string; d.server.version += 1;
     fireEvent.click(button(b.container, "Проверить состояние")!); await settle(); await settle();
     expect(statuses(d).every(entry => entry.startsWith(`GET status ${x} `))).toBe(true);
     expect(statuses(d).at(-1)).toBe(`GET status ${x} -> applied`);
-    expect(localStorage.getItem(SLOT)).toBeNull();
+    expect(lsPendingRaw(SLOT)).toBeNull();
     fireEvent.click(button(b.container, "Правильно")!); await settle(); await settle();
     const posts = d.log.filter(entry => entry.startsWith("POST") && !entry.includes(`id=${x}`));
     expect(posts).toHaveLength(1);

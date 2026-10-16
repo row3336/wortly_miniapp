@@ -31,6 +31,8 @@ type LaneState = {
   current: Step | null;
   closedSession: ClosedSessionBoundary | null;
   stateVersion: string | null;
+  /** Q27 (C458): the primary command known by its ID only; Stop of its session waits until that session is read open. */
+  lost?: { sessionOpen: boolean } | null;
 };
 type Lane<C, T> = {
   snapshot(): C; refresh(): Promise<void>; begin(action: T): Promise<void>; retry(): Promise<void>; dispose(): void;
@@ -297,7 +299,9 @@ export class DocumentLanes<C extends LaneState, T extends { kind: string; sessio
       // §4.1 «Правило кнопки» (K01s start, K03 Stop; C335, M-P03-10): a new action waits for mayWrite — visibly inactive.
       canBegin: begin && this.options.transport.gate.mayWrite(),
       heldByGate: begin && !this.options.transport.gate.mayWrite(),
-      canStop: live && !this.work.stop && ready(stop) && this.options.transport.gate.mayWrite(), recovery: live ? this.recovery.view() : null, automaticPrimary,
+      // Q27: with a lost answer, Stop follows its usual rights only once the session of that answer was read open.
+      canStop: live && !this.work.stop && ready(stop) && (!lane.lost || lane.lost.sessionOpen)
+        && this.options.transport.gate.mayWrite(), recovery: live ? this.recovery.view() : null, automaticPrimary,
       closedAction: live ? this.closedActionView(lane, stop) : null };
   }
   private closedActionView(primary: C, stop: C): ClosedAction | null {

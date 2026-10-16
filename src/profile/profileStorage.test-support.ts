@@ -8,6 +8,7 @@ export function memoryStorage(initial: Record<string, string> = {}) {
     async get(key) { return values.get(key) ?? null; },
     async set(key, value) { writes.push(key); values.set(key, value); },
     async remove(key) { writes.push(`-${key}`); values.delete(key); },
+    async keys(prefix) { return [...values.keys()].filter(key => key.startsWith(prefix)); },
   };
   return { storage, values, writes };
 }

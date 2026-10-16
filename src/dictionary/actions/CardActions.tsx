@@ -68,7 +68,7 @@ export function CardActions({ language, lemma, document }: Props) {
       </div>
       <div className="card-dialog-actions">
         <button type="button" disabled={!form.canSend} onClick={actions.sendComplaint}>{t.send}</button>
-        {form.canRetry && <button type="button" onClick={actions.retryComplaint}>{t.reportRetry}</button>}
+        {form.canRetry && <button type="button" onClick={actions.retryComplaint}>{form.problem === "lost_envelope" ? t.reportCheckAgain : t.reportRetry}</button>}
         <button type="button" onClick={actions.closeComplaint}>{t.close}</button>
       </div>
     </ActionDialog>}

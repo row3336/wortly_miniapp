@@ -6,6 +6,7 @@ import { oralIntentHash, type OralIntent, type OralCommand } from "./oralIntent"
 import { OralSessionPendingStore, OralStopPendingStore } from "./oralPending";
 import { OralDocumentController, type OralDocumentOptions } from "./oralDocumentController";
 import { testGate } from "../commands/testGate.test-support";
+import { pendingRaw, hasPending, seedRaw } from "../commands/pendingSeed.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const key = (stop = false) => stop ? "wortly.pending.oral_stop" : "wortly.pending.oral_session";
@@ -44,8 +45,8 @@ const intents: OralIntent[] = [
 /** FakeHTTP is a server model: hash fixtures prove client composition, not backend correctness. */
 function fixture(config: { saved?: OralIntent[]; seed?: string | null; step?: Step; minimum?: () => string | null } = {}) {
   const values = new Map<string, string>();
-  for (const intent of config.saved ?? []) values.set(key(intent.kind === "session.stop"), JSON.stringify({
-    schemaVersion: 1, profileId: id(50), clientInstanceId: id(1), pair: "ru-de", intent }));
+  for (const intent of config.saved ?? []) seedRaw(values, key(intent.kind === "session.stop"), JSON.stringify({
+    schemaVersion: 1, profileId: id(50), clientInstanceId: id(1), pair: "ru-de", intent }), id(50));
   const storage: AsyncStorage = { get: vi.fn(async k => values.get(k) ?? null), set: vi.fn(async (k, v) => { values.set(k, v); }),
     remove: vi.fn(async k => { values.delete(k); }) };
   const studyStore = new OralSessionPendingStore(storage), stopStore = new OralStopPendingStore(storage);
@@ -170,7 +171,7 @@ describe("oral document: owner-bound exchanges before access denial", () => {
         f.accepted.set(intent.command_id, intent); return old.promise;
       });
       oldWork = f.controller.grade(false); await vi.waitFor(() => expect(f.posted).toHaveLength(1));
-      expect(f.values.has(key())).toBe(true);
+      expect(hasPending(f.values, key())).toBe(true);
     } else {
       if (route === "pending_read") {
         f.accepted.clear(); f.fetcher.mockImplementationOnce(f.handler).mockReturnValueOnce(old.promise);
@@ -207,7 +208,7 @@ describe("oral document: owner-bound exchanges before access denial", () => {
     const grading = f.controller.grade(true); await vi.waitFor(() => expect(f.posted).toHaveLength(1));
     f.controller.setActivity({ enabled: false, visible: true }); gate.resolve(response({})); await grading;
     expect(f.controller.snapshot()).toMatchObject({ phase: "summary", commands: { study: { pending: false, outcome: "accepted" } } });
-    expect(f.values.has(key())).toBe(false); expect(f.denied).not.toHaveBeenCalled(); expect(f.posted).toHaveLength(1);
+    expect(hasPending(f.values, key())).toBe(false); expect(f.denied).not.toHaveBeenCalled(); expect(f.posted).toHaveLength(1);
   });
 });
 
@@ -247,7 +248,7 @@ describe("oral document: actual shown, reveal, immediate next", () => {
     vi.mocked(f.storage.remove).mockRejectedValueOnce(new Error("storage")); await f.controller.refresh();
     expect(f.controller.snapshot()).toMatchObject({ phase: "unknown", presentationTicket: null,
       canStart: false, canReveal: false, canGrade: false, commands: { study: { pending: true, outcome: "accepted" } } });
-    expect(f.values.has(key())).toBe(true); await f.controller.reveal(); await f.controller.grade(true); expect(f.posted).toEqual([]);
+    expect(hasPending(f.values, key())).toBe(true); await f.controller.reveal(); await f.controller.grade(true); expect(f.posted).toEqual([]);
     await f.controller.refresh(); expect(f.controller.snapshot()).toMatchObject({ phase: "prefetched", commands: { study: { pending: false } } });
     await f.controller.shown(f.controller.snapshot().presentationTicket!); expect(f.controller.snapshot().canReveal).toBe(true);
   });
@@ -371,7 +372,7 @@ describe("oral document: independent Stop and immutable facts", () => {
     const f = fixture({ saved: [intents[3]], step: "closed" }); f.accepted.set(id(4), { ...intents[3], payload: { correct: false } } as OralIntent);
     await f.controller.refresh(); await f.controller.retry("study");
     expect(f.controller.snapshot().commands.study).toMatchObject({ pending: true, problem: "mismatch", outcome: null, canRetry: false });
-    expect(JSON.parse(f.values.get(key())!).mismatch).toBe(true); expect(f.posted).toEqual([]);
+    expect(JSON.parse(pendingRaw(f.values, key())!).mismatch).toBe(true); expect(f.posted).toEqual([]);
   });
   it("accepted fact with failed clear retries cleanup without a second POST", async () => {
     const f = fixture({ step: "presented" }); await f.controller.refresh(); vi.mocked(f.storage.remove).mockRejectedValueOnce(new Error("storage"));
@@ -412,7 +413,7 @@ describe("oral document: floor, source and detached snapshots", () => {
     vi.mocked(f.storage.set).mockImplementationOnce(async (k, v) => { await gate.promise; f.values.set(k, v); });
     const work = f.controller.shown(f.controller.snapshot().presentationTicket!); await vi.waitFor(() => expect(f.storage.set).toHaveBeenCalled());
     f.controller.setActivity({ enabled: true, visible: false }); gate.resolve(); await work;
-    expect(f.posted).toEqual([]); expect(f.values.has(key())).toBe(true);
+    expect(f.posted).toEqual([]); expect(hasPending(f.values, key())).toBe(true);
   });
 });
 

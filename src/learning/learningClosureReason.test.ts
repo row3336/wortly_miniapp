@@ -5,6 +5,7 @@ import type { LearningSessionProjection } from "../api/generated";
 import { current, fact, id, missing, original, pending, primaryKey, response, stopKey } from "./learningFixtures.test-support";
 import { learningViewFixture } from "./learningView.test-support";
 import type { LearningViewController } from "./learningViewController";
+import { pendingRaw, seedRaw } from "../commands/pendingSeed.test-support";
 
 const owners: LearningViewController[] = [];
 afterEach(() => { owners.splice(0).forEach(owner => owner.dispose()); });
@@ -19,7 +20,7 @@ const closeDirectly = (f: Harness, sessionId: string, reason: string | null) =>
 /** A saved answer whose reply is gone and whose status the core answers as not found, with the closure of its session. */
 function boundary(f: Harness, reason: string, sessionId = id(3)) {
   const intent = original();
-  f.values.set(primaryKey, JSON.stringify(pending({ ...intent, session_id: sessionId })));
+  seedRaw(f.values, primaryKey, JSON.stringify(pending({ ...intent, session_id: sessionId })), id(50));
   f.fetcher.mockImplementation(async (url, init) => init?.method === "GET" && String(url).includes(`/commands/${intent.command_id}`)
     ? response({ ...missing(intent, "5"), closed_session: { session_id: sessionId, status: "closed", close_reason: reason } })
     : f.handler(url, init));
@@ -69,7 +70,7 @@ describe("the close reason of a Learning session (D-TEXT-DEFECTS §1)", () => {
     f.fetcher.mockImplementation(async (url, init) => {
       if (init?.method === "POST") throw new TypeError("network");
       if (String(url).includes("/commands/")) {
-        const stop = JSON.parse(f.values.get(stopKey)!).intent;
+        const stop = JSON.parse(pendingRaw(f.values, stopKey)!).intent;
         return response({ ...missing(stop, "5"), closed_session: { session_id: id(3), status: "closed", close_reason: "remote_stop" } });
       }
       return f.handler(url, init);

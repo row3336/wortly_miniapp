@@ -7,6 +7,7 @@ import type { OpenRequest, OralSessionProjection, Profile, TodayResponse } from 
 import { settingsResponse } from "../settings/settingsRead.test-support";
 import { App } from "./App";
 import { openDocument, staleDocument, staleRefusal } from "./openRules.test-support";
+import { lsPendingRaw, lsSeedRaw, lsRemovePointer } from "../commands/lsPending.test-support";
 
 type Fetch = (url: string | URL | Request, init?: RequestInit) => Promise<Response>;
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -101,7 +102,7 @@ async function openedWindow() {
 describe("oral: an unreadable record in the slot meets a new action", () => {
   it.each([["not JSON", "{not json"], ["JSON of another shape", "{\"a\":1}"]])("%s: only the block is named; Y is not checked, not offered for a retry, not sent", async (_name, raw) => {
     const { d, view } = await openedWindow();
-    localStorage.setItem(SLOT, raw);
+    lsSeedRaw(SLOT, raw, id(50));
     d.log.length = 0;
     fireEvent.click(button(view.container, "Раскрыть")!); await settle(); await settle(1500);
     const screen = seen(view.container);
@@ -114,26 +115,26 @@ describe("oral: an unreadable record in the slot meets a new action", () => {
     // The check may read the session; it never asks for the dropped action and never sends.
     expect(d.log.filter(entry => entry.startsWith("GET status") || entry.startsWith("POST"))).toEqual([]);
     expect(button(view.container, "Повторить действие")).toBeUndefined();
-    expect(localStorage.getItem(SLOT)).toBe(raw);
+    expect(lsPendingRaw(SLOT)).toBe(raw);
   });
 
   it("after the check the same tap is refused again, still without a request about a command", async () => {
     const { d, view } = await openedWindow();
-    localStorage.setItem(SLOT, "{not json");
+    lsSeedRaw(SLOT, "{not json", id(50));
     fireEvent.click(button(view.container, "Раскрыть")!); await settle();
     fireEvent.click(button(view.container, "Проверить состояние")!); await settle(); await settle();
     d.log.length = 0;
     fireEvent.click(button(view.container, "Раскрыть")!); await settle(); await settle(1000);
     expect(d.log.filter(entry => entry.startsWith("GET status") || entry.startsWith("POST"))).toEqual([]);
     expect(seen(view.container).lines).toContain(BLOCKED);
-    expect(localStorage.getItem(SLOT)).toBe("{not json");
+    expect(lsPendingRaw(SLOT)).toBe("{not json");
   });
 
   it("once the record is gone the action goes out exactly once", async () => {
     const { d, view } = await openedWindow();
-    localStorage.setItem(SLOT, "{not json");
+    lsSeedRaw(SLOT, "{not json", id(50));
     fireEvent.click(button(view.container, "Раскрыть")!); await settle();
-    localStorage.removeItem(SLOT);
+    lsRemovePointer(SLOT, id(50));
     fireEvent.click(button(view.container, "Проверить состояние")!); await settle(); await settle();
     d.log.length = 0;
     fireEvent.click(button(view.container, "Раскрыть")!); await settle(); await settle(300);

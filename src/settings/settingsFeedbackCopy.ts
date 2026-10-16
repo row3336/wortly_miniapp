@@ -3,7 +3,7 @@ import type { Language } from "../i18n/language";
 import type { FeedbackProblem } from "../feedback/feedbackController";
 
 type Copy = {
-  title: string; label: string; hint: string; send: string; retry: string;
+  title: string; label: string; hint: string; send: string; retry: string; checkAgain: string;
   loading: string; sending: string; checking: string; confirmed: string; refused: string;
   counter(length: number, max: number): string; tooLong(over: number): string; refusedInvalid: string;
   problems: Record<FeedbackProblem, string>;
@@ -16,7 +16,7 @@ export const settingsFeedbackCopy: Record<Language, Copy> = {
   ru: {
     title: "Связь с разработчиком", label: "Сообщение разработчику",
     hint: "Напиши, что не так или что улучшить. Сообщение придёт разработчику через бота.",
-    send: "Отправить", retry: "Повторить отправку", loading: "Проверяем сохранённую отправку",
+    send: "Отправить", retry: "Повторить отправку", checkAgain: "Проверить снова", loading: "Проверяем сохранённую отправку",
     sending: "Отправляем сообщение", checking: "Проверяем, принято ли сообщение",
     confirmed: "Сообщение принято. Спасибо.",
     counter: (length, max) => `${length} из ${max}`,
@@ -32,12 +32,14 @@ export const settingsFeedbackCopy: Record<Language, Copy> = {
       expired: "Сеанс истёк. Текст сохранён: открой приложение заново.",
       forbidden: "Нет доступа к отправке сообщений. Текст сохранён.",
       paused: pausedCopy.ru,
+      // WORKING TEXT (Q27 lost envelope, C458): the owner fixes final wording.
+      lost_envelope: "Раньше отправленное сообщение пока не подтверждено, а его текст на этом устройстве удалён. Повторно оно не отправится; новое можно будет отправить, когда результат выяснится. Нажми «Проверить снова».",
     },
   },
   uk: {
     title: "Зв’язок із розробником", label: "Повідомлення розробнику",
     hint: "Напиши, що не так або що покращити. Повідомлення прийде розробнику через бота.",
-    send: "Надіслати", retry: "Повторити надсилання", loading: "Перевіряємо збережене надсилання",
+    send: "Надіслати", retry: "Повторити надсилання", checkAgain: "Перевірити знову", loading: "Перевіряємо збережене надсилання",
     sending: "Надсилаємо повідомлення", checking: "Перевіряємо, чи прийнято повідомлення",
     confirmed: "Повідомлення прийнято. Дякуємо.",
     counter: (length, max) => `${length} з ${max}`,
@@ -53,12 +55,14 @@ export const settingsFeedbackCopy: Record<Language, Copy> = {
       expired: "Сеанс завершився. Текст збережено: відкрий застосунок знову.",
       forbidden: "Немає доступу до надсилання повідомлень. Текст збережено.",
       paused: pausedCopy.uk,
+      // WORKING TEXT (Q27 lost envelope, C458): the owner fixes final wording.
+      lost_envelope: "Раніше надіслане повідомлення ще не підтверджене, а його текст на цьому пристрої видалено. Повторно воно не надішлеться; нове можна буде надіслати, коли результат з’ясується. Натисни «Перевірити знову».",
     },
   },
   en: {
     title: "Contact the developer", label: "Message to the developer",
     hint: "Write what is wrong or what to improve. The message reaches the developer through the bot.",
-    send: "Send", retry: "Retry sending", loading: "Checking the saved message",
+    send: "Send", retry: "Retry sending", checkAgain: "Check again", loading: "Checking the saved message",
     sending: "Sending the message", checking: "Checking whether the message was accepted",
     confirmed: "Message accepted. Thank you.",
     counter: (length, max) => `${length} of ${max}`,
@@ -74,6 +78,8 @@ export const settingsFeedbackCopy: Record<Language, Copy> = {
       expired: "The session expired. The text is kept: reopen the app.",
       forbidden: "Sending messages is not allowed. The text is kept.",
       paused: pausedCopy.en,
+      // WORKING TEXT (Q27 lost envelope, C458): the owner fixes final wording.
+      lost_envelope: "A message sent earlier is not confirmed yet, and its text was deleted on this device. It will not be sent again; a new message can be sent once the outcome is known. Tap “Check again”.",
     },
   },
 };

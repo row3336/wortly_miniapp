@@ -10,6 +10,7 @@ import { activeButton } from "../app/gateButton.test-support";
 import { app, dropRequest, exchange, pairText, requests, row, useWrittenAppEnvironment } from "./writtenApp.test-support";
 import { id } from "./writtenFixtures.test-support";
 import { writtenPrimaryKey } from "./writtenPending";
+import { lsPendingRaw, lsSeedRaw } from "../commands/lsPending.test-support";
 
 useWrittenAppEnvironment();
 const words = /Слова: перевод на немецкий/;
@@ -42,8 +43,8 @@ describe("written 2.3 А: the start record of another window is only checked", (
     localStorage.setItem(`wortly.installation:${id(50)}`, JSON.stringify({ profileId: id(50), clientInstanceId: id(61),
       registrationId: id(62), proof: "synthetic-proof", proofVersion: "1", activated: true }));
     const X = id(71);
-    localStorage.setItem(writtenPrimaryKey, JSON.stringify({ schemaVersion: 1, profileId: id(50), clientInstanceId: id(61), pair: "ru-de",
-      intent: { command_id: X, session_id: id(72), kind: "session.start", payload: { mode: "written", bucket: "words" } } }));
+    lsSeedRaw(writtenPrimaryKey, JSON.stringify({ schemaVersion: 1, profileId: id(50), clientInstanceId: id(61), pair: "ru-de",
+      intent: { command_id: X, session_id: id(72), kind: "session.start", payload: { mode: "written", bucket: "words" } } }), id(50));
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: CHECK }, exchange)); await pause(1500);
     fireEvent.click(screen.getByRole("button", { name: CHECK })); await pause(1500);
@@ -53,6 +54,6 @@ describe("written 2.3 А: the start record of another window is only checked", (
     expect(onX.length).toBeGreaterThan(0);
     expect(new Set(onX)).toEqual(new Set([`GET /api/v1/commands/${X}`]));
     expect(startPosts(a)).toEqual([]);
-    expect(localStorage.getItem(writtenPrimaryKey)).toContain(X);
+    expect(lsPendingRaw(writtenPrimaryKey)).toContain(X);
   });
 });

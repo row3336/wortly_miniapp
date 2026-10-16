@@ -8,7 +8,7 @@ type Copy = {
   refused: string; conflict: string; setup: string; mismatch: string;
   relearnTitle(lemma: string): string; relearnText: string; relearnConfirm: string; cancel: string;
   reportTitle: string; reportLabel: string; reportAttached(lemma: string): string; send: string; close: string;
-  sending: string; reportChecking: string; reportRefused: string; reportSent: string; reportRetry: string;
+  sending: string; reportChecking: string; reportRefused: string; reportSent: string; reportRetry: string; reportCheckAgain: string;
   reportProblems: Record<FeedbackProblem, string>;
   reportCounter(length: number, max: number): string; reportTooLong(over: number): string; reportRefusedInvalid: string;
 };
@@ -30,7 +30,7 @@ export const actionsCopy: Record<Language, Copy> = {
     reportTitle: "Сообщить об ошибке", reportLabel: "Что не так?", reportAttached: lemma => `Карточка «${lemma}» будет приложена.`,
     send: "Отправить", close: "Закрыть", sending: "Отправляем…", reportChecking: "Проверяем, принято ли сообщение…",
     reportRefused: "Сообщение не принято. Текст сохранён: проверь его и отправь снова.", reportSent: "Сообщение отправлено.",
-    reportRetry: "Повторить отправку",
+    reportRetry: "Повторить отправку", reportCheckAgain: "Проверить снова",
     reportCounter: (length, max) => `${length} из ${max}`,
     reportTooLong: over => `Текст слишком длинный: лишних знаков ${over}. Текст сохранён — сократи его, и сообщение можно будет отправить. Эмодзи считается за 2 знака.`,
     reportRefusedInvalid: "Сообщение не принято: текст не подходит (слишком длинный или с недопустимыми символами). Текст сохранён: сократи или исправь его и отправь снова.",
@@ -43,6 +43,8 @@ export const actionsCopy: Record<Language, Copy> = {
       expired: "Сеанс истёк. Текст сохранён: открой приложение заново.",
       forbidden: "Нет доступа к отправке сообщений. Текст сохранён.",
       paused: pausedCopy.ru,
+      // WORKING TEXT (Q27 lost envelope, C458): the owner fixes final wording.
+      lost_envelope: "Раньше отправленное сообщение пока не подтверждено, а его текст на этом устройстве удалён. Повторно оно не отправится; новое можно будет отправить, когда результат выяснится. Нажми «Проверить снова».",
     },
   },
   uk: {
@@ -57,7 +59,7 @@ export const actionsCopy: Record<Language, Copy> = {
     reportTitle: "Повідомити про помилку", reportLabel: "Що не так?", reportAttached: lemma => `Картку «${lemma}» буде додано.`,
     send: "Надіслати", close: "Закрити", sending: "Надсилаємо…", reportChecking: "Перевіряємо, чи прийнято повідомлення…",
     reportRefused: "Повідомлення не прийнято. Текст збережено: перевір його й надішли знову.", reportSent: "Повідомлення надіслано.",
-    reportRetry: "Повторити надсилання",
+    reportRetry: "Повторити надсилання", reportCheckAgain: "Перевірити знову",
     reportCounter: (length, max) => `${length} з ${max}`,
     reportTooLong: over => `Текст задовгий: зайвих знаків ${over}. Текст збережено — скороти його, і повідомлення можна буде надіслати. Емодзі рахується за 2 знаки.`,
     reportRefusedInvalid: "Повідомлення не прийнято: текст не підходить (задовгий або з недопустимими символами). Текст збережено: скороти або виправ його й надішли знову.",
@@ -70,6 +72,8 @@ export const actionsCopy: Record<Language, Copy> = {
       expired: "Сеанс завершився. Текст збережено: відкрий застосунок знову.",
       forbidden: "Немає доступу до надсилання повідомлень. Текст збережено.",
       paused: pausedCopy.uk,
+      // WORKING TEXT (Q27 lost envelope, C458): the owner fixes final wording.
+      lost_envelope: "Раніше надіслане повідомлення ще не підтверджене, а його текст на цьому пристрої видалено. Повторно воно не надішлеться; нове можна буде надіслати, коли результат з’ясується. Натисни «Перевірити знову».",
     },
   },
   en: {
@@ -84,7 +88,7 @@ export const actionsCopy: Record<Language, Copy> = {
     reportTitle: "Report a mistake", reportLabel: "What is wrong?", reportAttached: lemma => `The card “${lemma}” is attached.`,
     send: "Send", close: "Close", sending: "Sending…", reportChecking: "Checking whether the message was accepted…",
     reportRefused: "The message was not accepted. The text is kept: check it and send again.", reportSent: "Message sent.",
-    reportRetry: "Retry sending",
+    reportRetry: "Retry sending", reportCheckAgain: "Check again",
     reportCounter: (length, max) => `${length} of ${max}`,
     reportTooLong: over => `The text is too long by ${over} characters. The text is kept: shorten it and the message can be sent. An emoji counts as 2.`,
     reportRefusedInvalid: "The message was not accepted: the text does not fit (too long or with invalid characters). The text is kept: shorten or fix it and send again.",
@@ -97,6 +101,8 @@ export const actionsCopy: Record<Language, Copy> = {
       expired: "The session expired. The text is kept: reopen the app.",
       forbidden: "No access to sending messages. The text is kept.",
       paused: pausedCopy.en,
+      // WORKING TEXT (Q27 lost envelope, C458): the owner fixes final wording.
+      lost_envelope: "A message sent earlier is not confirmed yet, and its text was deleted on this device. It will not be sent again; a new message can be sent once the outcome is known. Tap “Check again”.",
     },
   },
 };

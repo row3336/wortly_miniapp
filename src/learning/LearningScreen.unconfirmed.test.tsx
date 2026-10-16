@@ -8,6 +8,7 @@ import { LearningScreen } from "./LearningScreen";
 import { learningViewFixture } from "./learningView.test-support";
 import { current, deferred, id, missing, original, pending, primaryKey, response } from "./learningFixtures.test-support";
 import type { LearningViewController } from "./learningViewController";
+import { seedRaw } from "../commands/pendingSeed.test-support";
 
 const owners: LearningViewController[] = [];
 afterEach(() => { cleanup(); owners.splice(0).forEach(owner => owner.dispose()); vi.useRealTimers(); });
@@ -23,7 +24,7 @@ const endButton = (name: string) => screen.getByRole("button", { name }) as HTML
 /** A reload with a saved answer whose receipt is missing: the count is unknown, only checks remain (CT §6.1 п. 4). */
 async function reloaded(language: Language = "ru", routeStop?: (call: Parameters<typeof fetch>) => Promise<Response> | undefined) {
   const f = learningViewFixture(); owners.push(f.view); const intent = original();
-  f.values.set(primaryKey, JSON.stringify(pending(intent)));
+  seedRaw(f.values, primaryKey, JSON.stringify(pending(intent)), id(50));
   f.fetcher.mockImplementation(async (url, init) => {
     if (init?.method === "GET" && String(url).includes(`/commands/${intent.command_id}`)) return response(missing(intent, "1"));
     return routeStop?.([url, init]) ?? f.handler(url, init);
@@ -72,7 +73,7 @@ describe("Learning, an unknown count of sends", () => {
   it("the wait for the card to show stays uncovered (Q25.2): no cover and no 9.2.10 on it", async () => {
     const f = learningViewFixture(); owners.push(f.view);
     const intent = { command_id: id(100), session_id: id(3), kind: "assignment.present" as const, assignment_id: id(6), payload: {} };
-    f.values.set(primaryKey, JSON.stringify(pending(intent)));
+    seedRaw(f.values, primaryKey, JSON.stringify(pending(intent)), id(50));
     f.setStep({ ...current(), assignment: { ...current().assignment!, status: "prefetched" as const } });
     f.fetcher.mockImplementation(async (url, init) => init?.method === "GET" && String(url).includes(`/commands/${intent.command_id}`)
       ? response(missing(intent, "1")) : f.handler(url, init));

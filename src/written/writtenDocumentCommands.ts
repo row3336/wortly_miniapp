@@ -3,6 +3,7 @@ import { createWrittenApi, type WrittenResultRead, type WrittenSessionRead } fro
 import { WrittenCommandController, type WrittenCommandSnapshot, type WrittenTransition } from "./writtenCommandController";
 import { writtenStores } from "./writtenPending";
 import { PausedBeforeSendError } from "../commands/writeGate";
+import { lostAddress } from "../commands/lostEnvelope";
 
 export type WrittenDocumentSnapshot = DocumentLanesSnapshot<WrittenCommandSnapshot>;
 export type WrittenDocumentOptions = DocumentLanesOptions<WrittenCommandSnapshot>;
@@ -42,6 +43,9 @@ export class WrittenDocumentCommands extends DocumentLanes<WrittenCommandSnapsho
           // R6: the status of this ID is read only with the gate's ticket (after the identity check, if one is due).
           check: intent => gate.runReadback(intent.command_id, ticket => wiring.run(credentials =>
             api.status(credentials.token, credentials.proof, { ...intent, ...wiring.origin(credentials) }, ticket))),
+          // Q27 (C458): a lost answer is read by its ID under the same ticket and open handle; it is never sent.
+          checkLost: lost => gate.runReadback(lost.commandId, ticket => wiring.run(credentials =>
+            api.statusLost(credentials.token, credentials.proof, lostAddress(lost, wiring.origin(credentials)), ticket))),
           gate, family: "written",
           read: reads.read, readResult: intent => reads.readResult(intent), onUpdate: wiring.onUpdate,
           slotConflict: wiring.slotConflict,

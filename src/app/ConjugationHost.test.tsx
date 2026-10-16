@@ -13,6 +13,7 @@ import { leavesToToday, useConjugationHost, type ConjugationHost, type Conjugati
 import { ConjugationTestFlow } from "../conjugation/conjugationTestFlow";
 import { createOpenedAccess, type OpenedAccess } from "./openedAccess";
 import { testGate } from "../commands/testGate.test-support";
+import { hasPending, seedRaw } from "../commands/pendingSeed.test-support";
 
 const S1 = id(3), studyKey = "wortly.pending.conjugation_session";
 const response = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status });
@@ -34,7 +35,7 @@ type Options = { sessions?: ModelSession[]; seed?: boolean; route?: ConjugationH
 function setup(options: Options = {}) {
   const model = conjugationServer({ sessions: options.sessions, version: "10" });
   const values = new Map<string, string>();
-  if (options.saved) values.set(studyKey, JSON.stringify({ schemaVersion: 1, profileId: id(50), clientInstanceId: id(1), pair: "ru-de", intent: options.saved }));
+  if (options.saved) seedRaw(values, studyKey, JSON.stringify({ schemaVersion: 1, profileId: id(50), clientInstanceId: id(1), pair: "ru-de", intent: options.saved }), id(50));
   const fail = { remove: false };
   const storage: AsyncStorage = { get: async k => values.get(k) ?? null, set: async (k, v) => { values.set(k, v); },
     remove: async k => { if (fail.remove) throw new Error("storage unavailable"); values.delete(k); } };
@@ -304,7 +305,7 @@ describe.each([["StrictMode", true], ["plain render", false]])("useConjugationHo
         expect(screen.getByTestId("today").textContent).toBe("shown");
         // No claim of the refused session: the route stays on Today, nothing is cleared, cancelled or started again.
         expect(h.onConjugation).toHaveBeenCalledOnce(); expect(h.model.posted).toHaveLength(1);
-        expect(h.values.has(studyKey)).toBe(false);
+        expect(hasPending(h.values, studyKey)).toBe(false);
       });
 
     it("H5 a refusal outside the final list (VERSION_CONFLICT) gives Back nothing to do", async () => {
@@ -326,7 +327,7 @@ describe.each([["StrictMode", true], ["plain render", false]])("useConjugationHo
       expect(screen.queryByRole("textbox")).toBeNull();
       expect(h.back.bound).toBe(0);
       await h.back.click();
-      expect(h.onToday).not.toHaveBeenCalled(); expect(h.values.has(studyKey)).toBe(true);
+      expect(h.onToday).not.toHaveBeenCalled(); expect(hasPending(h.values, studyKey)).toBe(true);
     });
 
     it("H5 a stale read of an open session is no refusal: Back does not leave", async () => {
@@ -354,7 +355,7 @@ describe.each([["StrictMode", true], ["plain render", false]])("useConjugationHo
       await waitFor(() => expect(h.starts()).toHaveLength(1));
       await macrotasks(25);
       expect(screen.getByText("Не удалось обновить данные на этом устройстве.")).toBeTruthy();
-      expect(h.values.has(studyKey)).toBe(true);
+      expect(hasPending(h.values, studyKey)).toBe(true);
       blocked(h);
       await h.back.click();
       expect(h.onToday).not.toHaveBeenCalled(); expect(h.model.posted).toHaveLength(1);

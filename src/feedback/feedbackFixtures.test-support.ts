@@ -4,10 +4,23 @@ import { createFeedbackApi } from "./feedbackApi";
 import { FeedbackController, type FeedbackSnapshot } from "./feedbackController";
 import { FeedbackPendingStore } from "./feedbackPending";
 import { testGate } from "../commands/testGate.test-support";
+import { pointerKeyOf, readPending, seedPending } from "../commands/pendingSeed.test-support";
 
 /** What the next POST /commands meets: the server applies or not, and the reply arrives or is lost. */
 export type Fate = "ok" | "lose-before" | "lose-after" | "422" | "409" | "403" | "401" | "500" | "garbage" | "400" | "404" | "413" | "408" | "429";
-export const slot = "wortly.pending.feedback";
+/** The pointer of the fixture profile id(50) (pending profile addresses §2); its text lives in a payload key. */
+export const FEEDBACK_BASE = "wortly.pending.feedback";
+export const slot = pointerKeyOf(FEEDBACK_BASE, id(50));
+/** Seeds one stored record (JSON of the record, or any raw string as a damaged pointer) like the product stores it. */
+export function seedFeedback(values: Map<string, string>, raw: string): void {
+  let value: unknown;
+  try { value = JSON.parse(raw); } catch { values.set(slot, raw); return; }
+  const item = value as { profileId?: unknown };
+  if (typeof item?.profileId !== "string") { values.set(slot, raw); return; }
+  seedPending(values, FEEDBACK_BASE, value as { profileId: string } & Record<string, unknown>);
+}
+/** The stored record of profileId joined back with its text (null: none). */
+export function storedFeedback(values: Map<string, string>, profileId = id(50)) { return readPending(values, FEEDBACK_BASE, profileId); }
 export const TEXT = "Das Wort ist falsch geschrieben";
 
 /** An in-memory server of feedback.send: idempotent by command_id, text never echoed back. */

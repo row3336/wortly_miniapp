@@ -9,6 +9,7 @@ import { ConjugationCatalogPendingStore, ConjugationSessionPendingStore, Conjuga
   conjugationLane, type ConjugationPending } from "./conjugationPending";
 import { ConjugationCommandController, resultAddressed, type ConjugationCommandOptions, type ConjugationRead, type ConjugationTransition } from "./conjugationCommandController";
 import { readWithTicket, testGate } from "../commands/testGate.test-support";
+import { hasPending, pendingRaw, seedRaw, pointerKeyOf } from "../commands/pendingSeed.test-support";
 
 const id = (n: number) => `aaaaaaaa-bbbb-4000-8000-${String(n).padStart(12, "0")}`;
 const base = { command_id: id(10), session_id: id(3) };
@@ -116,7 +117,7 @@ function fixture(seed?: ConjugationPending, source = seed?.intent ?? intents[3])
   const values = new Map<string, string>(), events: string[] = [];
   const keys = { catalog: "wortly.pending.conjugation_catalog", study: "wortly.pending.conjugation_session", stop: "wortly.pending.conjugation_stop" };
   const key = keys[conjugationLane(source)];
-  if (seed) values.set(key, JSON.stringify(seed));
+  if (seed) seedRaw(values, key, JSON.stringify(seed), id(90));
   const storage: AsyncStorage = { get: vi.fn(async k => { events.push("storage:get"); return values.get(k) ?? null; }),
     set: vi.fn(async (k, value) => { events.push("storage:set"); values.set(k, value); }),
     remove: vi.fn(async k => { events.push("storage:remove"); values.delete(k); }) };
@@ -182,9 +183,9 @@ describe("conjugation persistence and immutable command lifecycle", () => {
   });
   it("malformed persisted Unicode blocks hydration without issuing a proof GET", async () => {
     const f = fixture(pending({ ...intents[3], kind: "answer.submit", session_id: id(3), assignment_id: id(4), payload: { text: "\ud800" } }));
-    const raw = f.values.get(f.key); await f.controller.refresh();
+    const raw = pendingRaw(f.values, f.key); await f.controller.refresh();
     expect(f.controller.snapshot()).toMatchObject({ problem: "invalid_pending", phase: "blocked", canRetry: false });
-    expect(f.fetcher).not.toHaveBeenCalled(); expect(f.values.get(f.key)).toBe(raw);
+    expect(f.fetcher).not.toHaveBeenCalled(); expect(pendingRaw(f.values, f.key)).toBe(raw);
   });
   it("an intervening replacement slot blocks later check, retry and clearing", async () => {
     const f = fixture(); await f.controller.refresh(); const replacement = pending(); replacement.intent.command_id = id(99);
@@ -192,16 +193,16 @@ describe("conjugation persistence and immutable command lifecycle", () => {
     // The new intent was neither stored nor sent: no unknown outcome is left of it; the other record stays as it was.
     expect(f.controller.snapshot()).toMatchObject({ problem: "pending_changed", pending: false, phase: "blocked", canRetry: false });
     expect(f.send).not.toHaveBeenCalled(); expect(f.check).not.toHaveBeenCalled(); expect(f.read).not.toHaveBeenCalled();
-    expect(JSON.parse(f.values.get(f.key)!).intent.command_id).toBe(id(99));
+    expect(JSON.parse(pendingRaw(f.values, f.key)!).intent.command_id).toBe(id(99));
   });
   it("a retained intent whose slot changed before its retry keeps its record and stays unknown", async () => {
     const f = fixture(pending()); await f.controller.refresh(); expect(f.controller.snapshot().canRetry).toBe(true);
-    const replacement = pending(); replacement.intent.command_id = id(99); f.values.set(f.key, JSON.stringify(replacement));
+    const replacement = pending(); replacement.intent.command_id = id(99); seedRaw(f.values, f.key, JSON.stringify(replacement), id(90));
     await f.controller.retry();
     // A retry is no new intent: the slot conflict leaves its unknown outcome as it was, and nothing is sent.
     expect(f.controller.snapshot()).toMatchObject({ problem: "pending_changed", pending: true, canRetry: false });
     expect(f.controller.snapshot().pendingIntent?.command_id).toBe(id(10));
-    expect(f.send).not.toHaveBeenCalled(); expect(JSON.parse(f.values.get(f.key)!).intent.command_id).toBe(id(99));
+    expect(f.send).not.toHaveBeenCalled(); expect(JSON.parse(pendingRaw(f.values, f.key)!).intent.command_id).toBe(id(99));
   });
   it.each(intents.map((intent, index) => ({ kind: intent.kind, intent, index })))("lost $kind reply reloads with only exact addressed GET proof", async ({ intent }) => {
     const f = fixture(undefined, intent); f.model.lostReply = true; await f.controller.refresh(); await f.controller.begin(action(intent));
@@ -277,10 +278,10 @@ describe("proof collisions, closure and confirmed cleanup", () => {
   it("failed mismatch marker remains sticky; refresh repairs only the marker; restart proves collision again", async () => {
     const f = fixture(pending()); f.model.status = "mismatch"; vi.mocked(f.storage.set).mockRejectedValueOnce(new Error("marker failed"));
     await f.controller.refresh(); expect(f.controller.snapshot()).toMatchObject({ problem: "storage", outcome: null, canRetry: false });
-    expect(JSON.parse(f.values.get(f.key)!).mismatch).toBeUndefined();
+    expect(JSON.parse(pendingRaw(f.values, f.key)!).mismatch).toBeUndefined();
     f.controller.dispose(); const restarted = f.make(); await restarted.refresh();
     expect(restarted.snapshot()).toMatchObject({ problem: "mismatch", outcome: null, canRetry: false });
-    expect(f.check).toHaveBeenCalledTimes(2); expect(JSON.parse(f.values.get(f.key)!).mismatch).toBe(true);
+    expect(f.check).toHaveBeenCalledTimes(2); expect(JSON.parse(pendingRaw(f.values, f.key)!).mismatch).toBe(true);
     f.model.status = "accepted"; await restarted.refresh(); await restarted.retry(); expect(f.check).toHaveBeenCalledTimes(2); expect(f.send).not.toHaveBeenCalled();
   });
   it("marker failure on a living owner never permits an accepted-looking recheck", async () => {
@@ -293,7 +294,7 @@ describe("proof collisions, closure and confirmed cleanup", () => {
     f.send.mockImplementationOnce(async () => { vi.mocked(f.storage.set).mockRejectedValueOnce(new Error("marker failed")); throw new ApiError("http", 409, "COMMAND_PAYLOAD_MISMATCH"); });
     await f.controller.begin(action()); await f.controller.refresh(); await f.controller.retry();
     expect(f.controller.snapshot()).toMatchObject({ problem: "mismatch", pending: true, outcome: null, canRetry: false });
-    expect(f.send).toHaveBeenCalledOnce(); expect(f.check).not.toHaveBeenCalled(); expect(JSON.parse(f.values.get(f.key)!).mismatch).toBe(true);
+    expect(f.send).toHaveBeenCalledOnce(); expect(f.check).not.toHaveBeenCalled(); expect(JSON.parse(pendingRaw(f.values, f.key)!).mismatch).toBe(true);
   });
   it("retry discovering a collision never POSTs and detaches the previous view", async () => {
     const f = fixture(pending()); await f.controller.refresh(); f.model.status = "mismatch"; await f.controller.retry();
@@ -310,9 +311,9 @@ describe("proof collisions, closure and confirmed cleanup", () => {
     const f = fixture(pending()); f.model.status = "accepted";
     const replacement = pending(); replacement.intent.command_id = id(99);
     vi.mocked(f.storage.remove).mockImplementationOnce(async () => { throw new Error("first cleanup fails"); });
-    await f.controller.refresh(); f.values.set(f.key, JSON.stringify(replacement)); await f.controller.refresh();
+    await f.controller.refresh(); seedRaw(f.values, f.key, JSON.stringify(replacement), id(90)); await f.controller.refresh();
     expect(f.controller.snapshot()).toMatchObject({ outcome: "accepted", pending: true, problem: "pending_changed" });
-    expect(JSON.parse(f.values.get(f.key)!).intent.command_id).toBe(id(99)); expect(f.send).not.toHaveBeenCalled();
+    expect(JSON.parse(pendingRaw(f.values, f.key)!).intent.command_id).toBe(id(99)); expect(f.send).not.toHaveBeenCalled();
   });
   it("atomic missing+closed proves not_applied; a later closed read remains unknown", async () => {
     const atomic = fixture(pending()); atomic.model.closedProof = { session_id: id(3), status: "closed", close_reason: "stop" };
@@ -343,11 +344,17 @@ describe("proof collisions, closure and confirmed cleanup", () => {
 });
 
 describe("identity, tagged results and document/version lifetime", () => {
-  it("same UUID case is one profile; a truly foreign profile is removed without network", async () => {
-    const own = fixture({ ...pending(), profileId: id(90).toUpperCase(), clientInstanceId: id(1).toUpperCase() });
+  // Profile addressing (project_pending_profile_slots.md ред.1.1 §2, §3.4): the slot stores only the canonical record (the
+  // pointer comparison refuses any other spelling as damage), and PendingSlot.load no longer «self-cleans» another
+  // profile's record — it lives under that profile's own pointer, which this owner neither reads nor removes.
+  it("same UUID case is one profile; a truly foreign profile is left under its own pointer, without network", async () => {
+    const own = fixture(pending());
     const same = own.make({ profileId: id(90).toUpperCase(), clientInstanceId: id(1).toUpperCase() }); await same.refresh(); expect(same.snapshot().canRetry).toBe(true);
-    const foreign = fixture({ ...pending(), profileId: id(89) }); await foreign.controller.refresh();
-    expect(foreign.fetcher).not.toHaveBeenCalled(); expect(foreign.values.has(foreign.key)).toBe(false); expect(foreign.controller.snapshot().phase).toBe("idle");
+    const foreign = fixture({ ...pending(), profileId: id(89) }); const kept = foreign.values.get(pointerKeyOf(foreign.key, id(89)));
+    await foreign.controller.refresh();
+    expect(foreign.fetcher).not.toHaveBeenCalled(); expect(foreign.controller.snapshot().phase).toBe("idle");
+    expect(foreign.values.get(pointerKeyOf(foreign.key, id(89)))).toBe(kept); expect(kept).toBeDefined();
+    expect(foreign.values.has(pointerKeyOf(foreign.key, id(90)))).toBe(false);
   });
   it.each(["client", "pair"])("foreign %s hides payload and rights, but an exact accepted fact may clean up", async identity => {
     const p = pending(); if (identity === "client") p.clientInstanceId = id(88); else p.pair = "en-de";
@@ -402,7 +409,7 @@ describe("identity, tagged results and document/version lifetime", () => {
     await study.refresh(); f.send.mockReturnValueOnce(gate.promise); const work = study.begin(action()); await vi.waitFor(() => expect(f.send).toHaveBeenCalledOnce());
     const stop = f.make({ lane: "stop", pendingStore: f.stores.stop, newId: () => id(99), stateVersion: "9", minimumStateVersion: () => floor, onUpdate: update,
       send: async intent => ({ ...await f.api.send("synthetic-token", "synthetic-proof", { ...intent, client_instance_id: id(1), document_id: id(2) }), state_version: "10" }) });
-    await stop.refresh(); await stop.begin(action(intents[6])); expect(f.values.has(f.key)).toBe(true); expect(f.values.has("wortly.pending.conjugation_stop")).toBe(false);
+    await stop.refresh(); await stop.begin(action(intents[6])); expect(hasPending(f.values, f.key)).toBe(true); expect(hasPending(f.values, "wortly.pending.conjugation_stop")).toBe(false);
     gate.resolve(await f.api.send("synthetic-token", "synthetic-proof", { ...intents[3], client_instance_id: id(1), document_id: id(2) })); await work;
     expect(stop.snapshot()).toMatchObject({ outcome: "accepted", view: { kind: "session", current: { status: "closed" } } });
     expect(study.snapshot()).toMatchObject({ outcome: "accepted", pending: false, view: null, resolved: { resultId: id(6) } });
@@ -442,7 +449,7 @@ describe("identity, tagged results and document/version lifetime", () => {
     const f = fixture(); await f.controller.refresh();
     vi.mocked(f.storage.set).mockImplementationOnce(async (key, value) => { f.values.set(key, value); f.isLive.mockReturnValue(false); });
     await f.controller.begin(action()); expect(f.send).not.toHaveBeenCalled();
-    expect(f.controller.snapshot()).toMatchObject({ phase: "disposed", pendingIntent: null, view: null, canRetry: false }); expect(f.values.has(f.key)).toBe(true);
+    expect(f.controller.snapshot()).toMatchObject({ phase: "disposed", pendingIntent: null, view: null, canRetry: false }); expect(hasPending(f.values, f.key)).toBe(true);
   });
   it.each([401, 403])("real Adapter + guarded access.run prevents late %s of old owner from revoking live access", async status => {
     const f = fixture(pending()), gate = deferred<Response>(), onDenied = vi.fn();
@@ -498,13 +505,13 @@ describe("D-STALE-WINDOW 3.1.4: the core's DOCUMENT_STALE envelope refuses this 
     let saved: string | undefined;
     f.model.intercept = async (_url, init) => {
       if (init.method !== "POST") return null;
-      saved = f.values.get(f.key);
+      saved = pendingRaw(f.values, f.key);
       return new Response(JSON.stringify(refusal(intent, "DOCUMENT_STALE")), { status: 409 });
     };
     await f.controller.begin(action(intent));
     expect(saved).toBeDefined();
     // The same raw record as before the POST: neither cleared nor rewritten.
-    expect(f.values.get(f.key)).toBe(saved);
+    expect(pendingRaw(f.values, f.key)).toBe(saved);
     expect(f.storage.remove).not.toHaveBeenCalled();
     expect(f.send).toHaveBeenCalledOnce();
     expect(f.controller.snapshot()).toMatchObject({ phase: "unresolved", pending: true, outcome: null, rejectionCode: null,
@@ -515,7 +522,7 @@ describe("D-STALE-WINDOW 3.1.4: the core's DOCUMENT_STALE envelope refuses this 
     f.model.intercept = async (_url, init) => init.method === "POST"
       ? new Response(JSON.stringify(refusal(intent, "SESSION_CLOSED")), { status: 409 }) : null;
     await f.controller.begin(action(intent));
-    expect(f.values.has(f.key)).toBe(false);
+    expect(hasPending(f.values, f.key)).toBe(false);
     expect(f.controller.snapshot()).toMatchObject({ outcome: "rejected", pending: false, rejectionCode: "SESSION_CLOSED" });
   });
 });
@@ -525,28 +532,28 @@ describe("D-STALE-WINDOW 3.1.4: the core's DOCUMENT_STALE envelope refuses this 
 describe("conjugation: an unreadable record in the shared slot meets a new action", () => {
   it.each([["not JSON", "{not json"], ["JSON of another shape", "{\"a\":1}"]])("%s: the action is dropped, nothing is requested", async (_name, raw) => {
     const f = fixture(); await f.controller.refresh(); const before = f.fetcher.mock.calls.length;
-    f.values.set(f.key, raw);
+    seedRaw(f.values, f.key, raw, id(90));
     await f.controller.begin(action());
     expect(f.controller.snapshot()).toMatchObject({ phase: "blocked", problem: "invalid_pending", pending: false, pendingIntent: null, canRetry: false });
     await f.controller.refresh(); await f.controller.retry();
     expect(f.fetcher.mock.calls.length).toBe(before);
     expect(f.send).not.toHaveBeenCalled(); expect(f.check).not.toHaveBeenCalled();
     expect(f.controller.snapshot()).toMatchObject({ phase: "idle", pending: false });
-    expect(f.values.get(f.key)).toBe(raw);
+    expect(pendingRaw(f.values, f.key)).toBe(raw);
   });
   it("a retained intent keeps its record and stays pending when the slot turns unreadable under its retry", async () => {
     const f = fixture(pending()); await f.controller.refresh();
     expect(f.controller.snapshot()).toMatchObject({ pending: true, canRetry: true });
-    f.values.set(f.key, "{not json");
+    seedRaw(f.values, f.key, "{not json", id(90));
     await f.controller.retry();
     expect(f.send).not.toHaveBeenCalled();
     expect(f.controller.snapshot()).toMatchObject({ pending: true, problem: "invalid_pending", canRetry: false });
-    expect(f.values.get(f.key)).toBe("{not json");
+    expect(pendingRaw(f.values, f.key)).toBe("{not json");
   });
   it("once the record is gone, a new action goes out once with a new ID", async () => {
     const f = fixture(); await f.controller.refresh();
-    f.values.set(f.key, "{not json"); await f.controller.begin(action());
-    f.values.delete(f.key); await f.controller.refresh();
+    seedRaw(f.values, f.key, "{not json", id(90)); await f.controller.begin(action());
+    f.values.delete(pointerKeyOf(f.key, id(90))); await f.controller.refresh();
     await f.controller.begin(action());
     expect(f.send).toHaveBeenCalledOnce(); expect(f.check).not.toHaveBeenCalled();
   });

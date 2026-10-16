@@ -4,6 +4,7 @@ import { oneOf, sameId, uuid, version } from "../api/wireValidation";
 import { GatePending, pausedBeforeSend } from "../commands/gatePending";
 import { PendingStoreError, refusedUnsent, type PendingSlot } from "../commands/pendingSlot";
 import type { WriteGate } from "../commands/writeGate";
+import { lostCommand, lostEnvelopeError, lostMissingProblem, type LostCommand, type LostMissing, type LostView } from "../commands/lostEnvelope";
 import type { ConjugationCatalogRead, ConjugationSessionRead, ConjugationResultRead, ConjugationReply, ConjugationStatus } from "./conjugationApi";
 import { validConjugationIntent, type ConjugationIntent } from "./conjugationIntent";
 import { canonicalConjugationIntent, conjugationLane, type ConjugationCommandLane, type ConjugationPending } from "./conjugationPending";
@@ -30,11 +31,15 @@ export type ConjugationCommandSnapshot = {
     | "expired" | "forbidden" | "profile_changed" | "client_changed" | "pair_changed" | "step_changed"
     | "closed" | "stale_response" | "window_stale"
     // PAUSED_BEFORE_SEND (P03 §4.2): the write gate kept the request on the client; nothing left, the record stays.
-    | "paused" | null;
+    | "paused"
+    // Q27 (C458/C467): the content of the command is gone and the server does not hold its ID: never sent again.
+    | "lost_envelope" | null;
   canRetry: boolean;
   stateVersion: string | null;
   closedSession: ClosedSessionBoundary | null;
   view: ConjugationCommandView | null;
+  /** Q27: the command of this lane known by its ID only (its content payload is gone); null otherwise. */
+  lost?: LostView | null;
 };
 export type ConjugationCommandOptions = {
   profileId: string;
@@ -47,6 +52,8 @@ export type ConjugationCommandOptions = {
   send(intent: ConjugationIntent): Promise<ConjugationReply>;
   /** Must use the proof-validating createConjugationApi.status. */
   check(intent: ConjugationIntent): Promise<ConjugationStatus>;
+  /** Q27: the status of a lost answer or grade by its ID only (createConjugationApi.statusLost); none → stays unresolved. */
+  checkLost?(lost: LostCommand): Promise<Extract<ConjugationStatus, { outcome: "accepted" }> | LostMissing>;
   /** schedule -> catalog; revisions -> original session/assignment/result;
    * start/present/unknown answer/stop -> original session. Never infer an answer result ID. */
   read(intent: ConjugationIntent): Promise<ConjugationRead>;
@@ -81,6 +88,9 @@ export class ConjugationCommandController {
   private ownIdentity = true;
   private changedSlot = false;
   private readonly registry: GatePending | null;
+  /** Q27: the stored command whose content is gone — read by its ID only, never sent; it blocks a new action until cleared. */
+  private lost: LostCommand | null = null;
+  private lostOpen = false;
 
   constructor(options: ConjugationCommandOptions) {
     if (!uuid(options.profileId) || !uuid(options.clientInstanceId) || !oneOf(options.pair, ["ru-de", "uk-de", "en-de"])
@@ -108,15 +118,18 @@ export class ConjugationCommandController {
   snapshot(): ConjugationCommandSnapshot {
     const live = this.live(), fresh = live && this.fresh();
     const visible = live && this.ownIdentity && !["profile_changed", "client_changed", "pair_changed", "expired", "forbidden"].includes(this.problem ?? "");
-    return { phase: live ? this.phase : "disposed", pending: this.pending !== null,
-      kind: visible ? this.pending?.intent.kind ?? null : null,
-      sessionId: visible && this.pending && "session_id" in this.pending.intent ? this.pending.intent.session_id : null,
+    return { phase: live ? this.phase : "disposed", pending: this.pending !== null || this.lost !== null,
+      kind: visible ? this.pending?.intent.kind ?? this.lost?.kind as ConjugationIntent["kind"] | undefined ?? null : null,
+      sessionId: visible && this.pending && "session_id" in this.pending.intent ? this.pending.intent.session_id
+        : visible && this.lost ? this.lost.sessionId : null,
       pendingIntent: visible && fresh && this.pending ? canonicalConjugationIntent(this.pending.intent) : null,
       outcome: live ? this.outcome : null, resolved: visible && this.resolved ? { ...this.resolved } : null,
       rejectionCode: visible ? this.rejectionCode : null, problem: this.problem,
       canRetry: visible && fresh && !this.running && this.retryVerified && this.pending !== null && !this.pending.mismatch && this.outcome === null,
       stateVersion: this.floor, closedSession: visible && fresh ? structuredClone(this.closedSession) : null,
-      view: visible && fresh ? structuredClone(this.view) : null };
+      view: visible && fresh ? structuredClone(this.view) : null,
+      lost: live && this.lost ? { commandId: this.lost.commandId, kind: this.lost.kind, sessionId: this.lost.sessionId,
+        sessionOpen: this.lostOpen } : null };
   }
   private emit(): void { if (this.live()) this.options.onUpdate(this.snapshot()); }
   private run(action: () => Promise<void>): Promise<void> {
@@ -136,7 +149,7 @@ export class ConjugationCommandController {
       // The same class as failureProblem (commandLane.ts): the record stays, a live window checks it.
       else if (error instanceof ApiError && error.status === 409 && error.code === "DOCUMENT_STALE") this.problem = "window_stale";
       else this.problem = "network";
-      this.phase = this.pending ? "unresolved" : "blocked";
+      this.phase = this.pending || this.lost ? "unresolved" : "blocked";
     }).finally(() => { if (this.running === task) this.running = null; this.emit(); });
     this.running = task;
     return task;
@@ -171,6 +184,11 @@ export class ConjugationCommandController {
   private async clearSettled(): Promise<void> {
     if (!this.outcome || !this.live()) return;
     if (this.pending) await this.options.pendingStore.clear(this.pending, this.lifetime.signal);
+    else if (this.lost) {
+      await this.options.pendingStore.clearLost(this.lost.envelope, this.lifetime.signal);
+      if (!this.live()) return;
+      this.lost = null; this.lostOpen = false;
+    }
     if (!this.live()) return;
     this.pending = null; this.problem = null; this.retryVerified = false; this.phase = "settled";
     this.registry?.cleared();
@@ -210,13 +228,23 @@ export class ConjugationCommandController {
     this.emit();
     if (!this.live()) return;
     if (!this.loaded) {
-      const pending = await this.options.pendingStore.load(this.options.profileId, this.lifetime.signal);
+      let pending: ConjugationPending | null = null;
+      try { pending = await this.options.pendingStore.load(this.options.profileId, this.lifetime.signal); }
+      catch (error: unknown) {
+        // Q27: a pointer without its content — the command is known by its ID only; nothing is written or sent for it.
+        if (!lostEnvelopeError(error)) throw error;
+        if (!this.live()) return;
+        this.lost = lostCommand(error, this.options.profileId);
+      }
       if (!this.live()) return;
       this.pending = pending; this.loaded = true;
       if (pending) this.registry?.hold(pending.intent.command_id);
-      this.ownIdentity = !pending || sameId(pending.clientInstanceId, this.options.clientInstanceId) && pending.pair === this.options.pair;
+      else if (this.lost) this.registry?.hold(this.lost.commandId);
+      this.ownIdentity = this.lost ? sameId(this.lost.clientInstanceId, this.options.clientInstanceId) && this.lost.pair === this.options.pair
+        : !pending || sameId(pending.clientInstanceId, this.options.clientInstanceId) && pending.pair === this.options.pair;
     }
     if (this.outcome) { await this.clearSettled(); return; }
+    if (this.lost) { await this.reconcileLost(this.lost); return; }
     const pending = this.pending;
     if (!pending) { this.phase = "idle"; return; }
     if (conjugationLane(pending.intent) !== this.options.lane) throw new PendingStoreError("invalid");
@@ -254,6 +282,58 @@ export class ConjugationCommandController {
         this.view = this.addressedView(pending.intent, read, resultAddressed(pending.intent));
         this.problem = retryProblem(pending.intent, this.view, pending.pair);
         this.retryVerified = this.problem === "not_found";
+      }
+    }
+    this.phase = "unresolved";
+  }
+  /**
+   * Q27 (C458/C467): a lost answer or grade is read by its own ID only. Its acceptance is its ordinary recovery (a
+   * restored result view); a definite absence with the final closure of its session proves it never applies; any other
+   * absence leaves it unresolved without a resend. Stop follows the document's own rights (a confirmed open session).
+   */
+  private async reconcileLost(lost: LostCommand): Promise<void> {
+    const intent = { command_id: lost.commandId, kind: lost.kind, session_id: lost.sessionId, assignment_id: lost.assignmentId,
+      ...(lost.kind === "result.grade" ? { result_id: lost.resultId!, expected_result_version: lost.expectedResultVersion! } : {}),
+      payload: {} } as unknown as ConjugationIntent;
+    if (lost.mismatch) { this.problem = "mismatch"; this.phase = "unresolved"; return; }
+    if (!this.options.checkLost) { this.problem = "lost_envelope"; this.phase = "unresolved"; return; }
+    const reply = await this.options.checkLost(lost);
+    if (!this.live()) return;
+    if (reply.outcome === "accepted") {
+      this.outcome = "accepted";
+      this.resolved = this.address(intent);
+      this.resolved.objectVersion = reply.command.object_version;
+      if (uuid(reply.command.action_id)) this.resolved.actionId = reply.command.action_id;
+      if (uuid(reply.command.result_id)) this.resolved.resultId = reply.command.result_id;
+      this.rejectionCode = null;
+      if (this.observe(reply.state_version) && this.ownIdentity) this.view = this.addressedView(intent, reply, "step" in reply);
+      else this.clearView();
+      await this.clearSettled();
+      return;
+    }
+    this.registry?.settled("not_recorded");
+    if (!this.observe(reply.state_version)) this.problem = "stale_response";
+    else {
+      const problem = lostMissingProblem(reply, lost, this.options);
+      if (problem === "not_applied") {
+        this.outcome = "not_applied"; this.resolved = this.address(intent);
+        this.closedSession = structuredClone(reply.closed_session!);
+        await this.clearSettled(); return;
+      }
+      if (problem !== null) this.problem = problem;
+      else {
+        // Its session is read before anything else: an open one leaves Stop to the document's usual rights.
+        const read = await this.options.read({ ...intent, kind: "answer.submit" } as ConjugationIntent);
+        if (!this.live()) return;
+        if (!this.observe(read.state_version)) this.problem = "stale_response";
+        else {
+          this.view = this.addressedView({ ...intent, kind: "answer.submit" } as ConjugationIntent, read, false);
+          const step = this.view?.kind === "session" ? this.view.current : null;
+          const open = !!step && "session_id" in step && sameId(step.session_id, lost.sessionId)
+            && (step.status === "active" || step.status === "summary") && "pair" in step && step.pair === this.options.pair;
+          this.lostOpen = open;
+          this.problem = open ? "lost_envelope" : step && "status" in step && step.status === "closed" ? "closed" : "step_changed";
+        }
       }
     }
     this.phase = "unresolved";
@@ -301,7 +381,7 @@ export class ConjugationCommandController {
     }
   }
   begin(action: ConjugationTransition): Promise<void> {
-    if (!this.live() || this.running || !this.loaded || this.pending || !["idle", "settled"].includes(this.phase)) return this.running ?? Promise.resolve();
+    if (!this.live() || this.running || !this.loaded || this.pending || this.lost || !["idle", "settled"].includes(this.phase)) return this.running ?? Promise.resolve();
     const candidate = { ...action, command_id: this.options.clientInstanceId };
     if (Object.hasOwn(action, "command_id") || !validConjugationIntent(candidate) || conjugationLane(candidate) !== this.options.lane) return Promise.reject(new Error("invalid conjugation action"));
     let intent: ConjugationIntent;

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { id } from "../learning/learningFixtures.test-support";
 import { createFeedbackApi, FEEDBACK_TEXT_MAX_UTF16, feedbackTextLength, overFeedbackLimit, type FeedbackIntent } from "./feedbackApi";
-import { feedbackWorld, makeController, pendingRecord, slot } from "./feedbackFixtures.test-support";
+import { feedbackWorld, makeController, pendingRecord, slot , seedFeedback } from "./feedbackFixtures.test-support";
 import { testGate } from "../commands/testGate.test-support";
 
 // R7-01 (К19-042, П5-022): 3700 UTF-16 code units, the unit of String.length and of the server (core TEXT_MAX_UTF16).
@@ -94,7 +94,7 @@ describe("the api layer is a second guard", () => {
 describe("an old stored intent over the limit does not lock the form", () => {
   it("the retry is refused without a request, the record is dropped, the text stays to be shortened", async () => {
     const world = feedbackWorld();
-    world.f.values.set(slot, pendingRecord(id(300), "a".repeat(3701)));
+    seedFeedback(world.f.values, pendingRecord(id(300), "a".repeat(3701)));
     const { controller } = makeController(world);
     await controller.refresh();
     expect(controller.snapshot()).toMatchObject({ phase: "unresolved", problem: "not_sent", canRetry: true });

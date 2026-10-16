@@ -9,6 +9,7 @@ import { gate, replaceDocument, watchFlash } from "../app/flashWatch.test-suppor
 import { app, answer, settingsRefusalText, compatibility, exchange, field, loseReply, offlineStudy, pairText, requests, row, startWords,
   useWrittenAppEnvironment } from "./writtenApp.test-support";
 import { deferred, id, profile, response } from "./writtenFixtures.test-support";
+import { lsPendingRaw } from "../commands/lsPending.test-support";
 
 useWrittenAppEnvironment();
 
@@ -518,7 +519,7 @@ describe("Written quiz through the actual App document", () => {
     // as A sent it; B, which loaded the slot before, sends nothing of it (CT §6.1 п. 5, Codex C093 п. 5).
     const answer = a.posts().find(post => post.document_id === old && post.kind === "answer.submit")!;
     const { client_instance_id: _client, document_id: _document, ...intent } = answer;
-    expect(JSON.parse(localStorage.getItem("wortly.pending.written_session")!).intent).toEqual(intent);
+    expect(JSON.parse(lsPendingRaw("wortly.pending.written_session")!).intent).toEqual(intent);
     expect(a.posts().filter(post => post.document_id !== old)).toHaveLength(0);
   });
 
@@ -556,7 +557,7 @@ describe("Written while the window checks its document", () => {
     await waitFor(() => expect(r.foregrounds()).toBe(1));
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 50)); });
     expect(watch.seen).toEqual([]);
-    expect(JSON.parse(localStorage.getItem("wortly.pending.written_session")!).intent).toMatchObject({ kind: "answer.submit" });
+    expect(JSON.parse(lsPendingRaw("wortly.pending.written_session")!).intent).toMatchObject({ kind: "answer.submit" });
     await act(async () => { hold.open(); });
     await screen.findByRole("heading", { name: "Wortly уже открыт" });
     watch.stop();

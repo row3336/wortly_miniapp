@@ -10,6 +10,7 @@ import { staleCommand } from "../app/openRules.test-support";
 import { writtenPrimaryKey } from "./writtenPending";
 import { cancelDue } from "../commands/startCancel";
 import { pageSendCounter } from "../commands/laneRecovery";
+import { pendingRaw, hasPending } from "../commands/pendingSeed.test-support";
 
 /** The core's DOCUMENT_STALE envelope of this command (study/coordinator.py; an answer kind is flattened). */
 const stale = (request: Request) => response(staleCommand(request.body!.command_id, request.body!.session_id, 1, request.kind!), 409);
@@ -320,26 +321,26 @@ describe("refusals during recovery (8.10–8.14)", () => {
     // The conflicting record stays until a confirmed closure (Я17, CP4): the lane keeps it, no new action starts.
     expect(other.view.snapshot()).toMatchObject({ problem: "mismatch", canRetryPrimary: false, canSubmit: false,
       commands: { canBegin: false, primary: { pending: true } } });
-    expect(other.values.has("wortly.pending.written_session")).toBe(true);
+    expect(hasPending(other.values, "wortly.pending.written_session")).toBe(true);
   });
 });
 
 describe("D-STALE-WINDOW: the core's DOCUMENT_STALE envelope on a send (C091 §1)", () => {
   const intentOf = (post: Record<string, unknown>) => { const { client_instance_id: _c, document_id: _d, ...intent } = post; return intent; };
-  const kept = (h: ReturnType<typeof harness>) => h.values.has(writtenPrimaryKey) ? JSON.parse(h.values.get(writtenPrimaryKey)!).intent : null;
+  const kept = (h: ReturnType<typeof harness>) => hasPending(h.values, writtenPrimaryKey) ? JSON.parse(pendingRaw(h.values, writtenPrimaryKey)!).intent : null;
   it("3.1.4 / 3.1.5 the first send refused, the window replaced: the record stays as sent, nothing more goes out", async () => {
     const h = harness(); await h.started();
     h.route(request => request.kind === "answer.submit" ? stale(request) : undefined);
     vi.mocked(h.storage.remove).mockClear();
     await h.view.submit(); await tick();
-    const raw = h.values.get(writtenPrimaryKey);
+    const raw = pendingRaw(h.values, writtenPrimaryKey);
     expect(kept(h)).toEqual(intentOf(h.answers()[0]));
     expect(h.view.snapshot().commands.primary).toMatchObject({ phase: "unresolved", pending: true, outcome: null, problem: "window_stale" });
     expect(h.recovery()).toMatchObject({ state: { name: "window_check" }, sends: 1, transmitted: 1 });
     const recovery = h.view.snapshot().commands.recovery!;
     h.revoke(); await h.run(10 * 60_000, 5000);
     expect(h.answers()).toHaveLength(1);
-    expect(h.values.get(writtenPrimaryKey)).toBe(raw);
+    expect(pendingRaw(h.values, writtenPrimaryKey)).toBe(raw);
     expect(h.storage.remove).not.toHaveBeenCalledWith(writtenPrimaryKey);
     // The replaced window keeps the count of its send too (D-CP5 9.2.6: window_replaced keeps the budget).
     expect(await pageSendCounter(h.storage).load(recovery.commandId!)).toMatchObject({ reserved: 1, transmitted: 1 });
@@ -369,7 +370,7 @@ describe("D-STALE-WINDOW: the core's DOCUMENT_STALE envelope on a send (C091 §1
     expect(sent[1].command_id).toBe(sent[0].command_id);
     expect(h.checks(sent[0].command_id)).toBeGreaterThanOrEqual(1);
     expect(h.recovery()).toMatchObject({ state: { name: "settled" }, sends: 2, transmitted: 2 });
-    expect(h.values.has(writtenPrimaryKey)).toBe(false);
+    expect(hasPending(h.values, writtenPrimaryKey)).toBe(false);
   });
   /** W2: another page (its own page memory over the same shared storage) with another live document of this installation. */
   function otherPage(h: ReturnType<typeof harness>, documentId: string) {
@@ -420,7 +421,7 @@ describe("D-STALE-WINDOW: the core's DOCUMENT_STALE envelope on a send (C091 §1
     // W1's own check by ID found the fact before any retry; the fact stays a fact and the record is settled.
     expect(h.view.snapshot().phase).toBe("disposed");
     expect(w2.snapshot().commands.primary).toMatchObject({ pending: false });
-    expect(h.values.has(writtenPrimaryKey)).toBe(false);
+    expect(hasPending(h.values, writtenPrimaryKey)).toBe(false);
   });
   it("3.1.7 ii the early send never arrived: W2 loads X and only checks it; X is never sent with W2's document", async () => {
     const { h, w2, x } = await replaced(false);
@@ -562,7 +563,7 @@ describe("an ended recovery shows the server's state (CT §6.1 п. 7, QA CP2 Н2
     expect(h.recovery()?.state).toEqual({ name: "refused", code: "VALIDATION_FAILED" });
     expect(h.view.snapshot()).toMatchObject({ phase: "question", question: { id: id(6), status: "presented" }, problem: null,
       canRetryPrimary: false, canForget: true, canStop: true, commands: { primary: { pending: false } } });
-    expect(h.values.has("wortly.pending.written_session")).toBe(false);
+    expect(hasPending(h.values, "wortly.pending.written_session")).toBe(false);
     await h.run(60_000);
     expect(h.answers()).toHaveLength(1);
     refuse = false; h.view.setDraft("Haus"); await h.view.submit(); await tick();

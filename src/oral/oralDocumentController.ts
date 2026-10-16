@@ -7,6 +7,7 @@ import { onlyCheckedAbsent } from "../commands/commandLane";
 import { createOralApi, type OralRead } from "./oralApi";
 import { OralCommandController, type OralCommandSnapshot, type OralTransition } from "./oralCommandController";
 import type { OralCommandLane, OralSessionPendingStore, OralStopPendingStore } from "./oralPending";
+import { lostAddress } from "../commands/lostEnvelope";
 
 type AccessCredentials = Parameters<Parameters<OpenedAccess["run"]>[0]>[0];
 
@@ -126,6 +127,10 @@ export class OralDocumentController {
       check: intent => options.transport.gate.runReadback(intent.command_id, ticket =>
         this.exchange(({ token, proof, clientInstanceId, documentId }) =>
           api.status(token, proof, { ...intent, client_instance_id: clientInstanceId, document_id: documentId }, ticket))),
+      // Q27 (C467): a lost self-assessment is read by its ID under the same ticket and open handle; it is never sent.
+      checkLost: lost => options.transport.gate.runReadback(lost.commandId, ticket =>
+        this.exchange(({ token, proof, clientInstanceId, documentId }) =>
+          api.statusLost(token, proof, lostAddress(lost, { client_instance_id: clientInstanceId, document_id: documentId }), ticket))),
       gate: options.transport.gate, family: "oral",
       send: intent => this.exchange(({ token, proof, clientInstanceId, documentId }) => {
         if (!this.active(lane) || this.sendEpoch[lane] !== this.activityEpoch) throw new ClosedAccessError();

@@ -13,6 +13,7 @@ import { WrittenViewController } from "./writtenViewController";
 import { writtenPrimaryKey } from "./writtenPending";
 import { pending, response, writtenFixture } from "./writtenFixtures.test-support";
 import type { WrittenIntent } from "./writtenIntent";
+import { seedRaw } from "../commands/pendingSeed.test-support";
 
 const owners: WrittenViewController[] = [];
 afterEach(() => { owners.splice(0).forEach(owner => owner.dispose()); vi.useRealTimers(); });
@@ -66,7 +67,7 @@ describe("MQ8 contract control (not an App trace): sameId of the resolved sessio
     b.dispose();
     // A new owner of S on this page (a remount with the open session) finds Y in the shared slot.
     h.world.older = { sessionId: s2, commandId: y.command_id as string };
-    h.values.set(writtenPrimaryKey, JSON.stringify(pending(y as WrittenIntent)));
+    seedRaw(h.values, writtenPrimaryKey, JSON.stringify(pending(y as WrittenIntent)), "00000000-0000-4000-8000-000000000050");
     const c = h.owner(s);
     const mark = h.fetcher.mock.calls.length;
     await c.refresh();

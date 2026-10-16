@@ -6,6 +6,7 @@ import { previewContent } from "./learningPreview.test-support";
 import { learningViewFixture } from "./learningView.test-support";
 import type { LearningViewController } from "./learningViewController";
 import { testGate } from "../commands/testGate.test-support";
+import { pendingRaw, hasPending, seedRaw, pointerKeyOf } from "../commands/pendingSeed.test-support";
 
 const owners: LearningViewController[] = [];
 afterEach(() => { owners.splice(0).forEach(owner => owner.dispose()); vi.useRealTimers(); });
@@ -24,15 +25,15 @@ async function exitDuringStartSave(outcome: Outcome) {
   const gate = deferred<void>(); let holding = true;
   const get = vi.mocked(f.storage.get).getMockImplementation()!, set = vi.mocked(f.storage.set).getMockImplementation()!;
   vi.mocked(f.storage.get).mockImplementation(async key => {
-    if (holding && key === primaryKey) {
+    if (holding && key === pointerKeyOf(primaryKey, id(50))) {
       holding = false; await gate.promise;
-      if (outcome === "changed") f.values.set(primaryKey, JSON.stringify(pending(original(action(), 777))));
-      if (outcome === "invalid") f.values.set(primaryKey, "{not json");
+      if (outcome === "changed") seedRaw(f.values, primaryKey, JSON.stringify(pending(original(action(), 777))), id(50));
+      if (outcome === "invalid") seedRaw(f.values, primaryKey, "{not json", id(50));
     }
     return get(key);
   });
   vi.mocked(f.storage.set).mockImplementation(async (key, value) => {
-    if (outcome === "unavailable" && key === primaryKey) throw new Error("quota");
+    if (outcome === "unavailable" && key === pointerKeyOf(primaryKey, id(50))) throw new Error("quota");
     return set(key, value);
   });
   const updates = () => f.onUpdate.mock.calls.length;
@@ -127,7 +128,7 @@ async function holdStartSave(sessionId: string | null = null) {
   const state = { gate: deferred<void>(), holding: true };
   const get = vi.mocked(f.storage.get).getMockImplementation()!;
   vi.mocked(f.storage.get).mockImplementation(async key => {
-    if (state.holding && key === primaryKey) { state.holding = false; await state.gate.promise; }
+    if (state.holding && key === pointerKeyOf(primaryKey, id(50))) { state.holding = false; await state.gate.promise; }
     return get(key);
   });
   const kinds = () => f.posts().map(post => `${post.kind}:${post.session_id}`);
@@ -241,7 +242,7 @@ describe("Learning: a start stored but never sent because the open handle was re
     expect(after.canStop).toBe(false);
     expect(after.commands.primary).toMatchObject({ pending: true, preparingStart: false, startNotSent: true });
     expect(kinds()).toEqual([]);
-    expect(JSON.parse(f.values.get(primaryKey)!).intent).toMatchObject({ kind: "session.start", session_id: y, command_id: startId });
+    expect(JSON.parse(pendingRaw(f.values, primaryKey)!).intent).toMatchObject({ kind: "session.start", session_id: y, command_id: startId });
     await f.view.stop(); await tick();
     expect(kinds()).toEqual([]);
     // What the host does on a new open handle: one check of the record, then the one send of the very same start.
@@ -249,7 +250,7 @@ describe("Learning: a start stored but never sent because the open handle was re
     expect(startsOf(f)).toEqual([expect.objectContaining({ command_id: startId, session_id: y })]);
     expect(kinds()).toEqual([`session.start:${y}`]);
     expect(f.view.snapshot()).toMatchObject({ sessionId: y, canStop: true, commands: { primary: { pending: false, startNotSent: false } } });
-    expect(f.values.has(primaryKey)).toBe(false);
+    expect(hasPending(f.values, primaryKey)).toBe(false);
     // Nothing more by itself, and a second check sends nothing again.
     await f.view.refresh(); for (let second = 0; second < 30; second += 5) await tick(5000);
     expect(startsOf(f)).toHaveLength(1);
@@ -393,7 +394,7 @@ describe("Learning: outside 33.1-А nothing is sent by itself", () => {
     const y = id(40), record = { schemaVersion: 1, profileId: id(50), clientInstanceId: id(1), pair: "ru-de",
       intent: { command_id: id(41), kind: "session.start", session_id: y, payload: { mode: "learning" } } };
     const f = learningViewFixture("normal", null); owners.push(f.view);
-    f.values.set(primaryKey, JSON.stringify(record));
+    seedRaw(f.values, primaryKey, JSON.stringify(record), id(50));
     absentStart(f); await f.view.refresh(); await tick(); await tick(5000);
     await f.view.refresh(); await tick(5000);
     expect(f.posts()).toEqual([]);
@@ -431,7 +432,7 @@ describe("Learning: the F6 erase is only for this window's own never sent start 
     const { f, y, startId } = await storedNotSent(); foundByRead(f, y, startId, () => openSession(y));
     const next = f.make();
     await next.refresh(); await tick(5000);
-    expect(f.values.get(primaryKey)).toBeDefined(); expect(f.posts()).toEqual([]);
+    expect(pendingRaw(f.values, primaryKey)).toBeDefined(); expect(f.posts()).toEqual([]);
     expect(next.snapshot().primary).toMatchObject({ pending: true, startNotSent: false });
     next.dispose();
   });
@@ -447,14 +448,14 @@ describe("Learning: the F6 erase is only for this window's own never sent start 
     const y = f.view.snapshot().sessionId!, startId = f.view.snapshot().commands.primary.pendingIntent!.command_id;
     foundByRead(f, y, startId, () => openSession(y));
     await f.view.refresh(); await tick(5000);
-    expect(f.values.get(primaryKey)).toBeDefined(); expect(startsOf(f)).toHaveLength(1);
+    expect(pendingRaw(f.values, primaryKey)).toBeDefined(); expect(startsOf(f)).toHaveLength(1);
   });
   it("N9: another window's record in the slot at the moment of clearing stays untouched", async () => {
     const { f, y, startId } = await storedNotSent(); foundByRead(f, y, startId, () => openSession(y));
     const other = JSON.stringify(pending(original(action(), 777)));
-    f.values.set(primaryKey, other);
+    seedRaw(f.values, primaryKey, other, id(50));
     await f.view.refresh(); await tick(5000);
-    expect(f.values.get(primaryKey)).toBe(other); expect(f.posts()).toEqual([]);
+    expect(pendingRaw(f.values, primaryKey)).toBe(other); expect(f.posts()).toEqual([]);
   });
   it("N12: a failed clear keeps the record and the pending start, sends nothing; the next check clears it and recovers S", async () => {
     const { f, y, startId } = await storedNotSent(); foundByRead(f, y, startId, () => openSession(y));
@@ -462,11 +463,11 @@ describe("Learning: the F6 erase is only for this window's own never sent start 
     const remove = vi.mocked(f.storage.remove).getMockImplementation()!;
     vi.mocked(f.storage.remove).mockImplementation(async key => { if (broken) throw new Error("quota"); return remove(key); });
     await f.view.refresh(); await tick(5000);
-    expect(f.values.get(primaryKey)).toBeDefined(); expect(f.posts()).toEqual([]);
+    expect(pendingRaw(f.values, primaryKey)).toBeDefined(); expect(f.posts()).toEqual([]);
     expect(f.view.snapshot().commands.primary.pending).toBe(true);
     broken = false;
     await f.view.refresh(); await tick(5000);
-    expect(f.posts()).toEqual([]); expect(f.values.get(primaryKey)).toBeUndefined();
+    expect(f.posts()).toEqual([]); expect(pendingRaw(f.values, primaryKey)).toBeUndefined();
     expect(f.view.snapshot()).toMatchObject({ sessionId: y, phase: "preview" });
   });
   it("N13: a session read below the version the status raised erases nothing (stale_response)", async () => {
@@ -481,7 +482,7 @@ describe("Learning: the F6 erase is only for this window's own never sent start 
       return handler(url, init);
     });
     await f.view.refresh(); await tick(5000);
-    expect(f.values.get(primaryKey)).toBeDefined(); expect(f.posts()).toEqual([]);
+    expect(pendingRaw(f.values, primaryKey)).toBeDefined(); expect(f.posts()).toEqual([]);
     expect(f.view.snapshot().commands.primary).toMatchObject({ pending: true, problem: "stale_response" });
   });
   // F9 (C231): an already created session is recovered whatever its open phase (33.1/35.1), the summary included.
@@ -489,7 +490,7 @@ describe("Learning: the F6 erase is only for this window's own never sent start 
     const { f, y, startId } = await storedNotSent(); foundByRead(f, y, startId, () => ({ ...current(y), status: "summary", assignment: null }));
     await f.view.refresh(); await tick(5000);
     for (let second = 0; second < 30; second += 5) await tick(5000);
-    expect(f.values.get(primaryKey)).toBeUndefined(); expect(f.posts()).toEqual([]);
+    expect(pendingRaw(f.values, primaryKey)).toBeUndefined(); expect(f.posts()).toEqual([]);
     expect(f.view.snapshot()).toMatchObject({ sessionId: y, commands: { primary: { pending: false, startNotSent: false } } });
   });
 });

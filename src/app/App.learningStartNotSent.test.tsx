@@ -9,6 +9,7 @@ import { learningViewFixture } from "../learning/learningView.test-support";
 import { profile, response } from "../learning/learningFixtures.test-support";
 import { settingsResponse } from "../settings/settingsRead.test-support";
 import { App } from "./App";
+import { lsPendingRaw } from "../commands/lsPending.test-support";
 
 const LSLOT = "wortly.pending.learning_session";
 /** The App's real browser storage, with one held read of the Learning slot (the start's save) while armed. */
@@ -113,7 +114,7 @@ async function storedDuringForeground(extraForeground = false) {
   fireEvent.click(exit()); foreground(); await settled(10);
   expect(s.opens).toContain("foreground");
   expect(exit().disabled).toBe(true);
-  const record = JSON.parse(localStorage.getItem(LSLOT) ?? "null");
+  const record = JSON.parse(lsPendingRaw(LSLOT) ?? "null");
   hold.release();
   if (extraForeground) foreground();
   return { s, exit, record };
@@ -129,7 +130,7 @@ describe("App Learning: a start stored while a foreground open replaced its hand
     const sentId = JSON.parse(String(s.fetcher.mock.calls.find(([url, init]) => init?.method === "POST" && String(url).endsWith("/commands"))![1]!.body)).command_id;
     expect(s.checks()).toBeGreaterThan(0);
     // The old handle never sent it: the one POST went after the check, through the current handle, with the stored ID.
-    expect(localStorage.getItem(LSLOT)).toBeNull();
+    expect(lsPendingRaw(LSLOT)).toBeNull();
     await waitFor(() => expect(exit().disabled).toBe(false));
     expect(screen.queryByText("Завершаем занятие…")).toBeNull();
     expect(sentId).toMatch(/^[0-9a-f-]{36}$/);

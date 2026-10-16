@@ -9,6 +9,7 @@ import { testGate } from "../commands/testGate.test-support";
 import type { WriteGate } from "../commands/writeGate";
 import { WriteGate as RealWriteGate } from "../commands/writeGate";
 import { ManualClock } from "../commands/writeGate.test-support";
+import { seedRaw } from "../commands/pendingSeed.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const context = (): ManualContext => ({ profileId: id(1), clientInstanceId: id(2), documentId: id(3),
@@ -64,7 +65,7 @@ describe("manual selection controller", () => {
     expect(f.api.change).not.toHaveBeenCalled();
     await f.controller.refresh();
     vi.mocked(f.api.change).mockImplementationOnce(async (_token, _proof, request) => {
-      expect(JSON.parse([...f.disk.values.values()][0])).toEqual(pending());
+      expect(JSON.parse([...f.disk.values.values()][0]).record).toEqual(pending()); // the pointer of this profile (§2)
       expect(f.controller.snapshot().canChange).toBe(false);
       expect(request).toEqual({ ...pending().intent, client_instance_id: id(2), document_id: id(3) });
       return accepted();
@@ -135,12 +136,14 @@ describe("manual selection controller", () => {
       problem: { reason: changed === "client" ? "client_changed" : "pair_changed" } });
   });
 
-  it("drops the previous account's temporary data and never queries its command", async () => {
+  // §3.4: the previous account's record stays under its own pointer; the new account neither reads nor removes it.
+  it("leaves the previous account's temporary data under its own pointer and never queries its command", async () => {
     const disk = persisted(); await seed(disk);
+    const before = [...disk.values];
     const f = fixture({ disk, context: { profileId: id(9) } });
     await f.controller.refresh();
     expect(f.api.status).not.toHaveBeenCalled(); expect(f.api.change).not.toHaveBeenCalled();
-    expect(disk.values.size).toBe(0); expect(f.controller.snapshot().pending).toBeNull();
+    expect([...disk.values]).toEqual(before); expect(f.controller.snapshot().pending).toBeNull();
   });
 
   it("does not clear an unknown intent when status returns another profile", async () => {
@@ -247,7 +250,7 @@ describe("manual selection controller", () => {
     await f.controller.change(id(4), true); await f.controller.retry();
     expect(f.controller.snapshot()).toMatchObject({ pending: { mismatch: true }, canRetry: false, canChange: false });
     await f.controller.refresh();
-    expect(JSON.parse([...f.disk.values.values()][0]).mismatch).toBe(true);
+    expect(JSON.parse([...f.disk.values.values()][0]).record.mismatch).toBe(true);
     expect(f.api.change).toHaveBeenCalledOnce(); expect(f.api.status).not.toHaveBeenCalled();
     expect(f.controller.snapshot().problem?.reason).toBe("mismatch");
   });
@@ -295,7 +298,7 @@ describe("manual selection controller", () => {
   it.each(["read failure", "corrupt data"])("blocks new commands on %s", async reason => {
     const f = fixture();
     if (reason === "read failure") vi.mocked(f.disk.storage.get).mockRejectedValueOnce(new Error("read failure"));
-    else f.disk.values.set("wortly.pending.manual", "broken");
+    else seedRaw(f.disk.values, "wortly.pending.manual", "broken", id(1));
     await f.controller.refresh(); await f.controller.change(id(4), true);
     expect(f.controller.snapshot().canChange).toBe(false); expect(f.api.change).not.toHaveBeenCalled();
     expect(f.newId).not.toHaveBeenCalled();
@@ -304,12 +307,12 @@ describe("manual selection controller", () => {
   it("does not erase a different pending record during completion cleanup", async () => {
     const f = fixture(); await f.controller.refresh();
     vi.mocked(f.api.change).mockImplementationOnce(async () => {
-      f.disk.values.set("wortly.pending.manual", JSON.stringify({ ...pending(), intent: { ...pending().intent, command_id: id(999) } }));
+      seedRaw(f.disk.values, "wortly.pending.manual", JSON.stringify({ ...pending(), intent: { ...pending().intent, command_id: id(999) } }), id(1));
       return accepted();
     });
     await f.controller.change(id(4), true);
     expect(f.controller.snapshot()).toMatchObject({ canChange: false, problem: { reason: "pending_changed" } });
-    expect(JSON.parse([...f.disk.values.values()][0]).intent.command_id).toBe(id(999));
+    expect(JSON.parse([...f.disk.values.values()][0]).record.intent.command_id).toBe(id(999));
   });
 
   it("a UI snapshot cannot mutate the replay payload", async () => {

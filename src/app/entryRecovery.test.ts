@@ -15,6 +15,7 @@ import { ManualClock, settle } from "../commands/writeGate.test-support";
 import type { EntrySnapshot } from "./entryController";
 import { createTodayApi } from "../today/todayApi";
 import { createJsonTransport } from "../api/http";
+import { hasPending, pendingRaw } from "../commands/pendingSeed.test-support";
 
 const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const PROFILE = uuid(1), TARGET = uuid(50);
@@ -370,7 +371,7 @@ describe("remoteAction and R10 (the own stop_remote in busy/remote without opene
     expect(order).toEqual(["POST /client/open", `GET /commands/${uuid(800)}`, "POST /client/open"]);
     expect(f.opens.map(body => body.event)).toEqual(["open", "foreground"]);
     expect(f.state()).toEqual({ kind: "opened" });
-    expect(storage.values.has("wortly.pending.remote_stop")).toBe(false);
+    expect(hasPending(storage.values, "wortly.pending.remote_stop")).toBe(false);
     expect(f.posts("/commands")).toBe(0);
   });
 
@@ -379,7 +380,7 @@ describe("remoteAction and R10 (the own stop_remote in busy/remote without opene
     const f = chain({ storage }); f.script.busy = true;
     f.script.status.push(() => { f.script.busy = false; f.script.version = "11"; return status(801, { status: "unavailable" }); });
     await f.controller.start(); await settle();
-    expect(storage.values.has("wortly.pending.remote_stop")).toBe(false);
+    expect(hasPending(storage.values, "wortly.pending.remote_stop")).toBe(false);
     expect(f.posts("/commands")).toBe(0);
     expect(f.opens.map(body => body.event)).toEqual(["open", "foreground"]);
   });
@@ -391,7 +392,7 @@ describe("remoteAction and R10 (the own stop_remote in busy/remote without opene
     await f.controller.start(); await settle(); await f.clock.advanceTo(60_000);
     expect(f.state()).toMatchObject({ kind: "remote", remote: { pending: true, problem: "not_found", phase: "unresolved" } });
     expect(f.posts("/commands")).toBe(0);
-    expect(storage.values.has("wortly.pending.remote_stop")).toBe(true);
+    expect(hasPending(storage.values, "wortly.pending.remote_stop")).toBe(true);
     expect(f.opens).toHaveLength(1);
   });
 
@@ -402,7 +403,7 @@ describe("remoteAction and R10 (the own stop_remote in busy/remote without opene
     await f.controller.start(); await settle(); await f.clock.advanceTo(120_000);
     expect(f.opens).toHaveLength(1);
     expect(f.calls.some(call => call.startsWith("GET /commands/"))).toBe(false);
-    expect(storage.values.has("wortly.pending.remote_stop")).toBe(true);
+    expect(hasPending(storage.values, "wortly.pending.remote_stop")).toBe(true);
   });
 
   it("AC-116: the window goes unavailable while the GET runs — the late accepted changes nothing, the pending stays", async () => {
@@ -415,7 +416,7 @@ describe("remoteAction and R10 (the own stop_remote in busy/remote without opene
     f.gate.noteAccessLost(); // what an `unavailable` of this generation does to the context (R10 п.3)
     answer(status(804, { session_id: TARGET, status: "closed", close_reason: "remote_stop" }));
     await starting; await settle();
-    expect(storage.values.has("wortly.pending.remote_stop")).toBe(true);
+    expect(hasPending(storage.values, "wortly.pending.remote_stop")).toBe(true);
     expect(f.opens.map(body => body.event)).toEqual(["open"]);
   });
 });
@@ -477,7 +478,7 @@ describe("N3/visibility at the entry (C365): no automatic request of a hidden wi
     current: { session_id: TARGET, status: "closed", close_reason: "remote_stop" }, state_version: "11" }));
     await settle(); await new Promise(resolve => setTimeout(resolve, 5));
     expect(f.opens).toHaveLength(1);
-    expect(storage.values.has("wortly.pending.remote_stop")).toBe(false);
+    expect(hasPending(storage.values, "wortly.pending.remote_stop")).toBe(false);
     f.gate.setVisible(true); f.controller.setVisible(true);
     await starting;
     expect(f.opens.map(body => body.event)).toEqual(["open", "foreground"]);
@@ -758,7 +759,7 @@ describe("fix3 (C382): the П01 episode — a definite SESSION_BUSY of the own s
     expect(f.calls.filter(call => call === `GET /commands/${stopId}`)).toHaveLength(1);
     expect(f.posts("/commands")).toBe(before + 1);
     expect(f.state()).toMatchObject({ kind: "opened" });
-    expect(f.storage.values.has("wortly.pending.remote_stop")).toBe(false);
+    expect(hasPending(f.storage.values, "wortly.pending.remote_stop")).toBe(false);
   });
 
   it("a generic screen foreground (no П01 intent) of the same busy closes the window (C388); so does the intent without an episode", async () => {
@@ -831,7 +832,7 @@ describe("fix3 (C382): the П01 episode — a definite SESSION_BUSY of the own s
       target_id: TARGET, object_version: null, action_id: null, result_id: null, context_id: null },
     current: { session_id: TARGET, status: "closed", close_reason: "remote_stop" }, state_version: "11" }));
     await checking; await settle();
-    expect(f.storage.values.has("wortly.pending.remote_stop")).toBe(true);
+    expect(hasPending(f.storage.values, "wortly.pending.remote_stop")).toBe(true);
   });
 });
 
@@ -850,7 +851,7 @@ describe("fix3 (C383): one UUID per intent on the П01 path — lost reply, not_
       .map(call => JSON.parse(String(call[1]!.body))).filter(body => body.kind === "session.stop_remote");
     const first = stops()[0];
     expect(first).toMatchObject({ session_id: TARGET, payload: { confirmed: true } });
-    const saved = () => JSON.parse(f.storage.values.get("wortly.pending.remote_stop")!).intent;
+    const saved = () => JSON.parse(pendingRaw(f.storage.values, "wortly.pending.remote_stop")!).intent;
     f.script.status.push(json({ command: { id: first.command_id, status: "not_found" }, current: profile(f.script.version), state_version: f.script.version }));
     await f.controller.checkRemoteStop(); await settle(); await f.clock.advanceTo(60_000);
     expect(f.state()).toMatchObject({ kind: "remote", remote: { pending: true, problem: "not_found" } });
@@ -956,7 +957,7 @@ describe("C400 (R10 п.1, ред.21): the manual repeat of «Проверить�
     f.script.stop.push("network");
     f.controller.requestRemoteStop(); await f.controller.confirmRemoteStop(); await settle();
     await f.clock.advanceTo(5_000); await settle();
-    const saved = f.storage.values.get("wortly.pending.remote_stop")!;
+    const saved = pendingRaw(f.storage.values, "wortly.pending.remote_stop")!;
     return { saved, stopId: JSON.parse(saved).intent.command_id as string };
   }
   const reads = (f: ReturnType<typeof chain>, stopId: string) => f.calls.filter(call => call.startsWith(`GET /commands/${stopId}`)).length;
@@ -976,7 +977,7 @@ describe("C400 (R10 п.1, ред.21): the manual repeat of «Проверить�
     expect(problems).toEqual(["not_found", "not_found", "not_found"]);
     expect(f.opens.length - opens).toBe(0);
     expect(f.posts("/commands") - posts).toBe(0);
-    expect(f.storage.values.get("wortly.pending.remote_stop")).toBe(saved);
+    expect(pendingRaw(f.storage.values, "wortly.pending.remote_stop")).toBe(saved);
   });
 
   it("the П01 context of a working window: the same — a new ticket for each explicit check, then the stop found applied", async () => {
@@ -999,7 +1000,7 @@ describe("C400 (R10 п.1, ред.21): the manual repeat of «Проверить�
     await f.controller.checkRemoteStop(); await settle();
     expect(reads(f, stopId)).toBe(2);
     expect(f.state()).toMatchObject({ kind: "opened" });
-    expect(f.storage.values.has("wortly.pending.remote_stop")).toBe(false);
+    expect(hasPending(f.storage.values, "wortly.pending.remote_stop")).toBe(false);
   });
 
   it("no automatic path reads after not_found: show, ready, the probe series and time send no GET; only the user's check does", async () => {
@@ -1014,7 +1015,7 @@ describe("C400 (R10 п.1, ред.21): the manual repeat of «Проверить�
     f.gate.closeByFailure(); await f.clock.advanceTo(120_000); await settle();
     expect(reads(f, stopId)).toBe(1);
     expect((f.state() as { remote: { problem: string } }).remote.problem).toBe("not_found");
-    expect(f.storage.values.get("wortly.pending.remote_stop")).toBe(saved);
+    expect(pendingRaw(f.storage.values, "wortly.pending.remote_stop")).toBe(saved);
     f.script.status.push(notFound(f, stopId));
     await f.controller.checkRemoteStop(); await settle();
     expect(reads(f, stopId)).toBe(2);

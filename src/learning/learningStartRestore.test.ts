@@ -3,6 +3,7 @@ import { tick } from "../commands/recoveryTime.test-support";
 import { action, deferred, id, original, pending, primaryKey, profile } from "./learningFixtures.test-support";
 import { learningViewFixture } from "./learningView.test-support";
 import type { LearningViewController } from "./learningViewController";
+import { pendingRaw, seedRaw, pointerKeyOf } from "../commands/pendingSeed.test-support";
 
 const owners: LearningViewController[] = [];
 afterEach(() => { owners.splice(0).forEach(owner => owner.dispose()); vi.useRealTimers(); });
@@ -21,7 +22,7 @@ function held(sessionId: string | null = null) {
   let holding = false;
   const base = vi.mocked(f.storage.get).getMockImplementation()!;
   vi.mocked(f.storage.get).mockImplementation(async key => {
-    if (holding && key === primaryKey) { holding = false; f.values.set(primaryKey, other()); await gate.promise; }
+    if (holding && key === pointerKeyOf(primaryKey, id(50))) { holding = false; seedRaw(f.values, primaryKey, other(), id(50)); await gate.promise; }
     return base(key);
   });
   return { ...f, reads: reads(f), hold: () => { holding = true; }, release: () => gate.resolve() };
@@ -45,7 +46,7 @@ describe("Learning: the view after a start dropped over another window's record"
     const updates = f.onUpdate.mock.calls.length;
     f.view.dispose(); f.release(); await starting; await tick();
     expect(f.onUpdate.mock.calls.length).toBe(updates);
-    expect(f.posts()).toEqual([]); expect(f.values.get(primaryKey)).toBe(other());
+    expect(f.posts()).toEqual([]); expect(pendingRaw(f.values, primaryKey)).toBe(other());
   });
   it("Stop during the await: «Выйти» is off while the start is stored (21.1-А); the dropped start returns to idle", async () => {
     vi.useFakeTimers(); const f = held(); await f.view.refresh();
@@ -61,9 +62,9 @@ describe("Learning: the view after a start dropped over another window's record"
     const f = learningViewFixture("normal", id(3)); owners.push(f.view); await f.view.refresh(); await tick();
     f.view.setDraft("Haus"); await f.view.submit(); await tick();
     expect(f.view.snapshot()).toMatchObject({ phase: "result_correct" });
-    const before = f.posts().length; f.values.set(primaryKey, other());
+    const before = f.posts().length; seedRaw(f.values, primaryKey, other(), id(50));
     await f.view.grade(5); await tick();
-    f.values.delete(primaryKey); await f.view.refresh(); await tick();
+    f.values.delete(pointerKeyOf(primaryKey, id(50))); await f.view.refresh(); await tick();
     for (let second = 0; second < 60; second += 5) await tick(5000);
     expect(f.posts()).toHaveLength(before);
     expect(f.view.snapshot()).toMatchObject({ phase: "result_correct", answer: { result: { grade: 4 } } });
@@ -71,12 +72,12 @@ describe("Learning: the view after a start dropped over another window's record"
   it("a start refused over an unreadable record: idle again; «check» reads no session of Y", async () => {
     vi.useFakeTimers();
     const v = learningViewFixture("normal", null), f = { ...v, reads: reads(v) }; owners.push(f.view); await f.view.refresh();
-    f.values.set(primaryKey, "{not json");
+    seedRaw(f.values, primaryKey, "{not json", id(50));
     const before = f.reads().length;
     await f.view.start(); await tick();
     expect(f.view.snapshot()).toMatchObject({ phase: "idle", sessionId: null, problem: "invalid_pending" });
     await f.view.refresh(); await tick();
     expect(f.reads().slice(before)).toEqual([]);
-    expect(f.posts()).toEqual([]); expect(f.values.get(primaryKey)).toBe("{not json");
+    expect(f.posts()).toEqual([]); expect(pendingRaw(f.values, primaryKey)).toBe("{not json");
   });
 });

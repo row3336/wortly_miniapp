@@ -7,6 +7,7 @@ import type { LearningCommandIntent } from "./learningCommandIntent";
 import type { LearningTransition } from "./learningCommandController";
 import { LearningDocumentCommands, type LearningDocumentSnapshot } from "./learningDocumentCommands";
 import { testGate } from "../commands/testGate.test-support";
+import { seedRaw } from "../commands/pendingSeed.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const primaryKey = "wortly.pending.learning_session", stopKey = "wortly.pending.learning_stop";
@@ -66,8 +67,8 @@ function deferred<T>() { let resolve!: (value: T) => void, reject!: (error: unkn
 function fixture(saved: Partial<Record<"primary" | "stop", LearningCommandIntent>> = {}, minimumStateVersion?: () => string | null) {
   hashInPlace();
   const values = new Map<string, string>([["unrelated", "keep"]]);
-  if (saved.primary) values.set(primaryKey, JSON.stringify(pending(saved.primary)));
-  if (saved.stop) values.set(stopKey, JSON.stringify(pending(saved.stop)));
+  if (saved.primary) seedRaw(values, primaryKey, JSON.stringify(pending(saved.primary)), id(50));
+  if (saved.stop) seedRaw(values, stopKey, JSON.stringify(pending(saved.stop)), id(50));
   const storage: AsyncStorage = { get: vi.fn(async key => values.get(key) ?? null),
     set: vi.fn(async (key, value) => { values.set(key, value); }), remove: vi.fn(async key => { values.delete(key); }) };
   let access: OpenedAccess, live = true, next = 100;

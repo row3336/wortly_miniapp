@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WrittenIntent } from "./writtenIntent";
 import { WrittenViewController } from "./writtenViewController";
 import { deferred, id, profile, tick, writtenFixture, type ServerOptions } from "./writtenFixtures.test-support";
+import { hasPending } from "../commands/pendingSeed.test-support";
 
 const owners: WrittenViewController[] = [];
 afterEach(() => { owners.splice(0).forEach(owner => owner.dispose()); vi.useRealTimers(); });
@@ -105,7 +106,7 @@ describe("one command_id per intent (Т02)", () => {
     // The changed step is a final outcome: the record goes and the screen continues by the server's state (CT §6.1 п. 7).
     expect(h.view.snapshot()).toMatchObject({ phase: "question", question: { id: id(6), status: "presented" }, problem: null,
       canRetryPrimary: false, canForget: true, commands: { primary: { pending: false }, recovery: { state: { name: "terminated", reason: "step_stale" } } } });
-    expect(h.values.has("wortly.pending.written_session")).toBe(false);
+    expect(hasPending(h.values, "wortly.pending.written_session")).toBe(false);
     const checks = h.gets(`/commands/${id(401)}`).length;
     await tick(60_000);
     expect(h.gets(`/commands/${id(401)}`)).toHaveLength(checks);
@@ -728,7 +729,7 @@ describe("a pair changed elsewhere and an empty Stop (M-WRITTEN-STUCK)", () => {
   async function newOwnerOfAnotherPair() {
     const h = harness({ cards: [6, 7] }); await h.started();
     h.loseReply(); const online = h.offline(); await h.answer("Haus");
-    await vi.waitFor(() => expect(h.values.has("wortly.pending.written_session")).toBe(true));
+    await vi.waitFor(() => expect(hasPending(h.values, "wortly.pending.written_session")).toBe(true));
     h.view.dispose();
     // Another device changed the pair: the server closed the old-pair session; this document is rebound to the new pair.
     closeElsewhere(h);

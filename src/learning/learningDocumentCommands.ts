@@ -7,6 +7,7 @@ import { createLearningSessionApi, type LearningSessionRead } from "./learningSe
 import { LearningSessionPendingStore, LearningStopPendingStore } from "./learningSessionPending";
 import type { LearningPageStarts } from "./learningPageStarts";
 import { PausedBeforeSendError } from "../commands/writeGate";
+import { lostAddress } from "../commands/lostEnvelope";
 
 export type LearningDocumentSnapshot = DocumentLanesSnapshot<LearningCommandSnapshot>;
 /**
@@ -66,6 +67,9 @@ export class LearningDocumentCommands extends DocumentLanes<LearningCommandSnaps
               ? results.status(credentials.token, credentials.proof, { ...intent, ...address }, ticket)
               : sessions.status(credentials.token, credentials.proof, { ...intent, ...address }, ticket);
           })),
+          // Q27 (C458/C467): a lost answer or grade is read by its ID under the same ticket and open handle; never sent.
+          checkLost: lost => gate.runReadback(lost.commandId, ticket => wiring.run(credentials =>
+            results.statusLost(credentials.token, credentials.proof, lostAddress(lost, wiring.origin(credentials)), ticket))),
           gate, family: "learning",
           read: reads.read, readResult: intent => reads.readResult(intent), onUpdate: wiring.onUpdate, page: options.page,
         });

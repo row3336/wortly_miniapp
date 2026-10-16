@@ -3,6 +3,7 @@ import { tick } from "../commands/recoveryTime.test-support";
 import type { LearningTransition } from "./learningCommandController";
 import { id, primaryKey, stopKey, profile, current, prefetched, closed, action, present, stop, original, resultRead, accepted, missing,
   response, deferred, fixture } from "./learningFixtures.test-support";
+import { pendingRaw, hasPending, pointerKeyOf, seedRaw } from "../commands/pendingSeed.test-support";
 
 afterEach(() => { vi.useRealTimers(); });
 
@@ -18,10 +19,10 @@ describe("Learning opened-document command owner", () => {
       f.values.set(key, value); await gate.promise;
     });
     const sending = f.owner.begin(transition);
-    await vi.waitFor(() => expect(f.values.has(key)).toBe(true));
+    await vi.waitFor(() => expect(hasPending(f.values, key)).toBe(true));
     f.replace({}, "fresh-token"); gate.resolve(); await sending;
     expect(f.fetcher).not.toHaveBeenCalled(); expect(f.owner.snapshot()[lane].pending).toBe(true);
-    expect(JSON.parse(f.values.get(key)!).intent).toEqual(command);
+    expect(JSON.parse(pendingRaw(f.values, key)!).intent).toEqual(command);
     f.fetcher.mockResolvedValueOnce(response(missing(command))).mockResolvedValueOnce(response({ current: prefetched(), state_version: "3" }));
     await f.owner.refresh();
     expect(f.fetcher.mock.calls.map(call => call[1]?.method)).toEqual(["GET", "GET"]);
@@ -30,7 +31,7 @@ describe("Learning opened-document command owner", () => {
     expect(f.fetcher.mock.calls.map(call => call[1]?.method)).toEqual(["GET", "GET", "POST"]);
     expect(JSON.parse(String(f.fetcher.mock.calls[2][1]?.body)).command_id).toBe(command.command_id);
     expect(f.fetcher.mock.calls[2][1]?.headers).toMatchObject({ Authorization: "Bearer fresh-token" });
-    expect(f.newId).toHaveBeenCalledOnce(); expect(f.values.has(key)).toBe(false);
+    expect(f.newId).toHaveBeenCalledOnce(); expect(hasPending(f.values, key)).toBe(false);
   });
   it.each(["stop"] as const)("a new handle also revokes %s retry while it persists the same intent", async lane => {
     const command = original(stop), key = stopKey;
@@ -42,9 +43,9 @@ describe("Learning opened-document command owner", () => {
     vi.mocked(f.storage.get).mockReturnValueOnce(gate.promise);
     const retrying = f.owner.retry(lane);
     await vi.waitFor(() => expect(f.storage.get).toHaveBeenCalledTimes(calls + 1));
-    f.replace({}, "fresh-token"); gate.resolve(f.values.get(key)!); await retrying;
+    f.replace({}, "fresh-token"); gate.resolve(f.values.get(pointerKeyOf(key, id(50)))!); await retrying;
     expect(f.fetcher).not.toHaveBeenCalled(); expect(f.newId).not.toHaveBeenCalled();
-    expect(JSON.parse(f.values.get(key)!).intent).toEqual(command);
+    expect(JSON.parse(pendingRaw(f.values, key)!).intent).toEqual(command);
     expect(f.owner.snapshot()[lane]).toMatchObject({ pending: true, outcome: null, canRetry: false });
   });
   it("a confirmed external setting version rejects an older session read on the same access handle", async () => {
@@ -61,7 +62,7 @@ describe("Learning opened-document command owner", () => {
     const sending = f.owner.begin(action()); await vi.waitFor(() => expect(f.fetcher).toHaveBeenCalledOnce());
     floor = "9"; gate.resolve(response(accepted(original(), "8"))); await sending;
     expect(f.owner.snapshot()).toMatchObject({ stateVersion: "9", primary: { outcome: "accepted", pending: false, answer: null, current: null } });
-    expect(f.values.has(primaryKey)).toBe(false); expect(f.fetcher).toHaveBeenCalledOnce();
+    expect(hasPending(f.values, primaryKey)).toBe(false); expect(f.fetcher).toHaveBeenCalledOnce();
   });
   it("an external floor also rejects stale result capabilities", async () => {
     const f = fixture({}, () => "9"); await f.owner.refresh();
@@ -86,12 +87,12 @@ describe("Learning opened-document command owner", () => {
     await f.owner.refresh(); expect(f.owner.snapshot().stop.canRetry).toBe(true);
     floor = "4"; expect(f.owner.snapshot().stop.canRetry).toBe(false);
     await f.owner.retry("stop"); expect(f.fetcher).toHaveBeenCalledTimes(2); expect(f.newId).not.toHaveBeenCalled();
-    expect(f.values.has(stopKey)).toBe(true);
+    expect(hasPending(f.values, stopKey)).toBe(true);
   });
   it("an accepted Stop stays conclusive even below a later settings observation", async () => {
     const f = fixture({}, () => "20"); await f.owner.refresh(); await f.owner.begin(stop);
     expect(f.owner.snapshot()).toMatchObject({ stateVersion: "20", stop: { outcome: "accepted", pending: false, current: null } });
-    await f.owner.begin(action()); expect(f.fetcher).toHaveBeenCalledOnce(); expect(f.values.has(stopKey)).toBe(false);
+    await f.owner.begin(action()); expect(f.fetcher).toHaveBeenCalledOnce(); expect(hasPending(f.values, stopKey)).toBe(false);
   });
   it("accepted result identity survives stale projection and a retry of local cleanup", async () => {
     const f = fixture({}, () => "9"); await f.owner.refresh();
@@ -100,13 +101,14 @@ describe("Learning opened-document command owner", () => {
     expect(f.owner.snapshot().primary).toMatchObject({ resolved, outcome: "accepted", pending: true, answer: null });
     const exposed = f.owner.snapshot().primary.resolved!; exposed.resultId = id(999);
     await f.owner.refresh(); expect(f.owner.snapshot().primary).toMatchObject({ resolved, outcome: "accepted", pending: false });
-    expect(f.fetcher).toHaveBeenCalledOnce(); expect(f.values.has(primaryKey)).toBe(false);
+    expect(f.fetcher).toHaveBeenCalledOnce(); expect(hasPending(f.values, primaryKey)).toBe(false);
   });
   it("loads both slots without opening a session or sending anything", async () => {
     const f = fixture(); expect(f.owner.snapshot().canBegin).toBe(false); await f.owner.refresh();
     expect(f.owner.snapshot()).toMatchObject({ live: true, canBegin: true, canStop: true });
     expect(f.fetcher).not.toHaveBeenCalled(); expect(f.newId).not.toHaveBeenCalled();
-    expect(f.storage.get).toHaveBeenCalledWith(primaryKey); expect(f.storage.get).toHaveBeenCalledWith(stopKey);
+    expect(f.storage.get).toHaveBeenCalledWith(pointerKeyOf(primaryKey, id(50)));
+    expect(f.storage.get).toHaveBeenCalledWith(pointerKeyOf(stopKey, id(50)));
   });
   it.each(["session.start", "learning.preview_next", "learning.known", "assignment.present", "answer.submit", "result.correct", "result.grade", "session.stop"])(
     "routes %s through the real transport and saves before POST", async kind => {
@@ -118,8 +120,11 @@ describe("Learning opened-document command owner", () => {
       const normal = f.fetcher.getMockImplementation()!;
       f.fetcher.mockImplementationOnce(async (url, options) => {
         const key = kind === "session.stop" ? stopKey : primaryKey;
-        expect(JSON.parse(f.values.get(key)!).intent).toEqual(original(transition));
-        expect(f.values.get(key)).not.toMatch(/synthetic-token|synthetic-proof|document_id|documentId/);
+        expect(JSON.parse(pendingRaw(f.values, key)!).intent).toEqual(original(transition));
+        // Nothing of the credentials or the document is stored: neither in the pointer nor in the payload of its content.
+        const stored = [...f.values].filter(([name]) => name.startsWith("wortly.pending.") || name.startsWith("wortly.payload."));
+        expect(stored.length).toBeGreaterThan(0);
+        expect(stored.map(([, value]) => value).join("\n")).not.toMatch(/synthetic-token|synthetic-proof|document_id|documentId/);
         expect(JSON.parse(String(options?.body))).toEqual({ ...original(transition), client_instance_id: id(1), document_id: id(2) });
         expect(options?.headers).toMatchObject({ Authorization: "Bearer synthetic-token", "X-Origin-Proof": "synthetic-proof" });
         return normal(url, options);
@@ -179,10 +184,10 @@ describe("Learning opened-document command owner", () => {
     f.fetcher.mockRejectedValueOnce(new Error("offline")); gate.reject(new Error("lost")); await send; await tick();
     expect(f.owner.snapshot().primary).toMatchObject({ phase: "unresolved", problem: "network" });
     expect(f.owner.snapshot().recovery?.state.name).toBe("unreachable");
-    expect(f.fetcher).toHaveBeenCalledTimes(3); expect(f.values.has(primaryKey)).toBe(true);
+    expect(f.fetcher).toHaveBeenCalledTimes(3); expect(hasPending(f.values, primaryKey)).toBe(true);
     await tick(4000); expect(f.fetcher).toHaveBeenCalledTimes(3);
     f.fetcher.mockResolvedValueOnce(response(missing(original(), "10", true))); await tick(1000);
-    expect(f.fetcher).toHaveBeenCalledTimes(4); expect(f.values.has(primaryKey)).toBe(false);
+    expect(f.fetcher).toHaveBeenCalledTimes(4); expect(hasPending(f.values, primaryKey)).toBe(false);
     expect(f.owner.snapshot().primary.outcome).toBe("not_applied");
     expect(f.fetcher.mock.calls.filter(call => call[1]?.method === "POST")).toHaveLength(2);
   });
@@ -269,7 +274,7 @@ describe("Learning opened-document command owner", () => {
     await tick(4000); expect(f.fetcher).toHaveBeenCalledTimes(2);
     for (let second = 0; second < 40; second += 5) await tick(5000);
     expect(f.fetcher.mock.calls.map(call => call[1]?.method)).toEqual(["POST", "GET", "GET", "GET", "GET"]);
-    expect(f.values.has(primaryKey)).toBe(true); expect(f.newId).toHaveBeenCalledOnce();
+    expect(hasPending(f.values, primaryKey)).toBe(true); expect(f.newId).toHaveBeenCalledOnce();
     f.owner.dispose();
   });
   it.each(["dispose", "document"] as const)("joined foreground does not check an old command after %s", async ending => {
@@ -278,14 +283,14 @@ describe("Learning opened-document command owner", () => {
     const foreground = f.owner.refresh();
     if (ending === "dispose") f.owner.dispose(); else f.replace({ document_id: id(91) });
     gate.resolve(response(accepted(original()))); await Promise.all([send, foreground]);
-    expect(f.fetcher).toHaveBeenCalledOnce(); expect(f.values.has(primaryKey)).toBe(true); expect(f.owner.snapshot().live).toBe(false);
+    expect(f.fetcher).toHaveBeenCalledOnce(); expect(hasPending(f.values, primaryKey)).toBe(true); expect(f.owner.snapshot().live).toBe(false);
   });
   it.each([401, 403])("a current HTTP %s revokes the document and preserves the unknown intent", async status => {
     const f = fixture(); await f.owner.refresh(); f.fetcher.mockResolvedValueOnce(response({ error: { code: "FORBIDDEN" } }, status));
     await f.owner.begin(action()); expect(f.onDenied).toHaveBeenCalledOnce();
     expect(f.owner.snapshot()).toMatchObject({ live: false, canBegin: false, canStop: false, primary: { phase: "disposed", pending: true, current: null } });
     await f.owner.refresh(); await f.owner.begin(stop); await f.owner.retry("primary"); expect(f.fetcher).toHaveBeenCalledOnce();
-    expect(f.values.has(primaryKey)).toBe(true);
+    expect(hasPending(f.values, primaryKey)).toBe(true);
   });
   it.each(["profile", "pair", "client", "document", "revoked", "dispose"])("context change %s prevents late data and new writes", async changed => {
     const f = fixture(), gate = deferred<Response>(); await f.owner.refresh(); f.fetcher.mockReturnValueOnce(gate.promise);
@@ -298,7 +303,7 @@ describe("Learning opened-document command owner", () => {
     const emitted = f.onUpdate.mock.calls.length; gate.resolve(response(accepted(original()))); await send;
     expect(f.owner.snapshot()).toMatchObject({ live: false, primary: { pending: true, outcome: null, answer: null, current: null, resolved: null } });
     await f.owner.refresh(); await f.owner.begin(stop); await f.owner.retry("primary");
-    expect(f.fetcher).toHaveBeenCalledOnce(); expect(f.onUpdate).toHaveBeenCalledTimes(emitted); expect(f.values.has(primaryKey)).toBe(true);
+    expect(f.fetcher).toHaveBeenCalledOnce(); expect(f.onUpdate).toHaveBeenCalledTimes(emitted); expect(hasPending(f.values, primaryKey)).toBe(true);
   });
   it("a newer foreground profile immediately blocks a previously verified retry", async () => {
     const command = original(stop), f = fixture({ stop: command });
@@ -319,8 +324,8 @@ describe("Learning opened-document command owner", () => {
     expect(f.owner.snapshot().primary.outcome).toBe("not_applied");
   });
   it.each([primaryKey, stopKey])("malformed %s remains stored and blocks new primary writes", async key => {
-    const f = fixture(); f.values.set(key, "not-json"); await f.owner.refresh(); await f.owner.begin(action());
-    expect(f.owner.snapshot().canBegin).toBe(false); expect(f.values.get(key)).toBe("not-json");
+    const f = fixture(); seedRaw(f.values, key, "not-json", id(50)); await f.owner.refresh(); await f.owner.begin(action());
+    expect(f.owner.snapshot().canBegin).toBe(false); expect(pendingRaw(f.values, key)).toBe("not-json");
     expect(f.fetcher).not.toHaveBeenCalled(); expect(f.newId).not.toHaveBeenCalled();
   });
   it("captures the submitted input before awaiting storage and never stores credentials", async () => {
@@ -328,7 +333,7 @@ describe("Learning opened-document command owner", () => {
     const input = action(), send = f.owner.begin(input); Object.assign(input.payload, { text: "changed" });
     await vi.waitFor(() => expect(f.fetcher).toHaveBeenCalledOnce());
     expect(JSON.parse(String(f.fetcher.mock.calls[0][1]?.body)).payload).toEqual({ text: "Haus" });
-    expect(JSON.parse(f.values.get(primaryKey)!).intent.payload).toEqual({ text: "Haus" });
+    expect(JSON.parse(pendingRaw(f.values, primaryKey)!).intent.payload).toEqual({ text: "Haus" });
     gate.resolve(response(accepted(original()))); await send;
     const snapshot = f.owner.snapshot(); snapshot.primary.resolved!.sessionId = id(99);
     expect(f.owner.snapshot().primary.resolved!.sessionId).toBe(id(3));
@@ -372,9 +377,9 @@ describe("Learning opened-document command owner", () => {
     f.fetcher.mockResolvedValueOnce(response({ current: closed(), state_version: "10" })).mockReturnValueOnce(gate.promise);
     await f.owner.readSession(id(3)); await vi.waitFor(() => expect(f.fetcher).toHaveBeenCalledTimes(4));
     expect(f.owner.snapshot().primary).toMatchObject({ pending: true, outcome: null, canRetry: false });
-    expect(f.values.has(primaryKey)).toBe(true); gate.resolve(response(missing(command, "10", true)));
+    expect(hasPending(f.values, primaryKey)).toBe(true); gate.resolve(response(missing(command, "10", true)));
     await vi.waitFor(() => expect(f.owner.snapshot().primary.outcome).toBe("not_applied"));
-    expect(f.values.has(primaryKey)).toBe(false); expect(f.fetcher.mock.calls.every(call => call[1]?.method === "GET")).toBe(true);
+    expect(hasPending(f.values, primaryKey)).toBe(false); expect(f.fetcher.mock.calls.every(call => call[1]?.method === "GET")).toBe(true);
   });
   it("closure of another addressed session does not resolve this pending intent", async () => {
     const command = original(stop), f = fixture({ stop: command });
@@ -383,7 +388,7 @@ describe("Learning opened-document command owner", () => {
     f.fetcher.mockResolvedValueOnce(response({ current: { ...closed(), session_id: id(90) }, state_version: "10" }));
     await f.owner.readSession(id(90));
     expect(f.fetcher).toHaveBeenCalledTimes(3); expect(f.owner.snapshot().stop).toMatchObject({ pending: true, outcome: null });
-    expect(JSON.parse(f.values.get(stopKey)!).intent).toEqual(command);
+    expect(JSON.parse(pendingRaw(f.values, stopKey)!).intent).toEqual(command);
   });
   it("screen reads use the refreshed document's current credentials", async () => {
     const f = fixture(); f.replace({}, "synthetic-new-token"); f.fetcher.mockResolvedValueOnce(response({ current: current(), state_version: "3" }));

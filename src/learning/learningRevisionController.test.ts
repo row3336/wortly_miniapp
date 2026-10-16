@@ -6,6 +6,7 @@ import type { LearningAnswerReply, LearningAnswerStatus, LearningResultRead } fr
 import type { LearningRevisionIntent } from "./learningRevisionIntent";
 import type { LearningCommandIntent, LearningResultIntent } from "./learningCommandIntent";
 import { LearningSessionPendingStore, LearningStopPendingStore, type LearningSessionPending } from "./learningSessionPending";
+import { pendingRaw, hasPending, seedRaw } from "../commands/pendingSeed.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const slot = "wortly.pending.learning_session", stopSlot = "wortly.pending.learning_stop";
@@ -43,7 +44,7 @@ const missing = (): Extract<LearningAnswerStatus, { outcome: "not_found" }> => (
     time_zone: "UTC", state_version: "8", access: { status: "admitted", version: "1", reason: null } } });
 type Options = ConstructorParameters<typeof LearningCommandController>[0];
 function fixture(raw?: LearningSessionPending) {
-  const values = new Map<string, string>(); if (raw) values.set(slot, JSON.stringify(raw));
+  const values = new Map<string, string>(); if (raw) seedRaw(values, slot, JSON.stringify(raw), id(50));
   const storage: AsyncStorage = { get: vi.fn(async key => values.get(key) ?? null),
     set: vi.fn(async (key, value) => { values.set(key, value); }), remove: vi.fn(async key => { values.delete(key); }) };
   const pendingStore = new LearningSessionPendingStore(storage), stopStore = new LearningStopPendingStore(storage);
@@ -65,7 +66,7 @@ describe("Durable Learning correction and grade", () => {
   it.each(["result.correct", "result.grade"] as const)("saves exact %s before sending and ignores repeated clicks", async kind => {
     const original = intent(kind), f = fixture(); await f.controller.refresh(); const gate = deferred<LearningAnswerReply>();
     f.send.mockImplementationOnce(async value => {
-      expect(JSON.parse(f.values.get(slot)!)).toEqual(saved(original)); expect(value).toEqual(original); return gate.promise;
+      expect(JSON.parse(pendingRaw(f.values, slot)!)).toEqual(saved(original)); expect(value).toEqual(original); return gate.promise;
     });
     const input = action(original), work = f.controller.begin(input);
     Object.assign(input, { result_id: id(99), expected_result_version: "2" }); Object.assign(input.payload, { grade: 3 });
@@ -73,7 +74,7 @@ describe("Durable Learning correction and grade", () => {
     expect(f.controller.begin(action())).toBe(work); expect(f.controller.retry()).toBe(work);
     gate.resolve(accepted(original)); await work;
     expect(f.controller.snapshot()).toMatchObject({ outcome: "accepted", pending: false, answer: { result: { version: "2" } } });
-    expect(f.newId).toHaveBeenCalledOnce(); expect(f.values.has(slot)).toBe(false);
+    expect(f.newId).toHaveBeenCalledOnce(); expect(hasPending(f.values, slot)).toBe(false);
   });
   it.each(["result.correct", "result.grade"] as const)("after reload missing %s checks the exact result, then only manual retry can POST", async kind => {
     const original = intent(kind), f = fixture(saved(original));
@@ -82,7 +83,7 @@ describe("Durable Learning correction and grade", () => {
     expect(f.read).not.toHaveBeenCalled(); expect(f.send).not.toHaveBeenCalled();
     expect(f.controller.snapshot()).toMatchObject({ outcome: null, pending: true, problem: "not_found", canRetry: true });
     await f.controller.retry(); expect(f.send).toHaveBeenCalledExactlyOnceWith(original);
-    expect(f.newId).not.toHaveBeenCalled(); expect(f.values.has(slot)).toBe(false);
+    expect(f.newId).not.toHaveBeenCalled(); expect(hasPending(f.values, slot)).toBe(false);
   });
   it("recovers accepted original fact with a later current grade without a second read or POST", async () => {
     const f = fixture(saved()), reply = accepted(); reply.result!.version = reply.action!.version = "3"; reply.result!.grade = 3;
@@ -112,7 +113,7 @@ describe("Durable Learning correction and grade", () => {
     const f = fixture(saved()), view = current(); damage(view); f.readResult.mockResolvedValue(view);
     await f.controller.refresh(); await f.controller.retry(); await f.controller.begin(action());
     expect(f.controller.snapshot()).toMatchObject({ outcome: null, pending: true, canRetry: false });
-    expect(f.values.has(slot)).toBe(true); expect(f.send).not.toHaveBeenCalled(); expect(f.newId).not.toHaveBeenCalled();
+    expect(hasPending(f.values, slot)).toBe(true); expect(f.send).not.toHaveBeenCalled(); expect(f.newId).not.toHaveBeenCalled();
   });
   it("does not retry a grade absent from the fresh capability", async () => {
     const original = intent("result.grade"), view = current(original), f = fixture(saved(original));
@@ -145,7 +146,7 @@ describe("Durable Learning correction and grade", () => {
     if (changed === "grade") Object.assign(different.payload, { grade: 3 });
     else Object.assign(different, { [changed]: changed === "expected_result_version" ? "2" : id(99) });
     await expect(f.pendingStore.save(saved(different), new AbortController().signal)).rejects.toMatchObject({ kind: "changed" });
-    expect(JSON.parse(f.values.get(slot)!)).toEqual(saved(original));
+    expect(JSON.parse(pendingRaw(f.values, slot)!)).toEqual(saved(original));
   });
   it("save failure never sends the revision", async () => {
     const f = fixture(); await f.controller.refresh(); vi.mocked(f.storage.set).mockRejectedValueOnce(new Error("save failed"));
@@ -171,13 +172,13 @@ describe("Durable Learning correction and grade", () => {
     if (failure === "dispose") f.controller.dispose(); else f.isLive.mockReturnValue(false);
     gate.resolve(current()); await work;
     expect(f.controller.snapshot()).toMatchObject({ phase: "disposed", outcome: null, pending: true, answer: null, canRetry: false });
-    expect(f.values.has(slot)).toBe(true);
+    expect(hasPending(f.values, slot)).toBe(true);
   });
   it("atomic missing plus closed session resolves a revision without reading or repeating it", async () => {
-    const f = fixture(saved()); f.values.set(stopSlot, "independent");
+    const f = fixture(saved()); seedRaw(f.values, stopSlot, "independent", id(50));
     f.check.mockResolvedValue({ ...missing(), closed_session: { session_id: id(3), status: "closed", close_reason: "stop" } });
     await f.controller.refresh(); expect(f.controller.snapshot()).toMatchObject({ pending: false, outcome: "not_applied" });
-    expect(f.readResult).not.toHaveBeenCalled(); expect(f.send).not.toHaveBeenCalled(); expect(f.values.get(stopSlot)).toBe("independent");
+    expect(f.readResult).not.toHaveBeenCalled(); expect(f.send).not.toHaveBeenCalled(); expect(pendingRaw(f.values, stopSlot)).toBe("independent");
   });
   it("mismatch remains durable and never reads current to infer a retry", async () => {
     const f = fixture(); await f.controller.refresh(); const reply = accepted();
@@ -193,8 +194,8 @@ it("Stop remains independent while a revision is in flight; an old reply cannot 
   if (!("pair" in step)) throw new Error("invalid fixture");
   const closed = { ...step, status: "closed" as const, close_reason: "stop" as const };
   const stop = f.make({ pendingStore: f.stopStore, newId: () => id(90), send: async value => {
-    expect(JSON.parse(f.values.get(slot)!)).toEqual(saved());
-    expect(JSON.parse(f.values.get(stopSlot)!).intent).toEqual(value);
+    expect(JSON.parse(pendingRaw(f.values, slot)!)).toEqual(saved());
+    expect(JSON.parse(pendingRaw(f.values, stopSlot)!).intent).toEqual(value);
     return { outcome: "accepted", state_version: "10", current: closed,
       command: { id: id(90), kind: "session.stop", status: "applied", applied_at: "2026-09-30T12:00:06Z",
         target_id: id(3), action_id: null, result_id: null, context_id: null, object_version: null } };
@@ -203,7 +204,7 @@ it("Stop remains independent while a revision is in flight; an old reply cannot 
   const inFlight = f.controller.begin(action()); await vi.waitFor(() => expect(f.send).toHaveBeenCalledOnce());
   await stop.begin({ kind: "session.stop", session_id: id(3), payload: { reason: "stop" } });
   expect(stop.snapshot()).toMatchObject({ outcome: "accepted", pending: false, current: { status: "closed" } });
-  expect(f.values.has(slot)).toBe(true); expect(f.values.has(stopSlot)).toBe(false);
+  expect(hasPending(f.values, slot)).toBe(true); expect(hasPending(f.values, stopSlot)).toBe(false);
   f.controller.dispose(); gate.resolve(accepted()); await inFlight;
   expect(f.controller.snapshot()).toMatchObject({ phase: "disposed", answer: null, current: null });
   const prior = accepted(); f.check.mockResolvedValue({ ...prior, state_version: "10", step: closed,
@@ -216,10 +217,10 @@ it("Stop remains independent while a revision is in flight; an old reply cannot 
 
 it.each([{ expected_result_version: "0" }, { expected_result_version: 1 }, { result_id: "" }, { payload: { text: "wrong" } }])(
   "invalid durable revision is blocked and retained: %j", async changes => {
-    const f = fixture(); f.values.set(slot, JSON.stringify({ ...saved(), intent: { ...intent(), ...changes } }));
+    const f = fixture(); seedRaw(f.values, slot, JSON.stringify({ ...saved(), intent: { ...intent(), ...changes } }), id(50));
     await f.controller.refresh(); await f.controller.begin(action());
     expect(f.controller.snapshot()).toMatchObject({ phase: "blocked", problem: "invalid_pending" });
-    expect(f.values.has(slot)).toBe(true); expect(f.check).not.toHaveBeenCalled(); expect(f.send).not.toHaveBeenCalled();
+    expect(hasPending(f.values, slot)).toBe(true); expect(f.check).not.toHaveBeenCalled(); expect(f.send).not.toHaveBeenCalled();
   });
 
 it("a newer Stop observation hides an old accepted revision without losing its command outcome", async () => {
@@ -240,7 +241,7 @@ it("a newer Stop observation hides an old accepted revision without losing its c
   expect(sharedVersion).toBe("10"); gate.resolve(accepted()); await sending;
   expect(primary.snapshot()).toMatchObject({ outcome: "accepted", pending: false, current: null, answer: null, canRetry: false });
   expect(stop.snapshot()).toMatchObject({ current: { status: "closed" }, stateVersion: "10" });
-  expect(f.values.has(slot)).toBe(false);
+  expect(hasPending(f.values, slot)).toBe(false);
 });
 
 it("a previously allowed retry is invalidated immediately by a newer shared observation", async () => {
@@ -263,5 +264,5 @@ it("a late addressed read cannot authorize retry below the shared Stop version",
   const reading = controller.refresh(); await vi.waitFor(() => expect(f.readResult).toHaveBeenCalledOnce());
   sharedVersion = "10"; gate.resolve(current()); await reading; await controller.retry();
   expect(controller.snapshot()).toMatchObject({ problem: "stale_response", pending: true, canRetry: false, current: null, answer: null });
-  expect(f.values.has(slot)).toBe(true); expect(f.send).not.toHaveBeenCalled();
+  expect(hasPending(f.values, slot)).toBe(true); expect(f.send).not.toHaveBeenCalled();
 });

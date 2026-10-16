@@ -5,6 +5,7 @@ import { tick } from "../commands/recoveryTime.test-support";
 import { LearningViewController } from "./learningViewController";
 import { current, deferred, id, missing, original, pending, primaryKey, profile, response } from "./learningFixtures.test-support";
 import { testGate } from "../commands/testGate.test-support";
+import { hasPending, seedRaw } from "../commands/pendingSeed.test-support";
 
 const owners: LearningViewController[] = [];
 afterEach(() => { owners.splice(0).forEach(owner => owner.dispose()); vi.useRealTimers(); });
@@ -298,7 +299,7 @@ describe("Learning question, result and presentation lifecycle", () => {
     await f.view.next(); await f.view.submit(); expect(f.posts()).toHaveLength(2);
   });
   it("reload retains only the exact submitted text and never inserts it into another assignment", async () => {
-    const f = harness(), command = original(); f.values.set(primaryKey, JSON.stringify(pending(command)));
+    const f = harness(), command = original(); seedRaw(f.values, primaryKey, JSON.stringify(pending(command)), id(50));
     f.setStep({ ...current(), assignment: { ...current().assignment!, id: id(90) } });
     f.fetcher.mockResolvedValueOnce(response(missing(command, "1")))
       .mockResolvedValueOnce(response({ current: { ...current(), assignment: { ...current().assignment!, id: id(90) } }, state_version: "1" }));
@@ -327,7 +328,7 @@ describe("Learning question, result and presentation lifecycle", () => {
   it("a missing original present reloads with its barrier and permits typing; with an unknown count it is only checked (Q25.1, CT §6.1 п. 4)", async () => {
     vi.useFakeTimers();
     const f = harness(), intent = { command_id: id(100), session_id: id(3), kind: "assignment.present" as const, assignment_id: id(6), payload: {} };
-    f.values.set(primaryKey, JSON.stringify(pending(intent)));
+    seedRaw(f.values, primaryKey, JSON.stringify(pending(intent)), id(50));
     const question = { ...current(), assignment: { ...current().assignment!, status: "prefetched" as const } }; f.setStep(question);
     f.fetcher.mockImplementation(async (url, init) => init?.method === "GET" && String(url).includes(`/commands/${id(100)}`)
       ? response(missing(intent, "1")) : f.handler(url, init));
@@ -342,7 +343,7 @@ describe("Learning question, result and presentation lifecycle", () => {
   });
   it("a missing submitted answer reloads the same text; with an unknown count it is only checked, never resent (CT §6.1 п. 4)", async () => {
     vi.useFakeTimers();
-    const f = harness(), intent = original(); f.values.set(primaryKey, JSON.stringify(pending(intent)));
+    const f = harness(), intent = original(); seedRaw(f.values, primaryKey, JSON.stringify(pending(intent)), id(50));
     f.fetcher.mockImplementation(async (url, init) => init?.method === "GET" && String(url).includes(`/commands/${id(100)}`)
       ? response(missing(intent, "1")) : f.handler(url, init));
     await f.view.refresh(); await tick();
@@ -358,7 +359,7 @@ describe("Learning question, result and presentation lifecycle", () => {
     if (source === "pair") saved.pair = "en-de";
     if (source === "client") saved.clientInstanceId = id(90);
     if (source === "profile") saved.profileId = id(90);
-    f.values.set(primaryKey, JSON.stringify(saved));
+    seedRaw(f.values, primaryKey, JSON.stringify(saved), id(50));
     if (source !== "profile") f.fetcher.mockResolvedValueOnce(response(missing(saved.intent, "1")));
     await f.view.refresh(); expect(f.view.snapshot().submittedText).toBeNull(); expect(f.view.snapshot().draft).toBe("");
     expect(f.posts()).toEqual([]);
@@ -492,7 +493,7 @@ describe("Learning question, result and presentation lifecycle", () => {
     expect(f.view.snapshot()).toMatchObject({ phase: "result_wrong", draft: "", answer: { result: { grade: 2 } } });
     const checks = f.fetcher.mock.calls.filter(call => call[1]?.method === "GET" && String(call[0]).includes("/commands/"));
     expect(checks.at(-1)![1]?.headers).toMatchObject({ Authorization: "Bearer synthetic-new" });
-    expect(f.posts().map(post => post.kind)).toEqual(["answer.submit"]); expect(f.values.has(primaryKey)).toBe(false);
+    expect(f.posts().map(post => post.kind)).toEqual(["answer.submit"]); expect(hasPending(f.values, primaryKey)).toBe(false);
   });
   it("a lost correction is recovered without changing the next question's draft", async () => {
     vi.useFakeTimers();
@@ -556,7 +557,7 @@ describe("Learning question, result and presentation lifecycle", () => {
         error: { code: "VALIDATION_FAILED" } }, 422);
     });
     await f.view.submit(); expect(f.view.snapshot()).toMatchObject({ phase: "question", draft: "bad input", problem: "VALIDATION_FAILED", canSubmit: true });
-    expect(f.values.has(primaryKey)).toBe(false);
+    expect(hasPending(f.values, primaryKey)).toBe(false);
   });
   it.each(["stop", "dispose", "revoke", "previous"])("an old timer callback cannot act after %s", async change => {
     vi.useFakeTimers(); const f = harness(); const spy = vi.spyOn(globalThis, "setTimeout");
@@ -596,7 +597,7 @@ describe("Learning: a pair changed elsewhere and an empty Stop (M-WRITTEN-STUCK)
     f.fetcher.mockImplementationOnce(async (...call) => { await f.handler(...call); throw new Error("lost response"); });
     f.fetcher.mockImplementation(async () => { throw new Error("offline"); });
     await f.view.submit();
-    await vi.waitFor(() => expect(f.values.has(primaryKey)).toBe(true));
+    await vi.waitFor(() => expect(hasPending(f.values, primaryKey)).toBe(true));
     f.view.dispose();
     // Another device changed the pair: the server closed the old-pair session; this document is rebound to the new pair.
     f.setStep(closedElsewhere("pair_changed"));

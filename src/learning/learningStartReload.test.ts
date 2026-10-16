@@ -10,6 +10,7 @@ import type { LearningSessionIntent } from "./learningSessionIntent";
 import { LearningSessionPendingStore, type LearningSessionPending } from "./learningSessionPending";
 import { LearningPageStarts } from "./learningPageStarts";
 import { previewContent } from "./learningPreview.test-support";
+import { pendingRaw, hasPending, seedRaw } from "../commands/pendingSeed.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const slot = "wortly.pending.learning_session";
@@ -32,7 +33,7 @@ const notFound = (): Extract<LearningSessionStatus, { outcome: "not_found" }> =>
 const absent = (): LearningSessionRead => ({ current: { session_id: id(3), status: "not_found" }, state_version: "9" });
 
 function fixture(raw?: LearningSessionPending) {
-  const values = new Map<string, string>(); if (raw) values.set(slot, JSON.stringify(raw));
+  const values = new Map<string, string>(); if (raw) seedRaw(values, slot, JSON.stringify(raw), id(50));
   const storage: AsyncStorage = { get: vi.fn(async key => values.get(key) ?? null),
     set: vi.fn(async (key, value) => { values.set(key, value); }), remove: vi.fn(async key => { values.delete(key); }) };
   const pendingStore = new LearningSessionPendingStore(storage);
@@ -55,7 +56,7 @@ describe("35.1-А: a Learning start left by another page", () => {
     await controller.retry(); await controller.resend();
     await controller.refresh();
     expect(f.check).toHaveBeenCalledTimes(2); expect(f.send).not.toHaveBeenCalled(); expect(f.newId).not.toHaveBeenCalled();
-    expect(JSON.parse(f.values.get(slot)!)).toEqual(record());
+    expect(JSON.parse(pendingRaw(f.values, slot)!)).toEqual(record());
   });
 
   it("restores the session the check finds, by the same ID and without a POST", async () => {
@@ -63,7 +64,7 @@ describe("35.1-А: a Learning start left by another page", () => {
     const controller = f.make(new LearningPageStarts()); await controller.refresh();
     expect(controller.snapshot()).toMatchObject({ outcome: "accepted", pending: false, resolved: { commandId: id(4), kind: "session.start" } });
     expect(controller.snapshot().current).toMatchObject({ session_id: id(3), status: "active" });
-    expect(f.send).not.toHaveBeenCalled(); expect(f.values.has(slot)).toBe(false);
+    expect(f.send).not.toHaveBeenCalled(); expect(hasPending(f.values, slot)).toBe(false);
   });
 
   it("a start of this page keeps its explicit retry under a new owner of the same page", async () => {
@@ -71,7 +72,7 @@ describe("35.1-А: a Learning start left by another page", () => {
     const first = f.make(page); await first.refresh();
     f.send.mockRejectedValueOnce(new ApiError("network"));
     await first.start(start); first.dispose();
-    expect(JSON.parse(f.values.get(slot)!)).toEqual(record());
+    expect(JSON.parse(pendingRaw(f.values, slot)!)).toEqual(record());
     const next = f.make(page); await next.refresh();
     expect(next.snapshot()).toMatchObject({ problem: "not_found", canRetry: true });
     await next.retry();
@@ -121,14 +122,14 @@ describe("35.1-А: a Learning start left by another page", () => {
     const controller = f.make(page); await controller.refresh();
     f.send.mockRejectedValue(new ApiError("network"));
     await controller.start(start);
-    expect(page.owns(record())).toBe(true); expect(f.values.has(slot)).toBe(true);
+    expect(page.owns(record())).toBe(true); expect(hasPending(f.values, slot)).toBe(true);
     vi.mocked(f.storage.remove).mockRejectedValueOnce(new Error("disk"));
     await release(controller, own);
-    expect(f.values.has(slot)).toBe(true); expect(page.owns(record())).toBe(true);
+    expect(hasPending(f.values, slot)).toBe(true); expect(page.owns(record())).toBe(true);
     await release(controller, other);
-    expect(f.values.has(slot)).toBe(true); expect(page.owns(record())).toBe(true);
+    expect(hasPending(f.values, slot)).toBe(true); expect(page.owns(record())).toBe(true);
     await release(controller, own);
-    expect(f.values.has(slot)).toBe(false); expect(page.owns(record())).toBe(false);
+    expect(hasPending(f.values, slot)).toBe(false); expect(page.owns(record())).toBe(false);
   });
 
   it("33.1-А F6: the found session of an own never sent start clears its record and its mark; a failed clear keeps both", async () => {
@@ -141,9 +142,9 @@ describe("35.1-А: a Learning start left by another page", () => {
     f.read.mockResolvedValue({ current: preview(), state_version: "8" });
     vi.mocked(f.storage.remove).mockRejectedValueOnce(new Error("disk"));
     await controller.refresh();
-    expect(f.values.has(slot)).toBe(true); expect(page.owns(record())).toBe(true);
+    expect(hasPending(f.values, slot)).toBe(true); expect(page.owns(record())).toBe(true);
     await controller.refresh();
-    expect(f.values.has(slot)).toBe(false); expect(page.owns(record())).toBe(false);
+    expect(hasPending(f.values, slot)).toBe(false); expect(page.owns(record())).toBe(false);
     expect(controller.snapshot()).toMatchObject({ pending: false, phase: "idle" });
     expect(f.send).toHaveBeenCalledOnce();
   });

@@ -462,7 +462,7 @@ describe("M-LANE-PAIR-GUARD 4.1: an accepted reply whose session is open in anot
 });
 
 describe("D-STALE-WINDOW 3.1.12: a record kept after DOCUMENT_STALE and a change of profile", () => {
-  it("profile A keeps X after the refusal; the first load of profile B removes A's record (pendingSlot.load)", async () => {
+  it("profile A keeps X after the refusal; profile B's own load never touches A's record (pending profile addresses)", async () => {
     const f = fixture(); await f.controller.refresh();
     // The thrown form every study adapter gives the core's envelope (commandRefusal.ts).
     f.send.mockRejectedValueOnce(new ApiError("http", 409, "DOCUMENT_STALE"));
@@ -473,11 +473,12 @@ describe("D-STALE-WINDOW 3.1.12: a record kept after DOCUMENT_STALE and a change
     expect(JSON.parse(f.values.get("test.pending")!)).toMatchObject({ profileId: id(1), intent: sent });
     const storage: AsyncStorage = { get: async key => f.values.get(key) ?? null, set: async (key, value) => { f.values.set(key, value); },
       remove: async key => { f.values.delete(key); } };
-    const store = new PendingSlot<LanePending<Intent>>(storage, "test.pending", value => value as LanePending<Intent>);
+    // B's records live under its own profile address: A's record is not read, not removed.
+    const store = new PendingSlot<LanePending<Intent>>(storage, "wortly.pending.test_lane", value => value as LanePending<Intent>);
     const other = new TestLane({ profileId: id(99), clientInstanceId: id(2), pair: "ru-de", lane: "study", pendingStore: store,
       isLive: () => true, newId: () => id(200), send: vi.fn(), check: vi.fn(), read: vi.fn(), onUpdate: vi.fn(), stateVersion: "5" });
     await other.refresh();
-    expect(f.values.has("test.pending")).toBe(false);
+    expect(JSON.parse(f.values.get("test.pending")!)).toMatchObject({ profileId: id(1), intent: sent });
     expect(other.snapshot()).toMatchObject({ phase: "idle", pending: false });
   });
 });

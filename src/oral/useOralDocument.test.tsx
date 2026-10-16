@@ -8,6 +8,7 @@ import { oralIntentHash, type OralCommand, type OralIntent } from "./oralIntent"
 import { OralSessionPendingStore, OralStopPendingStore } from "./oralPending";
 import { useOralDocument, type OralDocumentHookOptions } from "./useOralDocument";
 import { testGate } from "../commands/testGate.test-support";
+import { pendingRaw, hasPending, seedRaw } from "../commands/pendingSeed.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const studyKey = "wortly.pending.oral_session";
@@ -79,7 +80,7 @@ describe("oral React Adapter: source and gates", () => {
   it("confirmed fresh session remains usable after an unavailable historical foreign receipt is settled", async () => {
     const f = fixture(), historical: OralIntent = { kind: "oral.grade", command_id: id(4), session_id: id(90),
       assignment_id: id(6), payload: { correct: true } };
-    f.values.set(studyKey, JSON.stringify({ schemaVersion: 1, profileId: id(50), clientInstanceId: id(1), pair: "ru-de", intent: historical }));
+    seedRaw(f.values, studyKey, JSON.stringify({ schemaVersion: 1, profileId: id(50), clientInstanceId: id(1), pair: "ru-de", intent: historical }), id(50));
     f.set("prefetched", "13"); f.fetcher.mockImplementation(async (url, init) => {
       if (String(url).includes(`/commands/${id(4)}?`)) return response({ command: fact(historical, "already_applied"),
         verified_intent_hash: await oralIntentHash(historical), current: { status: "unavailable" }, state_version: "12" });
@@ -87,7 +88,7 @@ describe("oral React Adapter: source and gates", () => {
     });
     const ui = renderHook(useOralDocument, { initialProps: f.options });
     await waitFor(() => expect(ui.result.current.state?.phase).toBe("prefetched"));
-    expect(f.values.has(studyKey)).toBe(false); expect(f.posts).toEqual([]);
+    expect(hasPending(f.values, studyKey)).toBe(false); expect(f.posts).toEqual([]);
     expect(ui.result.current.state).toMatchObject({ sessionId: id(3), commands: { study: { pending: false, outcome: "accepted" } } });
     await act(() => ui.result.current.actions.shown(ui.result.current.state!.presentationTicket!));
     expect(ui.result.current.state).toMatchObject({ phase: "question", canReveal: true, current: { session_id: id(3) } });
@@ -226,14 +227,14 @@ describe("oral React Adapter: visibility and lifetime", () => {
   });
   it("StrictMode recovers a shared receipt with no automatic command and one shown command", async () => {
     const f = fixture(); const intent: OralIntent = { kind: "oral.reveal", command_id: id(4), session_id: id(3), assignment_id: id(6), payload: {} };
-    f.values.set(studyKey, JSON.stringify({ schemaVersion: 1, profileId: id(50), clientInstanceId: id(1), pair: "ru-de", intent }));
+    seedRaw(f.values, studyKey, JSON.stringify({ schemaVersion: 1, profileId: id(50), clientInstanceId: id(1), pair: "ru-de", intent }), id(50));
     f.set("revealed"); f.fetcher.mockImplementation(async (url, init) => {
       if (String(url).includes("/commands/")) return response({ command: fact(intent, "already_applied"),
         verified_intent_hash: await oralIntentHash(intent), current: projection("revealed"), state_version: "8" });
       return f.handler(url, init);
     });
     const ui = renderHook(useOralDocument, { initialProps: f.options, reactStrictMode: true });
-    await waitFor(() => expect(ui.result.current.state?.canGrade).toBe(true)); expect(f.posts).toEqual([]); expect(f.values.has(studyKey)).toBe(false);
+    await waitFor(() => expect(ui.result.current.state?.canGrade).toBe(true)); expect(f.posts).toEqual([]); expect(hasPending(f.values, studyKey)).toBe(false);
     f.set("prefetched", "9"); await act(() => ui.result.current.actions.refresh());
     await act(() => ui.result.current.actions.shown(ui.result.current.state!.presentationTicket!)); expect(f.posts).toHaveLength(1);
   });
@@ -251,14 +252,14 @@ describe("oral React Adapter: visibility and lifetime", () => {
     await waitFor(() => expect(f.storage.set).toHaveBeenCalledOnce());
     // Server model confirms that the retained intent was applied by the old source.
     f.fetcher.mockImplementation(async (url, init) => {
-      if (String(url).includes("/commands/")) { const saved = JSON.parse(f.values.get(studyKey)!).intent as OralIntent;
+      if (String(url).includes("/commands/")) { const saved = JSON.parse(pendingRaw(f.values, studyKey)!).intent as OralIntent;
         return response({ command: fact(saved, "already_applied"), verified_intent_hash: await oralIntentHash(saved),
           current: projection("presented"), state_version: "9" }); }
       return f.handler(url, init);
     });
     f.set("presented", "9"); ui.rerender({ ...f.options, access: f.replace({}, "fresh-synthetic-token") });
     await act(async () => { gate.resolve(); await shown; });
-    await waitFor(() => expect(ui.result.current.state?.canReveal).toBe(true)); expect(f.posts).toEqual([]); expect(f.values.has(studyKey)).toBe(false);
+    await waitFor(() => expect(ui.result.current.state?.canReveal).toBe(true)); expect(f.posts).toEqual([]); expect(hasPending(f.values, studyKey)).toBe(false);
   });
 });
 
@@ -378,7 +379,7 @@ describe("oral React Adapter: own closed address across same-identity access rep
   });
   it("L2-9 a foreign closed receipt is never adopted as the own address", async () => {
     const f = fixture(), foreign: OralIntent = { kind: "session.stop", command_id: id(5), session_id: id(90), payload: { reason: "stop" } };
-    f.values.set(stopKey, JSON.stringify({ schemaVersion: 1, profileId: id(50), clientInstanceId: id(1), pair: "ru-de", intent: foreign }));
+    seedRaw(f.values, stopKey, JSON.stringify({ schemaVersion: 1, profileId: id(50), clientInstanceId: id(1), pair: "ru-de", intent: foreign }), id(50));
     addressed(f, async url => url.includes(`/commands/${id(5)}?`) ? response({ command: fact(foreign, "already_applied"),
       verified_intent_hash: await oralIntentHash(foreign), current: { status: "unavailable" }, state_version: "8" }) : null);
     const options = { ...f.options, initialSessionId: null };

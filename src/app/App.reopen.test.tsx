@@ -9,6 +9,7 @@ import { settingsResponse } from "../settings/settingsRead.test-support";
 import { App } from "./App";
 import { keysOf, openDocument, openRequestKeys, staleCommand, staleDocument, staleRefusal } from "./openRules.test-support";
 import { watchFlash } from "./flashWatch.test-support";
+import { lsPendingRaw } from "../commands/lsPending.test-support";
 
 type Fetch = (url: string | URL | Request, init?: RequestInit) => Promise<Response>;
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -117,7 +118,8 @@ const sentIntents = (d: ReturnType<typeof device>, document: string) => d.posts(
   .map(([, init]) => JSON.parse(String(init!.body))).filter(body => body.document_id === document)
   .map(({ client_instance_id: _client, document_id: _document, ...intent }) => intent);
 /** The intent of the record in the shared slot, as a list for comparison with sentIntents. */
-const keptIntent = (key: string) => { const raw = localStorage.getItem(key); return raw === null ? [] : [JSON.parse(raw).intent]; };
+// The record of a lane is its profile pointer joined with its content (profile addressing, pendingSeed.test-support).
+const keptIntent = (key: string) => { const raw = lsPendingRaw(key); return raw === null ? [] : [JSON.parse(raw).intent]; };
 const foreground = () => {
   vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
   fireEvent(document, new Event("visibilitychange"));

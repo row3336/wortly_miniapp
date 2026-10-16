@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { WrittenViewController } from "./writtenViewController";
 import { profile, response, writtenFixture } from "./writtenFixtures.test-support";
 import type { WrittenViewSnapshot } from "./writtenViewController";
+import { hasPending } from "../commands/pendingSeed.test-support";
 
 const owners: WrittenViewController[] = [];
 const mismatch = (view: { snapshot(): { pairMismatch: string | null } }) => view.snapshot().pairMismatch !== null;
@@ -104,7 +105,7 @@ describe("17.2-А: the R1 Stop gate", () => {
     // The answer commits, its reply is lost and no check reaches the server: its record waits for the next owner.
     h.serverPair.lose = true; h.serverPair.checksDown = true;
     h.view.setDraft("Haus"); await h.view.submit();
-    await vi.waitFor(() => expect(h.values.has("wortly.pending.written_session")).toBe(true));
+    await vi.waitFor(() => expect(hasPending(h.values, "wortly.pending.written_session")).toBe(true));
     h.view.dispose();
     h.serverPair.checksDown = false; h.serverPair.otherPair = true;
     const owner = h.owner(null);

@@ -6,6 +6,7 @@ import type { AsyncStorage } from "../platform/storage";
 import { writtenIntentHash, type WrittenIntent } from "./writtenIntent";
 import { writtenPrimaryKey, writtenStopKey } from "./writtenPending";
 import { testGate } from "../commands/testGate.test-support";
+import { seedRaw } from "../commands/pendingSeed.test-support";
 
 // Automatic recovery on fake time: the exchange helpers are shared with the Learning fixtures.
 export { drain, tick } from "../commands/recoveryTime.test-support";
@@ -223,11 +224,12 @@ export function writtenServer(options: ServerOptions = {}) {
         state_version: String(state.version), ...(state.status === "closed" && state.sessionId === parsed.searchParams.get("session_id")
           ? { closed_session: { session_id: state.sessionId, status: "closed", close_reason: state.closeReason } } : {}) });
       const expected = parsed.searchParams.get("expected_intent_hash");
-      if (expected !== await writtenIntentHash(receipt.intent)) return response({ error: { code: "COMMAND_PAYLOAD_MISMATCH" } }, 409);
-      const command = { ...receipt.fact, status: "already_applied" };
+      // As the core (study/command_status.py): without expected_intent_hash nothing is verified and none is claimed (Q27).
+      if (expected !== null && expected !== await writtenIntentHash(receipt.intent)) return response({ error: { code: "COMMAND_PAYLOAD_MISMATCH" } }, 409);
+      const command = { ...receipt.fact, status: "already_applied" }, verified = expected === null ? {} : { verified_intent_hash: expected };
       return response(typeof receipt.fact.result_id === "string"
-        ? { ...view(receipt.fact.result_id), command, state_version: String(state.version), verified_intent_hash: expected }
-        : { command, current: projection(), state_version: String(state.version), verified_intent_hash: expected });
+        ? { ...view(receipt.fact.result_id), command, state_version: String(state.version), ...verified }
+        : { command, current: projection(), state_version: String(state.version), ...verified });
     }
     if (init?.method === "GET" && parsed.pathname.startsWith("/api/v1/sessions/")) {
       const resultId = parsed.searchParams.get("result_id");
@@ -263,8 +265,8 @@ export function writtenServer(options: ServerOptions = {}) {
 export function writtenFixture(options: ServerOptions & { saved?: Partial<Record<"primary" | "stop", WrittenIntent>> } = {}) {
   hashInPlace();
   const values = new Map<string, string>([["unrelated", "keep"]]);
-  if (options.saved?.primary) values.set(writtenPrimaryKey, JSON.stringify(pending(options.saved.primary)));
-  if (options.saved?.stop) values.set(writtenStopKey, JSON.stringify(pending(options.saved.stop)));
+  if (options.saved?.primary) seedRaw(values, writtenPrimaryKey, JSON.stringify(pending(options.saved.primary)), id(50));
+  if (options.saved?.stop) seedRaw(values, writtenStopKey, JSON.stringify(pending(options.saved.stop)), id(50));
   const storage: AsyncStorage = { get: vi.fn(async key => values.get(key) ?? null),
     set: vi.fn(async (key, value) => { values.set(key, value); }), remove: vi.fn(async key => { values.delete(key); }) };
   let access: OpenedAccess, live = true, next = 1000;

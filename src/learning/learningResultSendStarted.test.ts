@@ -14,6 +14,7 @@ import { LearningDocumentCommands } from "./learningDocumentCommands";
 import { accepted, current, id, missing, pending, primaryKey, profile, response } from "./learningFixtures.test-support";
 import { hashInPlace } from "../commands/recoveryTime.test-support";
 import { testGate } from "../commands/testGate.test-support";
+import { seedRaw } from "../commands/pendingSeed.test-support";
 
 const answer: LearningTransition = { kind: "answer.submit", session_id: id(3), assignment_id: id(6), payload: { text: "Haus" } };
 const owners: LearningDocumentCommands[] = [];
@@ -87,7 +88,7 @@ async function inherit(p: ReturnType<typeof page>) {
 describe("Learning results: Request.started → sendStarted (timer layer, QA-FINAL Q2)", () => {
   it("control: an answer left by an earlier owner and already held by the core is found by the first check: old (restored), nothing sent", async () => {
     const p = page(), intent = { ...answer, command_id: id(90) } as LearningCommandIntent;
-    p.values.set(primaryKey, JSON.stringify(pending(intent))); p.committed.set(intent.command_id, intent);
+    seedRaw(p.values, primaryKey, JSON.stringify(pending(intent)), id(50)); p.committed.set(intent.command_id, intent);
     const owner = p.make(); owner.setRecoveryActive(true); await owner.refresh(); await tick();
     expect(p.posts()).toBe(0);
     expect(p.started).not.toHaveBeenCalled();

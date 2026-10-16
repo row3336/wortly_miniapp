@@ -8,6 +8,7 @@ import { learningViewFixture } from "../learning/learningView.test-support";
 import { id, profile, response } from "../learning/learningFixtures.test-support";
 import { settingsResponse } from "../settings/settingsRead.test-support";
 import { App } from "./App";
+import { lsSeedRaw, lsRemovePointer } from "../commands/lsPending.test-support";
 
 type Fetch = (url: string | URL | Request, init?: RequestInit) => Promise<Response>;
 const compatibility = { compatible: true, contract_version: "1" };
@@ -96,7 +97,7 @@ async function wrongResult() {
   return s;
 }
 async function checkedThenCorrected(s: Awaited<ReturnType<typeof wrongResult>>) {
-  localStorage.removeItem(LSLOT);
+  lsRemovePointer(LSLOT, id(50));
   // The return's own read may already have lifted the block; then there is no check button left to press.
   const check = screen.queryByRole("button", { name: "Проверить состояние" });
   if (check) { fireEvent.click(check); await settled(10); }
@@ -113,7 +114,7 @@ describe("C190: background around a refused «Далее» on the actual App", (
   it("background in the same task as the tap: the present never reaches the slot; after the return the machine meets X and B is shown, never the old result", async () => {
     const s = await wrongResult();
     const sent = posts(s).length;
-    localStorage.setItem(LSLOT, xRecord(s));
+    lsSeedRaw(LSLOT, xRecord(s), id(50));
     // Earlier than any real background can come (a browser event waits for the microtasks of the tap).
     act(() => { fireEvent.click(screen.getByRole("button", { name: "Далее" })); visibility("hidden"); });
     await settled(10);
@@ -125,14 +126,14 @@ describe("C190: background around a refused «Далее» on the actual App", (
     expect(screen.queryByRole("region", { name: "Есть ошибка" })).toBeNull();
     expect(screen.getByText("Подтверждаем показ задания…")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Исправить ответ" })).toBeNull();
-    localStorage.removeItem(LSLOT);
+    lsRemovePointer(LSLOT, id(50));
     fireEvent.click(screen.getByRole("button", { name: "Проверить состояние" })); await settled(10);
     expect(posts(s).slice(sent)).toEqual(["assignment.present"]);
   }, 40000);
   it("background after the refusal restored the result: after the return and the check an accepted correction waits for «Далее»", async () => {
     const s = await wrongResult();
     const sent = posts(s).length;
-    localStorage.setItem(LSLOT, xRecord(s));
+    lsSeedRaw(LSLOT, xRecord(s), id(50));
     fireEvent.click(screen.getByRole("button", { name: "Далее" })); await settled(10);
     expect(screen.getByRole("region", { name: "Есть ошибка" })).toBeTruthy();
     await act(async () => { visibility("hidden"); }); await act(async () => { visibility("visible"); }); await settled(10);
@@ -142,7 +143,7 @@ describe("C190: background around a refused «Далее» on the actual App", (
   }, 30000);
   it("contrast without a background: the accepted correction after the refused «Далее» gets its own timer", async () => {
     const s = await wrongResult();
-    localStorage.setItem(LSLOT, xRecord(s));
+    lsSeedRaw(LSLOT, xRecord(s), id(50));
     fireEvent.click(screen.getByRole("button", { name: "Далее" })); await settled(10);
     expect(await checkedThenCorrected(s)).toEqual(["result.correct", "assignment.present"]);
   }, 30000);

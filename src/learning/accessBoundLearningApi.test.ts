@@ -154,7 +154,7 @@ describe("accepted ManualSelectionController over the access-bound API", () => {
   it("persists before a POST that is denied; the intent stays for the next document and nothing leaks", async () => {
     const f = fixture(), c = composed(f);
     f.fetcher.mockResolvedValueOnce(ok.get()).mockImplementationOnce(async () => {
-      expect(JSON.parse([...c.values.values()][0])).toEqual({ schemaVersion: 1, profileId: id(3), clientInstanceId: id(1), intent: intent() });
+      expect(JSON.parse([...c.values.values()][0]).record).toEqual({ schemaVersion: 1, profileId: id(3), clientInstanceId: id(1), intent: intent() });
       return denial(401);
     });
     await c.controller.refresh(); await c.controller.change(id(4), true);

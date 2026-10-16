@@ -9,6 +9,7 @@ import { ConjugationCommandController, resultAddressed, type ConjugationCommandS
 import type { ConjugationSessionPendingStore, ConjugationStopPendingStore } from "./conjugationPending";
 import type { ConjugationResultCurrent } from "./conjugationProjection";
 import { undoAction } from "../commands/resultUndo";
+import { lostAddress } from "../commands/lostEnvelope";
 
 type AccessCredentials = Parameters<Parameters<OpenedAccess["run"]>[0]>[0];
 type ResultView = Extract<ConjugationCommandView, { kind: "result" }>;
@@ -178,6 +179,10 @@ export class ConjugationDocumentController implements ConjugationDocumentActions
       check: intent => options.transport.gate.runReadback(intent.command_id, ticket =>
         this.exchange(({ token, proof, clientInstanceId, documentId }) =>
           api.status(token, proof, { ...intent, client_instance_id: clientInstanceId, document_id: documentId }, ticket))),
+      // Q27 (C458/C467): a lost answer or grade is read by its ID under the same ticket and open handle; never sent.
+      checkLost: lost => options.transport.gate.runReadback(lost.commandId, ticket =>
+        this.exchange(({ token, proof, clientInstanceId, documentId }) =>
+          api.statusLost(token, proof, lostAddress(lost, { client_instance_id: clientInstanceId, document_id: documentId }), ticket))),
       gate: options.transport.gate,
       // Revisions read their original triple; start/present/unknown answer/stop read only the original session.
       read: intent => this.exchange<ConjugationRead>(({ token, proof, clientInstanceId, documentId }) => {

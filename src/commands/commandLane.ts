@@ -4,6 +4,7 @@ import { exactKeys, oneOf, record, sameId, uuid, version } from "../api/wireVali
 import { sendableIntent } from "./closeIntent";
 import { GatePending, pausedBeforeSend } from "./gatePending";
 import { PendingStoreError, refusedUnsent, type PendingSlot } from "./pendingSlot";
+import { lostCommand, lostEnvelopeError, lostMissingProblem, type LostCommand, type LostMissing, type LostView } from "./lostEnvelope";
 import type { WriteGate } from "./writeGate";
 
 export type CommandPhase = "loading" | "idle" | "checking" | "sending" | "unresolved" | "blocked" | "settled" | "disposed";
@@ -18,7 +19,10 @@ export type CommandProblem = "network" | "storage" | "invalid_pending" | "pendin
   | "window_stale"
   // PAUSED_BEFORE_SEND (P03 §4.2): the write gate kept the request on the client. Nothing left and the record stays; once
   // the gate lets a write through again the owner reads the ID (M03) and offers the same send again.
-  | "paused";
+  | "paused"
+  // Q27 (C458): the answer's text is gone from this device (its payload deleted, Е02) and the server does not hold its ID:
+  // it is never sent again and no new command is made for it; its open session may be stopped as usual.
+  | "lost_envelope";
 export type CommandOutcome = "accepted" | "rejected" | "not_applied";
 export type Pair = "ru-de" | "uk-de" | "en-de";
 export type LaneIntent = { command_id: string; kind: string; session_id: string };
@@ -89,6 +93,8 @@ export type LaneSnapshot<I extends LaneIntent, C, R> = {
   current: C | null;
   closedSession: ClosedSessionBoundary | null;
   stateVersion: string | null;
+  /** Q27: the command of this lane known by its ID only (its payload is gone); null otherwise. */
+  lost?: LostView | null;
 };
 
 /** Types of one mode's lane; the controller logic below is identical for all of them. */
@@ -118,6 +124,11 @@ export type LaneOptions<S extends LaneSpec> = {
   send(intent: S["intent"], transmitted?: () => void): Promise<S["reply"]>;
   /** Verifies the server fingerprint of the full intent; a different payload under this ID is an HTTP 409. */
   check(intent: S["intent"]): Promise<S["status"]>;
+  /**
+   * Q27 (C458): the status of a lost command by its ID only — the same ticket, gate and open handle as check, without the
+   * fingerprint of the body that is gone. A lane without it keeps a lost command unresolved and reads nothing.
+   */
+  checkLost?(lost: LostCommand): Promise<Extract<S["status"], { outcome: "accepted" }> | LostMissing>;
   read(sessionId: string): Promise<S["read"]>;
   onUpdate(snapshot: S["snapshot"]): void;
   /**
@@ -192,6 +203,12 @@ export function retryStep<C extends { session_id: string; status: string }>(curr
   return current as Extract<C, { pair: string }>;
 }
 
+/** The service address of a lost answer for the shared target checks: no payload, never sendable. */
+export function lostIntent(lost: LostCommand): LaneIntent & { assignment_id: string; result_id?: string; expected_result_version?: string } {
+  return { command_id: lost.commandId, kind: lost.kind, session_id: lost.sessionId, assignment_id: lost.assignmentId,
+    ...(lost.kind === "result.grade" ? { result_id: lost.resultId!, expected_result_version: lost.expectedResultVersion! } : {}) };
+}
+
 /**
  * What every lane shares literally: one step at a time, a failed step leaves its intent unknown (never a new command),
  * the durable intent is loaded once per owner. CommandLane adds the written/oral algorithm; Learning keeps its own.
@@ -210,6 +227,13 @@ export abstract class LaneCore<I extends LaneIntent, Snapshot> {
   protected inherited = false;
   /** The raw error of the last step that failed, for automatic recovery to classify (CP2); null after a clean step. */
   private failure: unknown = null;
+  /**
+   * Q27 (C458): the stored command of this lane whose payload is gone — known by its ID only. It is read by its ID, never
+   * sent; it blocks a new action of the lane until its outcome is proven and its pointer cleared (clearLost).
+   */
+  protected lost: LostCommand | null = null;
+  /** The session of the lost command was read open after its ID proved absent: Stop follows the usual rights then. */
+  protected lostOpen = false;
 
   /** The owner's part in the readback registry of the write gate (P03 §4.11 R1–R9, M-P03-8); none without a gate. */
   protected readonly registry: GatePending | null;
@@ -235,7 +259,7 @@ export abstract class LaneCore<I extends LaneIntent, Snapshot> {
       this.problem = failureProblem(error);
       this.pauseSeconds = this.problem === "maintenance" && error instanceof ApiError ? error.pause?.waitSeconds ?? null : null;
       // A timeout keeps the same intent: it becomes unknown, never a new command.
-      this.phase = this.pending ? "unresolved" : "blocked";
+      this.phase = this.pending || this.lost ? "unresolved" : "blocked";
     }).finally(() => { if (this.running === task) this.running = null; this.emit(); });
     this.running = task;
     return task;
@@ -243,17 +267,38 @@ export abstract class LaneCore<I extends LaneIntent, Snapshot> {
   /** The first reconcile of this owner reads the durable intent; false when the owner died meanwhile. */
   protected async loadPending(): Promise<boolean> {
     if (!this.loaded) {
-      this.pending = await this.core.pendingStore.load(this.core.profileId, this.lifetime.signal);
+      try { this.pending = await this.core.pendingStore.load(this.core.profileId, this.lifetime.signal); }
+      catch (error: unknown) {
+        // Q27: a pointer without its payload — the command is known by its ID only; nothing is written or sent for it.
+        if (!lostEnvelopeError(error)) throw error;
+        if (!this.live()) return false;
+        this.lost = lostCommand(error, this.core.profileId);
+        this.pending = null;
+      }
       if (!this.live()) return false;
-      this.loaded = true; this.inherited = this.pending !== null;
+      this.loaded = true; this.inherited = this.pending !== null || this.lost !== null;
       // R1: a loaded record takes part in the readback registry of the gate.
       if (this.pending) this.registry?.hold(this.pending.intent.command_id);
+      else if (this.lost) this.registry?.hold(this.lost.commandId);
     }
     return true;
   }
+  /** Q27: removes the pointer of the lost command once its outcome is proven (the slot compares the exact pointer). */
+  protected async clearLostRecord(): Promise<void> {
+    const lost = this.lost;
+    if (!lost) return;
+    await this.core.pendingStore.clearLost(lost.envelope, this.lifetime.signal);
+    if (!this.live()) return;
+    this.lost = null; this.lostOpen = false;
+  }
+  /** Q27: the view of a lost command for the document (Stop) and the screens (status). */
+  protected lostView(): LostView | null {
+    return this.live() && this.lost ? { commandId: this.lost.commandId, kind: this.lost.kind, sessionId: this.lost.sessionId,
+      sessionOpen: this.lostOpen } : null;
+  }
   /** A new intent needs a live, loaded and idle owner with no running step. */
   protected busy(): boolean {
-    return !this.live() || !!this.running || !this.loaded || !!this.pending || !["idle", "settled"].includes(this.phase);
+    return !this.live() || !!this.running || !this.loaded || !!this.pending || !!this.lost || !["idle", "settled"].includes(this.phase);
   }
   /**
    * The host tells this from the transport once the request of the current send is built, right before fetch: from now
@@ -288,6 +333,14 @@ export abstract class LaneCore<I extends LaneIntent, Snapshot> {
   releaseClosed(sessionId: string): Promise<void> {
     return this.run(async () => {
       const pending = this.pending;
+      // Q27: a lost conflict of the closed session goes the same way: its pointer only, after the confirmed closure.
+      if (!pending && this.lost?.mismatch && !this.outcome && sameId(this.lost.sessionId, sessionId)) {
+        await this.clearLostRecord();
+        if (!this.live() || this.lost) return;
+        this.problem = null; this.retryVerified = false; this.phase = "idle";
+        this.registry?.cleared();
+        return;
+      }
       if (!pending || this.outcome || !sameId(pending.intent.session_id, sessionId)) return;
       await this.core.pendingStore.clearMarked(pending, this.lifetime.signal);
       if (!this.live()) return;
@@ -353,17 +406,19 @@ export abstract class CommandLane<S extends LaneSpec, O extends LaneOptions<S> =
     const live = this.live(), fresh = live && this.fresh();
     const own = this.pending !== null && this.pending.clientInstanceId === this.options.clientInstanceId && this.pending.pair === this.options.pair;
     const ownPending = live && own && !["profile_changed", "client_changed", "pair_changed", "forbidden", "expired"].includes(this.problem ?? "");
-    return this.extend({ phase: live ? this.phase : "disposed", pending: this.pending !== null,
-      kind: this.pending?.intent.kind ?? null, sessionId: this.pending?.intent.session_id ?? null,
+    return this.extend({ phase: live ? this.phase : "disposed", pending: this.pending !== null || this.lost !== null,
+      kind: this.pending?.intent.kind ?? this.lost?.kind ?? null,
+      sessionId: this.pending?.intent.session_id ?? this.lost?.sessionId ?? null,
       pendingIntent: ownPending ? this.mode.copy(this.pending!.intent) : null,
       outcome: this.outcome, resolved: live && this.resolved ? { ...this.resolved } : null,
       rejectionCode: live ? this.rejectionCode : null, problem: this.problem,
       pauseSeconds: this.problem === "maintenance" ? this.pauseSeconds : null,
       canRetry: live && fresh && !this.running && this.retryVerified && own && !this.pending!.mismatch && this.outcome === null
         && sendableIntent(this.pending!.intent),
-      conflict: this.pending?.mismatch === true,
+      conflict: this.pending?.mismatch === true || this.lost?.mismatch === true,
       current: live && fresh ? structuredClone(this.current) : null,
-      closedSession: live && fresh ? structuredClone(this.closedSession) : null, stateVersion: this.floor }, live && fresh);
+      closedSession: live && fresh ? structuredClone(this.closedSession) : null, stateVersion: this.floor,
+      lost: this.lostView() }, live && fresh);
   }
   protected clearCurrent(): void { this.current = null; this.closedSession = null; }
   /**
@@ -402,7 +457,10 @@ export abstract class CommandLane<S extends LaneSpec, O extends LaneOptions<S> =
     if (!this.outcome || !this.live()) return;
     if (this.pending && !this.resolved) this.resolved = { commandId: this.pending.intent.command_id,
       kind: this.pending.intent.kind, sessionId: this.pending.intent.session_id } as S["resolved"];
+    if (this.lost && !this.resolved) this.resolved = { commandId: this.lost.commandId, kind: this.lost.kind,
+      sessionId: this.lost.sessionId } as S["resolved"];
     if (this.pending) await this.options.pendingStore.clear(this.pending, this.lifetime.signal);
+    else if (this.lost) await this.clearLostRecord();
     if (!this.live()) return;
     this.pending = null; this.problem = null; this.retryVerified = false; this.phase = "settled";
     this.registry?.cleared();
@@ -437,12 +495,62 @@ export abstract class CommandLane<S extends LaneSpec, O extends LaneOptions<S> =
     this.clearCurrent(); this.problem = "mismatch"; this.phase = "unresolved";
     await this.options.pendingStore.markMismatch(this.pending, this.lifetime.signal);
   }
+  /**
+   * Q27 (C458): the lost command is read by its own ID only. Its acceptance is its ordinary recovery (the result is shown
+   * as a restored one); a definite absence with the final closure of its session proves it will never apply; any other
+   * absence leaves it unresolved without a resend — Stop of its session follows only once that session is read open.
+   */
+  private async reconcileLost(lost: LostCommand): Promise<void> {
+    // A conflict (Я17) is never read as this lane's fact: it waits for the confirmed closure of its session (releaseClosed).
+    if (lost.mismatch) { this.problem = "mismatch"; this.phase = "unresolved"; return; }
+    if (!this.options.checkLost) { this.problem = "lost_envelope"; this.phase = "unresolved"; return; }
+    const reply = await this.options.checkLost(lost);
+    if (!this.live()) return;
+    if (reply.outcome === "accepted") { await this.settleLost(reply as LaneSettled<S>, lost); return; }
+    // The server does not hold this ID: a definite answer about it (R5); the lost answer is never sent again.
+    this.registry?.settled("not_recorded");
+    const missing = reply as LostMissing;
+    if (!this.observe(missing.state_version)) this.problem = "stale_response";
+    else {
+      const problem = lostMissingProblem(missing, lost, this.options);
+      if (problem === "not_applied") {
+        this.outcome = "not_applied"; this.closedSession = structuredClone(missing.closed_session!);
+        await this.clearSettled(); return;
+      }
+      if (problem !== null) this.problem = problem;
+      else {
+        const read = await this.options.read(lost.sessionId);
+        if (!this.live()) return;
+        if (!this.observe(read.state_version, read.current)) this.problem = "stale_response";
+        else {
+          const step = retryStep(read.current as { session_id: string; status: string }, lostIntent(lost), lost.pair);
+          this.lostOpen = typeof step !== "string";
+          this.problem = typeof step === "string" ? step === "not_found" ? "step_changed" : step : "lost_envelope";
+        }
+      }
+    }
+    this.phase = "unresolved";
+  }
+  /** The accepted fact of a lost command, as settle does for a pending one: a restored outcome, then its pointer goes. */
+  private async settleLost(reply: LaneSettled<S>, lost: LostCommand): Promise<void> {
+    this.outcome = "accepted";
+    this.resolved = { commandId: lost.commandId, kind: lost.kind, sessionId: lost.sessionId, restored: true } as S["resolved"];
+    this.accept(lostIntent(lost) as unknown as S["intent"], reply as LaneSettled<S> & { outcome: "accepted" }, this.resolved);
+    this.rejectionCode = null;
+    const current = this.settledCurrent(reply), otherPair = "pair" in current && current.pair !== this.options.pair;
+    const observed = this.observe(reply.state_version, current);
+    if (!observed) this.clearCurrent();
+    else if (!otherPair) this.settledView(reply);
+    await this.clearSettled();
+    if (observed && otherPair && this.live() && !("status" in current && current.status === "closed")) this.problem = "pair_changed";
+  }
   private async reconcile(): Promise<void> {
     this.phase = "checking"; this.problem = null; this.retryVerified = false;
     if (!this.outcome) this.clearCurrent();
     this.emit();
     if (!this.live() || !await this.loadPending()) return;
     if (this.outcome) { await this.clearSettled(); return; }
+    if (this.lost) { await this.reconcileLost(this.lost); return; }
     const pending = this.pending;
     if (!pending) { this.phase = "idle"; return; }
     if ((pending.intent.kind === "session.stop") !== (this.options.lane === "stop")) throw new PendingStoreError("invalid");

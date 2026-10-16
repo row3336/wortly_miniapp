@@ -10,6 +10,7 @@ import { App } from "../app/App";
 import { commandPosts, enabledExits, foregroundOpen, LONG_SCENARIO_MS, loseReply, moveWithout, noLandings, pairMoved,
   settle, watchCommits } from "../app/pairMoved.test-support";
 import { app, exchange, pairText, row, useWrittenAppEnvironment } from "./writtenApp.test-support";
+import { lsPendingRaw, lsSeedRaw } from "../commands/lsPending.test-support";
 
 /**
  * Contract probe of the seam between a mode host and the document (QA-R1-V3 F1, C226): when `repeat` is set, the written
@@ -177,16 +178,16 @@ describe("written R1: the window refreshes itself into the session of the new pa
     const X = "7a1b2c3d-0000-4000-8000-00000000cc01";
     world.moved = true;
     fireEvent.click(row(words));
-    localStorage.setItem("wortly.pending.learning_session", JSON.stringify({ schemaVersion: 1, profileId: installation.profileId,
+    lsSeedRaw("wortly.pending.learning_session", JSON.stringify({ schemaVersion: 1, profileId: installation.profileId,
       clientInstanceId: installation.clientInstanceId, pair: "uk-de", intent: { command_id: X, session_id: "7a1b2c3d-0000-4000-8000-00000000cc02",
-        kind: "answer.submit", assignment_id: "7a1b2c3d-0000-4000-8000-00000000cc03", payload: { text: "Haus" } } }));
+        kind: "answer.submit", assignment_id: "7a1b2c3d-0000-4000-8000-00000000cc03", payload: { text: "Haus" } } }), installation.profileId);
     expect(await screen.findByText("слово 6", undefined, exchange)).toBeTruthy();
     await settle(3000);
     const onX = a.fetcher.mock.calls.slice(mark).filter(([url, init]) => String(url).includes(X) || String(init?.body ?? "").includes(X))
       .map(([url, init]) => `${init?.method ?? "GET"} ${new URL(String(url), "http://localhost").pathname}`);
     expect(onX.length).toBeGreaterThan(0);
     expect(new Set(onX)).toEqual(new Set([`GET /api/v1/commands/${X}`]));
-    expect(localStorage.getItem("wortly.pending.learning_session")).toContain(X);
+    expect(lsPendingRaw("wortly.pending.learning_session")).toContain(X);
   });
 
   it("2.3А: an old record X of another window is only checked, never sent, by the refreshed owners", async () => {
@@ -196,10 +197,10 @@ describe("written R1: the window refreshes itself into the session of the new pa
     const X = "7a1b2c3d-0000-4000-8000-00000000aa01";
     world.moved = true;
     fireEvent.click(row(words));
-    localStorage.setItem("wortly.pending.oral_session", JSON.stringify({ schemaVersion: 1, profileId: installation.profileId,
+    lsSeedRaw("wortly.pending.oral_session", JSON.stringify({ schemaVersion: 1, profileId: installation.profileId,
       clientInstanceId: installation.clientInstanceId, pair: "uk-de", intent: { command_id: X,
         session_id: "7a1b2c3d-0000-4000-8000-00000000aa02", kind: "oral.reveal",
-        assignment_id: "7a1b2c3d-0000-4000-8000-00000000aa03", payload: {} } }));
+        assignment_id: "7a1b2c3d-0000-4000-8000-00000000aa03", payload: {} } }), installation.profileId);
     expect(await screen.findByText("слово 6", undefined, exchange)).toBeTruthy();
     await settle(3000);
     expect(commandPosts(a.fetcher, mark).filter(post => post.command_id === X)).toEqual([]);
@@ -208,6 +209,6 @@ describe("written R1: the window refreshes itself into the session of the new pa
       .map(([url, init]) => `${init?.method ?? "GET"} ${new URL(String(url), "http://localhost").pathname}`);
     expect(reads.length).toBeGreaterThan(0);
     expect(new Set(reads)).toEqual(new Set([`GET /api/v1/commands/${X}`]));
-    expect(localStorage.getItem("wortly.pending.oral_session")).toContain(X);
+    expect(lsPendingRaw("wortly.pending.oral_session")).toContain(X);
   });
 });

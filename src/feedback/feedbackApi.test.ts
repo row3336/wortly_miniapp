@@ -127,3 +127,37 @@ describe("status", () => {
     await expect(status({ error: { code: "X" } }, 500)).rejects.toMatchObject({ kind: "http", status: 500 });
   });
 });
+
+describe("statusById (Q27: a message whose text is gone, by its stored ID and card)", () => {
+  const byId = (body: unknown, cardId: string | null = null, code = 200) => readWithTicket(intent, (__command, __ticket) =>
+    api(() => response(body, code)).api.statusById("token", id(50), { commandId: id(100), cardId }, __ticket));
+  it("the same strict checks as status: an applied fact of this ID and card, a not_found of this profile", async () => {
+    expect(await byId({ command: fact({}, "already_applied"), current: { inbox_id: id(900), card_id: null }, state_version: "5" }))
+      .toEqual({ outcome: "accepted", inboxId: id(900) });
+    expect(await byId({ command: fact({}, "already_applied"), current: { inbox_id: id(900), card_id: id(7) }, state_version: "5" }, id(7)))
+      .toEqual({ outcome: "accepted", inboxId: id(900) });
+    expect(await byId({ command: { id: id(100), status: "not_found" }, current: profile("5"), state_version: "5" })).toEqual({ outcome: "not_found" });
+  });
+  it.each([
+    ["a not_found of another profile", { command: { id: id(100), status: "not_found" }, current: { ...profile("5"), profile_id: id(51) }, state_version: "5" }],
+    ["a not_found of another ID", { command: { id: id(101), status: "not_found" }, current: profile("5"), state_version: "5" }],
+    ["a fact of another card", { command: fact({}, "already_applied"), current: { inbox_id: id(900), card_id: id(8) }, state_version: "5" }],
+    ["a fact of another ID", { command: fact({ id: id(101) }, "already_applied"), current: { inbox_id: id(900), card_id: null }, state_version: "5" }],
+    ["a fresh applied status", { command: fact(), current: { inbox_id: id(900), card_id: null }, state_version: "5" }],
+    ["another kind", { command: fact({ kind: "setting.save" }, "already_applied"), current: { inbox_id: id(900), card_id: null }, state_version: "5" }],
+    ["an error", { command: fact({}, "already_applied"), current: { inbox_id: id(900), card_id: null }, state_version: "5", error: { code: "X" } }],
+  ])("%s is invalid", async (_name, body) => {
+    await expect(byId(body)).rejects.toMatchObject({ kind: "invalid_response" });
+  });
+  it("a GET only, never a send; bad subjects are refused before any request", async () => {
+    const client = api(() => response({ command: { id: id(100), status: "not_found" }, current: profile("5"), state_version: "5" }));
+    await readWithTicket(intent, (_c, ticket) => client.api.statusById("token", id(50), { commandId: id(100), cardId: null }, ticket));
+    expect(client.fetcher.mock.calls.map(([url, init]) => [String(url).replace(/^.*\/commands/, "/commands"), init?.method]))
+      .toEqual([[`/commands/${id(100)}`, "GET"]]);
+    await expect(readWithTicket(intent, (_c, ticket) => client.api.statusById("token", id(50), { commandId: "x", cardId: null }, ticket)))
+      .rejects.toThrow("invalid feedback subject");
+    await expect(readWithTicket(intent, (_c, ticket) => client.api.statusById("token", id(50), { commandId: id(100), cardId: "x" }, ticket)))
+      .rejects.toThrow("invalid feedback subject");
+    expect(client.fetcher).toHaveBeenCalledTimes(1);
+  });
+});

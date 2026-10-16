@@ -6,6 +6,7 @@ import { tick } from "../commands/recoveryTime.test-support";
 import { id, primaryKey } from "./learningFixtures.test-support";
 import { learningViewFixture } from "./learningView.test-support";
 import type { LearningViewController } from "./learningViewController";
+import { pendingRaw, seedRaw, pointerKeyOf } from "../commands/pendingSeed.test-support";
 
 const owners: LearningViewController[] = [];
 afterEach(() => { owners.splice(0).forEach(owner => owner.dispose()); vi.useRealTimers(); });
@@ -24,14 +25,14 @@ function harness() {
 describe("Learning: an unreadable record in the slot meets a new answer", () => {
   it.each([["not JSON", "{not json"], ["JSON of another shape", "{\"a\":1}"]])("%s: no check of Y, no send, no recovery view, record kept", async (_name, raw) => {
     const h = harness(); await h.view.refresh(); h.view.setDraft("Haus");
-    h.values.set(primaryKey, raw);
+    seedRaw(h.values, primaryKey, raw, id(50));
     const mark = h.fetcher.mock.calls.length;
     await h.view.submit(); await tick();
     const y = h.newId.mock.results.at(-1)!.value as string;
     await h.run(10 * 60_000, 15_000);
     expect(h.requests(mark).statuses).toEqual([]);
     expect(h.posts()).toEqual([]);
-    expect(h.values.get(primaryKey)).toBe(raw);
+    expect(pendingRaw(h.values, primaryKey)).toBe(raw);
     expect(h.view.snapshot().commands.recovery).toBeNull();
     expect(h.view.snapshot().commands.primary).toMatchObject({ pending: false, problem: "invalid_pending" });
     expect(h.fetcher.mock.calls.slice(mark).some(([url, init]) => String(url).includes(y) || String(init?.body ?? "").includes(y))).toBe(false);
@@ -39,10 +40,10 @@ describe("Learning: an unreadable record in the slot meets a new answer", () => 
 
   it("the lane is free again after a check; once the record is gone the next answer goes out once under a new ID", async () => {
     const h = harness(); await h.view.refresh(); h.view.setDraft("Haus");
-    h.values.set(primaryKey, "{not json");
+    seedRaw(h.values, primaryKey, "{not json", id(50));
     await h.view.submit(); await tick(); await h.run(30_000);
     const y = h.newId.mock.results.at(-1)!.value as string;
-    h.values.delete(primaryKey);
+    h.values.delete(pointerKeyOf(primaryKey, id(50)));
     await h.view.refresh(); await tick();
     h.view.setDraft("Haus");
     await h.view.submit(); await tick(); await h.run(10_000);

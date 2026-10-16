@@ -4,6 +4,8 @@ import { PendingStoreError } from "../commands/pendingSlot";
 import type { ConjugationIntent } from "./conjugationIntent";
 import { canonicalConjugationIntent, ConjugationCatalogPendingStore, ConjugationSessionPendingStore,
   ConjugationStopPendingStore, validConjugationPending, type ConjugationPending } from "./conjugationPending";
+import { pendingRaw, seedRaw } from "../commands/pendingSeed.test-support";
+import { payloadKeyOf, pointerKeyOf } from "../commands/pendingSlot";
 
 const id = (n: number) => `aaaaaaaa-bbbb-4000-8000-${String(n).padStart(12, "0")}`;
 const signal = () => new AbortController().signal;
@@ -29,25 +31,36 @@ describe("conjugation durable slots through the public store Interface", () => {
       await store.save(pending(intents[i]), signal());
       await expect(store.save(pending(intents[(i + 1) % 3]), signal())).rejects.toMatchObject({ kind: "invalid" });
     }
-    expect([...f.values.keys()]).toEqual(["wortly.pending.conjugation_catalog", "wortly.pending.conjugation_session", "wortly.pending.conjugation_stop"]);
+    // Profile addressing (§2): one pointer per lane of this profile; the answer's content apart in its write-once payload.
+    expect([...f.values.keys()].sort()).toEqual([pointerKeyOf("wortly.pending.conjugation_catalog", id(90)),
+      payloadKeyOf("wortly.pending.conjugation_session", id(90), id(2)), pointerKeyOf("wortly.pending.conjugation_session", id(90)),
+      pointerKeyOf("wortly.pending.conjugation_stop", id(90))].sort());
     await f.stores[2].clear(pending(intents[2]), signal());
-    expect(f.values.size).toBe(2);
+    expect(f.values.size).toBe(3);
   });
   it("canonicalizes order and UUID case before exact guards without altering answer text", async () => {
     const f = fixture(), p = pending();
     const raw = { intent: { payload: { text: "  ä\né🙂  " }, assignment_id: id(4).toUpperCase(), session_id: id(3).toUpperCase(),
       kind: "answer.submit", command_id: id(2).toUpperCase() }, pair: "ru-de", clientInstanceId: id(91).toUpperCase(), profileId: id(90).toUpperCase(), schemaVersion: 1 };
-    f.values.set("wortly.pending.conjugation_session", JSON.stringify(raw));
+    // The slot stores only the canonical record (§3.2, the pointer comparator): a non-canonical intent is canonicalized by
+    // save; the same record then reads back under the profile's UUID in any case, and a repeat writes nothing.
+    await f.stores[1].save(raw as unknown as ConjugationPending, signal());
     expect(await f.stores[1].load(id(90).toUpperCase(), signal())).toEqual(p);
+    vi.mocked(f.storage.set).mockClear();
     await f.stores[1].save(p, signal()); expect(f.storage.set).not.toHaveBeenCalled();
     await f.stores[1].clear(p, signal()); expect(f.values.size).toBe(0);
   });
   it("returns detached payloads and persists only whitelisted fields", async () => {
     const f = fixture(), p = pending(); await f.stores[1].save(p, signal());
+    const savedText = (p.intent as { payload: { text: string } }).payload.text;
     Object.assign(p.intent.payload, { text: "changed" });
     const loaded = await f.stores[1].load(id(90), signal()); Object.assign(loaded!.intent.payload, { text: "mutated snapshot" });
     expect((await f.stores[1].load(id(90), signal()))!.intent.payload).toEqual({ text: "  ä\né🙂  " });
-    expect(Object.keys(JSON.parse(f.values.values().next().value!))).toEqual(["schemaVersion", "profileId", "clientInstanceId", "pair", "intent"]);
+    const pointer = JSON.parse(f.values.get(pointerKeyOf("wortly.pending.conjugation_session", id(90)))!);
+    expect(Object.keys(pointer)).toEqual(["schemaVersion", "record", "payloadKey"]);
+    expect(Object.keys(pointer.record)).toEqual(["schemaVersion", "profileId", "clientInstanceId", "pair", "intent"]);
+    expect(pointer.record.intent.payload).toEqual({}); // the answer is content: it lives only in the payload
+    expect(JSON.parse(f.values.get(pointer.payloadKey)!)).toEqual({ text: savedText });
   });
   it.each(["schema", "profile", "client", "pair", "extra", "mismatch", "payload", "mode", "kind", "version"])("blocks malformed %s without deleting data", async kind => {
     const f = fixture(), p: Record<string, unknown> = structuredClone(pending());
@@ -62,7 +75,7 @@ describe("conjugation durable slots through the public store Interface", () => {
     if (kind === "kind") p.intent = { ...intents[1], kind: "oral.grade" };
     if (kind === "version") p.intent = { command_id: id(2), kind: "result.grade", session_id: id(3), assignment_id: id(4), result_id: id(6), expected_result_version: 9007199254740993, payload: { grade: 4 } };
     expect(validConjugationPending(p)).toBe(false);
-    f.values.set("wortly.pending.conjugation_session", JSON.stringify(p));
+    seedRaw(f.values, "wortly.pending.conjugation_session", JSON.stringify(p), id(90));
     await expect(f.stores[1].load(id(90), signal())).rejects.toBeInstanceOf(PendingStoreError);
     expect(f.storage.remove).not.toHaveBeenCalled();
   });
@@ -100,15 +113,15 @@ describe("conjugation durable slots through the public store Interface", () => {
     vi.mocked(f.storage.get).mockImplementationOnce(async () => { abort.abort(); return null; });
     await expect(f.stores[1].save(pending(), abort.signal)).rejects.toMatchObject({ kind: "cancelled" });
     expect(f.storage.set).not.toHaveBeenCalled();
-    f.values.set("wortly.pending.conjugation_session", "broken-json");
+    seedRaw(f.values, "wortly.pending.conjugation_session", "broken-json", id(90));
     await expect(f.stores[1].load(id(90), signal())).rejects.toMatchObject({ kind: "invalid" });
-    expect(f.values.get("wortly.pending.conjugation_session")).toBe("broken-json");
+    expect(pendingRaw(f.values, "wortly.pending.conjugation_session")).toBe("broken-json");
   });
   it.each(["\ud800", "x\udfff"])("refuses a lone surrogate without changing or deleting the persisted text", async text => {
     const f = fixture(), p = pending({ command_id: id(2), kind: "answer.submit", session_id: id(3), assignment_id: id(4), payload: { text } });
     expect(validConjugationPending(p)).toBe(false); expect(() => canonicalConjugationIntent(p.intent)).toThrow(PendingStoreError);
-    const raw = JSON.stringify(p); f.values.set("wortly.pending.conjugation_session", raw);
+    const raw = JSON.stringify(p); seedRaw(f.values, "wortly.pending.conjugation_session", raw, id(90));
     await expect(f.stores[1].load(id(90), signal())).rejects.toMatchObject({ kind: "invalid" });
-    expect(f.values.get("wortly.pending.conjugation_session")).toBe(raw); expect(f.storage.remove).not.toHaveBeenCalled();
+    expect(pendingRaw(f.values, "wortly.pending.conjugation_session")).toBe(raw); expect(f.storage.remove).not.toHaveBeenCalled();
   });
 });

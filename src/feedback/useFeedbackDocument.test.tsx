@@ -3,7 +3,7 @@ import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { id } from "../learning/learningFixtures.test-support";
 import { FeedbackPendingStore } from "./feedbackPending";
-import { feedbackWorld, pendingRecord, slot, TEXT, type Fate } from "./feedbackFixtures.test-support";
+import { feedbackWorld, pendingRecord, TEXT, type Fate , seedFeedback } from "./feedbackFixtures.test-support";
 import { useFeedbackDocument } from "./useFeedbackDocument";
 import { testGate } from "../commands/testGate.test-support";
 
@@ -11,7 +11,7 @@ afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 type Options = Parameters<typeof useFeedbackDocument>[0];
 function setup(fates: Fate[] = [], saved?: string, strict = false) {
   const world = feedbackWorld(fates);
-  if (saved) world.f.values.set(slot, saved);
+  if (saved) seedFeedback(world.f.values, saved);
   const options: Options = { access: world.f.access(), transport: { fetcher: world.f.fetcher, timeoutMs: 30000, maxResponseBytes: 50000, gate: testGate() },
     pendingStore: new FeedbackPendingStore(world.f.storage) };
   const wrapper = strict ? ({ children }: PropsWithChildren) => <StrictMode>{children}</StrictMode> : undefined;

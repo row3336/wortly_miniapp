@@ -10,6 +10,7 @@ import { learningViewFixture } from "../learning/learningView.test-support";
 import { closed, profile, response } from "../learning/learningFixtures.test-support";
 import { settingsResponse } from "../settings/settingsRead.test-support";
 import { App } from "./App";
+import { lsPendingRaw } from "../commands/lsPending.test-support";
 
 type Fetch = (url: string | URL | Request, init?: RequestInit) => Promise<Response>;
 const LSLOT = "wortly.pending.learning_session";
@@ -98,7 +99,7 @@ async function lostStart(page: LearningPageStarts, lose: "before" | "after") {
   const start = await screen.findByRole("button", { name: /Новая группа слов/ }, exchange); await settled();
   s.control.lose = lose; fireEvent.click(start); await settled(10);
   expect(s.posts()).toHaveLength(1);
-  const stored = JSON.parse(localStorage.getItem(LSLOT)!);
+  const stored = JSON.parse(lsPendingRaw(LSLOT)!);
   expect(stored.intent.kind).toBe("session.start");
   return { s, first: s.posts()[0] };
 }
@@ -125,7 +126,7 @@ describe("App Learning 35.1-А: the start of another page is only checked", () =
     expect(retryButton()).toBeNull();
     expect(s.posts()).toEqual([first]);
     // The record waits for a definite answer: not_found clears nothing.
-    expect(JSON.parse(localStorage.getItem(LSLOT)!).intent.command_id).toBe(first.split(":")[1]);
+    expect(JSON.parse(lsPendingRaw(LSLOT)!).intent.command_id).toBe(first.split(":")[1]);
   });
 
   it("a full reload restores the session its check finds, by the same ID, without a POST", async () => {
@@ -134,7 +135,7 @@ describe("App Learning 35.1-А: the start of another page is only checked", () =
     expect(s.posts()).toEqual([first]);
     expect(retryButton()).toBeNull();
     expect(await screen.findByRole("button", { name: "Дальше" }, exchange)).toBeTruthy();
-    expect(localStorage.getItem(LSLOT)).toBeNull();
+    expect(lsPendingRaw(LSLOT)).toBeNull();
   });
 
   it("an App remount in the same page (StrictMode, new storage wrapper) is no reload: the explicit retry stays", async () => {
@@ -173,14 +174,14 @@ describe("App Learning 35.1-А: the start of another page is only checked", () =
   it("C229: «Выйти» for the start of another page refused as SESSION_CLOSED without a closed projection says nothing of a closure", async () => {
     const { s, first } = await lostStart(new LearningPageStarts(), "before");
     cleanup(); render(<App learningPage={new LearningPageStarts()} />); await settled(20);
-    const record = localStorage.getItem(LSLOT);
+    const record = lsPendingRaw(LSLOT);
     fireEvent.click(await screen.findByRole("button", { name: "Выйти" }, exchange)); await settled(15);
     expect(s.posts().filter(post => post.startsWith("session.stop"))).toHaveLength(1);
     // The core never had Y (current not_found): its refusal proves no closure, so the existing neutral text is shown.
     expect(screen.queryByText("Занятие завершено.")).toBeNull();
     expect(screen.getByText("Не удалось обновить занятие.")).toBeTruthy();
     // The start record, its ID, the rights and the route stay; no start, no cancel, no navigation.
-    expect(localStorage.getItem(LSLOT)).toBe(record);
+    expect(lsPendingRaw(LSLOT)).toBe(record);
     expect(s.posts().filter(post => post.startsWith("session.start"))).toEqual([first]);
     expect(s.cancels()).toBe(0);
     expect(screen.getByRole("heading", { name: "Изучение слов" })).toBeTruthy();

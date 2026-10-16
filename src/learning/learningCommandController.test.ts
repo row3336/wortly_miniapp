@@ -12,6 +12,7 @@ import { createLearningResultApi, type LearningAnswerReply, type LearningAnswerS
 import { staleCommand } from "../app/openRules.test-support";
 import { LearningPageStarts } from "./learningPageStarts";
 import { readWithTicket, testGate } from "../commands/testGate.test-support";
+import { pendingRaw, hasPending, seedRaw, pointerKeyOf } from "../commands/pendingSeed.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const slot = "wortly.pending.learning_session", stopSlot = "wortly.pending.learning_stop";
@@ -58,7 +59,7 @@ function deferred<T>() {
 }
 type Options = ConstructorParameters<typeof LearningCommandController>[0];
 function fixture(raw?: LearningSessionPending) {
-  const values = new Map<string, string>(); if (raw) values.set(slot, JSON.stringify(raw));
+  const values = new Map<string, string>(); if (raw) seedRaw(values, slot, JSON.stringify(raw), id(50));
   const storage: AsyncStorage = { get: vi.fn(async key => values.get(key) ?? null),
     set: vi.fn(async (key, value) => { values.set(key, value); }), remove: vi.fn(async key => { values.delete(key); }) };
   const pendingStore = new LearningSessionPendingStore(storage), stopStore = new LearningStopPendingStore(storage);
@@ -83,7 +84,7 @@ describe("Learning command durability and reconciliation", () => {
   it.each(intents)("saves $kind exactly before POST and permits only one in-flight action", async intent => {
     const f = fixture(); await f.controller.refresh(); const gate = deferred<LearningSessionReply>();
     f.send.mockImplementationOnce(async value => {
-      expect(JSON.parse(f.values.get(slot)!)).toEqual(pending(intent)); expect(value).toEqual(intent); return gate.promise;
+      expect(JSON.parse(pendingRaw(f.values, slot)!)).toEqual(pending(intent)); expect(value).toEqual(intent); return gate.promise;
     });
     const input = action(intent), sending = f.controller.begin(input);
     input.session_id = id(99); Object.assign(input.payload, { wrong: true });
@@ -178,7 +179,7 @@ describe("Learning command durability and reconciliation", () => {
     const f = fixture(pending(intent)); f.check.mockResolvedValue(notFound()); f.read.mockResolvedValue({ current, state_version: "9" });
     await f.controller.refresh(); await f.controller.retry();
     expect(f.controller.snapshot()).toMatchObject({ pending: true, outcome: null, canRetry: false, problem });
-    expect(f.send).not.toHaveBeenCalled(); expect(f.values.has(slot)).toBe(true);
+    expect(f.send).not.toHaveBeenCalled(); expect(hasPending(f.values, slot)).toBe(true);
   });
 
   it.each(["profile", "access", "language", "client", "pair"])("not-found after changed %s cannot authorize a POST", async change => {
@@ -193,10 +194,15 @@ describe("Learning command durability and reconciliation", () => {
     expect(f.read).not.toHaveBeenCalled(); expect(f.send).not.toHaveBeenCalled();
   });
 
-  it("removes only the old account's slot and never checks its command with the new account", async () => {
-    const f = fixture({ ...pending(), profileId: id(99) }); f.values.set(stopSlot, "untouched");
-    await f.controller.refresh(); expect(f.check).not.toHaveBeenCalled(); expect(f.values.has(slot)).toBe(false);
-    expect(f.values.get(stopSlot)).toBe("untouched"); expect(f.controller.snapshot().phase).toBe("idle");
+  // Profile addressing (§2, §3.4): the old account's record lives under its own pointer; the new account neither reads,
+  // checks nor removes it (load no longer «self-cleans»).
+  it("leaves the old account's record under its own pointer and never checks its command with the new account", async () => {
+    const f = fixture({ ...pending(), profileId: id(99) }); seedRaw(f.values, stopSlot, "untouched", id(50));
+    const old = f.values.get(pointerKeyOf(slot, id(99)));
+    await f.controller.refresh(); expect(f.check).not.toHaveBeenCalled();
+    expect(old).toBeDefined(); expect(f.values.get(pointerKeyOf(slot, id(99)))).toBe(old);
+    expect(f.values.has(pointerKeyOf(slot, id(50)))).toBe(false);
+    expect(pendingRaw(f.values, stopSlot)).toBe("untouched"); expect(f.controller.snapshot().phase).toBe("idle");
   });
 
   it("can reconcile an accepted old-pair command without restoring its card or installation", async () => {
@@ -257,7 +263,7 @@ describe("Learning command durability and reconciliation", () => {
       current: preview(), command: { id: id(4), status: "rejected" }, error: { code: "COMMAND_PAYLOAD_MISMATCH" } });
     await f.controller.begin(action()); f.controller.dispose(); const next = f.make(); await next.refresh(); await next.retry();
     expect(next.snapshot()).toMatchObject({ problem: "mismatch", pending: true, canRetry: false, outcome: null });
-    expect(JSON.parse(f.values.get(slot)!).mismatch).toBe(true); expect(f.check).not.toHaveBeenCalled();
+    expect(JSON.parse(pendingRaw(f.values, slot)!).mismatch).toBe(true); expect(f.check).not.toHaveBeenCalled();
     expect(f.send).toHaveBeenCalledOnce();
   });
 
@@ -268,7 +274,7 @@ describe("Learning command durability and reconciliation", () => {
         error: { code: "COMMAND_PAYLOAD_MISMATCH" } };
     });
     await f.controller.begin(action()); expect(f.controller.snapshot().canRetry).toBe(false);
-    await f.controller.refresh(); expect(JSON.parse(f.values.get(slot)!).mismatch).toBe(true);
+    await f.controller.refresh(); expect(JSON.parse(pendingRaw(f.values, slot)!).mismatch).toBe(true);
     expect(f.send).toHaveBeenCalledOnce(); expect(f.check).not.toHaveBeenCalled();
   });
 
@@ -280,31 +286,31 @@ describe("Learning command durability and reconciliation", () => {
   });
 
   it("bad persisted data is preserved and blocks all new commands", async () => {
-    const f = fixture(); f.values.set(slot, "damaged"); await f.controller.refresh(); await f.controller.begin(action());
+    const f = fixture(); seedRaw(f.values, slot, "damaged", id(50)); await f.controller.refresh(); await f.controller.begin(action());
     expect(f.controller.snapshot()).toMatchObject({ phase: "blocked", problem: "invalid_pending", canRetry: false });
-    expect(f.values.get(slot)).toBe("damaged"); expect(f.send).not.toHaveBeenCalled(); expect(f.check).not.toHaveBeenCalled();
+    expect(pendingRaw(f.values, slot)).toBe("damaged"); expect(f.send).not.toHaveBeenCalled(); expect(f.check).not.toHaveBeenCalled();
   });
 
   it("refuses to overwrite a different command discovered during save", async () => {
     const f = fixture(); await f.controller.refresh(); const other = pending({ ...intents[1], command_id: id(99) });
-    f.values.set(slot, JSON.stringify(other)); await f.controller.begin(action());
+    seedRaw(f.values, slot, JSON.stringify(other), id(50)); await f.controller.begin(action());
     expect(f.controller.snapshot()).toMatchObject({ problem: "pending_changed", canRetry: false });
-    expect(f.send).not.toHaveBeenCalled(); expect(JSON.parse(f.values.get(slot)!)).toEqual(other);
+    expect(f.send).not.toHaveBeenCalled(); expect(JSON.parse(pendingRaw(f.values, slot)!)).toEqual(other);
   });
 
   it("clear never deletes a replacement pending record", async () => {
     const f = fixture(); await f.controller.refresh(); const other = pending({ ...intents[1], command_id: id(99) });
-    f.send.mockImplementationOnce(async intent => { f.values.set(slot, JSON.stringify(other)); return accepted(intent); });
+    f.send.mockImplementationOnce(async intent => { seedRaw(f.values, slot, JSON.stringify(other), id(50)); return accepted(intent); });
     await f.controller.begin(action()); await f.controller.retry();
     expect(f.controller.snapshot()).toMatchObject({ outcome: "accepted", problem: "pending_changed", canRetry: false });
-    expect(JSON.parse(f.values.get(slot)!)).toEqual(other); expect(f.send).toHaveBeenCalledOnce();
+    expect(JSON.parse(pendingRaw(f.values, slot)!)).toEqual(other); expect(f.send).toHaveBeenCalledOnce();
   });
 
   it.each(["dispose", "revoke"])("%s during durable save prevents POST", async mode => {
     const f = fixture(); await f.controller.refresh(); vi.mocked(f.storage.set).mockImplementationOnce(async (key, value) => {
       f.values.set(key, value); if (mode === "dispose") f.controller.dispose(); else f.isLive.mockReturnValue(false);
     });
-    await f.controller.begin(action()); expect(f.send).not.toHaveBeenCalled(); expect(f.values.has(slot)).toBe(true);
+    await f.controller.begin(action()); expect(f.send).not.toHaveBeenCalled(); expect(hasPending(f.values, slot)).toBe(true);
   });
 
   it.each(["send", "check", "read"] as const)("ignores a late %s after document disposal", async source => {
@@ -316,7 +322,7 @@ describe("Learning command durability and reconciliation", () => {
     const task = source === "send" ? f.controller.begin(action()) : f.controller.refresh();
     await vi.waitFor(() => expect(f[source]).toHaveBeenCalledOnce()); f.controller.dispose(); const count = f.updates.length;
     gate.resolve(accepted()); await task;
-    expect(f.updates).toHaveLength(count); expect(f.values.has(slot)).toBe(true);
+    expect(f.updates).toHaveLength(count); expect(hasPending(f.values, slot)).toBe(true);
     expect(f.controller.snapshot()).toMatchObject({ phase: "disposed", current: null, outcome: null, canRetry: false });
   });
 
@@ -337,7 +343,7 @@ describe("Learning command durability and reconciliation", () => {
     const f = fixture({ ...pending(), profileId: id(99) });
     const refresh = f.controller.refresh(); f.isLive.mockReturnValue(false); await refresh;
     expect(f.storage.get).not.toHaveBeenCalled(); expect(f.storage.remove).not.toHaveBeenCalled();
-    expect(f.values.has(slot)).toBe(true); expect(f.check).not.toHaveBeenCalled();
+    expect(hasPending(f.values, slot)).toBe(true); expect(f.check).not.toHaveBeenCalled();
   });
 
   it.each(["checking", "sending"] as const)("an owner leaving on %s cannot start storage or HTTP work", async phase => {
@@ -355,22 +361,22 @@ describe("Learning command durability and reconciliation", () => {
     f.send.mockImplementationOnce(() => gate.promise);
     const first = f.controller.begin(action()); await vi.waitFor(() => expect(f.send).toHaveBeenCalledOnce());
     f.send.mockImplementationOnce(async intent => {
-      expect(JSON.parse(f.values.get(slot)!)).toEqual(pending());
-      expect(JSON.parse(f.values.get(stopSlot)!).intent).toEqual({ ...intents[4], command_id: id(90) });
+      expect(JSON.parse(pendingRaw(f.values, slot)!)).toEqual(pending());
+      expect(JSON.parse(pendingRaw(f.values, stopSlot)!).intent).toEqual({ ...intents[4], command_id: id(90) });
       return { ...accepted(intent), current: closed(), state_version: "10" };
     });
     await stop.begin(action(intents[4]));
     expect(stop.snapshot()).toMatchObject({ outcome: "accepted", pending: false, current: closed() });
-    expect(f.values.has(slot)).toBe(true); expect(f.values.has(stopSlot)).toBe(false);
+    expect(hasPending(f.values, slot)).toBe(true); expect(hasPending(f.values, stopSlot)).toBe(false);
     f.controller.dispose(); gate.resolve(accepted()); await first;
-    expect(f.values.has(slot)).toBe(true); expect(f.send).toHaveBeenCalledTimes(2);
+    expect(hasPending(f.values, slot)).toBe(true); expect(f.send).toHaveBeenCalledTimes(2);
   });
 
   it("a lost Stop reply is recovered independently without erasing another unknown command", async () => {
-    const f = fixture(pending()); f.values.set(stopSlot, JSON.stringify(pending(intents[4])));
+    const f = fixture(pending()); seedRaw(f.values, stopSlot, JSON.stringify(pending(intents[4])), id(50));
     const stop = f.make({ pendingStore: f.stopStore }); await stop.refresh();
-    expect(f.check).toHaveBeenCalledExactlyOnceWith(intents[4]); expect(f.values.has(slot)).toBe(true);
-    expect(f.values.has(stopSlot)).toBe(false); expect(f.send).not.toHaveBeenCalled();
+    expect(f.check).toHaveBeenCalledExactlyOnceWith(intents[4]); expect(hasPending(f.values, slot)).toBe(true);
+    expect(hasPending(f.values, stopSlot)).toBe(false); expect(f.send).not.toHaveBeenCalled();
   });
 
   it("the Stop store rejects an ordinary transition", async () => {
@@ -381,7 +387,7 @@ describe("Learning command durability and reconciliation", () => {
   it("real HTTP adapter and durable store recover a lost POST response using the exact GET and new document", async () => {
     const f = fixture(); let documentId = id(2);
     const fetcher = vi.fn<typeof fetch>(async (_url, init) => {
-      if (init?.method === "POST") { expect(f.values.has(slot)).toBe(true); throw new TypeError("lost response"); }
+      if (init?.method === "POST") { expect(hasPending(f.values, slot)).toBe(true); throw new TypeError("lost response"); }
       const { outcome: _outcome, ...body } = recovered();
       return new Response(JSON.stringify(body));
     });
@@ -440,7 +446,7 @@ describe("Learning answer uses the same durable command barrier", () => {
     "saves exact input %j before POST and recovers with no second send", async payload => {
       const intent = { ...answerIntent(), payload }, f = answerFixture(); await f.controller.refresh();
       f.send.mockImplementationOnce(async received => {
-        expect(received).toEqual(intent); expect(JSON.parse(f.values.get(slot)!)).toEqual(pending(intent));
+        expect(received).toEqual(intent); expect(JSON.parse(pendingRaw(f.values, slot)!)).toEqual(pending(intent));
         throw new ApiError("network");
       });
       const value = answerAction(intent), sending = f.controller.begin(value);
@@ -463,7 +469,7 @@ describe("Learning answer uses the same durable command barrier", () => {
     for (const op of ["save", "clear", "markMismatch"] as const) {
       await expect(f.pendingStore[op](changed, new AbortController().signal)).rejects.toMatchObject({ kind: "changed" });
     }
-    expect(JSON.parse(f.values.get(slot)!)).toEqual(original);
+    expect(JSON.parse(pendingRaw(f.values, slot)!)).toEqual(original);
   });
 
   it("not-found allows only an explicit repeat of the same presented assignment", async () => {
@@ -496,7 +502,7 @@ describe("Learning answer uses the same durable command barrier", () => {
     await f.controller.begin(action(intents[1]));
     await expect(f.pendingStore.save(pending(intents[1]), new AbortController().signal)).rejects.toMatchObject({ kind: "changed" });
     expect(f.send).not.toHaveBeenCalled(); expect(f.newId).not.toHaveBeenCalled();
-    expect(JSON.parse(f.values.get(slot)!).intent.kind).toBe("answer.submit");
+    expect(JSON.parse(pendingRaw(f.values, slot)!).intent.kind).toBe("answer.submit");
   });
 
   it("an unknown present blocks an answer in the same slot", async () => {
@@ -504,7 +510,7 @@ describe("Learning answer uses the same durable command barrier", () => {
     await f.controller.begin(answerAction());
     await expect(f.pendingStore.save(pending(answerIntent()), new AbortController().signal)).rejects.toMatchObject({ kind: "changed" });
     expect(f.send).not.toHaveBeenCalled(); expect(f.newId).not.toHaveBeenCalled();
-    expect(JSON.parse(f.values.get(slot)!).intent.kind).toBe("assignment.present");
+    expect(JSON.parse(pendingRaw(f.values, slot)!).intent.kind).toBe("assignment.present");
   });
 
   it("durability failure does not send or expose an invented result", async () => {
@@ -565,23 +571,23 @@ describe("Learning answer uses the same durable command barrier", () => {
     const saving = f.controller.begin(answerAction()); await vi.waitFor(() => expect(f.send).toHaveBeenCalledOnce());
     f.send.mockImplementationOnce(async intent => {
       if (intent.kind !== "session.stop") throw new Error();
-      expect(JSON.parse(f.values.get(slot)!).intent).toEqual(answerIntent());
+      expect(JSON.parse(pendingRaw(f.values, slot)!).intent).toEqual(answerIntent());
       return { ...accepted(intent), current: closed(), state_version: "10" };
     });
     await stop.begin(action(intents[4])); f.controller.dispose();
     gate.resolve(answerReply()); await saving;
     expect(stop.snapshot()).toMatchObject({ outcome: "accepted", current: { status: "closed" } });
     expect(f.controller.snapshot()).toMatchObject({ phase: "disposed", answer: null, current: null, outcome: null });
-    expect(f.values.has(slot)).toBe(true); expect(f.values.has(stopSlot)).toBe(false);
+    expect(hasPending(f.values, slot)).toBe(true); expect(hasPending(f.values, stopSlot)).toBe(false);
     expect(f.send).toHaveBeenCalledTimes(2);
   });
 
   it.each([{ text: "answer", forgot: true }, { forgot: false }, { text: 1 }, {}, { text: "answer", proof: "synthetic" }])(
     "malformed persisted answer %j is not treated as empty", async payload => {
-      const f = answerFixture(); f.values.set(slot, JSON.stringify(pending({ ...answerIntent(), payload } as LearningAnswerIntent)));
+      const f = answerFixture(); seedRaw(f.values, slot, JSON.stringify(pending({ ...answerIntent(), payload } as LearningAnswerIntent)), id(50));
       await f.controller.refresh(); await f.controller.begin(answerAction());
       expect(f.controller.snapshot()).toMatchObject({ phase: "blocked", problem: "invalid_pending" });
-      expect(f.send).not.toHaveBeenCalled(); expect(f.check).not.toHaveBeenCalled(); expect(f.values.has(slot)).toBe(true);
+      expect(f.send).not.toHaveBeenCalled(); expect(f.check).not.toHaveBeenCalled(); expect(hasPending(f.values, slot)).toBe(true);
     });
 });
 
@@ -590,12 +596,12 @@ const missingClosed = (): Extract<LearningSessionStatus, { outcome: "not_found" 
 describe("Authoritative closure of a missing Learning command", () => {
   it.each([...intents, answerIntent()])("resolves $kind without a POST and allows a new explicit action", async intent => {
     const f = fixture(pending(intent)); f.check.mockResolvedValue(missingClosed());
-    f.values.set(stopSlot, "separate Stop");
+    seedRaw(f.values, stopSlot, "separate Stop", id(50));
     await f.controller.refresh(); await f.controller.retry();
     expect(f.controller.snapshot()).toMatchObject({ phase: "settled", pending: false, outcome: "not_applied",
       current: null, answer: null, canRetry: false, closedSession: missingClosed().closed_session });
-    expect(f.read).not.toHaveBeenCalled(); expect(f.send).not.toHaveBeenCalled(); expect(f.values.has(slot)).toBe(false);
-    expect(f.values.get(stopSlot)).toBe("separate Stop");
+    expect(f.read).not.toHaveBeenCalled(); expect(f.send).not.toHaveBeenCalled(); expect(hasPending(f.values, slot)).toBe(false);
+    expect(pendingRaw(f.values, stopSlot)).toBe("separate Stop");
     f.newId.mockReturnValue(id(90));
     await f.controller.begin({ kind: "session.start", session_id: id(91), payload: { mode: "learning" } });
     expect(f.send).toHaveBeenCalledExactlyOnceWith({ command_id: id(90), session_id: id(91), kind: "session.start", payload: { mode: "learning" } });
@@ -621,7 +627,7 @@ describe("Authoritative closure of a missing Learning command", () => {
     const f = fixture(pending(answerIntent())), controller = f.make({ stateVersion: "8" });
     f.check.mockResolvedValue(reply); await controller.refresh(); await controller.retry();
     expect(controller.snapshot()).toMatchObject({ outcome: null, pending: true, canRetry: false, closedSession: null });
-    expect(f.values.has(slot)).toBe(true); expect(f.send).not.toHaveBeenCalled(); expect(f.read).not.toHaveBeenCalled();
+    expect(hasPending(f.values, slot)).toBe(true); expect(f.send).not.toHaveBeenCalled(); expect(f.read).not.toHaveBeenCalled();
   });
 
   it("a later closed read is unresolved until absence and closure are confirmed together", async () => {
@@ -644,17 +650,17 @@ describe("Authoritative closure of a missing Learning command", () => {
     expect(f.controller.snapshot().closedSession?.close_reason).toBe("stop");
     await f.controller.refresh();
     expect(f.controller.snapshot()).toMatchObject({ phase: "settled", outcome: "not_applied", pending: false });
-    expect(f.check).toHaveBeenCalledOnce(); expect(f.values.has(slot)).toBe(false);
+    expect(f.check).toHaveBeenCalledOnce(); expect(hasPending(f.values, slot)).toBe(false);
   });
 
   it("does not erase a different saved intent after observing final closure", async () => {
     const f = fixture(pending(answerIntent()));
     f.check.mockImplementationOnce(async () => {
-      f.values.set(slot, JSON.stringify(pending({ ...answerIntent(), command_id: id(99) }))); return missingClosed();
+      seedRaw(f.values, slot, JSON.stringify(pending({ ...answerIntent(), command_id: id(99) })), id(50)); return missingClosed();
     });
     await f.controller.refresh();
     expect(f.controller.snapshot()).toMatchObject({ outcome: "not_applied", pending: true, problem: "pending_changed", canRetry: false });
-    expect(JSON.parse(f.values.get(slot)!).intent.command_id).toBe(id(99)); expect(f.send).not.toHaveBeenCalled();
+    expect(JSON.parse(pendingRaw(f.values, slot)!).intent.command_id).toBe(id(99)); expect(f.send).not.toHaveBeenCalled();
   });
 
   it("a durable mismatch cannot be resolved using somebody else's missing fact", async () => {
@@ -669,7 +675,7 @@ describe("Authoritative closure of a missing Learning command", () => {
     await vi.waitFor(() => expect(f.check).toHaveBeenCalledOnce());
     if (condition === "dispose") f.controller.dispose(); else f.isLive.mockReturnValue(false);
     gate.resolve(missingClosed()); await work;
-    expect(f.values.has(slot)).toBe(true);
+    expect(hasPending(f.values, slot)).toBe(true);
     expect(f.controller.snapshot()).toMatchObject({ phase: "disposed", outcome: null, closedSession: null });
   });
 });
@@ -697,10 +703,10 @@ describe("D-STALE-WINDOW 3.1.4: the core's DOCUMENT_STALE envelope keeps the Lea
     const f = fixture(), { controller, send } = wired(f, envelope("DOCUMENT_STALE"), 409);
     await controller.refresh();
     let saved: string | undefined;
-    send.mockImplementationOnce(async value => { saved = f.values.get(slot); return send.getMockImplementation()!(value); });
+    send.mockImplementationOnce(async value => { saved = pendingRaw(f.values, slot); return send.getMockImplementation()!(value); });
     await controller.begin(action(intent as LearningSessionIntent));
     expect(saved).toBeDefined();
-    expect(f.values.get(slot)).toBe(saved);
+    expect(pendingRaw(f.values, slot)).toBe(saved);
     expect(f.storage.remove).not.toHaveBeenCalled();
     expect(controller.snapshot()).toMatchObject({ phase: "unresolved", pending: true, outcome: null, problem: "window_stale" });
     expect(controller.lastFailure()).toMatchObject({ kind: "http", status: 409, code: "DOCUMENT_STALE" });
@@ -708,7 +714,7 @@ describe("D-STALE-WINDOW 3.1.4: the core's DOCUMENT_STALE envelope keeps the Lea
   it.each([...intents.slice(0, 5), ...answers])("$kind: a business refusal (SESSION_CLOSED) still settles and clears", async intent => {
     const f = fixture(), { controller } = wired(f, envelope("SESSION_CLOSED"), 409);
     await controller.refresh(); await controller.begin(action(intent as LearningSessionIntent));
-    expect(f.values.has(slot)).toBe(false);
+    expect(hasPending(f.values, slot)).toBe(false);
     expect(controller.snapshot()).toMatchObject({ outcome: "rejected", pending: false, rejectionCode: "SESSION_CLOSED" });
   });
   it.each([["not_found", false], ["closed", true]] as const)(
@@ -728,19 +734,19 @@ describe("D-STALE-WINDOW 3.1.4: the core's DOCUMENT_STALE envelope keeps the Lea
 describe("Learning: an unreadable record in the shared slot meets a new action", () => {
   it.each([["not JSON", "{not json"], ["JSON of another shape", "{\"a\":1}"]])("%s: the action is dropped, nothing is checked or sent", async (_name, raw) => {
     const f = fixture(); await f.controller.refresh();
-    f.values.set(slot, raw);
+    seedRaw(f.values, slot, raw, id(50));
     await f.controller.begin(action());
     expect(f.controller.snapshot()).toMatchObject({ phase: "blocked", problem: "invalid_pending", pending: false, pendingIntent: null, canRetry: false });
     expect(f.send).not.toHaveBeenCalled(); expect(f.check).not.toHaveBeenCalled(); expect(f.read).not.toHaveBeenCalled();
-    expect(f.values.get(slot)).toBe(raw);
+    expect(pendingRaw(f.values, slot)).toBe(raw);
     await f.controller.refresh(); await f.controller.retry();
     expect(f.check).not.toHaveBeenCalled(); expect(f.read).not.toHaveBeenCalled(); expect(f.send).not.toHaveBeenCalled();
     expect(f.controller.snapshot()).toMatchObject({ phase: "idle", pending: false });
-    expect(f.values.get(slot)).toBe(raw);
+    expect(pendingRaw(f.values, slot)).toBe(raw);
   });
   it("the automatic path (prepare, start) is dropped the same way, without telling the transport hook", async () => {
     const f = fixture(); await f.controller.refresh();
-    f.values.set(slot, "{not json");
+    seedRaw(f.values, slot, "{not json", id(50));
     const intent = f.controller.prepare(action()) as LearningCommandIntent, transmitted = vi.fn();
     await f.controller.start(intent, transmitted);
     expect(f.controller.snapshot()).toMatchObject({ phase: "blocked", problem: "invalid_pending", pending: false });
@@ -751,16 +757,16 @@ describe("Learning: an unreadable record in the shared slot meets a new action",
     const f = fixture(pending());
     f.check.mockResolvedValue(notFound()); await f.controller.refresh();
     expect(f.controller.snapshot()).toMatchObject({ pending: true, canRetry: true });
-    f.values.set(slot, "{not json");
+    seedRaw(f.values, slot, "{not json", id(50));
     await f.controller.retry();
     expect(f.send).not.toHaveBeenCalled();
     expect(f.controller.snapshot()).toMatchObject({ pending: true, problem: "invalid_pending", canRetry: false });
-    expect(f.values.get(slot)).toBe("{not json");
+    expect(pendingRaw(f.values, slot)).toBe("{not json");
   });
   it("once the record is gone, a new action goes out once with a new ID", async () => {
     const f = fixture(); await f.controller.refresh();
-    f.values.set(slot, "{not json"); await f.controller.begin(action());
-    f.values.delete(slot); await f.controller.refresh();
+    seedRaw(f.values, slot, "{not json", id(50)); await f.controller.begin(action());
+    f.values.delete(pointerKeyOf(slot, id(50))); await f.controller.refresh();
     f.newId.mockReturnValueOnce(id(77));
     await f.controller.begin(action());
     expect(f.send).toHaveBeenCalledOnce(); expect(f.send.mock.calls[0][0]).toMatchObject({ command_id: id(77) });
@@ -814,6 +820,6 @@ describe("M-LANE-PAIR-GUARD 4.1 (Learning): an accepted reply whose session is o
     gate.resolve(accepted(intents[0])); await sending;
     expect(f.updates.length).toBe(updates);
     expect(f.controller.snapshot()).toMatchObject({ phase: "disposed", outcome: null, problem: null });
-    expect(JSON.parse(f.values.get(slot)!).intent.command_id).toBe(id(4));
+    expect(JSON.parse(pendingRaw(f.values, slot)!).intent.command_id).toBe(id(4));
   });
 });

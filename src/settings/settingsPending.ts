@@ -44,8 +44,8 @@ function copy(value: unknown): SettingsPending {
 }
 
 /**
- * The legacy global key of earlier builds. It is never copied or renamed. Only the profile it names may touch it:
- * through the same generic slot (so IDs and status are exactly the stored ones), or to drop a retired-setting record.
+ * The legacy global key of earlier builds (project_pending_profile_slots.md ред.1.1 §3.4, §4). It is never routed to,
+ * written, removed, copied or imported: its presence (or a failed read of it) only closes NEW saves of settings (preflight).
  */
 export const SETTINGS_SLOT = "wortly.pending.setting";
 
@@ -68,154 +68,95 @@ function retiredPending(raw: string | null): { key: string; profileId: string } 
   return { key, profileId: item!.profileId as string };
 }
 
-/** One generic slot whose validator also pins the owner and keeps one (lowercase) spelling of the ID. */
+/** One generic slot on the profile key whose validator also pins the owner and keeps one (lowercase) spelling of the ID. */
 function ownedSlot(storage: AsyncStorage, key: string, owner: string): PendingSlot<SettingsPending> {
   return new PendingSlot(storage, key, value => {
     const checked = copy(value);
-    // A record that names another profile is damaged: reject it rather than let the generic `load` delete it.
+    // A record that names another profile is damaged: "invalid", never removed.
     if (checked.profileId.toLowerCase() !== owner) throw new PendingStoreError("invalid");
-    // The generic `load` compares profile IDs case-sensitively and deletes on a difference: keep one spelling.
     return { ...checked, profileId: owner };
-  });
+  }, "fixed");
 }
 
 /**
- * Instantiate once for the application's document lifetimes, using its existing AsyncStorage. Each profile gets its
- * own `PendingSlot` under its own key; the generic slot and its single-record rules stay as they are.
+ * Instantiate once for the application's document lifetimes, using its existing AsyncStorage. Each profile has its own
+ * `PendingSlot` under its own key `wortly.pending.setting:profile:<pid>` (R3-02); no operation touches another key.
  *
- * Legacy global key `SETTINGS_SLOT` (written by released builds):
- * - a record of another profile is ignored and never touched;
- * - a valid record naming this profile stays where it is. This profile's operations are routed through a generic slot
- *   on that key, so the controller reads the status of the same `command_id`, may repeat the same stored envelope and,
- *   after a proven terminal outcome, its ordinary `clear` removes that record. Later saves go to the profile key.
- *   Nothing is copied and no new ID appears;
- * - fail closed ("invalid", record kept) when the profile key is also occupied (two records for one profile: which is
- *   newer cannot be proven), or when the record cannot be read as a save (no known owner: blocks every profile);
- * - a retired-setting record with a valid owner is dropped once by that owner's `load` with a key-name-only report.
+ * The legacy global key `SETTINGS_SLOT` is only read by the preflight of a NEW save (§4): present or unreadable — "legacy",
+ * nothing stored, settings stay closed for new changes until a cutover; a repeat of the profile's own stored save is not
+ * affected. An unfinished save of a retired setting under the profile key is dropped once by that profile's `load`
+ * (key-name-only report).
  *
- * Calls for one profile run strictly in call order (guard and operation together). Before every write the route is checked
- * again (see `guarded`), so a stale route fails closed as "changed" without recreating the legacy key or filling both slots.
- * Not covered: a third party writing between that check and the write (no compare-and-set in the storage API), and the
- * order of calls across two instances; the window lease of Entry is what keeps two windows apart.
+ * Calls for one profile run strictly in call order. Not covered: the order of calls across two windows of the SAME profile
+ * (the window lease of Entry keeps them apart).
  */
 export class SettingsPendingStore {
   private readonly slots = new Map<string, PendingSlot<SettingsPending>>();
   private readonly chains = new Map<string, Promise<unknown>>();
-  /** The signal of the call now running for each profile: the generic slot hands none to its storage. */
-  private readonly running = new Map<string, AbortSignal>();
 
   /** The application storage, so a sibling slot of the same document (the message to the developer) lands beside this one. */
   constructor(readonly backing: AsyncStorage, private readonly report: (message: string) => void = message => console.warn(message)) {}
 
-  private slot(key: string, owner: string): PendingSlot<SettingsPending> {
-    const id = `${key}\n${owner}`;
-    let slot = this.slots.get(id);
-    if (!slot) { slot = ownedSlot(this.guarded(owner), key, owner); this.slots.set(id, slot); }
+  private slot(owner: string): PendingSlot<SettingsPending> {
+    let slot = this.slots.get(owner);
+    if (!slot) { slot = ownedSlot(this.backing, settingsSlotOf(owner), owner); this.slots.set(owner, slot); }
     return slot;
   }
 
-  /**
-   * Storage for the slots of one profile whose `set` first re-reads both keys and refuses (as "changed", nothing written)
-   * when the route chosen earlier is no longer the right one: a window that cleared the legacy record meanwhile must not
-   * have it recreated, and a profile record must not appear beside a legacy one. The check and the write are two storage
-   * calls, so a third party writing exactly between them is not excluded: the storage API has no compare-and-set.
-   * Removes are not re-checked; the slot has just compared the record it removes.
-   */
-  private guarded(owner: string): AsyncStorage {
-    return {
-      get: key => this.backing.get(key),
-      remove: key => this.backing.remove(key),
-      set: async (key, value) => {
-        const ownKey = settingsSlotOf(owner);
-        const ownRaw = await this.backing.get(ownKey);
-        const legacyRaw = await this.backing.get(SETTINGS_SLOT);
-        let target: string;
-        // A cancelled call must leave every key as it is. No await follows this check, so it is also the one right before the write.
-        if (this.running.get(owner)?.aborted) throw new PendingStoreError("cancelled");
-        try { target = this.decide(owner, ownRaw, legacyRaw); } catch { throw new PendingStoreError("changed"); }
-        if (target !== key) throw new PendingStoreError("changed");
-        await this.backing.set(key, value);
-      },
-    };
-  }
-
-  /** The key this profile's operations belong to, or "invalid" when the stored state cannot be used safely. */
-  private decide(mine: string, ownRaw: string | null, legacyRaw: string | null): string {
-    const ownKey = settingsSlotOf(mine);
-    if (legacyRaw === null) return ownKey;
-    const retired = retiredPending(legacyRaw);
-    if (retired) {
-      if (retired.profileId.toLowerCase() !== mine) return ownKey;
-      throw new PendingStoreError("invalid");
-    }
-    let owner: string;
-    try { owner = copy(JSON.parse(legacyRaw)).profileId.toLowerCase(); } catch { throw new PendingStoreError("invalid"); }
-    if (owner !== mine) return ownKey;
-    // The legacy record is this profile's. Both slots filled: refuse rather than guess which one is current.
-    if (ownRaw !== null) throw new PendingStoreError("invalid");
-    return SETTINGS_SLOT;
-  }
-
   /** Runs `action` after every earlier call of the same profile has finished; a failure does not poison the chain. */
-  private serial<R>(profileId: string, signal: AbortSignal, action: () => Promise<R>): Promise<R> {
+  private serial<R>(profileId: string, action: (owner: string) => Promise<R>): Promise<R> {
     if (!validId(profileId)) return Promise.reject(new PendingStoreError("invalid"));
     const owner = profileId.toLowerCase();
-    const task = (this.chains.get(owner) ?? Promise.resolve()).then(() => { this.running.set(owner, signal); return action(); }).catch((error: unknown) => {
+    const task = (this.chains.get(owner) ?? Promise.resolve()).then(() => action(owner)).catch((error: unknown) => {
       throw error instanceof PendingStoreError ? error : new PendingStoreError("unavailable");
     });
     this.chains.set(owner, task.catch(() => undefined));
     return task;
   }
 
-  /** Chooses the slot of this profile; storage failures are "unavailable" and a cancelled signal never writes. */
-  private async route(profileId: string, signal: AbortSignal, dropRetired: boolean): Promise<PendingSlot<SettingsPending>> {
-    const cancelled = () => { if (signal.aborted) throw new PendingStoreError("cancelled"); };
-    const mine = profileId.toLowerCase();
-    const ownKey = settingsSlotOf(profileId);
-    cancelled();
-    const ownRaw = await this.backing.get(ownKey);
-    cancelled();
-    const ownDropped = await this.dropRetiredRecord(ownKey, ownRaw, mine, signal, dropRetired, false);
-    const legacyRaw = await this.backing.get(SETTINGS_SLOT);
-    cancelled();
-    const legacyDropped = legacyRaw !== null && await this.dropRetiredRecord(SETTINGS_SLOT, legacyRaw, mine, signal, dropRetired, true);
-    return this.slot(this.decide(mine, ownDropped ? null : ownRaw, legacyDropped ? null : legacyRaw), mine);
-  }
-
-  /**
-   * An unfinished save of a retired setting would be read as an invalid slot and block every new change.
-   * It is dropped once, with a technical record that carries the key name only. Returns true only when the record was dropped.
-   */
-  private async dropRetiredRecord(key: string, raw: string | null, mine: string, signal: AbortSignal,
-    allowed: boolean, legacy: boolean): Promise<boolean> {
-    const retired = retiredPending(raw);
-    if (retired === null) return false;
-    if (legacy && retired.profileId.toLowerCase() !== mine) return false;
-    if (!allowed) throw new PendingStoreError("invalid");
+  /** §4: the legacy key must be reliably absent before a NEW save; it is never written or removed. */
+  private async preflight(signal: AbortSignal): Promise<void> {
+    let raw: string | null;
+    try { raw = await this.backing.get(SETTINGS_SLOT); } catch { this.report(`settings preflight: legacy key ${SETTINGS_SLOT} unreadable`); throw new PendingStoreError("legacy"); }
     if (signal.aborted) throw new PendingStoreError("cancelled");
-    await this.backing.remove(key);
-    this.report(`settings: discarded an unfinished save of the retired setting ${retired.key}`);
-    return true;
+    if (raw !== null) { this.report(`settings preflight: legacy key ${SETTINGS_SLOT} present`); throw new PendingStoreError("legacy"); }
   }
 
-  /** Load runs before any write of a document, so dropping a retired record stays ahead of the slot's own queue. */
+  /** Load runs before any write of a document: an unfinished save of a retired setting on the profile key is dropped once. */
   async load(profileId: string, signal: AbortSignal): Promise<SettingsPending | null> {
-    return this.serial(profileId, signal, async () => (await this.route(profileId, signal, true)).load(profileId.toLowerCase(), signal));
+    return this.serial(profileId, async owner => {
+      const ownKey = settingsSlotOf(owner);
+      const raw = await this.backing.get(ownKey);
+      if (signal.aborted) throw new PendingStoreError("cancelled");
+      const retired = retiredPending(raw);
+      if (retired && retired.profileId.toLowerCase() === owner) {
+        await this.backing.remove(ownKey);
+        this.report(`settings: discarded an unfinished save of the retired setting ${retired.key}`);
+        return null;
+      }
+      return this.slot(owner).load(owner, signal);
+    });
   }
 
   async save(value: SettingsPending, signal: AbortSignal): Promise<void> {
     const pending = copy(value);
-    return this.serial(pending.profileId, signal, async () => (await this.route(pending.profileId, signal, false)).save(pending, signal));
+    return this.serial(pending.profileId, async owner => {
+      const slot = this.slot(owner);
+      // A repeat of the stored save (the same intent) is no new save: the preflight closes new ones only.
+      const stored = await slot.load(owner, signal);
+      if (stored === null) await this.preflight(signal);
+      return slot.save({ ...pending, profileId: owner }, signal);
+    });
   }
 
   async clear(value: SettingsPending, signal: AbortSignal): Promise<void> {
     const pending = copy(value);
-    return this.serial(pending.profileId, signal, async () => (await this.route(pending.profileId, signal, false)).clear(pending, signal));
+    return this.serial(pending.profileId, owner => this.slot(owner).clear({ ...pending, profileId: owner }, signal));
   }
 
   async clearMarked(value: SettingsPending, signal: AbortSignal): Promise<void> {
     const pending = copy(value);
-    return this.serial(pending.profileId, signal, async () => (await this.route(pending.profileId, signal, false)).clearMarked(pending, signal));
+    return this.serial(pending.profileId, owner => this.slot(owner).clearMarked({ ...pending, profileId: owner }, signal));
   }
 
   /**
@@ -225,11 +166,12 @@ export class SettingsPendingStore {
   async markRefused(value: SettingsPending, signal: AbortSignal): Promise<void> {
     const pending = copy(value);
     const marked = copy({ ...pending, refused: true });
-    return this.serial(pending.profileId, signal, async () => (await this.route(pending.profileId, signal, false)).replace(pending, marked, signal));
+    return this.serial(pending.profileId, owner => this.slot(owner).replace({ ...pending, profileId: owner },
+      { ...marked, profileId: owner }, signal));
   }
 
   async markMismatch(value: SettingsPending, signal: AbortSignal): Promise<void> {
     const pending = copy(value);
-    return this.serial(pending.profileId, signal, async () => (await this.route(pending.profileId, signal, false)).markMismatch(pending, signal));
+    return this.serial(pending.profileId, owner => this.slot(owner).markMismatch({ ...pending, profileId: owner }, signal));
   }
 }

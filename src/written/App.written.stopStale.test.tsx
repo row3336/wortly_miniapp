@@ -6,6 +6,7 @@ import { App } from "../app/App";
 import { staleCommand, staleRefusal } from "../app/openRules.test-support";
 import { app, startWords, useWrittenAppEnvironment } from "./writtenApp.test-support";
 import { response } from "./writtenFixtures.test-support";
+import { lsPendingRaw } from "../commands/lsPending.test-support";
 
 useWrittenAppEnvironment();
 const settle = () => act(async () => { await new Promise(resolve => setTimeout(resolve, 300)); });
@@ -34,6 +35,6 @@ describe("written Stop + DOCUMENT_STALE in a replaced window (App level)", () =>
     expect(screen.queryByText("Завершаем занятие…")).toBeNull();
     const after = a.fetcher.mock.calls.slice(mark).map(([url, init]) => `${init?.method ?? "GET"} ${new URL(String(url), "http://localhost").pathname}`);
     expect(after).toEqual(["POST /api/v1/commands", "POST /api/v1/client/open"]);
-    expect(JSON.parse(localStorage.getItem("wortly.pending.written_stop")!).intent).toMatchObject({ kind: "session.stop" });
+    expect(JSON.parse(lsPendingRaw("wortly.pending.written_stop")!).intent).toMatchObject({ kind: "session.stop" });
   });
 });

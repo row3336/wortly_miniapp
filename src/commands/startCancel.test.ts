@@ -13,6 +13,8 @@ import { createStartCancelApi, type StartCancelIntent, type StartCancelReply, ty
 import { startCancelKey, StartCancelPendingStore, type StartCancelPending } from "./startCancelPending";
 import type { AsyncStorage } from "../platform/storage";
 import { readWithTicket, testGate } from "./testGate.test-support";
+import { hasPending, pendingRaw, seedRaw } from "./pendingSeed.test-support";
+const seedRawAt = (profileId: string, values: Map<string, string>, base: string, raw: string) => seedRaw(values, base, raw, profileId);
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const PROFILE = id(50), CLIENT = id(1), SESSION = id(3), START = id(4), CANCEL = id(5);
@@ -72,7 +74,7 @@ function rig(script: {
   const newId = vi.fn(script.newId ?? (() => CANCEL));
   let recovery: StartCancelRecovery;
   const note = (op: Call["op"], intent: StartCancelIntent) => calls.push({ at: performance.now() - start, op,
-    body: JSON.stringify(intent), stored: storage.values.has(KEY), active: recovery.view()?.recovery.active ?? true });
+    body: JSON.stringify(intent), stored: hasPending(storage.values, KEY), active: recovery.view()?.recovery.active ?? true });
   const host: StartCancelHost = {
     send: (intent, transmitted) => {
       note("send", intent); transmitted();
@@ -144,7 +146,7 @@ describe("the automatic cancel of an exhausted start", () => {
     expect(await r.recovery.begin(startOf)).toBe("started");
     await pass(0);
     expect(r.calls).toEqual([{ at: 0, op: "send", body: BODY, stored: true, active: true }]);
-    expect(JSON.parse(r.storage.values.get(KEY)!)).toEqual(STORED);
+    expect(JSON.parse(pendingRaw(r.storage.values, KEY)!)).toEqual(STORED);
     expect(r.view().record.cancelCommandId).not.toBe(r.view().record.startCommandId);
   });
 
@@ -154,9 +156,9 @@ describe("the automatic cancel of an exhausted start", () => {
     await r.recovery.begin(startOf);
     await pass(0);
     expect(r.view()).toMatchObject({ outcome: "cancelled", unresolved: null, recovery: { state: { name: "settled", outcome: "accepted" } } });
-    expect(r.storage.values.has(KEY)).toBe(true);
+    expect(hasPending(r.storage.values, KEY)).toBe(true);
     await r.recovery.clear();
-    expect(r.storage.values.has(KEY)).toBe(false);
+    expect(hasPending(r.storage.values, KEY)).toBe(false);
     expect(await counter.load(CANCEL)).toBeNull();
   });
 
@@ -173,7 +175,7 @@ describe("the automatic cancel of an exhausted start", () => {
     await r.recovery.begin(startOf);
     await pass(0);
     expect(r.view()).toMatchObject({ outcome: null, recovery: { state: { name: "retry_wait" } } });
-    expect(r.storage.values.has(KEY)).toBe(true);
+    expect(hasPending(r.storage.values, KEY)).toBe(true);
     await expect(r.recovery.clear()).rejects.toThrow("no confirmed outcome");
     await pass(2_000);
     expect(r.calls.map(c => [c.at, c.op])).toEqual([[0, "send"], [0, "status"], [2_000, "status"], [2_000, "send"]]);
@@ -201,7 +203,7 @@ describe("the automatic cancel of an exhausted start", () => {
     const later6 = r.at("status").filter(t => t > 147_000);
     expect(later6.slice(0, 5)).toEqual([162_000, 168_000, 179_000, 200_000, 231_000]);
     expect(r.view()).toMatchObject({ outcome: null, unresolved: "exhausted", recovery: { sends: 6, transmitted: 6 } });
-    expect(r.storage.values.has(KEY)).toBe(true);
+    expect(hasPending(r.storage.values, KEY)).toBe(true);
     expect(r.newId).toHaveBeenCalledOnce();
   });
 
@@ -229,7 +231,7 @@ describe("the automatic cancel of an exhausted start", () => {
     await pass(40_000);
     expect(r.calls.map(c => [c.at, c.op])).toEqual([[0, "send"], [5_000, "status"], [15_000, "status"], [35_000, "status"]]);
     expect(r.view()).toMatchObject({ outcome: null, unresolved: "refused", rejectionCode: "VALIDATION_FAILED" });
-    expect(r.storage.values.has(KEY)).toBe(true);
+    expect(hasPending(r.storage.values, KEY)).toBe(true);
     await expect(r.recovery.clear()).rejects.toThrow();
     await pass(600_000);
     expect(r.at("send")).toEqual([0]);
@@ -332,7 +334,7 @@ describe("the cancel after a reload or in another owner (2.8.2, 2.7.4)", () => {
 
   it("3.3.8/3.3.20 a stored cancel with an unknown count: only GET by its ID, never a POST, never a second cancel_id", async () => {
     const storage = memory();
-    storage.values.set(KEY, JSON.stringify(STORED));
+    seedRawAt(STORED.profileId, storage.values, KEY, JSON.stringify(STORED));
     const r = rig({ storage, newId: () => id(77) });
     expect(await r.recovery.resume()).toEqual(STORED);
     await pass(600_000);
@@ -345,7 +347,7 @@ describe("the cancel after a reload or in another owner (2.8.2, 2.7.4)", () => {
 
   it("3.3.19 after a reload a late cancel is found and settles", async () => {
     const storage = memory();
-    storage.values.set(KEY, JSON.stringify(STORED));
+    seedRawAt(STORED.profileId, storage.values, KEY, JSON.stringify(STORED));
     const r = rig({ storage, status: n => n >= 3 ? found("cancelled") : absent() });
     await r.recovery.resume();
     await pass(60_000);
@@ -429,7 +431,7 @@ describe("the cancel after a reload or in another owner (2.8.2, 2.7.4)", () => {
 
   it("2.4.1а.1 begin on a stored cancel of the same start resumes it; of another start it is busy and sends nothing", async () => {
     const storage = memory();
-    storage.values.set(KEY, JSON.stringify(STORED));
+    seedRawAt(STORED.profileId, storage.values, KEY, JSON.stringify(STORED));
     const same = rig({ storage, newId: () => id(77) });
     expect(await same.recovery.begin({ sessionId: SESSION.toUpperCase(), startCommandId: START })).toBe("resumed");
     await pass(0);
@@ -441,7 +443,7 @@ describe("the cancel after a reload or in another owner (2.8.2, 2.7.4)", () => {
     await pass(60_000);
     expect(other.calls).toEqual([]);
     expect(other.recovery.view()).toBeNull();
-    expect(JSON.parse(storage.values.get(KEY)!)).toEqual(STORED);
+    expect(JSON.parse(pendingRaw(storage.values, KEY)!)).toEqual(STORED);
   });
 
   it("a failed record write sends nothing; a later begin may try again", async () => {
@@ -471,7 +473,7 @@ describe("C038 п. 1 the session was created and is closed by now", () => {
     expect(r.view()).toMatchObject({ outcome: "session_closed", closedSession: CLOSED, unresolved: null,
       recovery: { state: { name: "terminated", reason: "session_closed" } } });
     await r.recovery.clear();
-    expect(r.storage.values.has(KEY)).toBe(false);
+    expect(hasPending(r.storage.values, KEY)).toBe(false);
   });
 
   it("Д2 a closure answer the machine drops (it arrived in the background) never becomes the result, even on an outside terminate", async () => {
@@ -497,7 +499,7 @@ describe("C038 п. 1 the session was created and is closed by now", () => {
 
   it("unknown count after a reload: the same result from the first check, without a POST", async () => {
     const storage = memory();
-    storage.values.set(KEY, JSON.stringify(STORED));
+    seedRawAt(STORED.profileId, storage.values, KEY, JSON.stringify(STORED));
     const r = rig({ storage, status: () => closedAbsent() });
     await r.recovery.resume();
     await pass(60_000);
@@ -580,7 +582,7 @@ describe("C045 the status read: temporary failures and a confirmed impossibility
     await pass(600_000);
     expect(r.calls.map(c => [c.at, c.op])).toEqual([[0, "send"], [0, "status"]]);
     expect(r.view()).toMatchObject({ outcome: null, unresolved: "status_unreadable", recovery: { state: { name: "disposed" } } });
-    expect(r.storage.values.has(KEY)).toBe(true);
+    expect(hasPending(r.storage.values, KEY)).toBe(true);
     await expect(r.recovery.clear()).rejects.toThrow();
   });
 
