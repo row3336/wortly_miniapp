@@ -3,6 +3,7 @@
 // the working window, К-9 → К-7 of a window without a document, §4.13 routes, п.8б at the entry, the late registration
 // after 403, the first open held by the outage mark, remoteAction, and R10 with reload, late answers and negative controls.
 import { describe, expect, it, vi } from "vitest";
+import { TestEntryController } from "./entryInstallation.test-support";
 import { createEntryApi } from "../api/entryApi";
 import { createAvailabilityClient } from "../api/availability";
 import type { HttpOptions } from "../api/http";
@@ -11,7 +12,7 @@ import { RemoteStopPendingStore } from "../study/remoteStopPending";
 import type { AsyncStorage } from "../platform/storage";
 import { WriteGate } from "../commands/writeGate";
 import { ManualClock, settle } from "../commands/writeGate.test-support";
-import { EntryController, type EntrySnapshot } from "./entryController";
+import type { EntrySnapshot } from "./entryController";
 import { createTodayApi } from "../today/todayApi";
 import { createJsonTransport } from "../api/http";
 
@@ -86,7 +87,7 @@ function chain(options: { outage?: { retryAfterS: number | null }; storage?: Ret
   const updates: EntrySnapshot[] = [];
   let next = options.ids ?? 100;
   const closeWindow = vi.fn();
-  const controller = new EntryController({ gate, api: createEntryApi(http), today: createTodayApi(http),
+  const controller = new TestEntryController({ gate, api: createEntryApi(http), today: createTodayApi(http),
     remote: { api: createRemoteSessionApi(http), pendingStore }, storage,
     lock: { acquire: vi.fn(async () => ({ release: vi.fn() })) }, initData: "signed", savedLanguage: "ru",
     browserLanguage: "ru", clientVersion: "0.0.0", contractVersion: "1", timeZone: () => "UTC",
@@ -259,7 +260,7 @@ describe("К-11 / К-9а of the working window (the row M-P03-10)", () => {
     f.script.open.push("network", envelope("AUTH_EXPIRED", 401));
     await f.controller.foreground(); await settle();
     await f.clock.advanceTo(5_000);
-    await vi.waitFor(() => expect(f.state()).toEqual({ kind: "expired" }));
+    await vi.waitFor(() => expect(f.state()).toEqual({ kind: "expired", reentry: true, checkable: true }));
     expect(f.gate.snapshot()).toMatchObject({ identityLock: null, lastWorkingDoc: null, familyLocks: [] });
     expect(f.gate.hasUnsettledPending()).toBe(false);
   });
@@ -551,7 +552,9 @@ describe("fix1 (QA M-P03-9/10): the entry", () => {
     expect(f.opens).toHaveLength(0);
   });
 
-  it("the profile refresh never opens a document, even when the profile is admitted meanwhile", async () => {
+  // В4-Б (C390) replaces the earlier «never opens»: an admitted current profile continues the first entry of a page that never
+  // handed an open to L2 — one first open; the old reapply ID is not sent again (entryProfileFirstOpen.test.ts in detail).
+  it("the profile refresh of a page without any open attempt continues its first entry once the profile is admitted", async () => {
     const f = chain();
     const base = f.fetcher.getMockImplementation()!;
     let status: "rejected" | "admitted" = "rejected";
@@ -560,12 +563,21 @@ describe("fix1 (QA M-P03-9/10): the entry", () => {
       if (path === "/auth/telegram") return json({ access_token: "token", expires_at: "2026-10-17T00:00:00Z",
         profile: { ...profile(), access: { status, version: status === "rejected" ? "1" : "2", reason: null } }, compatibility });
       if (path === "/access/reapply") { status = "admitted"; return envelope("VERSION_CONFLICT", 409); }
+      if (path === "/client/open") {
+        // The core's open answers with the same current profile as its auth (a strict DTO: access version 2).
+        const body = JSON.parse(String(init!.body));
+        f.opens.push(body);
+        return json({ status: "opened", client_instance_id: body.client_instance_id, document_id: body.document_id,
+          document_epoch: "1", proof_version: "1", session: null, compatibility,
+          profile: { ...profile(), access: { status: "admitted", version: "2", reason: null } } });
+      }
       return base(url, init);
     });
     await f.controller.start(); await f.controller.reapply(); await settle();
     await f.controller.retry(); await settle();
-    expect(f.opens).toHaveLength(0); expect(f.posts("/client/register")).toBe(0);
-    expect(f.state()).toMatchObject({ kind: "unavailable" });
+    expect(f.opens.map(body => body.event)).toEqual(["open"]); expect(f.posts("/client/register")).toBe(1);
+    expect(f.fetcher.mock.calls.filter(call => String(call[0]).includes("/access/reapply"))).toHaveLength(1);
+    expect(f.state()).toEqual({ kind: "opened" });
   });
 
   it("QA-N3b (C365): the answer of a manual confirmRemoteStop while hidden — no foreground until the show, then one", async () => {

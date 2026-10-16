@@ -4,6 +4,7 @@ import type { Profile, SettingsResponse, TodayResponse } from "../api/generated"
 import { App } from "../app/App";
 import { withJournalIntake } from "../journal/intake.test-support";
 import { settingsResponse } from "../settings/settingsRead.test-support";
+import { appInstallationRow } from "../app/installationApp.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status });
@@ -82,12 +83,16 @@ describe("the profile deletion in the actual App (P04 §8, S-A07, PD-28)", () =>
   it("applied: S-A07 without a button, the records of X gone, no automatic sign-in or open afterwards", async () => {
     const c = core([applied()]);
     render(<App />);
+    // The precondition of the wipe assertions below: the installation of X is a row of the installation store.
+    await waitFor(() => expect(appInstallationRow(X)).toBeDefined(), { timeout: 5_000 });
     await openDeletion();
     await screen.findByText("Профиль удалён из приложения. Архивные копии ещё обрабатываются — до 7 дней.", {}, { timeout: 3_000 });
     expect(screen.queryByRole("button")).toBeNull();
     expect(c.deleteBodies).toEqual([{ command_id: expect.any(String), confirmed_profile_id: X, confirmation: "delete_profile",
       client_instance_id: expect.any(String) }]);
     expect(Object.keys(localStorage).filter(key => key.includes(X))).toEqual([]);
+    // Store §6: the installation of X lives in IndexedDB now — its row must be gone too (forget, both spellings).
+    await waitFor(() => expect(appInstallationRow(X)).toBeUndefined());
     const opens = c.calls("/client/open");
     await act(async () => { window.dispatchEvent(new Event("pageshow")); });
     expect(c.calls("/auth/telegram")).toBe(1);
@@ -113,6 +118,8 @@ describe("the profile deletion in the actual App (P04 §8, S-A07, PD-28)", () =>
     await screen.findByText("Прежний профиль удалён из приложения.");
     expect(c.calls("/auth/telegram")).toBe(2);
     expect(Object.keys(localStorage).filter(key => key.includes(X))).toEqual([]);
+    // Store §6: the installation of X lives in IndexedDB now — its row must be gone too (forget, both spellings).
+    await waitFor(() => expect(appInstallationRow(X)).toBeUndefined());
     expect(localStorage.getItem(`wortly.installation:${Z}`)).toBe("{}");
     expect(localStorage.getItem(`wortly.pending.settings-reset:profile:${Z}`)).toBe("{}");
     expect(JSON.parse(localStorage.getItem("wortly.pending.feedback") ?? "null")).toEqual({ profileId: Z });
@@ -153,6 +160,8 @@ describe("the return from the background in the actual App: the foreground repla
         expect(c.deleteBodies).toHaveLength(2);
         expect(c.deleteBodies[1]).toEqual(c.deleteBodies[0]);
         expect(Object.keys(localStorage).filter(key => key.includes(X))).toEqual([]);
+        // Store §6: the installation of X lives in IndexedDB now — its row must be gone too (forget, both spellings).
+        await waitFor(() => expect(appInstallationRow(X)).toBeUndefined());
       } finally { p.restore(); }
     }, 25_000);
 
@@ -203,13 +212,16 @@ describe("the return from the background in the actual App: the foreground repla
       render(<App />);
       // The ordinary document of X, nothing of the deletion screen involved.
       await screen.findByRole("button", { name: "Настройки" }, { timeout: 5_000 });
-      expect(Object.keys(localStorage).some(key => key.includes(X))).toBe(true);
+      // C163 integration: the installation of X lives in the installation store (IndexedDB), no longer in localStorage.
+      expect(appInstallationRow(X)).toBeDefined();
       await p.hide();
       await p.show();
       await screen.findByText("Профиль удалён из приложения. Архивные копии ещё обрабатываются — до 7 дней.", {}, { timeout: 5_000 });
       expect(c.opens()).toBeGreaterThan(1);
       expect(screen.queryByRole("button")).toBeNull();
       await waitFor(() => expect(Object.keys(localStorage).filter(key => key.includes(X))).toEqual([]));
+      // Store §6: the installation of X lives in IndexedDB now — its row must be gone too (forget, both spellings).
+      await waitFor(() => expect(appInstallationRow(X)).toBeUndefined());
       // No sign-in follows by itself, also not on the next return of the page.
       const opens = c.opens();
       await p.hide(); await p.show();

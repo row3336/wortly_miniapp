@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
+import { TestEntryController } from "./entryInstallation.test-support";
 import type { AuthResponse, OpenedClient, Profile } from "../api/generated";
 import { EntryApiError } from "../api/entryApi";
 import type { EntryApi } from "../api/entryApi";
 import type { AsyncStorage } from "../platform/storage";
 import type { DocumentLock } from "./documentLock";
-import { EntryController } from "./entryController";
 import { newerVersion } from "./installation";
 import { freshTestGate } from "../commands/testGate.test-support";
 
@@ -65,7 +65,7 @@ function fixture(status: "admitted" | "pending" | "rejected" = "admitted", onSta
   };
   const lock: DocumentLock = { acquire: vi.fn(async () => ({ release: vi.fn() })) };
   const timeZone = vi.fn((): string | null => "Europe/Berlin");
-  const controller = new EntryController({ gate: freshTestGate(),
+  const controller = new TestEntryController({ gate: freshTestGate(),
     api, storage, lock, initData: "signed-Telegram-data", savedLanguage: "ru", browserLanguage: "ru-RU",
     clientVersion: "0.0.0", contractVersion: "1", timeZone,
     newId: () => {
@@ -81,7 +81,7 @@ function fixture(status: "admitted" | "pending" | "rejected" = "admitted", onSta
 /** A new document of the same Mini App: shared server and storage, its own controller. */
 function relaunch(api: EntryApi, storage: AsyncStorage, ids: string[]) {
   const states: string[] = [];
-  const controller = new EntryController({ gate: freshTestGate(),
+  const controller = new TestEntryController({ gate: freshTestGate(),
     api, storage, lock: { acquire: vi.fn(async () => ({ release: vi.fn() })) },
     initData: "signed", savedLanguage: "ru", browserLanguage: "ru", clientVersion: "0.0.0", contractVersion: "1",
     timeZone: () => "Europe/Berlin", newId: () => ids.shift()!, onUpdate: ({ state }) => states.push(state.kind),
@@ -306,7 +306,7 @@ describe("entry controller", () => {
   it("does not call auth without signed Telegram init data", async () => {
     const { api, storage, lock } = fixture();
     const states: string[] = [];
-    const controller = new EntryController({ gate: freshTestGate(),
+    const controller = new TestEntryController({ gate: freshTestGate(),
       api, storage, lock, initData: null, savedLanguage: null, browserLanguage: "en",
       clientVersion: "0.0.0", contractVersion: "1", timeZone: () => "Europe/Berlin",
       newId: () => instanceId, onUpdate: ({ state }) => states.push(state.kind),
@@ -378,7 +378,7 @@ describe("entry controller", () => {
     first.controller.dispose();
 
     const states: string[] = [];
-    const second = new EntryController({ gate: freshTestGate(),
+    const second = new TestEntryController({ gate: freshTestGate(),
       api: first.api, storage: first.storage, lock: first.lock,
       initData: "signed", savedLanguage: "ru", browserLanguage: "ru", clientVersion: "0.0.0", contractVersion: "1",
       timeZone: () => "Europe/Berlin", newId: () => { throw new Error("New ID must not be used"); },
@@ -543,7 +543,10 @@ describe("entry controller", () => {
 
   it("retries an opened document after storing activation fails", async () => {
     const { controller, api, storage, states } = fixture();
-    storage.set.mockResolvedValueOnce(undefined).mockResolvedValueOnce(undefined)
+    // C163 шаг 6: the writers decide on the ACTUAL record (installation store), so the first two writes (A, its proof)
+    // really store; only the activation write fails.
+    const store = async (key: string, value: string) => { storage.values.set(key, value); };
+    storage.set.mockImplementationOnce(store).mockImplementationOnce(store)
       .mockRejectedValueOnce(new Error("storage denied"));
     await controller.start();
     expect(states.at(-1)).toBe("unavailable");
@@ -560,7 +563,7 @@ describe("entry controller", () => {
     const saved = JSON.parse(first.storage.values.get(`wortly.installation:${profileId}`)!);
     first.controller.dispose();
     const states: string[] = [];
-    const second = new EntryController({ gate: freshTestGate(),
+    const second = new TestEntryController({ gate: freshTestGate(),
       api: first.api, storage: first.storage, lock: first.lock,
       initData: "signed", savedLanguage: null, browserLanguage: "ru", clientVersion: "0.0.0", contractVersion: "1",
       timeZone: () => "Europe/Berlin", newId: () => "88888888-8888-4888-8888-888888888888",
@@ -663,7 +666,7 @@ describe("entry controller", () => {
       open: vi.fn(async (_token, _proof, request) => ({ ...opened(), client_instance_id: request.client_instance_id })),
     };
     const ids = [freshInstance, freshRegistration, documentId];
-    const second = new EntryController({ gate: freshTestGate(),
+    const second = new TestEntryController({ gate: freshTestGate(),
       api: freshApi, storage: first.storage, lock: { acquire: async () => "unsupported" },
       initData: "signed", savedLanguage: "ru", browserLanguage: "ru", clientVersion: "0.0.0", contractVersion: "1",
       timeZone: () => "Europe/Berlin", newId: () => ids.shift()!, onUpdate: () => {},

@@ -10,6 +10,8 @@ type Props = {
   state: EntryState;
   language: Language;
   onRetry?: () => void;
+  /** C163/AC-104: the button of the expired screen — a new sign-in in the same window (never the unavailable retry). */
+  onReenter?: () => void;
   onReapply?: () => void;
   onRemoteRequest?: () => void;
   onRemoteCancel?: () => void;
@@ -22,7 +24,7 @@ type Props = {
   afterStale?: boolean;
 };
 
-export function EntryScreen({ state, language, onRetry, onReapply,
+export function EntryScreen({ state, language, onRetry, onReenter, onReapply,
   onRemoteRequest, onRemoteCancel, onRemoteConfirm, onRemoteCheck, onRemoteRetry, onLogin, afterStale }: Props) {
   if (state.kind === "remote" || state.kind === "remote_confirm" || state.kind === "busy" && state.remoteTarget) {
     return <RemoteStopScreen state={state} language={language} onRequest={onRemoteRequest}
@@ -77,17 +79,23 @@ export function EntryScreen({ state, language, onRetry, onReapply,
           : state.kind === "opened"
             ? copy.openedDetail
           : state.kind === "expired"
-            ? copy.expiredDetail
+            // C390 В2: the re-entry offered (active / waiting for the gate) or, without it, the instruction of a new launch.
+            ? state.reentry ? state.checkable ? copy.expiredReentryDetail : copy.expiredReentryWaitDetail : copy.expiredDetail
           : state.kind === "incompatible"
             ? copy.incompatibleDetail
         : copy.unavailableDetail;
   const wait = state.kind === "rejected" && state.pause ? maintenanceWait(language, state.pause.waitSeconds)
-    : waitPause ? maintenanceWait(language, waitPause.waitSeconds) : null;
+    : waitPause ? maintenanceWait(language, waitPause.waitSeconds)
+    // The expired screen names a planned pause by its own estimate only: the command lines of §4.8 speak of sending.
+    : state.kind === "expired" && state.reentry && state.wait?.cause === "maintenance" ? maintenanceWait(language, state.wait.waitSeconds)
+    : null;
   // The rule of the button (§4.1, C335): a gate that holds keeps the button visible and inactive, with the wait of §4.8;
   // the button of §4.13 route В stays blocked until Я19 whatever the gate (no request leaves).
   const retryActive = state.kind === "unavailable" && (state.route === "document" || state.route === "own" || state.route === "profile")
     && !!state.checkable;
   const reapplyBlocked = state.kind === "rejected" && !!state.blocked;
+  // C163: the re-entry button of the expired screen follows the same rule of the button (visible, active by the gate).
+  const reenterActive = state.kind === "expired" && !!state.reentry && !!state.checkable;
   const gateLine = state.kind === "unavailable" && !waiting && state.wait ? gateWaitText(language, state.wait)
     : state.kind === "rejected" && state.blocked && state.wait && !state.pause ? gateWaitText(language, state.wait) : null;
 
@@ -110,6 +118,12 @@ export function EntryScreen({ state, language, onRetry, onReapply,
           <button className="primary-action" type="button" disabled={reapplyBlocked}
             onClick={() => { if (!reapplyBlocked) onReapply(); }}>
             {copy.reapply}
+          </button>
+        )}
+        {state.kind === "expired" && state.reentry && onReenter && (
+          <button className="primary-action" type="button" disabled={!reenterActive}
+            onClick={() => { if (reenterActive) onReenter(); }}>
+            {copy.retry}
           </button>
         )}
         {state.kind === "unavailable" && !waiting && onRetry && (

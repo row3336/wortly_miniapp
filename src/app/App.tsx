@@ -6,6 +6,7 @@ import { browserStorage } from "../platform/storage";
 import type { AsyncStorage } from "../platform/storage";
 import { closeMiniApp, notifyAcceptedMilestone, signedInitData, syncPlatform, telegramLanguage } from "../platform/telegram";
 import { browserDocumentLock } from "./documentLock";
+import { installationProvider } from "./installationProvider";
 import { EntryController, type ForegroundIntent } from "./entryController";
 import { EntryScreen } from "./EntryScreen";
 import type { EntryState } from "./entryState";
@@ -34,7 +35,6 @@ import { clientJournal, installClientJournal } from "../journal/clientJournal";
 import { createPageJournal, watchPage } from "../journal/pageJournal";
 import type { DeletionEnd } from "../profile/profileDeleteController";
 import { DeletionNotice, deletionCheckResult } from "../profile/DeletionNotice";
-import { wipeProfileRecords } from "../profile/profileWipe";
 
 /** The entry is still being decided: the launch screen keeps waiting (М20). Every other state is an answer, success or refusal. */
 const undecided: ReadonlySet<EntryState["kind"]> = new Set(["checking", "opening", "reapplying"]);
@@ -168,6 +168,10 @@ export function App({ learningPage }: { learningPage?: LearningPageStarts } = {}
           remote: { api: createRemoteSessionApi(options), pendingStore: new RemoteStopPendingStore(readyStorage) },
           storage: readyStorage,
           lock: browserDocumentLock(window.navigator),
+          // C163 шаг 6 (C405): the one atomic writer path of the installation record (Web Locks + synchronous storage).
+          // The backend is the store's choice behind its interface; without Web Locks it is "unsupported" (no new
+          // register/open needs a write there).
+          installationStore: installationProvider.make(),
           initData: signedInitData(window),
           savedLanguage: saved,
           browserLanguage: window.navigator.language || null,
@@ -196,7 +200,7 @@ export function App({ learningPage }: { learningPage?: LearningPageStarts } = {}
             if (confirmed && checked) {
               deletionCheck.current = null;
               // Another profile after the explicit sign-in: the earlier one is deleted, its local records go (§3.7 (A)).
-              if (checked === "deleted") void wipeProfileRecords(readyStorage, confirmed);
+              if (checked === "deleted") currentController?.profileDeleted(confirmed);
               setDeletionNotice(checked);
             }
             if (snapshot.profile) {
@@ -284,6 +288,7 @@ export function App({ learningPage }: { learningPage?: LearningPageStarts } = {}
         state={entryState}
         language={language}
         onRetry={controller && entryState.kind === "unavailable" ? () => { void controller.retry(); } : undefined}
+        onReenter={controller && entryState.kind === "expired" ? () => { void controller.reenter(); } : undefined}
         onReapply={controller && entryState.kind === "rejected" ? () => { void controller.reapply(); } : undefined}
         onRemoteRequest={controller ? () => controller.requestRemoteStop() : undefined}
         onRemoteCancel={controller ? () => controller.cancelRemoteStop() : undefined}

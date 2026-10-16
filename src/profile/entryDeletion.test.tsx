@@ -1,14 +1,16 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { TestEntryController } from "../app/entryInstallation.test-support";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuthResponse, OpenedClient, Profile } from "../api/generated";
 import { EntryApiError, type EntryApi } from "../api/entryApi";
 import { testGate } from "../commands/testGate.test-support";
 import type { DocumentLock } from "../app/documentLock";
-import { EntryController } from "../app/entryController";
 import { EntryScreen } from "../app/EntryScreen";
 import { deletionCheckResult, DeletionNotice } from "./DeletionNotice";
 import { profileDeleteCopy } from "./profileDeleteCopy";
 import { memoryStorage } from "./profileStorage.test-support";
+import type { ForgetOutcome, InstallationStore } from "../app/installationStore";
+import { contextInstallationStore } from "../app/entryInstallation.test-support";
 
 afterEach(cleanup);
 const X = "11111111-1111-4111-8111-111111111111", Y = "66666666-6666-4666-8666-666666666666";
@@ -24,7 +26,8 @@ const auth = (status: "admitted" | "pending" | "rejected", profileId = X): AuthR
 const opened = (): OpenedClient => ({ status: "opened", client_instance_id: ids()[0], document_id: ids()[2], document_epoch: "1",
   proof_version: "1", profile: profile("admitted"), session: null, compatibility: { compatible: true, contract_version: "1" } });
 
-function entry(status: "admitted" | "rejected" = "admitted", laterOpens: Array<() => Promise<OpenedClient>> = []) {
+function entry(status: "admitted" | "rejected" = "admitted", laterOpens: Array<() => Promise<OpenedClient>> = [],
+  installationStore?: InstallationStore) {
   const { storage, values } = memoryStorage();
   const states: string[] = [];
   const queue = ids();
@@ -35,9 +38,10 @@ function entry(status: "admitted" | "rejected" = "admitted", laterOpens: Array<(
     open: vi.fn(async () => { const next = laterOpens.shift(); return next ? next() : opened(); }),
   };
   const lock: DocumentLock = { acquire: vi.fn(async () => ({ release: vi.fn() })) };
-  const controller = new EntryController({ gate: testGate(), api, storage, lock, initData: "signed", savedLanguage: "ru",
+  const controller = new TestEntryController({ gate: testGate(), api, storage, lock, initData: "signed", savedLanguage: "ru",
     browserLanguage: "ru", clientVersion: "0.0.0", contractVersion: "1", timeZone: () => "UTC",
-    newId: () => queue.shift() ?? "77777777-7777-4777-8777-777777777777", onUpdate: ({ state }) => { states.push(state.kind); } });
+    newId: () => queue.shift() ?? "77777777-7777-4777-8777-777777777777", onUpdate: ({ state }) => { states.push(state.kind); },
+    ...(installationStore ? { installationStore } : {}) });
   return { controller, api, states, values };
 }
 
@@ -148,5 +152,59 @@ describe("the screens of the entry", () => {
         if (typeof value === "string") expect(value).not.toMatch(/полностью|повністю|fully|completely/i);
       }
     }
+  });
+});
+
+describe("the repeat of the cleanup by knowledge in the entry (store §6)", () => {
+  it("PROFILE_DELETED: forget X at once; unknown is not «стёрто» — the page shown again and the next sign-in forget X again", async () => {
+    const answers: ForgetOutcome[] = [{ kind: "unknown" }, { kind: "removed", count: 1 }];
+    const forget = vi.fn(async (_id: string): Promise<ForgetOutcome> => answers.shift() ?? { kind: "removed", count: 0 });
+    const store = { forget, mutate: vi.fn(async () => ({ kind: "unsupported", reason: "no-web-locks" })),
+      read: vi.fn(async () => ({ kind: "unsupported" })) } as unknown as InstallationStore;
+    const t = entry("rejected", [], store);
+    await t.controller.start();
+    await t.controller.reapply();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(t.states.at(-1)).toBe("profile_deleted");
+    expect(forget).toHaveBeenCalledTimes(1);
+    expect(forget).toHaveBeenLastCalledWith(X);
+    t.controller.setVisible(false);
+    expect(forget).toHaveBeenCalledTimes(1);
+    t.controller.setVisible(true);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(forget).toHaveBeenCalledTimes(2);
+    await t.controller.start();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(forget).toHaveBeenCalledTimes(3);
+    expect(forget.mock.calls.every(call => call[0] === X)).toBe(true);
+  });
+
+  it("the PD-28 conclusion (App: another profile after the explicit sign-in) is knowledge too", async () => {
+    const forget = vi.fn(async (): Promise<ForgetOutcome> => ({ kind: "removed", count: 1 }));
+    const store = { forget, mutate: vi.fn(), read: vi.fn() } as unknown as InstallationStore;
+    const t = entry("rejected", [], store);
+    t.controller.profileDeleted(X);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(forget).toHaveBeenCalledWith(X);
+  });
+});
+
+describe("the repeat after the store answers again (store §6 «после восстановления store»)", () => {
+  it("a profile this page knows deleted is forgotten again when the installation store answers the next write", async () => {
+    const { storage } = memoryStorage();
+    const forget = vi.fn(async (): Promise<ForgetOutcome> => ({ kind: "unknown" }));
+    const context = contextInstallationStore(storage);
+    const store: InstallationStore = { mutate: context.mutate.bind(context), read: context.read.bind(context), forget };
+    const t = entry("admitted", [], store);
+    // Z was seen deleted by this page earlier (PD-28); its first forget did not answer.
+    t.controller.profileDeleted(Y);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(forget).toHaveBeenCalledTimes(1);
+    // The ordinary sign-in of X writes its installation: the store answers, so Z is cleaned once more.
+    await t.controller.start();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const afterStart = forget.mock.calls.length;
+    expect(afterStart).toBeGreaterThanOrEqual(3); // start() itself, then every answered installation write
+    expect(forget.mock.calls.every(call => (call as unknown as string[])[0] === Y)).toBe(true);
   });
 });

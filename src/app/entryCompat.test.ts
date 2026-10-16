@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
+import { TestEntryController } from "./entryInstallation.test-support";
 import type { AuthResponse, IncompatibleClient, OpenedClient, Profile } from "../api/generated";
 import { EntryApiError } from "../api/entryApi";
 import type { EntryApi } from "../api/entryApi";
 import type { AsyncStorage } from "../platform/storage";
 import type { DocumentLock } from "./documentLock";
-import { EntryController } from "./entryController";
 import type { EntryState } from "./entryState";
 import { readInstallation } from "./installation";
 import { freshTestGate } from "../commands/testGate.test-support";
@@ -49,7 +49,7 @@ function fixture(status: "admitted" | "rejected" = "admitted", compatible = true
   };
   const lock: DocumentLock = { acquire: vi.fn(async () => ({ release: vi.fn() })) };
   const ids = [instanceId, registrationId, documentId, commandId];
-  const controller = new EntryController({ gate: freshTestGate(),
+  const controller = new TestEntryController({ gate: freshTestGate(),
     api, storage, lock, initData: "signed", savedLanguage: "ru", browserLanguage: "ru", clientVersion: "0.0.0",
     contractVersion: "1", timeZone: () => "Europe/Berlin", newId: () => ids.shift()!,
     onUpdate: ({ state, profile }) => { states.push(state); profiles.push(profile); },

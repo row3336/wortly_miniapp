@@ -158,6 +158,8 @@ describe("App Learning 35.1-А: the start of another page is only checked", () =
     const checksBefore = s.checks();
     vi.resetModules();
     const RTL = await import("@testing-library/react"), React = await import("react"), fresh = await import("./App");
+    // C163 integration: the fresh module graph gets the same installation database (a reload keeps the origin's IndexedDB).
+    (await import("./installationApp.test-support")).installAppInstallationStore((await import("./installationProvider")).installationProvider);
     const pause = async (n: number) => { for (let i = 0; i < n; i++) await RTL.act(async () => { await new Promise(done => setTimeout(done, 20)); }); };
     const view = RTL.render(React.createElement(fresh.App)); await pause(25);
     expect(s.checks()).toBeGreaterThan(checksBefore);

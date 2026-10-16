@@ -1,4 +1,5 @@
 import { withJournalIntake } from "../journal/intake.test-support";
+import { appInstallationRecords } from "./installationApp.test-support";
 import { activeButton } from "./gateButton.test-support";
 import { createHash } from "node:crypto";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -1941,8 +1942,8 @@ describe("Learning R1: the window refreshes itself into the session of the new p
         return reply;
       });
       render(<App />); const start = await startButton(a);
-      const key = Object.keys(localStorage).find(name => name.startsWith("wortly.installation:"))!;
-      const installation = JSON.parse(localStorage.getItem(key)!) as { profileId: string; clientInstanceId: string };
+      // C163 integration: the installation lives in the installation store (IndexedDB), no longer in localStorage.
+      const installation = appInstallationRecords()[0] as { profileId: string; clientInstanceId: string };
       const mark = a.fetcher.mock.calls.length;
       world.moved = true; fireEvent.click(start);
       localStorage.setItem("wortly.pending.written_session", JSON.stringify({ schemaVersion: 1, profileId: installation.profileId,

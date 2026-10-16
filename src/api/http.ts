@@ -30,6 +30,11 @@ export class ApiError extends Error {
     public readonly status?: number,
     public readonly code?: string,
     public readonly pause?: MaintenancePause,
+    /**
+     * C163 (Q01 route audit, C401): the actual-send snapshot of the refused request and whether its body is exactly the
+     * core's bare {"error":{"code":"FORBIDDEN"}}. Set by httpError from the transport's reply only; read by commands/proofRefusal.ts.
+     */
+    public readonly sentRefusal?: Readonly<{ sent: SentRequest; bareForbidden: boolean }>,
   ) {
     super(kind);
   }
@@ -104,7 +109,9 @@ export type DocumentStaleSource = {
   readonly mark: DocMark | null;
 };
 
-export type JsonReply = { status: number; ok: boolean; value: unknown; retryAfter?: number; retryAfterRaw?: string; trace?: string };
+export type JsonReply = { status: number; ok: boolean; value: unknown; retryAfter?: number; retryAfterRaw?: string; trace?: string;
+  /** The actual-send snapshot of this exchange (not enumerable: the reply the modules read stays as it was). */
+  sent?: SentRequest };
 
 /** The largest wait a client accepts from one announcement, in seconds (P03 §3.5, P3-01). */
 export const RETRY_AFTER_MAX_S = 900;
@@ -166,7 +173,8 @@ function maintenancePause(reply: JsonReply): MaintenancePause {
 export function httpError(reply: JsonReply): ApiError {
   const code = errorCode(reply.value);
   return new ApiError("http", reply.status, code,
-    code === "MAINTENANCE" && reply.status === 503 ? maintenancePause(reply) : undefined);
+    code === "MAINTENANCE" && reply.status === 503 ? maintenancePause(reply) : undefined,
+    reply.sent ? Object.freeze({ sent: reply.sent, bareForbidden: bareForbidden(reply) }) : undefined);
 }
 
 async function readJson(response: Response, limit: number, signal: AbortSignal): Promise<unknown> {
@@ -250,13 +258,15 @@ export function createJsonTransport(options: HttpOptions): JsonTransport {
       const refusal = gate?.admit({ method: request.method, path, body: request.body, readbackTicket: request.readbackTicket,
         ...(request.origin ? { origin: request.origin } : {}) });
       if (refusal) throw new PausedBeforeSendError(refusal);
+      // The method of the snapshot is the one sent: a callback (stamped, started) cannot change it any more (C163 P2-5A).
+      const method = request.method;
       if (gate && request.stamped) request.stamped(gate.stamp(path, request.body));
       sentMark = gate?.docMark() ?? null;
-      sent = sentRequest(path, request.method, body);
+      sent = sentRequest(path, method, body, headers["X-Origin-Proof"]);
       request.started?.();
       journal?.started();
       const response = await fetcher(url, {
-        method: request.method, headers, body,
+        method, headers, body,
         signal: controller.signal, cache: "no-store", credentials: "same-origin",
       });
       if (controller.signal.aborted) {
@@ -300,6 +310,8 @@ export function createJsonTransport(options: HttpOptions): JsonTransport {
     journalRefusal(reply.status, errorCode(reply.value));
     // One place for every module: a newer window of this installation may own the document now (decision 2.3).
     if (reply.status === 409 && errorCode(reply.value) === "DOCUMENT_STALE" && sent) options.onDocumentStale?.(staleSource(sent, reply, sentMark));
+    // The same snapshot travels with the reply for the refusal classifier (C401): one actual-send snapshot, not two.
+    if (sent) Object.defineProperty(reply, "sent", { value: sent, enumerable: false });
     return reply;
   };
   return send;
@@ -317,31 +329,50 @@ function observeReply(gate: WriteGate | undefined, path: string, request: Reques
   else gate.closeByFailure(reply.status === 503 && code === "WRITE_UNAVAILABLE" ? "unavailable" : "unknown", command);
 }
 
-/** The immutable snapshot of what one exchange sent: its method and route, and the kind, command_id and document_id of its body. */
-type SentRequest = { readonly method: "GET" | "POST"; readonly route: string; readonly kind: string | null;
-  readonly commandId: string | null; readonly documentId: string | null };
+/**
+ * The ONE immutable actual-send snapshot of an exchange (C408 стык + C163 C401; C411: one snapshot, both sets of negatives):
+ * taken from the path, the method pinned before any callback, the body ALREADY SERIALIZED for fetch and the X-Origin-Proof
+ * header as set, in the same synchronous stretch as the gate's mark — a later change of the caller's request object
+ * changes nothing of it. kind and command_id only of a POST /commands; client_instance_id and document_id from the body,
+ * else from the query; query: the names of the query parameters; proofSent: a non-empty proof header was set. No token,
+ * no proof value.
+ */
+export type SentRequest = Readonly<{ method: "GET" | "POST"; route: string; query: readonly string[]; kind: string | null;
+  commandId: string | null; clientInstanceId: string | null; documentId: string | null; proofSent: boolean }>;
 
 /** Read from the serialized body that goes to fetch (the bytes sent), never from the caller's object afterwards. */
-function sentRequest(path: string, method: "GET" | "POST", serialized: string | undefined): SentRequest {
+function sentRequest(path: string, method: "GET" | "POST", serialized: string | undefined, proofHeader: string | undefined): SentRequest {
   const route = path.split(/[?#]/, 1)[0];
   let body: Record<string, unknown> | undefined;
   if (serialized !== undefined) {
     try { const parsed: unknown = JSON.parse(serialized); body = record(parsed) ? parsed : undefined; } catch { body = undefined; }
   }
-  const post = method === "POST" && route === "/commands";
-  let documentId: string | null = typeof body?.document_id === "string" ? body.document_id : null;
-  if (documentId === null && path.includes("?")) {
-    try { documentId = new URLSearchParams(path.split("?", 2)[1]).get("document_id"); } catch { documentId = null; }
+  let params = new URLSearchParams();
+  if (path.includes("?")) {
+    try { params = new URLSearchParams(path.split("#", 1)[0].split("?", 2)[1]); } catch { params = new URLSearchParams(); }
   }
-  return Object.freeze({ method, route, kind: post && typeof body?.kind === "string" ? body.kind : null,
-    commandId: post && typeof body?.command_id === "string" ? body.command_id : null, documentId });
+  const post = method === "POST" && route === "/commands";
+  const field = (name: string): string | null => typeof body?.[name] === "string" ? body[name] as string : params.get(name);
+  return Object.freeze({ method, route, query: Object.freeze([...params.keys()]),
+    kind: post && typeof body?.kind === "string" ? body.kind : null,
+    commandId: post && typeof body?.command_id === "string" ? body.command_id : null,
+    clientInstanceId: field("client_instance_id"), documentId: field("document_id"),
+    proofSent: typeof proofHeader === "string" && proofHeader.length > 0 });
+}
+
+/** Exactly the core's bare refusal {"error":{"code":"FORBIDDEN"}} with 403 (api/app.py:220–224): no envelope, no other field. */
+function bareForbidden(reply: JsonReply): boolean {
+  const value = reply.value;
+  return reply.status === 403 && record(value) && Object.keys(value).length === 1 && record(value.error)
+    && Object.keys(value.error).length === 1 && value.error.code === "FORBIDDEN";
 }
 
 /** The local attribution of a DOCUMENT_STALE (DocumentStaleSource): what this exchange sent and what the core named. */
 function staleSource(sent: SentRequest, reply: JsonReply, mark: DocMark | null): DocumentStaleSource {
   const command = record(reply.value) && record(reply.value.command) ? reply.value.command : null;
   const attributed = sent.commandId !== null && command !== null && command.id === sent.commandId && command.status === "rejected";
-  return Object.freeze({ ...sent, attributed, mark });
+  return Object.freeze({ method: sent.method, route: sent.route, kind: sent.kind, commandId: sent.commandId,
+    documentId: sent.documentId, attributed, mark });
 }
 
 /** The command a request is about (its POST or the readback of its status): the anchor of an episode (§2 п.1), Z3. */

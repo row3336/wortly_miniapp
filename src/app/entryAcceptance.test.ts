@@ -1,6 +1,7 @@
 // Acceptance checks by the independent QA of entry and access (A-QA-E01E03), kept as regression tests:
 // controller-level entry, reapply, revocation and remote stop.
 import { describe, expect, it, vi } from "vitest";
+import { TestEntryController } from "./entryInstallation.test-support";
 import type { AuthResponse, OpenedClient, Profile, SessionStopRemoteCommand } from "../api/generated";
 import { EntryApiError } from "../api/entryApi";
 import type { EntryApi } from "../api/entryApi";
@@ -66,7 +67,7 @@ let next = 100;
 function launch(api: EntryApi, storage: AsyncStorage, extra: Partial<ConstructorParameters<typeof EntryController>[0]> = {}) {
   const updates: EntrySnapshot[] = [];
   const release = vi.fn();
-  const controller = new EntryController({ gate: freshTestGate(), api, storage, lock: { acquire: vi.fn(async () => ({ release })) },
+  const controller = new TestEntryController({ gate: freshTestGate(), api, storage, lock: { acquire: vi.fn(async () => ({ release })) },
     initData: "signed", savedLanguage: "ru", browserLanguage: "ru", clientVersion: "0.0.0", contractVersion: "1",
     timeZone: () => "Europe/Berlin", newId: () => id(next++), onUpdate: snapshot => updates.push(snapshot), ...extra });
   return { controller, updates, release, kinds: () => updates.map(update => update.state.kind),
@@ -143,7 +144,8 @@ describe("QA revocation (К02-047, Т38)", () => {
     let finish!: (value: string) => void;
     const command = access.run(() => new Promise<string>(resolve => { finish = resolve; }));
     await expect(access.run(async () => { throw new ApiError("http", 401, "AUTH_INVALID"); })).rejects.toMatchObject({ status: 401 });
-    expect(l.latest()).toEqual({ kind: "expired" });
+    // C163/AC-104: the expired screen offers the re-entry of the same window (its button by the gate).
+    expect(l.latest()).toEqual({ kind: "expired", reentry: true, checkable: true });
     const count = l.updates.length;
     finish("saved");
     await expect(command).rejects.toMatchObject({ message: "closed_access" });
@@ -162,7 +164,8 @@ describe("QA revocation (К02-047, Т38)", () => {
     await expect(access.run(async () => { throw new ApiError("http", 401); })).rejects.toBeTruthy();
     refuse(new ApiError("http", 403));
     await expect(command).rejects.toMatchObject({ message: "closed_access" });
-    expect(l.latest()).toEqual({ kind: "expired" });
+    // C163/AC-104: the expired screen offers the re-entry of the same window (its button by the gate).
+    expect(l.latest()).toEqual({ kind: "expired", reentry: true, checkable: true });
   });
 
   it("a new Telegram login after revocation gets a new token and uses it for the document (К02-047 client side)", async () => {

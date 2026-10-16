@@ -167,9 +167,13 @@ describe("ordinary Entry to Today integration", () => {
   it("HTTP401 closes application access and explains the actual reopening action", async () => {
     const f = fixture(); f.todayReply.mockResolvedValueOnce(json({ error: { code: "UNAUTHORIZED" } }, 401));
     render(<App />);
-    await screen.findByText("Закрой приложение и снова нажми кнопку Wortly в боте.");
+    // C390 В2: the re-entry text (the old «close the app» line alone is the state without the button).
+    await screen.findByText("Нажми «Попробовать ещё раз», чтобы подтвердить вход в этом окне. Если не получится, закрой приложение и снова нажми кнопку Wortly в боте.");
     expect(screen.queryByText("В базе")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Попробовать ещё раз" })).toBeNull();
+    // C163/AC-104: a 401 of the session (not of auth itself, Н4) offers the re-entry of the same window; nothing leaves
+    // until it is pressed (the sign-in of this page was 1).
+    expect(screen.getByRole("button", { name: "Попробовать ещё раз" })).toBeTruthy();
+    expect(f.fetcher.mock.calls.filter(([url]) => String(url).includes("/auth/telegram"))).toHaveLength(1);
   });
 
   it("HTTP403 returns to access verification without stale plan data", async () => {

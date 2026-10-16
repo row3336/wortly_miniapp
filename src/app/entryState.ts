@@ -26,7 +26,11 @@ export type EntryState =
   // document stay, writes are shut by the write gate. recovering: waiting for the server (ВР-1, ВР-9, ВР-10); verifying: the
   // one recovery foreground is in flight (ВР-4, ВР-5). checking: the round of readbacks after ВР-6 has pending IDs (9.2.1).
   | { kind: "opened"; recovery?: "recovering" | "verifying"; wait?: GateWait; checking?: true }
-  | { kind: "expired" }
+  // 401 (AUTH_EXPIRED / AUTH_INVALID): the state of a new sign-in (CON §7.1 п.1, P03 §4.6; pending stay, К19-001).
+  // reentry (C163/22.1-А, P03 AC-104, P02-W К-Т12о): the page has signed initData, so its button signs in again in the same
+  // window — one auth, then the FIRST open of a new document (п.8б (2)); never the `unavailable` retry() (AC-102).
+  // checkable: the button is active (the rule of the button, §4.1/C335: the gate lets the open go); wait: why not.
+  | { kind: "expired"; reentry?: true; checkable?: true; wait?: GateWait }
   // This client's contract version is not served (К10-059/060): reading why is allowed, new writes are not.
   // No document is open; the screen offers only the update message (what else it shows is open, see DESIGN Q-H1).
   | { kind: "incompatible" }

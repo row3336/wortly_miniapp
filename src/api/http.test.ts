@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError, clientContractVersion, createJsonTransport, httpError, readRetryAfter } from "./http";
 import { testGate } from "../commands/testGate.test-support";
+import { WriteGate } from "../commands/writeGate";
+import { ManualClock } from "../commands/writeGate.test-support";
 
 afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); });
 
@@ -361,5 +363,26 @@ describe("the estimate of a pause and the own deadline (M-P03-2, P03 §3.2, §3.
     await vi.advanceTimersByTimeAsync(100);
     await assertion;
     expect(await pending.catch(error => error)).toBeInstanceOf(ApiError);
+  });
+});
+
+// QA a2f6d85b J2 (C444) as a regression: a stamped callback changes request.proof after the header was set — the actual-
+// send snapshot follows the X-Origin-Proof header really sent, both ways (real transport + real gate).
+describe("the actual-send snapshot follows the proof header really sent (C163 C401, J2)", () => {
+  for (const way of ["sent, then cleared", "absent, then set"] as const) it(`stamped changes request.proof: ${way}`, async () => {
+    let header: string | null | undefined;
+    const fetcher = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      header = new Headers(init?.headers).get("X-Origin-Proof");
+      return new Response(JSON.stringify({ error: { code: "FORBIDDEN" } }), { status: 403, headers: { "content-type": "application/json" } });
+    });
+    const gate = new WriteGate({ clock: new ManualClock() });
+    const transport = createJsonTransport({ fetcher: fetcher as typeof fetch, timeoutMs: 5_000, maxResponseBytes: 100_000, gate });
+    const request: { method: "GET"; token: string; proof?: string; stamped: () => void } = { method: "GET", token: "t",
+      ...(way === "sent, then cleared" ? { proof: "real-proof" } : {}),
+      stamped: () => { request.proof = way === "sent, then cleared" ? "" : "late-proof"; } };
+    const reply = await transport("/sessions/00000000-0000-4000-8000-000000000001?client_instance_id=c&document_id=d", request);
+    const error = httpError(reply);
+    expect(header).toBe(way === "sent, then cleared" ? "real-proof" : null);
+    expect(error.sentRefusal?.sent.proofSent).toBe(way === "sent, then cleared");
   });
 });

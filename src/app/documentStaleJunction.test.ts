@@ -3,13 +3,14 @@
 // replacement of this very document and closes it at once; a card context's refusal only asks for the foreground check;
 // a late answer of another document, profile or exchange never closes the current window; the closure is terminal.
 import { describe, expect, it, vi } from "vitest";
+import { TestEntryController } from "./entryInstallation.test-support";
 import { createEntryApi } from "../api/entryApi";
 import { createAvailabilityClient } from "../api/availability";
 import { createJsonTransport, type HttpOptions } from "../api/http";
 import type { AsyncStorage } from "../platform/storage";
 import { WriteGate } from "../commands/writeGate";
 import { ManualClock, settle } from "../commands/writeGate.test-support";
-import { EntryController, type EntrySnapshot } from "./entryController";
+import type { EntryController, EntrySnapshot } from "./entryController";
 import { createTodayApi } from "../today/todayApi";
 
 const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -62,7 +63,7 @@ function chain() {
   gate.trackAccess();
   const storage = memory(), updates: EntrySnapshot[] = [], closeWindow = vi.fn(), checks: boolean[] = [];
   let next = 100, instance = "";
-  controller = new EntryController({ gate, api: createEntryApi(http), today: createTodayApi(http), storage,
+  controller = new TestEntryController({ gate, api: createEntryApi(http), today: createTodayApi(http), storage,
     lock: { acquire: vi.fn(async () => ({ release: vi.fn() })) }, initData: "signed", savedLanguage: "ru",
     browserLanguage: "ru", clientVersion: "0.0.0", contractVersion: "1", timeZone: () => "UTC",
     newId: () => uuid(next++), closeWindow, onUpdate: snapshot => updates.push(snapshot),

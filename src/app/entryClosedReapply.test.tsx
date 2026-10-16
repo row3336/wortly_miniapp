@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
+import { TestEntryController } from "./entryInstallation.test-support";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { AuthResponse, Profile } from "../api/generated";
 import { createEntryApi, EntryApiError, type EntryApi } from "../api/entryApi";
 import { t } from "../i18n/messages";
 import type { AsyncStorage } from "../platform/storage";
-import { EntryController } from "./entryController";
 import { EntryScreen } from "./EntryScreen";
 import type { EntryState } from "./entryState";
 import { freshTestGate } from "../commands/testGate.test-support";
@@ -40,7 +40,7 @@ function fixture(profile: Profile) {
     open: vi.fn(async () => { throw new Error("not expected"); }),
   };
   let id = 0;
-  const controller = new EntryController({ gate: freshTestGate(),
+  const controller = new TestEntryController({ gate: freshTestGate(),
     api, storage, lock: { acquire: vi.fn(async () => ({ release: vi.fn() })) },
     initData: "signed-Telegram-data", savedLanguage: "ru", browserLanguage: "ru-RU",
     clientVersion: "0.0.0", contractVersion: "1", timeZone: () => "Europe/Berlin",

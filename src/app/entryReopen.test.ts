@@ -1,13 +1,13 @@
 // Relaunch of the same installation after decision 2.3 (M-REOPEN-2): a new window takes the document over at once,
 // the old one closes itself, over /client/open as core identity/clients.py answers it after C-REOPEN-2.
 import { describe, expect, it, vi } from "vitest";
+import { TestEntryController } from "./entryInstallation.test-support";
 import type { BusyClient, OpenRequest, OpenedClient, Profile } from "../api/generated";
 import { EntryApiError } from "../api/entryApi";
 import type { EntryApi } from "../api/entryApi";
 import type { AsyncStorage } from "../platform/storage";
 import { RemoteStopPendingStore } from "../study/remoteStopPending";
 import type { DocumentLease, DocumentLock } from "./documentLock";
-import { EntryController } from "./entryController";
 import { keysOf, openDocument, openRequestKeys } from "./openRules.test-support";
 import type { EntryState } from "./entryState";
 import { freshTestGate } from "../commands/testGate.test-support";
@@ -69,7 +69,7 @@ function device(lock: DocumentLock, options: { remote?: boolean } = {}) {
     const states: EntryState[] = [];
     const closeWindow = vi.fn();
     const checks: boolean[] = [];
-    const controller = new EntryController({ gate: freshTestGate(), api, storage, lock, initData: "signed", savedLanguage: "ru",
+    const controller = new TestEntryController({ gate: freshTestGate(), api, storage, lock, initData: "signed", savedLanguage: "ru",
       browserLanguage: "ru", clientVersion: "0.0.0", contractVersion: "1", timeZone: () => "UTC",
       newId: () => id(next++), onUpdate: ({ state }) => { states.push(state); }, closeWindow,
       onDocumentCheck: checking => { checks.push(checking); }, ...remote });

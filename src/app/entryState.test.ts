@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import { TestEntryController } from "./entryInstallation.test-support";
 import type { AuthResponse, OpenedClient, Profile } from "../api/generated";
 import { EntryApiError } from "../api/entryApi";
 import type { EntryApi } from "../api/entryApi";
 import type { AsyncStorage } from "../platform/storage";
-import { EntryController } from "./entryController";
 import type { EntryState } from "./entryState";
 import { freshTestGate } from "../commands/testGate.test-support";
 
@@ -32,7 +32,7 @@ function setup(status: Profile["access"]["status"], reason: string | null = null
   };
   let next = 0;
   const states: EntryState[] = [];
-  const controller = new EntryController({ gate: freshTestGate(), api, storage, lock: { acquire: async () => ({ release: () => undefined }) },
+  const controller = new TestEntryController({ gate: freshTestGate(), api, storage, lock: { acquire: async () => ({ release: () => undefined }) },
     initData: "signed", savedLanguage: "en", browserLanguage: "en", clientVersion: "0.0.0", contractVersion: "1",
     timeZone: () => "UTC", newId: () => `00000000-0000-4000-8000-${String(++next).padStart(12, "0")}`,
     onUpdate: ({ state }) => states.push(state) });

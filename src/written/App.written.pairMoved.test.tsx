@@ -2,6 +2,7 @@
 // tapped here made the session in uk-de. The window refreshes its access by itself (one client/open) and goes into that
 // session; Stop of it is never sent from the old screen.
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { appInstallationRecords } from "../app/installationApp.test-support";
 import { activeButton } from "../app/gateButton.test-support";
 import { StrictMode } from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -171,8 +172,8 @@ describe("written R1: the window refreshes itself into the session of the new pa
   // written route the Learning owner of the new pair drives no recovery; X is checked by its ID and never sent.
   it("2.3А: an old automatic record X in the Learning slot is never sent by the refreshed owners", async () => {
     const { a, world, mark } = await ready();
-    const key = Object.keys(localStorage).find(name => name.startsWith("wortly.installation:"))!;
-    const installation = JSON.parse(localStorage.getItem(key)!) as { profileId: string; clientInstanceId: string };
+    // C163 integration: the installation lives in the installation store (IndexedDB), no longer in localStorage.
+    const installation = appInstallationRecords()[0] as { profileId: string; clientInstanceId: string };
     const X = "7a1b2c3d-0000-4000-8000-00000000cc01";
     world.moved = true;
     fireEvent.click(row(words));
@@ -190,8 +191,8 @@ describe("written R1: the window refreshes itself into the session of the new pa
 
   it("2.3А: an old record X of another window is only checked, never sent, by the refreshed owners", async () => {
     const { a, world, mark } = await ready();
-    const key = Object.keys(localStorage).find(name => name.startsWith("wortly.installation:"))!;
-    const installation = JSON.parse(localStorage.getItem(key)!) as { profileId: string; clientInstanceId: string };
+    // C163 integration: the installation lives in the installation store (IndexedDB), no longer in localStorage.
+    const installation = appInstallationRecords()[0] as { profileId: string; clientInstanceId: string };
     const X = "7a1b2c3d-0000-4000-8000-00000000aa01";
     world.moved = true;
     fireEvent.click(row(words));

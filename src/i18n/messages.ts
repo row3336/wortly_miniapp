@@ -25,6 +25,11 @@ const messages = {
     openedDetail: "Продовження поки недоступне.",
     expired: "Потрібно знову підтвердити вхід",
     expiredDetail: "Закрий застосунок і знову натисни кнопку Wortly в боті.",
+    // WORKING TEXT (C163/AC-104, C390 В2 [ПРЕДЛ, DEV-14/П5-021]; not the owner's words; to be shown on the phone, S-10):
+    // the expired screen while its re-entry button is offered (active), and while it waits for the gate (inactive). The
+    // wait text promises no single server answer (C392): the gate may still hold after ready (send_hold, gateWait.ts:24).
+    expiredReentryDetail: "Натисни «Спробувати ще раз», щоб підтвердити вхід у цьому вікні. Якщо не вийде, закрий застосунок і знову натисни кнопку Wortly в боті.",
+    expiredReentryWaitDetail: "Зараз підтвердити вхід не можна. Кнопка стане активною, коли це знову буде можливо. Можна також закрити застосунок і знову натиснути кнопку Wortly в боті.",
     // M-COMPAT-HDR (working copy, labelled until G05)
     incompatible: "Потрібно оновити Wortly",
     incompatibleDetail: "Ця версія застосунку застаріла й не може надсилати нові дії. Закрий Wortly і відкрий його знову через бота.",
@@ -61,6 +66,11 @@ const messages = {
     openedDetail: "You cannot continue yet.",
     expired: "Please confirm sign-in again",
     expiredDetail: "Close the app and tap the Wortly button in the bot again.",
+    // WORKING TEXT (C163/AC-104, C390 В2 [ПРЕДЛ, DEV-14/П5-021]; not the owner's words; to be shown on the phone, S-10):
+    // the expired screen while its re-entry button is offered (active), and while it waits for the gate (inactive). The
+    // wait text promises no single server answer (C392): the gate may still hold after ready (send_hold, gateWait.ts:24).
+    expiredReentryDetail: "Tap “Try again” to confirm sign-in in this window. If it does not work, close the app and tap the Wortly button in the bot again.",
+    expiredReentryWaitDetail: "Sign-in cannot be confirmed right now. The button becomes active when this is possible again. You can also close the app and tap the Wortly button in the bot again.",
     // M-COMPAT-HDR (working copy, labelled until G05)
     incompatible: "Wortly needs an update",
     incompatibleDetail: "This version of the app is out of date and cannot send new actions. Close Wortly and open it again from the bot.",
@@ -96,6 +106,11 @@ const messages = {
     openedDetail: "Продолжить пока нельзя.",
     expired: "Нужно снова подтвердить вход",
     expiredDetail: "Закрой приложение и снова нажми кнопку Wortly в боте.",
+    // WORKING TEXT (C163/AC-104, C390 В2 [ПРЕДЛ, DEV-14/П5-021]; not the owner's words; to be shown on the phone, S-10):
+    // the expired screen while its re-entry button is offered (active), and while it waits for the gate (inactive). The
+    // wait text promises no single server answer (C392): the gate may still hold after ready (send_hold, gateWait.ts:24).
+    expiredReentryDetail: "Нажми «Попробовать ещё раз», чтобы подтвердить вход в этом окне. Если не получится, закрой приложение и снова нажми кнопку Wortly в боте.",
+    expiredReentryWaitDetail: "Сейчас подтвердить вход нельзя. Кнопка станет активной, когда это снова будет возможно. Можно также закрыть приложение и снова нажать кнопку Wortly в боте.",
     // M-COMPAT-HDR (working copy, labelled until G05)
     incompatible: "Нужно обновить Wortly",
     incompatibleDetail: "Эта версия приложения устарела и не может отправлять новые действия. Закрой Wortly и открой его снова через бота.",

@@ -5,7 +5,11 @@ import type { EntryApi } from "../api/entryApi";
 import type { Language } from "../i18n/language";
 import type { AsyncStorage } from "../platform/storage";
 import type { DocumentLease, DocumentLock } from "./documentLock";
-import { newerVersion, readInstallation, writeInstallation } from "./installation";
+import { newerVersion } from "./installation";
+import type { InstallationStore } from "./installationStore";
+import type { IdbInstallationStore } from "./installationStoreIdb";
+import { decideA, decideActivated, decideB, decideRegister } from "./installationWriters";
+import type { Installation as StoredInstallation } from "./installation";
 import type { Installation } from "./installation";
 import type { EntryState } from "./entryState";
 import { clearReapplyIntent, readReapplyIntent, writeReapplyIntent } from "./reapplyIntent";
@@ -20,10 +24,18 @@ import { journalAccess, journalRecord } from "../journal/clientJournal";
 import { GatePending, pausedBeforeSend } from "../commands/gatePending";
 import type { GateDoc, GateEvent, P01Episode, RemoteReadContext, RequestOrigin, RequestStamp, WriteGate } from "../commands/writeGate";
 import { gateWait } from "../commands/gateWait";
-import { wipeProfileRecords } from "../profile/profileWipe";
+import { DeletedProfileCleanup } from "../profile/deletedProfileCleanup";
 import type { DeletionEnd } from "../profile/profileDeleteController";
+import { proofRefusalCandidate } from "../commands/proofRefusal";
 
 export type EntrySnapshot = { state: EntryState; profile?: Profile };
+
+/** C163 шаг 6b (P2-6B): no installation store given — every write and read is "unsupported": fail-closed. */
+const NO_STORE: InstallationStore = Object.freeze({
+  mutate: async () => ({ kind: "unsupported" as const, reason: "no-web-locks" as const }),
+  read: async () => ({ kind: "unsupported" as const }),
+  forget: async () => ({ kind: "unsupported" as const }),
+});
 
 /**
  * What a screen's foreground carries (fix3/fix4, C384): startRefused — the command_id of the start whose definite refusal
@@ -60,6 +72,15 @@ function transportFailure(error: unknown): boolean {
   if (error.kind === "network" || error.kind === "timeout") return true;
   if (error.kind === "invalid_response") return error.status === undefined;
   return error.kind === "http" && error.status !== undefined && error.status >= 500 && !maintenance(error);
+}
+
+/**
+ * C163 re-entry (22.1-А, AC-104): right before L2 the window was hidden or the gate did not let the first open of the new
+ * document go. Nothing of it left (admit never saw it, openAttempts unchanged); the expired screen comes back, the click is
+ * not kept (N3, no queue of clicks).
+ */
+class ReentryHeld extends Error {
+  constructor() { super("reentry_held"); }
 }
 
 /** ВР-8 / ВР-8б: the recovery foreground (or the manual check of the last working document) did not prove the identity. */
@@ -102,6 +123,12 @@ export type EntryControllerOptions = {
    * reapply and the remote stop take part in its readback registry (R1).
    */
   gate: WriteGate;
+  /**
+   * C163 шаг 6 (C405/C410): the ONE writer path of the installation record (installationStore.mutate). App gives the
+   * browser store (Web Locks + synchronous storage, installationStore.ts). Without one the entry is fail-closed (6b,
+   * P2-6B): nothing is written, no register, no open — there is no product fallback store.
+   */
+  installationStore?: InstallationStore;
 };
 
 export class EntryController {
@@ -125,6 +152,8 @@ export class EntryController {
   private reapplyIntent: ReapplyIntent | null = null;
   private conflictedIntentId: string | null = null;
   private conflictedAccessVersion: string | null = null;
+  /** The profile whose reapply met 409 VERSION_CONFLICT: the refreshed profile must be this one (В4, C390). */
+  private conflictedProfileId: string | null = null;
   // The profile whose reapply the core refused with 403 ACCESS_REJECTED (two refusals, CT §6.3). It outlives
   // retry(): the closure is final, and an older core's profile has no reapply_closed to say so again.
   private reapplyClosedFor: string | null = null;
@@ -171,12 +200,35 @@ export class EntryController {
   private profileRefresh = false;
   /** The current run only reads the profile again (route «profile», fix1): it never goes on to open. */
   private profileOnly = false;
+  /**
+   * A first open that goes to L2 only from a visible window with mayWrite in the same synchronous stretch (else nothing
+   * of it leaves): "reentry" — the expired screen's button (C163); "profile" — the first open of the page after the explicit
+   * profile refresh of a VERSION_CONFLICT found the profile admitted (В4-Б, C390). Null for every other run.
+   */
+  private guarded: { generation: number; kind: "reentry" | "profile" } | null = null;
+  /** Н4: the core refused this page's signed initData itself (401 to auth): no new sign-in with the same data. */
+  private initDataRefused = false;
+  /** P3-5: the profile whose session ended with 401; the re-entry signs in again only as this profile. */
+  private reentryProfileId: string | null = null;
+  /**
+   * C163 шаг 5 (Q01 вариант 1; CON:196–200; CL493): after the narrow candidate of a refused installation proof the page's
+   * re-entry signs in anew and continues as a NEW installation B. a — the refused installation A as this page knew it
+   * (its record is never reused); b — the client_instance_id of B this page created. Once per page: a second candidate
+   * stops (no cycle).
+   */
+  private installationRecovery: { a: Installation | null; b: Installation | null } | null = null;
   private readonly unsubscribeGate: () => void;
   private readonly waiters = new Set<() => void>();
   /** The phase of the identity lock the last gate event showed (ВР-12 is the step readback → verifying). */
   private lockPhase: "verifying" | "readback" | null = null;
 
+  private readonly store: InstallationStore;
+  /** P04 (A) / store §6: the profiles this page knows deleted; their cleanup is repeated on every trigger below. */
+  private readonly deletedProfiles: DeletedProfileCleanup;
+
   constructor(private readonly options: EntryControllerOptions) {
+    this.store = options.installationStore ?? NO_STORE;
+    this.deletedProfiles = new DeletedProfileCleanup(options.storage, options.installationStore);
     this.reapplyRegistry = new GatePending(options.gate, "reapply");
     // The entry reports its document to the gate from now on (noteOpened/noteAccessLost, together with R10).
     options.gate.trackAccess();
@@ -248,6 +300,8 @@ export class EntryController {
 
   start(): Promise<void> {
     if (this.running) return this.running;
+    // Store §6: the next sign-in repeats the cleanup of a profile this page knows deleted (actual presence each time).
+    void this.deletedProfiles.retry();
     this.session = null;
     this.installation = null;
     this.documentId = null;
@@ -272,7 +326,8 @@ export class EntryController {
     if (this.state.kind !== "unavailable" || this.state.waiting) return Promise.resolve();
     const route = this.route();
     if (route === "profile") {
-      if (this.gate.snapshot().closedWindow) return Promise.resolve();
+      // P3-3: the profile button follows the rule of the button — its click may end in the guarded first open (В4-Б).
+      if (this.gate.snapshot().closedWindow || !this.gate.mayWrite()) return Promise.resolve();
       this.profileOnly = true;
       return this.run(this.session === null).finally(() => { this.profileOnly = false; });
     }
@@ -301,15 +356,35 @@ export class EntryController {
   }
 
   /**
+   * The button of the expired screen (C163/22.1-А; P03 §4.6, AC-104; P02-W К-Т12о, :560): one new sign-in in the same
+   * window after a 401. auth (and register, if the stored installation has no proof) are L2 exceptions (§4.1 п.2,
+   * POST_ROUTES); a successful auth is no working document. The open that follows is the FIRST open of a new document
+   * (resetInvalidSession dropped the old one: п.8б (2)) and goes to L2 only if, in the same synchronous stretch, the window
+   * is visible and mayWrite holds; else nothing of it leaves and the expired screen comes back (ReentryHeld). A failure
+   * before that open reached L2 also brings the expired screen back; after it, the ordinary rules of the first open apply
+   * (§4.13 В/Б, п.8б (5)). Never the `unavailable` button (AC-102); ready, a show or a timer never call it.
+   */
+  reenter(): Promise<void> {
+    if (this.running) return this.running;
+    const state = this.state;
+    if (state.kind !== "expired" || !state.reentry || !state.checkable) return Promise.resolve();
+    if (this.session !== null || !this.options.initData || this.initDataRefused || this.replaced || this.closed || this.disposed
+      || this.hidden || !this.gate.mayWrite()) return Promise.resolve();
+    return this.run(true, true);
+  }
+
+  /**
    * The window is hidden or shown (App's visibilitychange/pageshow). Hidden: the next show is one show (ВР-4) — the
    * first foreground() after it spends it. Hidden windows send no recovery foreground (ВР-3).
    */
   setVisible(visible: boolean): void {
     if (visible === !this.hidden) return;
     this.hidden = !visible;
-    if (this.hidden) this.showPending = true;
+    if (this.hidden) { this.showPending = true; return; }
+    // Store §6: the page shown again repeats the cleanup of a profile this page knows deleted.
+    void this.deletedProfiles.retry();
     // N3 (C365): a first open held by the gate, or the foreground after a confirmed own stop, waits for a visible window.
-    else for (const wake of [...this.waiters]) wake();
+    for (const wake of [...this.waiters]) wake();
   }
 
   /**
@@ -386,18 +461,55 @@ export class EntryController {
     return this.getOpenedAccess() !== null || this.getBusyAccess() !== null;
   }
 
-  private run(authenticate: boolean): Promise<void> {
+  private run(authenticate: boolean, reentry = false): Promise<void> {
     if (this.replaced) return Promise.resolve();
     this.remote?.dispose();
     this.remote = null;
     const generation = ++this.generation;
+    this.guarded = reentry ? { generation, kind: "reentry" } : null;
     const task = this.execute(generation, authenticate).catch((error: unknown) => {
-      if (this.current(generation)) this.fail(error);
+      if (!this.current(generation)) return;
+      const guard = this.guarded?.generation === generation ? this.guarded.kind : null;
+      if (guard && this.reentryUnsent(error)) {
+        // Nothing of the document reached L2 (a held open, or auth/register failed by transport, a pause or an unreadable
+        // reply): no working document, no open attempt. C163: the expired screen and its button by the gate. В4-Б: the
+        // profile button again (it reads the profile anew; the same first open may follow, no other ID is made).
+        this.session = null;
+        if (guard === "profile") { this.profileRefresh = true; this.emit(this.unavailableState()); }
+        else this.emit(this.expiredState());
+        return;
+      }
+      // The first open of the profile route reached L2 and failed: its conflict proves nothing any more (route В follows).
+      if (guard === "profile") { this.conflictedAccessVersion = null; this.conflictedProfileId = null; }
+      this.fail(error);
     }).finally(() => {
+      if (this.guarded?.generation === generation) this.guarded = null;
       if (this.running === task) this.running = null;
     });
     this.running = task;
     return task;
+  }
+
+  /**
+   * The re-entry ended before its open of the new document reached L2 (ReentryHeld, or any failure of auth/register but a
+   * refusal of the sign-in or of the access). 401 and 403 keep their own states (fail: expired, the stop of §4.13).
+   */
+  private reentryUnsent(error: unknown): boolean {
+    if (this.documentId !== null && this.gate.openAttempted(this.documentId)) return false;
+    if (error instanceof ReentryHeld) return true;
+    return !(error instanceof EntryApiError && error.kind === "http" && (error.status === 401 || error.status === 403));
+  }
+
+  /**
+   * 401: the state of a new sign-in (P03 §4.6; pending stay). With signed initData the core has not refused yet (Н4: after
+   * a 401 to auth itself, no retry with the same data) the page offers the re-entry of C163/AC-104; its button follows
+   * the rule of the button (§4.1, C335): visible, active by mayWrite, else the wait of §4.8.
+   */
+  private expiredState(): EntryState {
+    if (!this.options.initData || this.initDataRefused || this.gate.snapshot().closedWindow) return { kind: "expired" };
+    const checkable = this.gate.mayWrite();
+    const wait = checkable ? null : gateWait(this.gate, { pending: this.gate.hasUnsettledPending() });
+    return { kind: "expired", reentry: true, ...(checkable ? { checkable: true as const } : {}), ...(wait ? { wait } : {}) };
   }
 
   private fail(error: unknown): void {
@@ -410,7 +522,7 @@ export class EntryController {
     this.recovery = "none";
     this.resetInvalidSession(error);
     if (deletedBy(error)) { this.emit({ kind: "profile_deleted" }); return; }
-    if (expiredBy(error)) { this.emit({ kind: "expired" }); return; }
+    if (expiredBy(error)) { this.emit(this.expiredState()); return; }
     // К-9: a window without a working document met a planned pause (on open, auth or register) or a gate that kept its
     // open on the client: a wait screen without a button until ready and the end of the hold, then К-7 — no open.
     if (this.gate.snapshot().lastWorkingDoc === null
@@ -420,6 +532,14 @@ export class EntryController {
       return;
     }
     this.emit(this.unavailableState());
+  }
+
+  /** В4-Б: the page has never handed an open to L2 and has no document (P03 п.8б (1): the first open of the page). */
+  private firstOpenOfPage(): boolean {
+    const gate = this.gate.snapshot();
+    return !this.closed && !this.replaced && !this.disposed && !gate.closedWindow && this.gate.gateDoc() === null
+      && gate.lastWorkingDoc === null && gate.openAttempts.length === 0
+      && (this.documentId === null || !this.gate.openAttempted(this.documentId));
   }
 
   /**
@@ -436,7 +556,7 @@ export class EntryController {
 
   private failureState(error: unknown): EntryState {
     if (deletedBy(error)) return { kind: "profile_deleted" };
-    return expiredBy(error) ? { kind: "expired" } : this.unavailableState();
+    return expiredBy(error) ? this.expiredState() : this.unavailableState();
   }
 
   private unavailableState(options: { waiting?: true } = {}): EntryState {
@@ -446,9 +566,9 @@ export class EntryController {
       return { kind: "unavailable", waiting: true, ...(wait ? { wait } : {}) };
     }
     const route = this.route();
-    const checkable = route === "profile" ? !this.gate.snapshot().closedWindow
+    const checkable = route === "profile" ? !this.gate.snapshot().closedWindow && this.gate.mayWrite()
       : route !== "blocked" && this.session !== null && this.gate.checkButtonActive();
-    const wait = route !== "blocked" && route !== "profile" && !checkable ? gateWait(this.gate, { pending }) : null;
+    const wait = route !== "blocked" && !checkable ? gateWait(this.gate, { pending }) : null;
     // Route В is the plain unavailable state: its button is visible and blocked until Я19 (EntryScreen).
     return { kind: "unavailable", ...(route === "blocked" ? {} : { route }), ...(checkable ? { checkable: true as const } : {}),
       ...(wait ? { wait } : {}) };
@@ -585,6 +705,7 @@ export class EntryController {
     let next: EntryState | null = null;
     if (current.kind === "opened") next = this.openedState();
     else if (current.kind === "unavailable") next = this.unavailableState(current.waiting ? { waiting: true } : {});
+    else if (current.kind === "expired" && current.reentry) next = this.expiredState();
     else if (current.kind === "rejected" && !current.closed) next = this.rejectedState(current);
     if (next && JSON.stringify(next) !== JSON.stringify(current)) this.emit(next, this.session?.profile);
   }
@@ -707,16 +828,81 @@ export class EntryController {
     });
   }
 
+  /**
+   * C163 шаг 5: the rights of document A end at once (Z5, like any 403: session, document, locks and tickets go); its
+   * pending records stay in the storage with their IDs, intents, origins and targets. The window shows the re-entry at once
+   * (the expired screen and its button by the rule of the button); nothing is sent until the explicit click.
+   */
+  private enterInstallationRecovery(): void {
+    const installation = this.installation;
+    const profileId = this.session?.profile.profile_id ?? null;
+    this.installationRecovery = { a: installation ? { ...installation } : null, b: null };
+    this.resetInvalidSession(new EntryApiError("http", 403, "FORBIDDEN"));
+    this.reentryProfileId = profileId;
+    this.emit(this.expiredState());
+  }
+
+  /**
+   * C163 шаг 5: the installation of the re-entry after a refused proof. Never A's record (CON:200: a new authorization
+   * makes NEW client_instance_id/registration_id) and never another window's record from the shared storage: the stored
+   * record must be A's as this page knew it, this page's own B, or none; anything else (A with a newer proof — another
+   * window of A registered again —, a foreign B) stops. B with a proof continues; B without one is replaced by a new B
+   * (its registration belonged to the earlier sign-in).
+   */
+  private async prepareInstallationB(profileId: string, generation: number): Promise<boolean> {
+    const recovery = this.installationRecovery!;
+    if (recovery.a === null) return false;
+    const expectedA = recovery.a;
+    const ids = { clientInstanceId: this.options.newId(), registrationId: this.options.newId() };
+    // C163 шаг 6: one atomic mutation over the ACTUAL record (writer 2, decideB): exactly A as this page knew it, this
+    // page's own B, or none; a fresher A or another window's B is "foreign" — nothing written, no register/open.
+    const before = this.installation;
+    const outcome = await this.store.mutate(profileId, () => this.current(generation),
+      current => decideB(current, profileId, expectedA, recovery.b, ids));
+    // The write may have happened; a context that ended meanwhile still sends nothing (installationStore.ts contract).
+    const record = this.settleInstallationWrite(outcome, generation, before);
+    if (!record) return false;
+    recovery.b = record;
+    this.installation = record;
+    return true;
+  }
+
+  /**
+   * C163 шаг 6 — the outcome mapping of a store mutation (C414, prototype; not yet accepted): only "applied" or "current"
+   * of a context still live gives a record to go on with. A write that happened for a context that ended ("applied"
+   * after it, or the store's "late") is not acted on and not rolled back — this page only forgets its memory of the
+   * record, so the next run reads the actual one. "conflict" (incl. "invalid", fail-closed), "cancelled", "unsupported",
+   * "failed", "unknown" — no record: no register, no open; "unknown" is never read as «no record» or as a reason for a
+   * new A.
+   */
+  private settleInstallationWrite(outcome: { kind: string }, generation: number, before: StoredInstallation | null): StoredInstallation | null {
+    // K2 (store canon §4, ред.1.2): the store may answer applied/current to a context that has ended — Entry checks it
+    // after the await for EVERY outcome. late, or applied/current of an ended context: act on nothing, roll nothing back,
+    // forget the memory of the record — unless a newer run of this page already set its own meanwhile.
+    // Store §6 «после восстановления store»: the store answered again — a known deleted profile is cleaned once more.
+    if (outcome.kind === "applied" || outcome.kind === "current" || outcome.kind === "late") void this.deletedProfiles.retry();
+    if (!this.current(generation) || outcome.kind === "late") {
+      if (this.installation === before) this.installation = null;
+      return null;
+    }
+    // conflict (incl. invalid: fail-closed), cancelled, failed, unknown, unavailable, unsupported: no record — no
+    // register, no open. unavailable is never current(null) and never a reason to read the legacy record.
+    return outcome.kind === "applied" || outcome.kind === "current" ? (outcome as unknown as { result: StoredInstallation }).result : null;
+  }
+
   private resetInvalidSession(error: unknown): void {
     if (!(error instanceof EntryApiError) || error.kind !== "http"
       || (error.status !== 401 && error.status !== 403)) return;
+    // P3-5: the re-entry after this 401 continues only for the same profile (reentryProfileId, execute).
+    if (error.status === 401 && this.session) this.reentryProfileId = this.session.profile.profile_id;
     // The sign-in ended (401): the journal waits for the next one. A lost admission or a deleted profile (403) ends it
     // and clears its buffer (P04 r9 §3.8); another 403 (a refused proof) only stops its sending.
     if (error.status === 403 && (error.code === "PROFILE_DELETED" || error.code === "ACCESS_PENDING" || error.code === "ACCESS_REJECTED")) {
       journalAccess.revoke(true);
       // CON §7.3 п.2, P04 §8: after PROFILE_DELETED (also on another device) the local records of X go too.
       const deleted = this.session?.profile.profile_id;
-      if (error.code === "PROFILE_DELETED" && deleted) void wipeProfileRecords(this.options.storage, deleted);
+      // Store §6: forget in IndexedDB first, then localStorage; repeated while this page knows X is deleted.
+      if (error.code === "PROFILE_DELETED" && deleted) void this.deletedProfiles.note(deleted);
     } else {
       journalAccess.credentials(null);
       if (error.status === 401) journalAccess.revoke(false);
@@ -742,13 +928,23 @@ export class EntryController {
     this.emit({ kind: "checking" });
     if (authenticate) {
       if (!this.options.initData) { this.emit(this.unavailableState()); return; }
-      const response = await this.options.api.auth({
-        init_data: this.options.initData,
-        client_version: this.options.clientVersion,
-        contract_version: this.options.contractVersion,
-        saved_language: this.options.savedLanguage,
-        browser_language: this.options.browserLanguage,
-      });
+      let response: AuthResponse;
+      try {
+        response = await this.options.api.auth({
+          init_data: this.options.initData,
+          client_version: this.options.clientVersion,
+          contract_version: this.options.contractVersion,
+          saved_language: this.options.savedLanguage,
+          browser_language: this.options.browserLanguage,
+        });
+      } catch (error) {
+        // Н4: a definite refusal of auth itself by the core — 401 AUTH_EXPIRED/AUTH_INVALID (initData older than max_age or
+        // invalid), or another coded 4xx but 403/429 (P3-2: 422 and the like) — means these signed data cannot sign in
+        // again. A bare 401 without the core's code (P3-1), a 429, transport or a pause refuse nothing of the data.
+        if (error instanceof EntryApiError && error.kind === "http" && error.code !== undefined && error.status !== undefined
+          && error.status >= 400 && error.status < 500 && error.status !== 403 && error.status !== 429) this.initDataRefused = true;
+        throw error;
+      }
       if (!this.current(generation)) return;
       this.session = response;
     }
@@ -765,11 +961,26 @@ export class EntryController {
       return;
     }
     const profile = session.profile;
+    // P3-5: a re-entry that signed in as another profile than the one whose session ended stops here (no screen, no open).
+    if (this.guarded?.generation === generation && this.guarded.kind === "reentry" && this.reentryProfileId !== null
+      && profile.profile_id !== this.reentryProfileId) {
+      this.session = null;
+      this.emit(this.unavailableState());
+      return;
+    }
     // The client journal exists only for an admitted profile: a pending or rejected one has none, and any other
     // profile's buffer is dropped (events TZ §4.5; P04 r9 §2.7).
     if (profile.access.status === "admitted") journalAccess.admit(profile.profile_id);
     else journalAccess.revoke(true);
     if (!this.acceptProfile(profile)) throw new EntryApiError("invalid_response");
+    // В4 (C390): after a VERSION_CONFLICT the refreshed profile is the conflicted one's and newer than the access version
+    // the refused reapply expected — for every status, not only rejected; else it proves nothing current.
+    if (this.conflictedAccessVersion && (profile.profile_id !== (this.conflictedProfileId ?? profile.profile_id)
+      || !newerVersion(profile.access.version, this.conflictedAccessVersion))) {
+      this.session = null;
+      this.emit(this.unavailableState());
+      return;
+    }
     if (profile.access.status === "pending") {
       await this.dropSettledReapplyIntent(profile.profile_id);
       if (!this.current(generation)) return;
@@ -795,30 +1006,68 @@ export class EntryController {
           return;
         }
         this.conflictedAccessVersion = null;
+        this.conflictedProfileId = null;
       }
       this.emit(this.rejected(profile), profile);
       return;
     }
-    // The profile refresh after a VERSION_CONFLICT (route «profile») ends with the profile: it opens no document.
-    if (this.profileOnly) { this.profileOnly = false; this.emit(this.unavailableState()); return; }
+    // The profile refresh after a VERSION_CONFLICT (route «profile», C373): no old reapply ID, no side open. В4-Б (C390): an
+    // admitted current profile continues the page's ORIGINAL entry only while that is truly its first open — no document
+    // of reference, no working document, no L2 attempt of any open on this page; its open is guarded (visible ∧ mayWrite
+    // right before L2). Otherwise the profile screen stays (a named remainder), nothing opens.
+    if (this.profileOnly) {
+      this.profileOnly = false;
+      // P2-2 (pre-QA C163): only a proven 409 VERSION_CONFLICT (its strict actuality was checked above) continues the first
+      // entry. Every other reason of route «profile» — a committed reapply whose later step failed (ACCESS_* 403 on
+      // register/open, a cleanup failure), an unreadable reply — keeps the old stop: the profile, no open (C390 В3).
+      const conflicted = this.conflictedAccessVersion !== null && this.conflictedProfileId !== null;
+      if (!conflicted || !this.firstOpenOfPage()) {
+        // P3 (pre-QA 3b): no first open is possible by this route any more — its button stops honestly (route В, blocked)
+        // instead of reading the profile again and again; the proof of a conflict is void here.
+        this.profileRefresh = false;
+        this.conflictedAccessVersion = null;
+        this.conflictedProfileId = null;
+        this.emit(this.unavailableState());
+        return;
+      }
+      // The conflict marks stay until the first open has been answered: a click held before L2 may come again.
+      this.guarded = { generation, kind: "profile" };
+    }
     this.emit({ kind: "opening" }, profile);
-    await this.prepareInstallation(profile.profile_id);
+    if (this.installationRecovery !== null && this.guarded?.generation === generation && this.guarded.kind === "reentry") {
+      // C163 шаг 5: the fresh same profile is admitted — B, never A (prepareInstallationB); a record it may not take stops.
+      if (!await this.prepareInstallationB(profile.profile_id, generation)) {
+        if (!this.current(generation)) return;
+        this.session = null;
+        this.emit(this.unavailableState());
+        return;
+      }
+    } else if (!await this.prepareInstallation(profile.profile_id, generation)) {
+      // C163 шаг 6: an invalid record (fail-closed: never a new A over it), a conflict or no safe store — no register/open.
+      if (!this.current(generation)) return;
+      this.emit(this.unavailableState());
+      return;
+    }
     if (!this.current(generation)) return;
     if (!this.installation) throw new Error("Missing installation");
     if (!this.installation.proof) await this.register(session.access_token, generation);
     if (!this.current(generation)) return;
     // T28s (§4.10, R1): a page closed by the outage mark does not hand its first open to L2 before mayWrite (ready, the
     // hold end, a fresh probe): it waits without a button; no PAUSED_BEFORE_SEND, nothing in openAttempts meanwhile.
-    if (this.gate.outageAtStart && !this.gate.openAttempted(this.documentId ?? "")) {
+    if (this.guarded?.generation !== generation && this.gate.outageAtStart && !this.gate.openAttempted(this.documentId ?? "")) {
       if (!await this.waitWritable(generation)) return;
       this.emit({ kind: "opening" }, profile);
     }
     let stamp: RequestStamp | null = null;
     try {
-      await this.open(session.access_token, generation, "open", "auto", issued => { stamp = issued; });
+      await this.open(session.access_token, generation, "open", this.guarded?.generation === generation ? "user" : "auto",
+        issued => { stamp = issued; });
     } catch (error) {
       if (!(error instanceof EntryApiError) || error.kind !== "http" || error.status !== 403
-        || this.installation?.activated || !this.proofIssuedThisSession || !this.current(generation)) throw error;
+        || this.installation?.activated || !this.proofIssuedThisSession || !this.current(generation)
+        // C163 шаг 5: a refusal of B's first open ends the recovery — no repeat, no cycle.
+        || (this.installationRecovery?.b ?? null) !== null
+          && this.installationRecovery!.b!.clientInstanceId === this.installation?.clientInstanceId) throw error;
       // A late registration may have replaced a proof before this open reached the server. Only a definite 403
       // FORBIDDEN of the core (given before any change, clients.py:237–239) allows one repeat of the same document's
       // open (п.8б (5)): the gate takes the stamp of that very request; any other 403 ends here (ВР-10а).
@@ -831,6 +1080,11 @@ export class EntryController {
       }
       if (!this.current(generation)) { this.gate.dropRetryAfter403(); return; }
       await this.open(session.access_token, generation);
+    }
+    // В4-Б: the first open of the profile route was answered; its conflict proves nothing for any later run.
+    if (this.guarded?.generation === generation && this.guarded.kind === "profile") {
+      this.conflictedAccessVersion = null;
+      this.conflictedProfileId = null;
     }
   }
 
@@ -855,24 +1109,33 @@ export class EntryController {
     }
   }
 
-  private async prepareInstallation(profileId: string): Promise<void> {
-    if (this.installation?.profileId === profileId) return;
-    const stored = await readInstallation(this.options.storage, profileId);
-    if (stored?.proof && stored.proofVersion) {
-      this.installation = stored;
-      return;
+  /**
+   * Writer 1 (C163 шаг 6, decideA): the record of the ordinary entry, decided on the ACTUAL record under the store's
+   * lock — a record with a proof is reused, none or one without a proof (an earlier sign-in's registration) is replaced by
+   * new IDs. An invalid record is fail-closed (no new A over it). Without a safe store ("unsupported") only a valid,
+   * activated record with a proof may be used by a plain read — it needs no write before open; anything else stops.
+   */
+  private async prepareInstallation(profileId: string, generation: number): Promise<boolean> {
+    if (this.installation?.profileId === profileId) return true;
+    const ids = { clientInstanceId: this.options.newId(), registrationId: this.options.newId() };
+    const before = this.installation;
+    const outcome = await this.store.mutate(profileId, () => this.current(generation), current => decideA(current, profileId, ids));
+    let record = this.settleInstallationWrite(outcome, generation, before);
+    if (!this.current(generation)) return false;
+    // §5 (store canon, C423 п.1): ONLY when the IndexedDB API is reliably absent ("unsupported" no-indexeddb) — one strict
+    // read-only legacy read of this profile; a valid activated A with a proof and its version opens by the existing open
+    // with no installation write and no register (open() skips the activated write, register needs no proof). Never for
+    // unavailable/failed/unknown/invalid; never a write, an import or a mirror; anything else → no open.
+    if (!record && outcome.kind === "unsupported" && (outcome as { reason?: string }).reason === "no-indexeddb"
+      && "readLegacy" in this.store) {
+      const legacy = await (this.store as IdbInstallationStore).readLegacy(profileId);
+      if (!this.current(generation)) return false;
+      if (legacy.kind === "found" && legacy.openable && legacy.record.profileId === profileId && legacy.record.activated
+        && legacy.record.proof && legacy.record.proofVersion) record = legacy.record;
     }
-    // Without a saved proof, a pending registration belongs to its old auth session.
-    const created: Installation = {
-      profileId,
-      clientInstanceId: this.options.newId(),
-      registrationId: this.options.newId(),
-      proof: null,
-      proofVersion: null,
-      activated: false,
-    };
-    await writeInstallation(this.options.storage, created);
-    this.installation = created;
+    if (!record) return false;
+    this.installation = record;
+    return true;
   }
 
   private async register(token: string, generation: number): Promise<void> {
@@ -889,15 +1152,23 @@ export class EntryController {
       return;
     }
     if (!response.origin_proof || response.activated) throw new Error("Invalid registration");
-    if (installation.proofVersion && newerVersion(installation.proofVersion, response.proof_version)) return;
-    const updated: Installation = {
-      ...installation, proof: response.origin_proof, proofVersion: response.proof_version,
-    };
-    await writeInstallation(this.options.storage, updated);
-    if (this.current(generation)) {
-      this.installation = updated;
-      this.proofIssuedThisSession = true;
+    // Writer 3 (C163 шаг 6, decideRegister): the reply belongs only to the IDs that were sent; the highest version is read
+    // from the ACTUAL record; activated is never lowered; a late reply never replaces another record (late A after B).
+    const sent = { profileId: installation.profileId, clientInstanceId: installation.clientInstanceId, registrationId: installation.registrationId };
+    const reply = { proof: response.origin_proof, proofVersion: response.proof_version };
+    const before = this.installation;
+    const outcome = await this.store.mutate(installation.profileId, () => this.current(generation),
+      current => decideRegister(current, sent, reply));
+    const record = this.settleInstallationWrite(outcome, generation, before);
+    if (!this.current(generation)) return;
+    if (!record) throw new Error("Installation not stored"); // conflict / no safe store / failed / unknown: no open follows
+    this.installation = record;
+    // 6b (P2-6A): this page's own B is known by its full record from now on (its proof included).
+    const recovery = this.installationRecovery;
+    if (recovery?.b && recovery.b.clientInstanceId === record.clientInstanceId && recovery.b.registrationId === record.registrationId) {
+      recovery.b = record;
     }
+    if (record.proof === reply.proof) this.proofIssuedThisSession = true;
   }
 
   /**
@@ -919,6 +1190,12 @@ export class EntryController {
     // After DOCUMENT_STALE an open of this document would make it live again, taking it from the newer window
     // (question 2.30 is open). Only a foreground may ask until an answer confirms the document.
     if (this.staleHint) event = "foreground";
+    // C163 re-entry: its open goes to L2 only from a visible window whose gate lets it go — the same synchronous stretch as
+    // admit (no await from here to fetch); else nothing leaves and the expired screen comes back.
+    if (event === "open" && this.guarded?.generation === generation && (this.hidden || !this.gate.mayWrite())) {
+      this.gate.dropRetryAfter403(); // an allowance of п.8б (5) never outlives an open that did not go
+      throw new ReentryHeld();
+    }
     // A new document of this installation always becomes the live one (decision 2.3): no lock flag, no confirmation.
     const request: OpenRequest = {
       client_instance_id: installation.clientInstanceId,
@@ -1014,14 +1291,30 @@ export class EntryController {
     const working = this.gate.snapshot().lastWorkingDoc;
     // ВР-8: the same document with another epoch or profile than the last confirmed one is no identity.
     if (verify && (!working || !sameGateDoc(working, doc))) throw new IdentityRefused("identity");
-    const updated = { ...installation, activated: true };
-    await writeInstallation(this.options.storage, updated);
-    if (!this.current(generation)) return;
-    this.installation = updated;
+    // Writer 4 (C163 шаг 6, decideActivated): only the flag of the actual record of this installation; a fresher proof
+    // there is kept, never rewritten from this snapshot.
+    // An installation already activated needs no write (also where the store is "unsupported": C405 p.«unsupported», C410/C414).
+    if (!installation.activated) {
+      const before = this.installation;
+      const outcome = await this.store.mutate(installation.profileId, () => this.current(generation),
+        current => decideActivated(current, installation));
+      const activated = this.settleInstallationWrite(outcome, generation, before);
+      if (!this.current(generation)) return;
+      // Not stored (no safe store, or the record is no longer this installation): as before, the open fails (no working
+      // document from a record this page cannot keep).
+      if (!activated) throw new Error("Installation not stored");
+      this.installation = activated;
+    }
     const access: OpenedAccess = createOpenedAccess({ opened, token, proof: installation.proof, generation,
       isLive: () => this.current(generation) && this.state.kind === "opened" && this.openedAccess === access,
       onDenied: error => {
         this.generation += 1; // A pending foreground reply must not restore revoked access.
+        // C163 шаг 5: only the narrow candidate (commands/proofRefusal.ts), only once per page, leads to the re-entry
+        // of a new installation; every other 401/403 keeps its own state.
+        if (this.installationRecovery === null && proofRefusalCandidate(error, access.document)) {
+          this.enterInstallationRecovery();
+          return;
+        }
         this.resetInvalidSession(error);
         this.emit(this.failureState(error));
       },
@@ -1069,7 +1362,7 @@ export class EntryController {
           if (snapshot.pending || snapshot.phase === "blocked") {
             if (snapshot.problem === "expired" || snapshot.problem === "forbidden") {
               this.resetInvalidSession(new EntryApiError("http", snapshot.problem === "expired" ? 401 : 403));
-              this.emit({ kind: snapshot.problem === "expired" ? "expired" : "unavailable" });
+              this.emit(snapshot.problem === "expired" ? this.expiredState() : { kind: "unavailable" });
               return;
             }
             this.emit({ kind: "remote", remote: snapshot }, this.session?.profile);
@@ -1256,6 +1549,7 @@ export class EntryController {
         this.reapplyRegistry.release();
         this.conflictedIntentId = this.reapplyIntent?.commandId ?? null;
         this.conflictedAccessVersion = this.reapplyIntent?.expectedAccessVersion ?? null;
+        this.conflictedProfileId = session.profile.profile_id;
         this.reapplyIntent = null;
         this.session = null;
         try {
@@ -1299,6 +1593,9 @@ export class EntryController {
    * itself. deleted — the result S-A07; unknown — «исход неизвестен» with the explicit sign-in (start()); expired —
    * AUTH_* on the first attempt, the ordinary expired screen.
    */
+  /** PD-28 after the explicit sign-in named another profile: the earlier one is deleted (App, deletionCheckResult). */
+  profileDeleted(profileId: string): void { void this.deletedProfiles.note(profileId); }
+
   endAfterDeletion(end: DeletionEnd): void {
     if (this.disposed || this.replaced) return;
     this.generation += 1; // A pending foreground reply must not reopen the document.

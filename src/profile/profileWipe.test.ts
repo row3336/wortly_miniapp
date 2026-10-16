@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { AsyncStorage } from "../platform/storage";
 import { memoryStorage } from "./profileStorage.test-support";
-import { NOT_PROFILE_RECORDS, PROFILE_KEYED, SHARED_SLOTS, wipeProfileRecords } from "./profileWipe";
+import { IDB_STORES, NOT_PROFILE_RECORDS, PROFILE_KEYED, SHARED_SLOTS, wipeProfileRecords } from "./profileWipe";
 
 const X = "00000000-0000-4000-8000-0000000000AA", Y = "00000000-0000-4000-8000-0000000000bb";
 const x = X.toLowerCase();
@@ -25,7 +25,8 @@ describe("wipeProfileRecords (P04 §8: the local records of a deleted profile)",
       "wortly.pending.oral_session": "not json",
     });
     const result = await wipeProfileRecords(storage, X);
-    expect(result).toEqual({ removed: 7, failed: 0 });
+    // Without an installation store nothing is «стёрто», whatever localStorage did (store §6).
+    expect(result).toEqual({ installation: { kind: "no-store" }, local: { removed: 7, failed: 0 }, wiped: false });
     expect([...values.keys()].sort()).toEqual([
       `wortly.installation:${Y}`, "wortly.pending.feedback", "wortly.pending.oral_session",
       `wortly.pending.settings-reset:profile:${Y}`, "wortly.uiLanguage",
@@ -39,13 +40,14 @@ describe("wipeProfileRecords (P04 §8: the local records of a deleted profile)",
       async remove() { throw new Error("denied"); },
     };
     const result = await wipeProfileRecords(storage, X);
-    expect(result.removed).toBe(0);
-    expect(result.failed).toBeGreaterThan(0);
+    expect(result.local.removed).toBe(0);
+    expect(result.local.failed).toBeGreaterThan(0);
+    expect(result.wiped).toBe(false);
   });
 
   it("an ID that is not a profile UUID touches nothing", async () => {
     const { storage, writes } = memoryStorage({ "wortly.installation:x": "{}" });
-    expect(await wipeProfileRecords(storage, "x")).toEqual({ removed: 0, failed: 0 });
+    expect(await wipeProfileRecords(storage, "x")).toEqual({ installation: { kind: "no-store" }, local: { removed: 0, failed: 0 }, wiped: false });
     expect(writes).toEqual([]);
   });
 });
@@ -75,5 +77,22 @@ describe("the inventory of local keys", () => {
       ? !modes.every(mode => known.has(literal.replace("${mode}", mode))) : !known.has(literal));
     expect(unclassified).toEqual([]);
     expect(literals.size).toBeGreaterThanOrEqual(15);
+  });
+
+  it("classifies every IndexedDB database/store of src (store §6: forget, revoke or kept); a new name without a class fails", () => {
+    const names = new Set<string>();
+    for (const file of sources(join(__dirname, ".."))) {
+      const code = readFileSync(file, "utf8");
+      const databases = [...code.matchAll(/_DATABASE\s*=\s*["']([^"']+)["']/g)].map(match => match[1]);
+      const stores = [...code.matchAll(/_STORE\s*=\s*["']([^"']+)["']/g)].map(match => match[1]);
+      for (const database of databases) {
+        if (stores.length === 0) names.add(database);
+        for (const store of stores) names.add(`${database}/${store}`);
+      }
+    }
+    expect([...names].filter(name => !Object.hasOwn(IDB_STORES, name))).toEqual([]);
+    expect([...names].sort()).toEqual(Object.keys(IDB_STORES).sort());
+    expect(IDB_STORES["wortly_installation/installations"]).toBe("forget");
+    expect(IDB_STORES["wortly_journal/buffers"]).toBe("revoke");
   });
 });

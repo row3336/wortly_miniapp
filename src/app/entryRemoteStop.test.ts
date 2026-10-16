@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
+import { TestEntryController } from "./entryInstallation.test-support";
 import type { EntryApi } from "../api/entryApi";
 import { ApiError } from "../api/http";
 import type { Profile, SessionStopRemoteCommand } from "../api/generated";
 import type { AsyncStorage } from "../platform/storage";
 import type { RemoteSessionApi, RemoteStopReply, RemoteStopStatus } from "../study/remoteSessionApi";
 import { RemoteStopPendingStore } from "../study/remoteStopPending";
-import { EntryController, type EntrySnapshot } from "./entryController";
+import type { EntrySnapshot } from "./entryController";
 import type { TodayApi } from "../today/todayApi";
 import { ClosedAccessError } from "./openedAccess";
 import { freshTestGate } from "../commands/testGate.test-support";
@@ -52,7 +53,7 @@ function fixture() {
   const updates: EntrySnapshot[] = [];
   const release = vi.fn();
   const todayApi: TodayApi = { get: vi.fn() };
-  const make = () => new EntryController({ gate: freshTestGate(), api, today: todayApi, remote: { api: remoteApi, pendingStore }, storage,
+  const make = () => new TestEntryController({ gate: freshTestGate(), api, today: todayApi, remote: { api: remoteApi, pendingStore }, storage,
     lock: { acquire: vi.fn(async () => ({ release })) }, initData: "synthetic-init", savedLanguage: "ru", browserLanguage: "ru",
     clientVersion: "0.0.0", contractVersion: "1", timeZone: () => "UTC", newId: () => id(nextId++),
     onUpdate: snapshot => updates.push(snapshot) });
@@ -104,7 +105,7 @@ describe("Entry remote confirmation integration", () => {
     finish({ status: "SESSION_BUSY", profile: profile("3"), compatibility: { compatible: true, contract_version: "1" },
       session: { status: "busy", stop_remote_target: id(50) } });
     await refresh;
-    expect(f.latest()).toEqual({ kind: status === 401 ? "expired" : "unavailable" });
+    expect(f.latest()).toEqual(status === 401 ? { kind: "expired", reentry: true, checkable: true } : { kind: "unavailable" });
     expect(f.controller.getBusyAccess()).toBeNull(); expect(f.controller.getOpenedAccess()).toBeNull();
     expect(f.release).toHaveBeenCalledOnce();
   });
@@ -222,7 +223,7 @@ describe("Entry remote confirmation integration", () => {
     const f = fixture(); await f.controller.start();
     vi.mocked(f.remoteApi.stop).mockRejectedValueOnce(new ApiError("http", status));
     f.controller.requestRemoteStop(); await f.controller.confirmRemoteStop();
-    expect(f.latest()).toEqual({ kind: status === 401 ? "expired" : "unavailable" });
+    expect(f.latest()).toEqual(status === 401 ? { kind: "expired", reentry: true, checkable: true } : { kind: "unavailable" });
     expect(f.controller.getOpenedAccess()).toBeNull(); expect(f.release).toHaveBeenCalledOnce();
     expect(f.values.has("wortly.pending.remote_stop")).toBe(true);
   });

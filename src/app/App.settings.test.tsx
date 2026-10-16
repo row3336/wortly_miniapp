@@ -460,7 +460,7 @@ describe("Settings in the real App document", () => {
   it.each([401, 403])("revokes the document after a current settings refusal (%s)", async status => {
     const f = fixture(); f.settingsReply.mockImplementationOnce(async () => json({ error: { code: "DENIED" } }, status));
     render(<App />);
-    await screen.findByText(status === 401 ? "Закрой приложение и снова нажми кнопку Wortly в боте." : "Не удалось открыть Wortly");
+    await screen.findByText(status === 401 ? "Нажми «Попробовать ещё раз», чтобы подтвердить вход в этом окне. Если не получится, закрой приложение и снова нажми кнопку Wortly в боте." : "Не удалось открыть Wortly");
     expect(screen.queryByRole("heading", { name: "Настройки", level: 1 })).toBeNull();
     expect(screen.queryByRole("button", { name: "Сохранить" })).toBeNull(); expect(f.commandReply).not.toHaveBeenCalled();
   });

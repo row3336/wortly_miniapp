@@ -1,6 +1,7 @@
 // Windows of one installation after decision 2.3 over the real transport, entry API, remote-stop API and
 // browserDocumentLock, each window wired like App.tsx (its HttpOptions tell its own controller of DOCUMENT_STALE).
 import { describe, expect, it, vi } from "vitest";
+import { TestEntryController } from "./entryInstallation.test-support";
 import type { OpenRequest, Profile } from "../api/generated";
 import { createEntryApi } from "../api/entryApi";
 import { createJsonTransport, type HttpOptions } from "../api/http";
@@ -85,7 +86,7 @@ function device(options: { otherSession?: string; locks?: boolean } = {}) {
     let controller: EntryController | null = null;
     const http: HttpOptions = { fetcher: fetcher as unknown as typeof fetch, timeoutMs: 1000, maxResponseBytes: 100000, gate: freshTestGate(),
       onDocumentStale: () => controller?.documentStale() };
-    controller = new EntryController({ gate: freshTestGate(), api: createEntryApi(http), storage, lock: browserDocumentLock(nav),
+    controller = new TestEntryController({ gate: freshTestGate(), api: createEntryApi(http), storage, lock: browserDocumentLock(nav),
       remote: { api: createRemoteSessionApi(http), pendingStore: new RemoteStopPendingStore(storage) },
       initData: "signed", savedLanguage: "ru", browserLanguage: "ru", clientVersion: "0.0.0", contractVersion: "1",
       timeZone: () => "UTC", newId: () => id(next++), onUpdate: ({ state }) => { states.push(state); }, closeWindow });
