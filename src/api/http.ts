@@ -1,3 +1,4 @@
+import { pageServerClock, type ServerClock } from "../commands/serverClock";
 import { clientJournal, journalRecord, journalRefusal } from "../journal/clientJournal";
 import { isCommandKind, isErrorCode, journalId, ATTEMPT_MAX_MS, type CommandReplyEvent } from "../journal/events";
 import { PausedBeforeSendError, type DocMark, type ReadbackTicket, type RequestOrigin, type RequestStamp,
@@ -53,6 +54,8 @@ export type HttpOptions = {
   onDocumentStale?(source: DocumentStaleSource): void;
   /** Overrides clientContractVersion() for the header of every POST. */
   contractVersion?: string;
+  /** The clock fed by the Date of successful answers (default: the page's); tests give their own. */
+  serverClock?: ServerClock;
   /** The trace of each attempt; crypto.randomUUID() by default. */
   newTraceId?(): string;
   /**
@@ -265,6 +268,7 @@ export function createJsonTransport(options: HttpOptions): JsonTransport {
       sent = sentRequest(path, method, body, headers["X-Origin-Proof"], trace);
       request.started?.();
       journal?.started();
+      const sentAt = performance.now();
       const response = await fetcher(url, {
         method, headers, body,
         signal: controller.signal, cache: "no-store", credentials: "same-origin",
@@ -274,6 +278,8 @@ export function createJsonTransport(options: HttpOptions): JsonTransport {
         throw new ApiError("timeout");
       }
       if (!response.ok) refusalStatus = response.status;
+      // D-CP5 10.3: the server's own time of a successful answer, for the pauses of automatic recovery (serverClock.ts).
+      else (options.serverClock ?? pageServerClock).observe(response.headers.get("date"), sentAt, performance.now());
       let value: unknown;
       try { value = await readJson(response, maxResponseBytes, controller.signal); }
       catch (error) {

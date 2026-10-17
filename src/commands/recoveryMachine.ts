@@ -539,6 +539,36 @@ export class RecoveryMachine<I extends { command_id: string }> {
   private lose(): void {
     this.retryDueAt = this.summary !== null ? this.clock.now() + pauseBefore(this.summary.occupied + 1) : null;
     this.remember();
+    this.writeLoss();
+  }
+  /**
+   * D-CP5 10.3 п.2 (C556 В4): the moment the loss was found, by the server clock, goes into the record with the send it
+   * waits for, so another owner of this action (another document of the page) waits only what is left of the pause.
+   * An unknown server time writes nothing: that owner then waits the whole pause (never a shorter one by the device clock).
+   */
+  private writeLoss(): void {
+    // The loss by the upper bound of the server time: an owner that reads it later never counts more time than passed.
+    const server = this.clock.serverBounds?.()?.upper ?? null, summary = this.summary;
+    if (server === null || summary === null || this.discarded) return;
+    const next = summary.occupied + 1;
+    if (next < 2 || next > MAX_SENDS) return;
+    const loss = { server: Math.floor(server), next, device: Math.max(0, Math.floor(Date.now())) };
+    this.summary = { ...summary, loss };
+    this.queue(() => this.budget.setLoss(loss)).catch(() => undefined);
+  }
+  /**
+   * The pause before send next for a machine that found no loss itself (a resumed or re-created owner): the rest after
+   * the loss an earlier owner wrote, counted from the upper bound of the server time at that loss to the lower bound now
+   * (C572: never shorter than the pause from the loss); the whole pause when the loss is not of this send or the server
+   * time is unknown now. A negative elapsed time never lengthens or shortens it.
+   */
+  private pauseLeft(summary: BudgetSummary): number {
+    const next = summary.occupied + 1, pause = pauseBefore(next), loss = summary.loss;
+    const server = this.clock.serverBounds?.()?.lower ?? null;
+    if (loss === null || loss.next !== next || server === null) return pause;
+    // The lower bound of the time since the loss (the delivery time and the rounding of Date both count against it).
+    const elapsed = Math.max(0, server - loss.server);
+    return Math.max(0, pause - elapsed);
   }
   /** Hand the earliest next send to the owner, so a later owner of the same document does not wait the pause again. */
   private remember(): void {
@@ -655,7 +685,7 @@ export class RecoveryMachine<I extends { command_id: string }> {
     if (verdict !== "can_send") { this.counterUnknown(); return; }
     const now = this.clock.now();
     // No known loss time (a resumed action without one): the full pause from now.
-    if (this.retryDueAt === null) { this.retryDueAt = now + pauseBefore(summary.occupied + 1); this.remember(); }
+    if (this.retryDueAt === null) { this.retryDueAt = now + this.pauseLeft(summary); this.remember(); }
     const due = this.held(this.retryDueAt);
     if (now >= due) void this.send();
     else this.retryWait(this.retryDueAt);

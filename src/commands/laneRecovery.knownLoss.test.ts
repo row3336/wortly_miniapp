@@ -138,14 +138,15 @@ describe("a new owner of the same document after a lost send", () => {
     });
   }
 
-  it("gets nothing from another document of the same page and waits its own full pause", async () => {
+  it("C572 (а): another document of the same page waits only the rest of the pause, by the page's monotonic clock", async () => {
     const p = page(), counter = budgets();
     const first = await loseSend(1, p, counter);
     await pass(100); first.dispose(); p.server.down = false;
     await p.until(1_000);
     p.owner(counter, "p1:c1:d2:1").sync();
     await pass(120_000);
-    expect(p.posts()).toEqual([1_000 + RETRY_PAUSES_MS[0]!]);
+    // Before C572 this owner waited its own full pause from its check (1 + 2 s); the norm counts from the loss.
+    expect(p.posts()).toEqual([RETRY_PAUSES_MS[0]!]);
   });
 });
 

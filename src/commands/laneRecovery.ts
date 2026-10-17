@@ -129,8 +129,9 @@ type PageLoss = KnownLoss & { scope: string };
 const losses = new WeakMap<object, Map<string, PageLoss>>();
 /**
  * The earliest next send of each command_id, in the memory of the page (CT §6.1 п. 4): an owner re-created inside the
- * same document (a failed foreground, a reseed) waits only the rest of the pause. Bound to the document (scope): another
- * document gets nothing from here. A reload starts without it (decision 2.3 А: it only checks there anyway).
+ * same document (a failed foreground, a reseed) or another document of this page waits only the rest of the pause —
+ * the page's monotonic clock is the same for all of them (C572 (а)). scope only says which owners keep a loss at all
+ * (none: no loss is kept). A reload starts without it (decision 2.3 А: it only checks there anyway).
  */
 function pageLosses(page: object): Map<string, PageLoss> {
   let map = losses.get(page);
@@ -271,7 +272,9 @@ export class LaneRecovery {
     this.commandId = intent.command_id; this.afterLoss = resumed; this.intent = intent;
     const key = intent.command_id.toLowerCase(), scope = this.scope, known = scope ? pageLosses(this.budgets.page).get(key) : undefined;
     const machine: RecoveryMachine<RecoveryIntent> = new RecoveryMachine({ intent, budget: this.budgets.of(intent), clock: this.clock, active: this.active,
-      knownLoss: resumed && known && known.scope === scope ? { next: known.next, dueAt: known.dueAt, holdUntil: known.holdUntil } : null,
+      // C572 (а): the loss of this action is known to every owner of it in this page, whatever its document: the page's
+      // monotonic clock is the same for all of them, so the rest of the pause is exact without any server time.
+      knownLoss: resumed && known ? { next: known.next, dueAt: known.dueAt, holdUntil: known.holdUntil } : null,
       onLoss: loss => {
         // Only the machine that drives the intent now: a replaced or disposed one never writes over its successor.
         if (!scope || this.machine !== machine) return;

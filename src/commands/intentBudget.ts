@@ -2,7 +2,7 @@ import type { Pair } from "./commandLane";
 import { intentHashSync } from "./intentHash";
 import {
   SendBudgetError,
-  type BudgetBinding, type BudgetFamily, type BudgetSummary, type BudgetTarget, type CreateResult, type ReserveResult,
+  type BudgetBinding, type BudgetFamily, type BudgetLoss, type BudgetSummary, type BudgetTarget, type CreateResult, type ReserveResult,
   type SendBudgetStore, type SlotClaim,
 } from "./sendBudget";
 import { IdbSendBudget } from "./sendBudgetIdb";
@@ -33,6 +33,8 @@ export type RecoveryBudget = {
   release(claim: SlotClaim): Promise<boolean>;
   forbidSends(): Promise<boolean>;
   setMaintenance(met: boolean): Promise<boolean>;
+  /** 2.3.9: when the loss of a reply was found, by the server clock, and the send it waits for (D-CP5 10.3). */
+  setLoss(loss: BudgetLoss): Promise<boolean>;
   /** 2.3.8: only after a proven outcome (D-CP5 9.2). */
   clear(): Promise<boolean>;
   /**
@@ -96,6 +98,7 @@ export function recoveryBudget(source: BudgetSource, binding: () => Promise<Budg
     release: claim => run((store, own) => store.release(own, claim), false),
     forbidSends: () => run((store, own) => store.forbidSends(own), false),
     setMaintenance: met => run((store, own) => store.setMaintenance(own, met), false),
+    setLoss: loss => run((store, own) => store.setLoss(own, loss), false),
     clear: () => run((store, own) => store.clear(own.commandId, own.profileId), false),
     finalRefusal: code => code === "SESSION_CLOSED" || (options.finalRefusal?.(code) ?? false),
     newAttempt: () => (options.newAttempt ?? (() => globalThis.crypto.randomUUID()))(),
