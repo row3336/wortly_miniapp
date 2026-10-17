@@ -1,11 +1,11 @@
 import type { AppOpenEvent, BudgetEvent, ClientErrorEvent, ClientEventBatch, CommandReplyEvent, CommandSendEvent,
-  RecoveryEvent, ScreenEvent, StorageEvent } from "../api/generated";
+  DefectEvent, DeleteEvent, RecoveryEvent, ResetEvent, ScreenEvent, StorageEvent } from "../api/generated";
 
 /**
- * The client journal of the Mini App (events TZ §4.5, R3-03 step 6): the eight c.* events the core's intake accepts
- * (POST /api/v1/client/events, core 30fe429). Every event and every value is on a closed list, checked again here at
- * run time: an event that does not pass is not kept, so no free text — a word, a name, a message, initData, a token —
- * can ever reach the buffer. c.reset, c.defect and c.delete belong to functions not released yet and are not made.
+ * The client journal of the Mini App (events TZ §4.5, R3-03 step 6): the eleven c.* events the core's intake accepts
+ * (POST /api/v1/client/events, core 30fe429; c.reset, c.defect and c.delete since core a4a65e9, DEV-41 C3/M1/M2). Every
+ * event and every value is on a closed list, checked again here at run time: an event that does not pass is not kept, so
+ * no free text — a word, a name, a message, initData, a token — can ever reach the buffer.
  */
 export type ClientEvent = ClientEventBatch["events"][number];
 /** An event as a call site gives it: the device time is stamped by the journal. */
@@ -55,6 +55,19 @@ exact<Exactly<typeof SCREEN_KINDS[number], ScreenEvent["kind"]>>();
 export const REPLY_OUTCOMES = ["applied", "already_applied", "refused", "unknown", "network", "timeout"] as const;
 exact<Exactly<typeof REPLY_OUTCOMES[number], CommandReplyEvent["outcome"]>>();
 
+/** c.reset (P02-R): the reset X or its cancel, and the outcome of X as the client recorded it (events §4.5, C496). */
+export const RESET_KINDS = ["settings.reset", "settings.reset_cancel"] as const;
+exact<Exactly<typeof RESET_KINDS[number], ResetEvent["kind"]>>();
+export const RESET_OUTCOMES = ["applied", "rejected_stale_epoch", "rejected_invalid", "rejected_incompatible", "cancelled",
+  "unknown"] as const;
+exact<Exactly<typeof RESET_OUTCOMES[number], ResetEvent["outcome"]>>();
+/** c.delete (P04): only the outcomes that were not applied; never del (events §4.5, V7). */
+export const DELETE_OUTCOMES = ["refused", "unknown"] as const;
+exact<Exactly<typeof DELETE_OUTCOMES[number], DeleteEvent["outcome"]>>();
+exact<Exactly<ErrorCode, NonNullable<ResetEvent["code"]>>>();
+exact<Exactly<ErrorCode, NonNullable<DefectEvent["code"]>>>();
+exact<Exactly<ErrorCode, NonNullable<DeleteEvent["code"]>>>();
+
 export const ERROR_CLASSES = [
   "Error", "AggregateError", "EvalError", "RangeError", "ReferenceError", "SyntaxError", "TypeError", "URIError",
   "DOMException", "AbortError", "ConstraintError", "DataError", "InvalidStateError", "NetworkError", "NotAllowedError",
@@ -103,6 +116,10 @@ const FIELDS: Record<ClientEvent["ev"], Record<string, { check: Check; required:
   "c.budget": { cmd: req(uuid), n: req(value => whole(value, 0, 100)), outcome: req(value => value === "failed" || value === "cancel_sent") },
   "c.storage": { kind: req(value => value === "storage_read" || value === "storage_write" || value === "idb_unavailable") },
   "c.error": { err: req(value => among(ERROR_CLASSES, value)) },
+  "c.reset": { cmd: req(uuid), kind: req(value => among(RESET_KINDS, value)), outcome: req(value => among(RESET_OUTCOMES, value)),
+    code: opt(isErrorCode) },
+  "c.defect": { cmd: req(uuid), trace: req(uuid), status: req(value => whole(value, 100, 599)), code: opt(isErrorCode) },
+  "c.delete": { cmd: req(uuid), outcome: req(value => among(DELETE_OUTCOMES, value)), code: opt(isErrorCode) },
 };
 function req(check: Check) { return { check, required: true }; }
 function opt(check: Check) { return { check: optional(check), required: false }; }
@@ -148,4 +165,5 @@ export function errorClass(error: unknown): ClientErrorEvent["err"] {
   return "Error";
 }
 
-export type { AppOpenEvent, BudgetEvent, ClientErrorEvent, CommandReplyEvent, CommandSendEvent, RecoveryEvent, ScreenEvent, StorageEvent };
+export type { AppOpenEvent, BudgetEvent, ClientErrorEvent, CommandReplyEvent, CommandSendEvent, DefectEvent, DeleteEvent,
+  RecoveryEvent, ResetEvent, ScreenEvent, StorageEvent };

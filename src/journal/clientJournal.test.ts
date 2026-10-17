@@ -656,3 +656,43 @@ describe("r3: the intake not deployed yet, the order of a clear and a restore, t
     expect(onDocumentStale).not.toHaveBeenCalled();
   });
 });
+
+describe("c.reset, c.defect and c.delete (DEV-41 M1/M2, events §4.5, C496): only their closed fields and values", () => {
+  const cts = "2026-10-16T05:00:00.000Z";
+  it.each([
+    { ev: "c.reset", cmd, kind: "settings.reset", outcome: "applied" },
+    { ev: "c.reset", cmd, kind: "settings.reset_cancel", outcome: "cancelled" },
+    { ev: "c.reset", cmd, kind: "settings.reset", outcome: "rejected_stale_epoch", code: "RESET_EPOCH_STALE" },
+    { ev: "c.reset", cmd, kind: "settings.reset", outcome: "unknown" },
+    { ev: "c.defect", cmd, trace: cmd, status: 422, code: "VALIDATION_FAILED" },
+    { ev: "c.defect", cmd, trace: cmd, status: 100 },
+    { ev: "c.defect", cmd, trace: cmd, status: 599 },
+    { ev: "c.delete", cmd, outcome: "refused", code: "CLIENT_INCOMPATIBLE" },
+    { ev: "c.delete", cmd, outcome: "unknown" },
+  ])("keeps %o as it is", event => {
+    expect(acceptedEvent({ ...event, cts })).toEqual({ ...event, cts });
+  });
+
+  it.each([
+    { ev: "c.reset", cmd, kind: "settings.reset", outcome: "sent" },
+    { ev: "c.reset", cmd, kind: "settings.reset_barrier", outcome: "applied" },
+    { ev: "c.reset", cmd, kind: "setting.save", outcome: "applied" },
+    { ev: "c.reset", kind: "settings.reset", outcome: "applied" },
+    { ev: "c.reset", cmd, kind: "settings.reset", outcome: "applied", prof: cmd },
+    { ev: "c.reset", cmd, kind: "settings.reset", outcome: "rejected_invalid", code: "MARKER free text" },
+    { ev: "c.defect", trace: cmd, status: 422 },
+    { ev: "c.defect", cmd, status: 422 },
+    { ev: "c.defect", cmd, trace: "not-a-uuid", status: 422 },
+    { ev: "c.defect", cmd, trace: cmd, status: 99 },
+    { ev: "c.defect", cmd, trace: cmd, status: 600 },
+    { ev: "c.defect", cmd, trace: cmd, status: "422" },
+    { ev: "c.defect", cmd, trace: cmd, status: 422, body: "MARKER" },
+    { ev: "c.delete", cmd, outcome: "applied" },
+    { ev: "c.delete", cmd, outcome: "already_applied" },
+    { ev: "c.delete", cmd, outcome: "refused", del: cmd },
+    { ev: "c.delete", cmd, outcome: "unknown", trace: cmd },
+    { ev: "c.delete", cmd, outcome: "refused", prof: cmd },
+  ])("refuses %o whole", event => {
+    expect(acceptedEvent({ ...event, cts })).toBeNull();
+  });
+});

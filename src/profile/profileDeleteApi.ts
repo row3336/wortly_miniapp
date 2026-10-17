@@ -1,4 +1,4 @@
-import { ApiError, createJsonTransport, errorCode, type HttpOptions, type JsonReply } from "../api/http";
+import { ApiError, createJsonTransport, errorCode, type HttpOptions, type JsonReply, type SentRequest } from "../api/http";
 import { eventTime, exactKeys, oneOf, record, sameId, uuid } from "../api/wireValidation";
 import { PausedBeforeSendError } from "../commands/writeGate";
 
@@ -33,6 +33,22 @@ export type ProfileDeleteReply =
   | { outcome: "maintenance" }
   | { outcome: "unknown" }
   | { outcome: "paused" };
+
+/**
+ * The attempt a defect answered (DEV-41 §9 п.2): the trace this client set on it and the command_id its body carried, both
+ * from the transport's actual-send snapshot (never the echo). Not enumerable on the reply, so the reply reads as before.
+ */
+export type ProfileDeleteAttempt = Readonly<{ trace: string; commandId: string }>;
+export function deleteAttempt(reply: ProfileDeleteReply): ProfileDeleteAttempt | null {
+  const attempt = (reply as { attempt?: unknown }).attempt;
+  return attempt && typeof attempt === "object" ? attempt as ProfileDeleteAttempt : null;
+}
+function withAttempt(reply: ProfileDeleteReply, sent: SentRequest | undefined): ProfileDeleteReply {
+  if (reply.outcome !== "defect" || !sent || sent.deleteCommandId === null) return reply;
+  Object.defineProperty(reply, "attempt", { value: Object.freeze({ trace: sent.trace, commandId: sent.deleteCommandId }),
+    enumerable: false });
+  return reply;
+}
 
 /** The one read that decides a defect code on a repeat (§3.7): the same session reads a profile projection. */
 export type ProfileCheckReply = "not_deleted" | "deleted" | "auth" | "unknown";
@@ -94,11 +110,12 @@ export function createProfileDeleteApi(options: HttpOptions): ProfileDeleteApi {
         if (error instanceof PausedBeforeSendError) return { outcome: "paused" };
         // An unreadable refusal keeps its status (http.ts): a 4xx without a body is still answered before any write.
         if (error instanceof ApiError && error.kind === "http" && error.status !== undefined) {
-          return classifyDeleteReply({ status: error.status, ok: false, value: undefined }, intent.commandId);
+          return withAttempt(classifyDeleteReply({ status: error.status, ok: false, value: undefined }, intent.commandId),
+            error.sentRefusal?.sent);
         }
         return { outcome: "unknown" };
       }
-      return classifyDeleteReply(reply, intent.commandId);
+      return withAttempt(classifyDeleteReply(reply, intent.commandId), reply.sent);
     },
     async check(token) {
       if (!token) throw new Error("invalid profile check");

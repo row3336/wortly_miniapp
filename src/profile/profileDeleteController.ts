@@ -2,9 +2,11 @@ import type { OpenedAccess } from "../app/openedAccess";
 import { MAX_SENDS, PROBE_DELAYS_MS, RETRY_PAUSES_MS } from "../commands/recoveryLimits";
 import { systemRecoveryClock, type RecoveryClock, type RecoveryTimer } from "../commands/recoveryClock";
 import type { WriteGate } from "../commands/writeGate";
-import { journalAccess } from "../journal/clientJournal";
+import { journalAccess, journalRecord } from "../journal/clientJournal";
+import { isErrorCode, journalId } from "../journal/events";
 import type { AsyncStorage } from "../platform/storage";
-import type { ProfileDeleteApi, ProfileDeleteCredentials, ProfileDeleteIntent, ProfileDeleteReply } from "./profileDeleteApi";
+import { deleteAttempt, type ProfileDeleteApi, type ProfileDeleteCredentials, type ProfileDeleteIntent,
+  type ProfileDeleteReply } from "./profileDeleteApi";
 import { wipeProfileRecords } from "./profileWipe";
 
 /** Q12: the final button of the question becomes active 5 s after the question is shown. */
@@ -290,6 +292,7 @@ export class ProfileDeleteController {
 
   /** §3.7: «применено» → «исход неизвестен» → «не выполнено», by the code and by the earlier unknown outcome. */
   private async decide(reply: ProfileDeleteReply, credentials: ProfileDeleteCredentials | null): Promise<void> {
+    const intent = this.intent;
     switch (reply.outcome) {
       case "applied": return;
       case "paused":
@@ -301,6 +304,7 @@ export class ProfileDeleteController {
         this.emit();
         return;
       case "refused":
+        this.journalDelete(intent, "refused", reply.code);
         this.refuse(reply.code);
         return;
       case "auth":
@@ -308,6 +312,8 @@ export class ProfileDeleteController {
         this.end({ kind: "expired" });
         return;
       case "defect":
+        // P3-D: a defect writes c.defect only, never a c.delete with the code the screen shows for it.
+        this.journalDefect(intent, reply);
         if (!this.hadUnknown) { this.refuse(reply.code ?? "VALIDATION_FAILED"); return; }
         // The same request could not be answered so: no repeat; one read by the same session decides (§3.7).
         await this.checkOutcome(credentials);
@@ -457,6 +463,32 @@ export class ProfileDeleteController {
     this.end({ kind: "unknown", confirmedProfileId: this.profileId });
   }
 
+  /**
+   * DEV-41 M2 (events §4.5, П-Р2): c.delete of an outcome that was not applied — refused with its code, or the final
+   * «исход неизвестен». cmd is this screen's own command_id; no del, no trace, nothing of the question or its text. An
+   * applied deletion writes nothing: the buffer is cleared (P04 §8). A refusal that ends the admission (ACCESS_*) clears
+   * the journal in the transport before this line, so it is not kept either.
+   */
+  private journalDelete(intent: ProfileDeleteIntent | null, outcome: "refused" | "unknown", code?: string): void {
+    const cmd = journalId(intent?.commandId);
+    if (cmd === null) return;
+    journalRecord({ ev: "c.delete", cmd, outcome, ...(outcome === "refused" && isErrorCode(code) ? { code } : {}) });
+  }
+
+  /**
+   * DEV-41 M2, §9 п.3: c.defect of the attempt the defect answered, from the transport's snapshot only (trace and the
+   * command_id of the body that was sent, never the echo), and only while it is this screen's live intent of the same
+   * profile. Tied to the core's line of that attempt by the trace when the request reached the core (P3-E).
+   */
+  private journalDefect(intent: ProfileDeleteIntent | null, reply: Extract<ProfileDeleteReply, { outcome: "defect" }>): void {
+    const attempt = deleteAttempt(reply);
+    if (!attempt || !intent || !this.live() || this.intent !== intent
+      || intent.profileId.toLowerCase() !== this.profileId.toLowerCase()) return;
+    const cmd = journalId(attempt.commandId), trace = journalId(attempt.trace);
+    if (cmd === null || trace === null || cmd !== journalId(intent.commandId)) return;
+    journalRecord({ ev: "c.defect", cmd, trace, status: reply.status, ...(isErrorCode(reply.code) ? { code: reply.code } : {}) });
+  }
+
   private refuse(code: string): void {
     this.dropIntent();
     this.refusalCode = code;
@@ -485,6 +517,7 @@ export class ProfileDeleteController {
   private end(end: DeletionEnd): void {
     if (this.phase === "ended" || this.phase === "disposed" && end.kind !== "deleted") return;
     const disposed = this.phase === "disposed";
+    if (end.kind === "unknown") this.journalDelete(this.intent, "unknown");
     this.dropIntent();
     this.cancelTick();
     this.phase = "ended";

@@ -56,7 +56,7 @@ export type CardTranslations = { "common": Array<string>; "personal": (PersonalC
 
 export type ClientErrorEvent = { "cts": string; "ev": "c.error"; "err": "Error" | "AggregateError" | "EvalError" | "RangeError" | "ReferenceError" | "SyntaxError" | "TypeError" | "URIError" | "DOMException" | "AbortError" | "ConstraintError" | "DataError" | "InvalidStateError" | "NetworkError" | "NotAllowedError" | "NotFoundError" | "QuotaExceededError" | "ReadOnlyError" | "SecurityError" | "TimeoutError" | "TransactionInactiveError" | "UnknownError" | "VersionError" | "ApiError" | "ClosedAccessError" | "DatabaseOpenError" | "PendingStoreError" | "SendBudgetError"; };
 
-export type ClientEventBatch = { "client_instance_id": string; "client_version": string; "dropped"?: number; "events": Array<(AppOpenEvent | CommandSendEvent | CommandReplyEvent | RecoveryEvent | ScreenEvent | BudgetEvent | StorageEvent | ClientErrorEvent)>; };
+export type ClientEventBatch = { "client_instance_id": string; "client_version": string; "dropped"?: number; "events": Array<(AppOpenEvent | CommandSendEvent | CommandReplyEvent | RecoveryEvent | ScreenEvent | BudgetEvent | StorageEvent | ClientErrorEvent | ResetEvent | DefectEvent | DeleteEvent)>; };
 
 export type ClientEventsAccepted = { "accepted": number; };
 
@@ -139,6 +139,10 @@ export type CurrentReviewProgress = { "interval_days": number; "repetitions": nu
 export type DecideCommand = { "command_id": string; "kind": "access.decide"; "payload": DecidePayload; };
 
 export type DecidePayload = { "request_id": string; "expected_version": string; "approve": boolean; "reason"?: (string | null); };
+
+export type DefectEvent = { "cts": string; "ev": "c.defect"; "cmd": string; "trace": string; "status": number; "code"?: ("ACCESS_PENDING" | "ACCESS_REJECTED" | "ANSWER_SPEC_UNAVAILABLE" | "ASSIGNMENT_STALE" | "AUTH_EXPIRED" | "AUTH_INVALID" | "CAPABILITY_EXPIRED" | "CLIENT_INCOMPATIBLE" | "CLIENT_OPEN_REQUIRED" | "CLIENT_REGISTRATION_CONFLICT" | "COMMAND_PAYLOAD_MISMATCH" | "DICTIONARY_LANGUAGE_LOCKED" | "DOCUMENT_STALE" | "FORBIDDEN" | "INTERNAL_ERROR" | "LEASE_HELD" | "LEASE_LOST" | "MAINTENANCE" | "METHOD_NOT_ALLOWED" | "NOTIFICATIONS_NOT_OPENED" | "NOT_FOUND" | "NO_MATERIAL" | "PRECEDENCE_ANOMALY" | "PROFILE_DELETED" | "RATE_LIMITED" | "REQUEST_REFUSED" | "RESET_CANCELLED" | "RESET_EPOCH_STALE" | "SEARCH_CURSOR_STALE" | "SESSION_BUSY" | "SESSION_CLOSED" | "SETUP_REQUIRED" | "VALIDATION_FAILED" | "VERSION_CONFLICT" | "WRITE_UNAVAILABLE" | null); };
+
+export type DeleteEvent = { "cts": string; "ev": "c.delete"; "cmd": string; "outcome": "refused" | "unknown"; "code"?: ("ACCESS_PENDING" | "ACCESS_REJECTED" | "ANSWER_SPEC_UNAVAILABLE" | "ASSIGNMENT_STALE" | "AUTH_EXPIRED" | "AUTH_INVALID" | "CAPABILITY_EXPIRED" | "CLIENT_INCOMPATIBLE" | "CLIENT_OPEN_REQUIRED" | "CLIENT_REGISTRATION_CONFLICT" | "COMMAND_PAYLOAD_MISMATCH" | "DICTIONARY_LANGUAGE_LOCKED" | "DOCUMENT_STALE" | "FORBIDDEN" | "INTERNAL_ERROR" | "LEASE_HELD" | "LEASE_LOST" | "MAINTENANCE" | "METHOD_NOT_ALLOWED" | "NOTIFICATIONS_NOT_OPENED" | "NOT_FOUND" | "NO_MATERIAL" | "PRECEDENCE_ANOMALY" | "PROFILE_DELETED" | "RATE_LIMITED" | "REQUEST_REFUSED" | "RESET_CANCELLED" | "RESET_EPOCH_STALE" | "SEARCH_CURSOR_STALE" | "SESSION_BUSY" | "SESSION_CLOSED" | "SETUP_REQUIRED" | "VALIDATION_FAILED" | "VERSION_CONFLICT" | "WRITE_UNAVAILABLE" | null); };
 
 export type DictionaryCardActions = { "exclude": boolean; "return": boolean; "relearn": boolean; };
 
@@ -433,6 +437,8 @@ export type RejectedCommandFact = { "id": string; "status": "rejected"; };
 export type RemoteSessionCommandResponse = { "command": (SavedCommandFact | RejectedCommandFact); "current": (RemoteSessionProjection | UnavailableSession); "state_version": string; "error"?: (ErrorDetail | null); };
 
 export type RemoteSessionProjection = { "session_id": string; "status": "active" | "summary" | "closed"; "close_reason": ("midnight" | "pair_changed" | "timezone_date_changed" | "stop" | "remote_stop" | "summary_home" | "save_failed" | null); };
+
+export type ResetEvent = { "cts": string; "ev": "c.reset"; "cmd": string; "kind": "settings.reset" | "settings.reset_cancel"; "outcome": "applied" | "rejected_stale_epoch" | "rejected_invalid" | "rejected_incompatible" | "cancelled" | "unknown"; "code"?: ("ACCESS_PENDING" | "ACCESS_REJECTED" | "ANSWER_SPEC_UNAVAILABLE" | "ASSIGNMENT_STALE" | "AUTH_EXPIRED" | "AUTH_INVALID" | "CAPABILITY_EXPIRED" | "CLIENT_INCOMPATIBLE" | "CLIENT_OPEN_REQUIRED" | "CLIENT_REGISTRATION_CONFLICT" | "COMMAND_PAYLOAD_MISMATCH" | "DICTIONARY_LANGUAGE_LOCKED" | "DOCUMENT_STALE" | "FORBIDDEN" | "INTERNAL_ERROR" | "LEASE_HELD" | "LEASE_LOST" | "MAINTENANCE" | "METHOD_NOT_ALLOWED" | "NOTIFICATIONS_NOT_OPENED" | "NOT_FOUND" | "NO_MATERIAL" | "PRECEDENCE_ANOMALY" | "PROFILE_DELETED" | "RATE_LIMITED" | "REQUEST_REFUSED" | "RESET_CANCELLED" | "RESET_EPOCH_STALE" | "SEARCH_CURSOR_STALE" | "SESSION_BUSY" | "SESSION_CLOSED" | "SETUP_REQUIRED" | "VALIDATION_FAILED" | "VERSION_CONFLICT" | "WRITE_UNAVAILABLE" | null); };
 
 export type ResetTarget = { "command_id": string; "outcome": "applied" | "cancelled" | "rejected_stale_epoch" | "rejected_invalid" | "rejected_incompatible"; };
 

@@ -262,7 +262,7 @@ export function createJsonTransport(options: HttpOptions): JsonTransport {
       const method = request.method;
       if (gate && request.stamped) request.stamped(gate.stamp(path, request.body));
       sentMark = gate?.docMark() ?? null;
-      sent = sentRequest(path, method, body, headers["X-Origin-Proof"]);
+      sent = sentRequest(path, method, body, headers["X-Origin-Proof"], trace);
       request.started?.();
       journal?.started();
       const response = await fetcher(url, {
@@ -296,7 +296,11 @@ export function createJsonTransport(options: HttpOptions): JsonTransport {
       if (refusalStatus !== undefined) {
         journal?.answered({ status: refusalStatus, ok: false, value: undefined });
         observeFailure(gate, path, request, refusalStatus >= 500 ? "unreadable_5xx" : "unreadable_4xx");
-        throw new ApiError("http", refusalStatus);
+        // DEV-41 §8 п.5 (C486): the snapshot taken before the await goes with the unreadable refusal too — no body was read,
+        // so it is never the bare FORBIDDEN; no echo, no new ID. The c.defect classifiers read it; nothing else changes.
+        const taken: SentRequest | null = sent;
+        throw new ApiError("http", refusalStatus, undefined, undefined,
+          taken ? Object.freeze({ sent: taken, bareForbidden: false }) : undefined);
       }
       journal?.failed(timedOut ? "timeout" : error instanceof ApiError && error.kind === "invalid_response" ? "unknown" : "network");
       observeFailure(gate, path, request, timedOut ? "timeout"
@@ -335,13 +339,16 @@ function observeReply(gate: WriteGate | undefined, path: string, request: Reques
  * header as set, in the same synchronous stretch as the gate's mark — a later change of the caller's request object
  * changes nothing of it. kind and command_id only of a POST /commands; client_instance_id and document_id from the body,
  * else from the query; query: the names of the query parameters; proofSent: a non-empty proof header was set. No token,
- * no proof value.
+ * no proof value. trace: the attempt's own X-Wortly-Trace-Id as this client set it (DEV-41 §8 п.1), never the echo;
+ * deleteCommandId: the command_id of a POST /profile/delete (§9 п.1) — kind and commandId stay those of /commands only.
  */
 export type SentRequest = Readonly<{ method: "GET" | "POST"; route: string; query: readonly string[]; kind: string | null;
-  commandId: string | null; clientInstanceId: string | null; documentId: string | null; proofSent: boolean }>;
+  commandId: string | null; clientInstanceId: string | null; documentId: string | null; proofSent: boolean; trace: string;
+  deleteCommandId: string | null }>;
 
 /** Read from the serialized body that goes to fetch (the bytes sent), never from the caller's object afterwards. */
-function sentRequest(path: string, method: "GET" | "POST", serialized: string | undefined, proofHeader: string | undefined): SentRequest {
+function sentRequest(path: string, method: "GET" | "POST", serialized: string | undefined, proofHeader: string | undefined,
+  trace: string): SentRequest {
   const route = path.split(/[?#]/, 1)[0];
   let body: Record<string, unknown> | undefined;
   if (serialized !== undefined) {
@@ -357,7 +364,8 @@ function sentRequest(path: string, method: "GET" | "POST", serialized: string | 
     kind: post && typeof body?.kind === "string" ? body.kind : null,
     commandId: post && typeof body?.command_id === "string" ? body.command_id : null,
     clientInstanceId: field("client_instance_id"), documentId: field("document_id"),
-    proofSent: typeof proofHeader === "string" && proofHeader.length > 0 });
+    proofSent: typeof proofHeader === "string" && proofHeader.length > 0, trace,
+    deleteCommandId: method === "POST" && route === "/profile/delete" && typeof body?.command_id === "string" ? body.command_id : null });
 }
 
 /** Exactly the core's bare refusal {"error":{"code":"FORBIDDEN"}} with 403 (api/app.py:220–224): no envelope, no other field. */

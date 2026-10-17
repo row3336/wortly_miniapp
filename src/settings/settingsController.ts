@@ -5,13 +5,23 @@ import { ClosedAccessError, type OpenedAccess } from "../app/openedAccess";
 import { GatePending, pausedBeforeSend } from "../commands/gatePending";
 import { PendingStoreError, validId } from "../commands/pendingSlot";
 import { PausedBeforeSendError, type WriteGate } from "../commands/writeGate";
+import { journalRecord } from "../journal/clientJournal";
+import { isErrorCode, journalId, type ResetEvent } from "../journal/events";
 import { allowedSettingValue, heldRefusal, KnownRefusal, refusalCodeOf, resetEpochOf, resetKeys, storedOnly, type IntentKey,
-  type ResetFinalCode, type ResetHeldCode, type ResetReply, type ResetTargetOutcome, type SettingKey, type SettingSaveReply, type SettingsApi } from "./settingsApi";
+  type ResetFinalCode, type ResetHeldCode, type ResetRefusalCode, type ResetReply, type ResetTargetOutcome, type SettingKey, type SettingSaveReply, type SettingsApi } from "./settingsApi";
 import { SettingsPendingStore, type SettingsPending } from "./settingsPending";
 import { unfinished, type SettingsResetFinalOnly, type SettingsResetPending, type SettingsResetPendingStore,
   type SettingsResetRecord } from "./settingsResetPending";
 
 type Draft = { input: unknown; original?: unknown; fieldVersion: string; revision: number };
+
+/** The terminal outcome of X each stored refusal code names (core settings/reset.py TERMINAL_ANSWERS; events §4.5). */
+const RESET_OUTCOME: Record<ResetRefusalCode, Exclude<ResetEvent["outcome"], "applied" | "unknown">> = {
+  RESET_CANCELLED: "cancelled", RESET_EPOCH_STALE: "rejected_stale_epoch", VALIDATION_FAILED: "rejected_invalid",
+  CLIENT_INCOMPATIBLE: "rejected_incompatible" };
+/** A bare answer to X that the defect line takes (C479 R7): 422 or 409, but not the codes with a meaning of their own. */
+const DEFECT_STATUSES = new Set([409, 422]);
+const NOT_A_DEFECT = new Set(["DOCUMENT_STALE", "SESSION_BUSY"]);
 export type SettingsDraft = Omit<Draft, "revision"> & {
   valid: boolean;
   conflict: boolean;
@@ -147,6 +157,8 @@ export class SettingsController {
   private submittedRevision: number | null = null;
   private pending: SettingsPending | null = null;
   private resetPending: SettingsResetPending | null = null;
+  /** The c.reset lines this controller wrote (cmd:outcome): an outcome read again — by a cancel, a check — is not written twice. */
+  private readonly journaledResets = new Set<string>();
   /**
    * The reset record as the storage holds it. It differs from `resetPending` only when the write of a held refusal failed
    * (I.11.3c п.5): the refusal is then held in this document's memory and nothing is sent for it.
@@ -484,11 +496,50 @@ export class SettingsController {
     this.submittedRevision = null;
     this.idle();
   }
+  /**
+   * DEV-41 M1 (events §4.5, C496): one c.reset once the outcome of X is recorded here (I.11.3c п.1: written before shown).
+   * cmd is X; kind names the command that ended X, as the core's a.reset.outcome does: the cancel for `cancelled`, else the
+   * reset. code only for a refusal (applied and cancelled are no errors); an unknown outcome writes nothing (R16-01: X is
+   * checked again, nothing is guessed). No setting value, no text.
+   */
+  private journalReset(commandId: string, outcome: ResetEvent["outcome"], code?: ResetRefusalCode): void {
+    const cmd = journalId(commandId);
+    if (cmd === null || this.journaledResets.has(`${cmd}:${outcome}`)) return;
+    this.journaledResets.add(`${cmd}:${outcome}`);
+    journalRecord({ ev: "c.reset", cmd, kind: outcome === "cancelled" ? "settings.reset_cancel" : "settings.reset", outcome,
+      ...(code !== undefined && outcome !== "cancelled" ? { code } : {}) });
+  }
+
+  /**
+   * DEV-41 M1, C479 R7, §8: the answer to this very send of X recorded no outcome of it — a bare 422/409, or a refusal whose
+   * parts disagree (AC-59). c.defect is taken from the actual-send snapshot only: cmd and trace of this attempt, never the
+   * echo; guarded by the snapshot's own kind and command_id, the installation it named and a live owner. DOCUMENT_STALE and
+   * SESSION_BUSY have their own meaning; 401/403, a network error and a request the gate kept are no defect. The handling
+   * that follows (the status of X by its ID, R16-01) is the same with or without this line. Whether the core saw the
+   * request is not known here: a proxy's 422 has no server line with this trace (P3-E).
+   */
+  private journalResetDefect(error: unknown, reset: SettingsResetPending, source: OpenedAccess): void {
+    if (!(error instanceof ApiError) || error.kind !== "http" || error.status === undefined || !DEFECT_STATUSES.has(error.status)
+      || error.code !== undefined && NOT_A_DEFECT.has(error.code)) return;
+    const sent = error.sentRefusal?.sent;
+    if (!sent || sent.method !== "POST" || sent.route !== "/commands" || sent.kind !== "settings.reset") return;
+    const cmd = journalId(sent.commandId), trace = journalId(sent.trace);
+    if (cmd === null || trace === null || cmd !== journalId(reset.intent.command_id)) return;
+    if (sent.clientInstanceId !== reset.clientInstanceId || !this.live() || this.currentAccess() !== source
+      || this.resetPending !== reset) return;
+    journalRecord({ ev: "c.defect", cmd, trace, status: error.status, ...(isErrorCode(error.code) ? { code: error.code } : {}) });
+  }
+
   private async resolve(status: Outcome["status"], code?: string): Promise<void> {
     this.registry.settled(status === "accepted" ? "recorded" : "rejected");
     if (this.resetPending) {
       this.outcome = null;
       this.resetOutcome = { commandId: this.resetPending.intent.command_id, status, ...(code ? { code } : {}) };
+      const refusal = code as ResetRefusalCode | undefined;
+      if (status === "accepted") this.journalReset(this.resetPending.intent.command_id, "applied");
+      else if (refusal !== undefined && Object.hasOwn(RESET_OUTCOME, refusal)) {
+        this.journalReset(this.resetPending.intent.command_id, RESET_OUTCOME[refusal], refusal);
+      }
       this.settled = true;
       // Owner answer R12: a confirmed reset discards the unsaved drafts of the fields it returned, so the initial
       // values show. A refusal or an unknown outcome is not a reset and keeps them; other fields are untouched.
@@ -547,6 +598,7 @@ export class SettingsController {
     else { this.writeBlocked = "forbidden"; this.data = null; }
     this.outcome = null;
     this.resetOutcome = { commandId: reset.intent.command_id, status: "rejected", code, final: true };
+    this.journalReset(reset.intent.command_id, RESET_OUTCOME[code], code);
     this.refusal = null;
     this.settled = false;
     this.submittedRevision = null;
@@ -652,6 +704,7 @@ export class SettingsController {
     this.registry.settled("rejected");
     const held: SettingsResetPending = { ...reset, state: { refused: code } };
     if (this.resetStored === reset && this.heldCode() === code) return;
+    const was = this.heldCode();
     try {
       await this.options.resetStore.replace(stored, held, this.lifetime.signal);
       this.resetStored = held;
@@ -659,7 +712,10 @@ export class SettingsController {
       if (error instanceof PendingStoreError && error.kind === "cancelled") throw error;
       this.resetStored = stored;
     }
-    if (this.live()) this.resetPending = held;
+    if (!this.live()) return;
+    this.resetPending = held;
+    // Held in the record, or in this document's memory when that write failed: the outcome of X is known either way.
+    if (was !== code) this.journalReset(reset.intent.command_id, RESET_OUTCOME[code], code);
   }
 
   /**
@@ -925,6 +981,7 @@ export class SettingsController {
       // record as it is. A bare or unconfirmed one of a live window is an unknown outcome of X like any other (C437, R16-01).
       if (!this.live() || !(error instanceof ApiError) || error.status === 401 || error.status === 403
         || error.code === "DOCUMENT_STALE" && this.replacementProved()) throw error;
+      this.journalResetDefect(error, reset, source);
       this.noteIncompatible(error);
       this.phase = "checking";
       this.emit();
