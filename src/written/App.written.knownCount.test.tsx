@@ -1,12 +1,12 @@
 // Decision 2.3 А with a known send count (S11, C153) through the actual App: page A loses k sends of an answer, then a new
-// page B (a new App: new storage wrapper, empty page memory) finds the record. The count of B answers k for X, as a durable
-// count of CP5 would; its read is asserted, so the guard, not an unknown count, is what keeps B from sending X again.
+// page B (a new App: new storage wrapper, empty page memory) finds the record. The durable count (CP5b; seeded into B's store
+// as IndexedDB would keep it) answers k for X; its read is asserted, so the guard, not an unknown count, keeps B from sending X.
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../app/App";
 import { RecoveryMachine, type RecoverySnapshot } from "../commands/recoveryMachine";
 import { hashInPlace, tick } from "../commands/recoveryTime.test-support";
-import { MemorySendCounter, type SendMarks } from "../commands/sendCounter";
+import { testBudgetLog } from "../commands/budget.test-support";
 import { app, field, pairText, row, useWrittenAppEnvironment } from "./writtenApp.test-support";
 
 useWrittenAppEnvironment();
@@ -55,15 +55,9 @@ describe("an answer of another page with a known count", () => {
       cleanup();
       await step(10_000);
       net.offline = false;
-      // Page B: its own memory is empty; a durable count would answer what page A spent.
-      const own = MemorySendCounter.prototype.load, answered: SendMarks[] = [];
-      vi.spyOn(MemorySendCounter.prototype, "load").mockImplementation(async function (this: MemorySendCounter, commandId: string) {
-        const marks = await own.call(this, commandId);
-        if (marks || commandId !== x) return marks;
-        const durable = { reserved: k, transmitted: k };
-        answered.push(durable);
-        return { ...durable };
-      });
+      // Page B: its page memory is empty; the durable store answers what page A spent (k sends, each written retryable).
+      testBudgetLog.seeds.set(x.toLowerCase(), { reserved: k, transmitted: k });
+      const answered = () => testBudgetLog.loads.filter(entry => entry.commandId === x.toLowerCase() && entry.transmitted === k);
       const states = new Set<string>();
       const snapshot = vi.spyOn(RecoveryMachine.prototype, "snapshot");
       const mark = a.fetcher.mock.calls.length;
@@ -71,7 +65,7 @@ describe("an answer of another page with a known count", () => {
       for (let spent = 0; spent < 90_000; spent += 500) await step(500);
       for (const result of snapshot.mock.results) if (result.type === "return") states.add((result.value as RecoverySnapshot).state.name);
       const after = a.fetcher.mock.calls.slice(mark);
-      expect(answered.length).toBeGreaterThan(0);
+      expect(answered().length).toBeGreaterThan(0);
       expect(after.filter(([, init]) => init?.method === "POST" && JSON.parse(String(init.body)).command_id === x)).toEqual([]);
       expect(after.filter(([url, init]) => (init?.method ?? "GET") === "GET" && String(url).includes(`/commands/${x}`)).length)
         .toBeGreaterThan(0);

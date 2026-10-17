@@ -5,7 +5,7 @@
 // window of this device would leave it. Texts 2.2 and the exit 2.1 are not chosen: no assertion names them.
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { pageSendCounter } from "../commands/laneRecovery";
+import { pageMarks, testBudgetLog } from "../commands/budget.test-support";
 import { useWrittenDocument } from "./useWrittenDocument";
 import { WrittenScreen } from "./WrittenScreen";
 import type { WrittenIntent } from "./writtenIntent";
@@ -48,7 +48,8 @@ async function open(options: ServerOptions = {}) {
   /** The record exactly as given (its own session): used for a record of an earlier session. */
   const occupyAs = async (intent: WrittenIntent) => {
     seedRaw(f.values, writtenPrimaryKey, JSON.stringify(pending(intent)), id(1));
-    await pageSendCounter(f.storage).save(intent.command_id, X_MARKS);
+    // CP5b: X's count in the store of the page (materialized under the owner's identity on its first read).
+    testBudgetLog.seeds.set(intent.command_id.toLowerCase(), X_MARKS);
   };
   const overlay = () => document.querySelector(".recovery-overlay");
   const visible = () => [...document.querySelectorAll("p")].map(item => item.textContent);
@@ -76,17 +77,20 @@ function checkedOnlyX(h: Awaited<ReturnType<typeof open>>, dropped: string) {
   expect(checks.every(url => url.includes(X.command_id))).toBe(true);
   expect(checks.filter(url => url.includes(dropped))).toEqual([]);
 }
-/** The check of X proved its step outdated (CT §6.1 п. 7, step_stale): the record and the count of X are gone, nothing of Y appears. */
+/**
+ * The check of X proved its step outdated (CT §6.1 п. 7, step_stale): the lane's record of X is gone, nothing of Y appears.
+ * The durable count of X stays (D-CP5 10.7.2.5, CP5b): a changed step is no proven outcome for the budget.
+ */
 async function xClearedAsStale(h: Awaited<ReturnType<typeof open>>, dropped: string) {
   expect(hasPending(h.values, writtenPrimaryKey)).toBe(false);
-  expect(await pageSendCounter(h.storage).load(X.command_id)).toBeNull();
-  expect(await pageSendCounter(h.storage).load(dropped)).toBeNull();
+  expect(await pageMarks(h.storage, X.command_id)).toEqual(X_MARKS);
+  expect(await pageMarks(h.storage, dropped)).toBeNull();
 }
 async function untouched(h: Awaited<ReturnType<typeof open>>, dropped: string) {
   expect(h.slotId()).toBe(X.command_id);
-  expect(await pageSendCounter(h.storage).load(X.command_id)).toEqual(X_MARKS);
+  expect(await pageMarks(h.storage, X.command_id)).toEqual(X_MARKS);
   // No record of the dropped ID, neither the reservation nor its give-back, whatever the machine wrote or cleared meanwhile.
-  expect(await pageSendCounter(h.storage).load(dropped)).toBeNull();
+  expect(await pageMarks(h.storage, dropped)).toBeNull();
   expect(h.gets("/commands/").filter(url => url.includes(dropped))).toEqual([]);
 }
 
@@ -130,7 +134,7 @@ describe("written quiz, B: a new action meets the record of another window", () 
       body: JSON.stringify({ ...x, client_instance_id: "other-window", document_id: "other-window" }) });
     await h.step(40_000);
     expect(hasPending(h.values, writtenPrimaryKey)).toBe(false);
-    expect(await pageSendCounter(h.storage).load(X.command_id)).toBeNull();
+    expect(await pageMarks(h.storage, X.command_id)).toBeNull();
     await nextBeforeZ(h);
     fireEvent.change(screen.getByRole("textbox"), { target: { value: "Haus" } });
     fireEvent.click(screen.getByRole("button", { name: "Проверить" })); await h.step(); await h.step(1000);
@@ -140,7 +144,7 @@ describe("written quiz, B: a new action meets the record of another window", () 
     expect(sent[0].command_id).not.toBe(X.command_id);
     expect(h.gets("/commands/").filter(url => url.includes(dropped))).toEqual([]);
     expect(h.posts().some(post => post.command_id === X.command_id)).toBe(false);
-    expect(await pageSendCounter(h.storage).load(dropped)).toBeNull();
+    expect(await pageMarks(h.storage, dropped)).toBeNull();
   });
 
   it("a new owner of the window after the conflict (reopen): X is loaded and checked by its own ID, the dropped ID never appears", async () => {
@@ -154,7 +158,7 @@ describe("written quiz, B: a new action meets the record of another window", () 
     expect(urls.some(url => url.includes(dropped))).toBe(false);
     expect(h.posts().some(post => post.command_id === dropped)).toBe(false);
     expect(h.gets("/commands/").every(url => url.includes(X.command_id))).toBe(true);
-    expect(await pageSendCounter(h.storage).load(dropped)).toBeNull();
+    expect(await pageMarks(h.storage, dropped)).toBeNull();
   });
 
   it("a real lost connection of a sent answer is still named as such", async () => {
@@ -263,7 +267,7 @@ describe("written quiz, B: the record of a closed earlier session blocks a new a
     expect(hasPending(h.values, writtenPrimaryKey)).toBe(false);
     expect(h.overlay()).toBeNull();
     expect(document.body.textContent).not.toContain(OFFLINE);
-    expect(await pageSendCounter(h.storage).load(dropped)).toBeNull();
+    expect(await pageMarks(h.storage, dropped)).toBeNull();
     // The dropped Y stays dropped; the person's next tap is a new action Z with a new ID, sent once.
     fireEvent.change(screen.getByRole("textbox"), { target: { value: "Haus" } });
     fireEvent.click(screen.getByRole("button", { name: "Проверить" })); await h.step(); await h.step(1000);
@@ -323,7 +327,7 @@ describe("written quiz, B: X vanished locally, the block ends only by a fact of 
       body: JSON.stringify({ ...x, client_instance_id: "other-window", document_id: "other-window" }) });
     await h.step(60_000);
     checkedOnlyX(h, dropped);
-    expect(await pageSendCounter(h.storage).load(X.command_id)).toBeNull();
+    expect(await pageMarks(h.storage, X.command_id)).toBeNull();
     expect(xPosts(h, dropped)).toEqual([]);
     await checksEnded(h);
     await nextBeforeZ(h);
@@ -336,7 +340,8 @@ describe("written quiz, B: X vanished locally, the block ends only by a fact of 
       body: JSON.stringify({ ...x, command_id: id(401), client_instance_id: "other-window", document_id: "other-window" }) });
     await h.step(60_000);
     checkedOnlyX(h, dropped);
-    expect(await pageSendCounter(h.storage).load(X.command_id)).toBeNull();
+    // The lane's record of X goes; its durable count stays (D-CP5 10.7.2.5, CP5b): a changed step is no proven outcome.
+    expect(await pageMarks(h.storage, X.command_id)).toEqual(X_MARKS);
     expect(xPosts(h, dropped)).toEqual([]);
     await checksEnded(h);
     await zPassesOnce(h, dropped);

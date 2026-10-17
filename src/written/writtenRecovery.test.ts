@@ -1,5 +1,6 @@
 // Automatic recovery of a written study action (M-RECOV-AUTO CP2, CT §6.1, D-RECOV table 8) through the real view,
 // document lanes and HTTP transport over the synthetic written server, on fake time.
+import { installTestSendBudget } from "../commands/budget.test-support";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WrittenIntent } from "./writtenIntent";
 import { WrittenDocumentCommands } from "./writtenDocumentCommands";
@@ -9,7 +10,7 @@ import { createOpenedAccess } from "../app/openedAccess";
 import { staleCommand } from "../app/openRules.test-support";
 import { writtenPrimaryKey } from "./writtenPending";
 import { cancelDue } from "../commands/startCancel";
-import { pageSendCounter } from "../commands/laneRecovery";
+import { pageMarks } from "../commands/budget.test-support";
 import { pendingRaw, hasPending } from "../commands/pendingSeed.test-support";
 
 /** The core's DOCUMENT_STALE envelope of this command (study/coordinator.py; an answer kind is flattened). */
@@ -118,6 +119,8 @@ describe("the budget of one action (Я15.5, Я15.6, 8.3)", () => {
   });
   it("whatever the server answers, one action never goes out more than six times (random replies, 40 runs)", async () => {
     for (let seed = 1; seed <= 40; seed++) {
+      // Every run is a page of its own with its own durable store (CP5b): the harness gives each run the same IDs.
+      installTestSendBudget();
       let state = seed;
       const random = () => { state = (state * 1103515245 + 12345) % 2147483648; return state / 2147483648; };
       const h = harness(); await h.started();
@@ -351,7 +354,7 @@ describe("D-STALE-WINDOW: the core's DOCUMENT_STALE envelope on a send (C091 §1
     expect(pendingRaw(h.values, writtenPrimaryKey)).toBe(raw);
     expect(h.storage.remove).not.toHaveBeenCalledWith(writtenPrimaryKey);
     // The replaced window keeps the count of its send too (D-CP5 9.2.6: window_replaced keeps the budget).
-    expect(await pageSendCounter(h.storage).load(recovery.commandId!)).toMatchObject({ reserved: 1, transmitted: 1 });
+    expect(await pageMarks(h.storage, recovery.commandId!)).toMatchObject({ reserved: 1, transmitted: 1 });
   });
   it("3.1.11 a start refused as DOCUMENT_STALE never settles rejected: even the widest cancel policy sees nothing to cancel", async () => {
     const h = harness();
@@ -434,12 +437,13 @@ describe("D-STALE-WINDOW: the core's DOCUMENT_STALE envelope on a send (C091 §1
   it("3.1.7 ii the early send never arrived: W2 loads X and only checks it; X is never sent with W2's document", async () => {
     const { h, w2, x } = await replaced(false);
     // CT §6.1 п. 5 asks for the same working document: until the owner answers В-2 (Codex C093 п. 5) no window sends X
-    // with another document_id; X and its count stay. Without the send count of CP5 W2 knows only counter_unknown.
+    // with another document_id; X and its count stay. With the durable count of CP5b W2 knows the count of X (the
+    // IndexedDB of the installation), and 2.3 А still lets it only check: origin_elsewhere, never a send.
     expect(h.answers().filter(post => post.document_id === id(77))).toEqual([]);
     expect(h.server.results.size).toBe(0);
     expect(kept(h)).toEqual(x);
     expect(w2.snapshot().commands.primary).toMatchObject({ pending: true, outcome: null });
-    expect(w2.snapshot().commands.recovery).toMatchObject({ state: { name: "counter_unknown" } });
+    expect(w2.snapshot().commands.recovery).toMatchObject({ state: { name: "origin_elsewhere" } });
   });
   it("3.1.8 a late copy applies after W1 was replaced: W2's check finds it once; the record was not cleared before", async () => {
     const h = harness(); await h.started();

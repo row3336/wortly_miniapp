@@ -747,11 +747,11 @@ describe("Learning: an unreadable record in the shared slot meets a new action",
   it("the automatic path (prepare, start) is dropped the same way, without telling the transport hook", async () => {
     const f = fixture(); await f.controller.refresh();
     seedRaw(f.values, slot, "{not json", id(50));
-    const intent = f.controller.prepare(action()) as LearningCommandIntent, transmitted = vi.fn();
-    await f.controller.start(intent, transmitted);
+    const intent = f.controller.prepare(action()) as LearningCommandIntent, hooks = { prepare: vi.fn(async () => true), started: vi.fn() }, transmitted = hooks.started;
+    await f.controller.start(intent, hooks);
     expect(f.controller.snapshot()).toMatchObject({ phase: "blocked", problem: "invalid_pending", pending: false });
-    expect(transmitted).not.toHaveBeenCalled(); expect(f.send).not.toHaveBeenCalled();
-    await f.controller.resend(transmitted); expect(f.send).not.toHaveBeenCalled(); expect(f.check).not.toHaveBeenCalled();
+    expect(transmitted).not.toHaveBeenCalled(); expect(hooks.prepare).not.toHaveBeenCalled(); expect(f.send).not.toHaveBeenCalled();
+    await f.controller.resend(hooks); expect(f.send).not.toHaveBeenCalled(); expect(f.check).not.toHaveBeenCalled();
   });
   it("a retained intent keeps its record and stays pending when the slot turns unreadable under its retry", async () => {
     const f = fixture(pending());

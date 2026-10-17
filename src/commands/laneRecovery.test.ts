@@ -20,7 +20,10 @@ describe("a send of the adapter", () => {
   });
   it("is the lane's own answer once it started", () => {
     expect(laneSendResult(settled("accepted"), null, true, ID)).toEqual({ kind: "settled", outcome: "accepted" });
-    expect(laneSendResult(settled("rejected"), null, true, ID)).toEqual({ kind: "settled", outcome: "rejected" });
+    // CP5b: a refusal carries the lane's code, which decides whether the record of the budget goes (D-CP5 9.2).
+    expect(laneSendResult(settled("rejected"), null, true, ID)).toEqual({ kind: "settled", outcome: "rejected", code: null });
+    expect(laneSendResult({ ...settled("rejected"), rejectionCode: "SESSION_CLOSED" }, null, true, ID))
+      .toEqual({ kind: "settled", outcome: "rejected", code: "SESSION_CLOSED" });
     expect(laneSendResult(lane({ problem: "mismatch" }), null, true, ID)).toEqual({ kind: "mismatch" });
     expect(laneSendResult(lane(), new ApiError("http", 503, "MAINTENANCE", { waitSeconds: 30 }), true, ID))
       .toEqual({ kind: "maintenance", waitSeconds: 30 });
@@ -104,7 +107,7 @@ describe("the waiting screen", () => {
 describe("forget", () => {
   it("leaves a machine of another intent alone and drops its own", async () => {
     const { LaneRecovery } = await import("./laneRecovery");
-    const { MemorySendCounter } = await import("./sendCounter");
+    const { testLaneBudgets } = await import("./budget.test-support");
     const { systemRecoveryClock } = await import("./recoveryClock");
     const intent = { command_id: ID, kind: "answer.submit", session_id: "00000000-0000-4000-8000-000000000003" };
     let updates = 0;
@@ -113,7 +116,7 @@ describe("forget", () => {
       // The first send never answers: the machine keeps driving this intent.
       send: () => new Promise<void>(() => {}), check: async () => {}, release: async () => {},
       isLive: () => true, onUpdate: () => { updates++; },
-    }, new MemorySendCounter(), systemRecoveryClock);
+    }, testLaneBudgets(), systemRecoveryClock);
     void recovery.begin(intent);
     await Promise.resolve();
     expect(recovery.drives(ID)).toBe(true);

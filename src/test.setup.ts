@@ -3,6 +3,7 @@ import { beforeEach } from "vitest";
 import { installTestPageGate } from "./app/pageGate.test-support";
 import { installationProvider } from "./app/installationProvider";
 import { installAppInstallationStore, resetAppInstallationIdb } from "./app/installationApp.test-support";
+import { installTestSendBudget } from "./commands/budget.test-support";
 
 installTestPageGate();
 
@@ -11,3 +12,7 @@ installTestPageGate();
 // localStorage as the store's lazy legacy getter. navigator/window stay as jsdom gives them.
 beforeEach(() => { resetAppInstallationIdb(); });
 installAppInstallationStore(installationProvider);
+
+// CP5b: jsdom has no indexedDB, and the product's send budget fails closed without it. Every test gets the memory model of
+// the same store protocol as the store of its pages (commands/budget.test-support.ts) — a test double, never a fallback.
+beforeEach(() => { installTestSendBudget(); });

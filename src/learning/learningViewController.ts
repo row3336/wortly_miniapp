@@ -171,6 +171,12 @@ export class LearningViewController extends StudyView<LearningDocumentCommands, 
       if (!this.live() || this.is("closed", "stopping")) return;
       // The start met another record in the shared slot and was neither stored nor sent: no session of its ID exists to
       // read or check. The view goes back to what it showed, unless something newer replaced this start meanwhile.
+      // Q34 / D-CP5A-DAMAGE-EXIT 3.2: the start sent nothing (no store, or a damaged one): back to what the view showed.
+      const commands = this.commands.snapshot();
+      if (commands.startBlocked || commands.storageUnavailable) {
+        if (this.sessionId === started && this.is("loading", "unknown")) Object.assign(this, before);
+        return;
+      }
       if (this.unsentSlot()) {
         // "unknown": the lane held the start for a moment while it was being stored; nothing newer than this start.
         if (this.sessionId === started && this.is("loading", "unknown")) Object.assign(this, before);

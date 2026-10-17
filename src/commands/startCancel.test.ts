@@ -7,7 +7,9 @@ import { ApiError } from "../api/http";
 import { systemRecoveryClock } from "./recoveryClock";
 import type { RecoverySnapshot } from "./recoveryMachine";
 import { hashInPlace, tick } from "./recoveryTime.test-support";
-import { MemorySendCounter, type SendCounter } from "./sendCounter";
+import { storedMarks, testBudget } from "./budget.test-support";
+import { NotPreparedError } from "./recoveryReplies";
+import { MemorySendBudget } from "./sendBudget";
 import { cancelDue, noFurtherCancel, StartCancelRecovery, type StartCancelHost } from "./startCancel";
 import { createStartCancelApi, type StartCancelIntent, type StartCancelReply, type StartCancelStatus } from "./startCancelApi";
 import { startCancelKey, StartCancelPendingStore, type StartCancelPending } from "./startCancelPending";
@@ -35,6 +37,9 @@ const CLOSED = { session_id: SESSION, status: "closed" as const, close_reason: "
 /** not_found of the cancel with the server's closure of exactly this number: the start created the session, it is closed now. */
 const closedAbsent = (version = "5"): StartCancelStatus => ({ ...absent({}, version), closed_session: CLOSED } as StartCancelStatus);
 const LOST = () => new ApiError("network");
+/** The cancel's budget over a store of the page (CP5b: family start_cancel, target its session). */
+const cancelBudget = (store: MemorySendBudget) => (intent: StartCancelIntent) =>
+  testBudget(intent, { store, owner: { profileId: PROFILE, clientInstanceId: CLIENT, pair: "ru-de" }, family: "start_cancel" });
 const STORED: StartCancelPending = { schemaVersion: 1, profileId: PROFILE, clientInstanceId: CLIENT, pair: "ru-de",
   sessionId: SESSION, startCommandId: START, cancelCommandId: CANCEL };
 /** The exact intent of the cancel: its own new ID, the start's session_id, an empty payload (2.3.1). */
@@ -61,7 +66,7 @@ function rig(script: {
   send?: (n: number, t: number) => Reply<StartCancelReply>;
   status?: (n: number, t: number) => Reply<StartCancelStatus>;
   storage?: ReturnType<typeof memory>;
-  counter?: SendCounter;
+  counter?: MemorySendBudget;
   live?: () => boolean;
   minimum?: () => string | null;
   newId?: () => string;
@@ -76,8 +81,10 @@ function rig(script: {
   const note = (op: Call["op"], intent: StartCancelIntent) => calls.push({ at: performance.now() - start, op,
     body: JSON.stringify(intent), stored: hasPending(storage.values, KEY), active: recovery.view()?.recovery.active ?? true });
   const host: StartCancelHost = {
-    send: (intent, transmitted) => {
-      note("send", intent); transmitted();
+    send: async (intent, hooks) => {
+      // The pre-request step is the last await before the request (CP5b).
+      if (!(await hooks.prepare())) throw new NotPreparedError();
+      note("send", intent); hooks.started();
       return answer((script.send ?? (() => LOST()))(++counts.send, performance.now() - start));
     },
     status: (intent) => {
@@ -89,7 +96,7 @@ function rig(script: {
     ...(script.minimum ? { minimumStateVersion: script.minimum } : {}),
     onUpdate: () => undefined,
   };
-  recovery = new StartCancelRecovery({ host, store, counter: script.counter ?? new MemorySendCounter(), clock: systemRecoveryClock,
+  recovery = new StartCancelRecovery({ host, store, budget: cancelBudget(script.counter ?? new MemorySendBudget()), clock: systemRecoveryClock,
     active: true, profileId: PROFILE, clientInstanceId: CLIENT, pair: "ru-de", newId });
   return {
     recovery, storage, store, calls, newId,
@@ -151,7 +158,7 @@ describe("the automatic cancel of an exhausted start", () => {
   });
 
   it("3.3.2 cancelled: the confirmed outcome; the record goes only by clear(), after the outcome", async () => {
-    const counter = new MemorySendCounter();
+    const counter = new MemorySendBudget();
     const r = rig({ send: () => applied("cancelled"), counter });
     await r.recovery.begin(startOf);
     await pass(0);
@@ -159,7 +166,7 @@ describe("the automatic cancel of an exhausted start", () => {
     expect(hasPending(r.storage.values, KEY)).toBe(true);
     await r.recovery.clear();
     expect(hasPending(r.storage.values, KEY)).toBe(false);
-    expect(await counter.load(CANCEL)).toBeNull();
+    expect(await storedMarks(counter, CANCEL)).toBeNull();
   });
 
   it("3.3.3 session_exists: the outcome names the session, nothing more is sent", async () => {
@@ -356,7 +363,7 @@ describe("the cancel after a reload or in another owner (2.8.2, 2.7.4)", () => {
   });
 
   it("another owner in the same page continues the shared count: 3 + 3 automatic sends, not 3 + 6", async () => {
-    const storage = memory(), counter = new MemorySendCounter();
+    const storage = memory(), counter = new MemorySendBudget();
     const a = rig({ storage, counter });
     await a.recovery.begin(startOf);
     await pass(7_000);
@@ -372,7 +379,7 @@ describe("the cancel after a reload or in another owner (2.8.2, 2.7.4)", () => {
 
   it("Д1 (QA D-c3) after a refused POST another owner in the same page sends no POST (C038 п. 3)", async () => {
     for (const failure of [() => refusal("SESSION_BUSY"), () => new ApiError("http", 422, "VALIDATION_FAILED")]) {
-      const storage = memory(), counter = new MemorySendCounter();
+      const storage = memory(), counter = new MemorySendBudget();
       const a = rig({ storage, counter, send: failure });
       await a.recovery.begin(startOf);
       await pass(10_000);
@@ -389,12 +396,12 @@ describe("the cancel after a reload or in another owner (2.8.2, 2.7.4)", () => {
   });
 
   it("C053 (б) after a refusal a reload with a trustworthy count (the same count store, a new owner by resume) sends no POST", async () => {
-    const storage = memory(), counter = new MemorySendCounter();
+    const storage = memory(), counter = new MemorySendBudget();
     const a = rig({ storage, counter, send: () => refusal("SESSION_BUSY") });
     await a.recovery.begin(startOf);
     await pass(1_000);
     a.recovery.dispose();
-    expect(await counter.load(CANCEL)).toEqual({ reserved: 1, transmitted: 1, forbidden: true });
+    expect(await storedMarks(counter, CANCEL)).toEqual({ reserved: 1, transmitted: 1, forbidden: true });
     const b = rig({ storage, counter, send: () => applied("cancelled") });
     expect(await b.recovery.resume()).toEqual(STORED);
     await pass(600_000);
@@ -403,9 +410,10 @@ describe("the cancel after a reload or in another owner (2.8.2, 2.7.4)", () => {
   });
 
   it("C053 (в) after a refusal the closure cannot be stored: the next owner still sends no POST", async () => {
-    const storage = memory(), inner = new MemorySendCounter();
-    const counter: SendCounter = { load: id => inner.load(id), clear: id => inner.clear(id), save: (id, marks) => inner.save(id, marks),
-      forbidSends: async () => { throw new Error("storage"); } };
+    class Failing extends MemorySendBudget {
+      override forbidSends(): Promise<boolean> { return Promise.reject(new Error("storage")); }
+    }
+    const storage = memory(), counter = new Failing();
     const a = rig({ storage, counter, send: () => refusal("SESSION_BUSY") });
     await a.recovery.begin(startOf);
     await pass(1_000);
@@ -617,11 +625,14 @@ describe("the cancel over the real HTTP adapter (3.3.13)", () => {
     const api = createStartCancelApi({ fetcher, timeoutMs: 15_000, maxResponseBytes: 10_000, gate: testGate() });
     const origin = { client_instance_id: CLIENT, document_id: id(2) };
     const host: StartCancelHost = {
-      send: (intent, transmitted) => { transmitted(); return api.send("t", "p", { ...intent, ...origin }); },
+      send: async (intent, hooks) => {
+        if (!(await hooks.prepare())) throw new NotPreparedError();
+        hooks.started(); return api.send("t", "p", { ...intent, ...origin });
+      },
       status: intent => readWithTicket({ ...intent, ...origin }, (__command, __ticket) => api.status("t", "p", __command, __ticket)),
       isLive: () => true, windowCheck: () => Promise.resolve(true), onUpdate: () => undefined,
     };
-    const recovery = new StartCancelRecovery({ host, store: new StartCancelPendingStore(memory(), "written"), counter: new MemorySendCounter(),
+    const recovery = new StartCancelRecovery({ host, store: new StartCancelPendingStore(memory(), "written"), budget: cancelBudget(new MemorySendBudget()),
       clock: systemRecoveryClock, active: true, profileId: PROFILE, clientInstanceId: CLIENT, pair: "ru-de", newId: () => CANCEL });
     await recovery.begin(startOf);
     await tick(0);

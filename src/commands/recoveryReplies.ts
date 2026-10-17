@@ -23,8 +23,8 @@ export type TerminationReason =
 
 /** The answer to one send (POST) of the retained intent, classified by DESIGN D-RECOV table 2. */
 export type SendResult =
-  /** 2.1 / 2.2: written, or refused with a known business code. */
-  | { kind: "settled"; outcome: "accepted" | "rejected" }
+  /** 2.1 / 2.2: written, or refused with a known business code (code: the refusal's, when the lane knows it). */
+  | { kind: "settled"; outcome: "accepted" | "rejected"; code?: string | null }
   /** 2.3: the same command_id carries another payload on the server (Я17). */
   | { kind: "mismatch" }
   /** 2.4. */
@@ -54,7 +54,7 @@ export type SendResult =
  */
 export type CheckResult =
   /** 2.1: the command is on the server (its own outcome); the result is restored from the fact, nothing is sent. */
-  | { kind: "recorded"; outcome: "accepted" | "rejected" }
+  | { kind: "recorded"; outcome: "accepted" | "rejected"; code?: string | null }
   /** 2.3. */
   | { kind: "mismatch" }
   /** 2.4 / 2.10 / 2.11. */
@@ -87,10 +87,18 @@ function accessReason(error: unknown): "reauth" | "access_lost" {
 /** HTTP refusals that the server answers before any write and that a retry of the same payload repeats. */
 const DEFINITE_REFUSALS: readonly (readonly [number, string])[] = [[422, "VALIDATION_FAILED"], [409, "VERSION_CONFLICT"]];
 
+/**
+ * The pre-request step of a send (CP5b, C555 п.2) did not let the request go: the slot of the attempt was not moved to
+ * "sending", or the document changed while it was being written. No request was made.
+ */
+export class NotPreparedError extends Error {
+  constructor() { super("not prepared"); }
+}
+
 /** The class of a failed POST. Anything not named below is a lost reply: the write may have happened. */
 export function sendFailure(error: unknown): SendResult {
-  // PAUSED_BEFORE_SEND (L1/L2): fetch never started, so nothing went out and the reservation goes back (I3).
-  if (error instanceof ClosedAccessError || error instanceof PausedBeforeSendError) return { kind: "not_sent" };
+  // PAUSED_BEFORE_SEND (L1/L2): fetch never started, so nothing went out (I3).
+  if (error instanceof ClosedAccessError || error instanceof PausedBeforeSendError || error instanceof NotPreparedError) return { kind: "not_sent" };
   if (accessLost(error)) return { kind: "terminated", reason: accessReason(error) };
   if (httpCode(error, 409, "COMMAND_PAYLOAD_MISMATCH")) return { kind: "mismatch" };
   if (httpCode(error, 409, "DOCUMENT_STALE")) return { kind: "window_stale" };

@@ -125,7 +125,7 @@ describe("the screen's decision for a recovered action (c.screen)", () => {
 describe("the recovery machine's part (c.recovery, c.budget)", () => {
   it("journals each change of state of one command and the spent budget, with the machine's send numbers", async () => {
     const { RecoveryMachine } = await import("../commands/recoveryMachine");
-    const { MemorySendCounter } = await import("../commands/sendCounter");
+    const { testBudget } = await import("../commands/budget.test-support");
     vi.useFakeTimers();
     try {
       const journal = new ClientJournal({ clientVersion: "0.0.0", send: vi.fn(), openStore: () => Promise.reject(new Error("none")) });
@@ -133,13 +133,16 @@ describe("the recovery machine's part (c.recovery, c.budget)", () => {
       journal.admit(profileId);
       const cmd = "55555555-5555-4555-8555-555555555555";
       const attempts: number[] = [];
+      const intent = { command_id: cmd, kind: "answer.submit", session_id: documentId, answer: "MARKER-answer" };
       const machine = new RecoveryMachine({
-        intent: { command_id: cmd, kind: "answer.submit", session_id: documentId, answer: "MARKER-answer" },
-        counter: new MemorySendCounter(), active: true,
+        intent, budget: testBudget(intent), active: true,
         clock: { now: () => performance.now(), schedule: (callback, delayMs) => ({ id: setTimeout(callback, delayMs) }),
           cancel: timer => clearTimeout(timer.id as ReturnType<typeof setTimeout>) },
         ports: {
-          async send(_intent, transmitted) { attempts.push(journal.attempt(cmd)); transmitted(); return { kind: "lost", cause: "network" }; },
+          async send(_intent, hooks) {
+            if (!(await hooks.prepare())) return { kind: "not_sent" };
+            attempts.push(journal.attempt(cmd)); hooks.started(); return { kind: "lost", cause: "network" };
+          },
           async check() { return { kind: "not_recorded" }; },
           async probe() { return true; }, isLive: () => true, windowCheck: async () => true,
         },

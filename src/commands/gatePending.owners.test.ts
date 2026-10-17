@@ -163,12 +163,17 @@ describe("structure of the readback registry (AC-54, R1, R6, M-P03-8)", () => {
     expect(missing).toEqual([]);
   });
 
-  it("L1 stands before transmitted in both automatic families (M-P03-5)", () => {
+  it("the pre-request step, then L1, then started in both automatic families (M-P03-5; CP5b)", () => {
     for (const file of ["written/writtenDocumentCommands.ts", "learning/learningDocumentCommands.ts"]) {
       const code = sources.get(file)!;
+      const prepare = code.indexOf("if (hooks && !(await hooks.prepare())) throw new NotPreparedError();");
       const l1 = code.indexOf("if (!gate.mayWrite(intent.command_id)) throw new PausedBeforeSendError(\"paused\");");
-      expect(l1, file).toBeGreaterThan(0);
-      expect(code.indexOf("transmitted?.();", l1), file).toBeGreaterThan(l1);
+      expect(prepare, file).toBeGreaterThan(0);
+      expect(l1, file).toBeGreaterThan(prepare);
+      // C565: the send is counted as gone only by the transport's callback, after L2 and right before fetch.
+      expect(code.indexOf("hooks?.started(); controller.sendStarted();"), file).toBeGreaterThan(0);
+      expect(code.match(/hooks\?\.started\(\)/g), file).toHaveLength(1);
+      expect(code.indexOf("api.send(", l1) > l1 || code.indexOf("results.send(", l1) > l1, file).toBe(true);
     }
   });
 });

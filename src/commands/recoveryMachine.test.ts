@@ -6,7 +6,8 @@ import { ClosedAccessError } from "../app/openedAccess";
 import { systemRecoveryClock } from "./recoveryClock";
 import { RecoveryMachine, type RecoverySnapshot } from "./recoveryMachine";
 import type { CheckResult, SendResult } from "./recoveryReplies";
-import { MemorySendCounter, type SendCounter } from "./sendCounter";
+import { seedMarks, storedMarks, testBudget, type Marks } from "./budget.test-support";
+import { MemorySendBudget } from "./sendBudget";
 
 type Intent = { command_id: string; kind: string; session_id: string; answer: string };
 /** wire: a send whose request really started (it reached the network); a client refusal before it is not one. */
@@ -30,7 +31,10 @@ type Rig = {
   posts(): number[];
   ops(): Call["op"][];
   state(): RecoverySnapshot["state"]["name"];
-  counter: SendCounter;
+  /** The store of the page the machine's budget lives in (the memory model of the durable store). */
+  store: MemorySendBudget;
+  /** The record of INTENT as the two numbers of the earlier count. */
+  marks(): Promise<Marks | null>;
 };
 
 /** One action against a scripted server. n counts the calls of each kind from 1; t is ms since the start. */
@@ -42,7 +46,7 @@ function rig(script: {
   /** The window check after DOCUMENT_STALE; default: the answer of live(). */
   windowCheck?: () => Promise<boolean>;
   active?: boolean;
-  counter?: SendCounter;
+  store?: MemorySendBudget;
   /** Whether send n reports its start; default true for every request that reaches the network. */
   transmit?: (n: number) => boolean;
   keepChecking?: boolean;
@@ -54,18 +58,22 @@ function rig(script: {
     if (reply instanceof Error) throw reply;
     return reply;
   };
-  const counter = script.counter ?? new MemorySendCounter();
+  const store = script.store ?? new MemorySendBudget();
   const machine = new RecoveryMachine<Intent>({
-    intent: INTENT, counter, clock: systemRecoveryClock, active: script.active ?? true,
+    intent: INTENT, budget: testBudget(INTENT, { store }), clock: systemRecoveryClock, active: script.active ?? true,
     ...(script.keepChecking === undefined ? {} : { keepChecking: script.keepChecking }),
     onUpdate: (snapshot) => updates.push(snapshot),
     ports: {
-      send: (intent, transmitted) => {
+      send: async (intent, hooks) => {
         const t = performance.now() - start, n = ++counts.send;
         const reply = (script.send ?? (() => LOST))(n, t);
-        const wire = !(reply instanceof ClosedAccessError) && !(typeof reply === "object" && "kind" in reply && reply.kind === "not_sent");
-        if (wire && (script.transmit ?? (() => true))(n)) transmitted();
-        calls.push({ at: t, op: "send", active: machine.snapshot().active, body: JSON.stringify(intent), wire });
+        const active = machine.snapshot().active;
+        let wire = !(reply instanceof ClosedAccessError) && !(typeof reply === "object" && "kind" in reply && reply.kind === "not_sent");
+        // The pre-request step is the last await before the request (CP5b): a false answer sends nothing.
+        if (wire && !(await hooks.prepare())) wire = false;
+        if (wire && (script.transmit ?? (() => true))(n)) hooks.started();
+        calls.push({ at: t, op: "send", active, body: JSON.stringify(intent), wire });
+        if (!wire && !(reply instanceof Error) && !(typeof reply === "object" && "kind" in reply && reply.kind === "not_sent")) return { kind: "not_sent" };
         return answer(reply);
       },
       check: () => {
@@ -86,7 +94,7 @@ function rig(script: {
     },
   });
   return {
-    machine, calls, updates, counter,
+    machine, calls, updates, store, marks: () => storedMarks(store, INTENT.command_id),
     at: (op) => calls.filter((call) => op === undefined || call.op === op).map((call) => call.at),
     posts: () => calls.filter((call) => call.op === "send" && call.wire).map((call) => call.at),
     ops: () => calls.map((call) => call.op),
@@ -126,7 +134,7 @@ describe("automatic recovery of one action", () => {
     expect(r.machine.snapshot().state).toEqual({ name: "settled", outcome: "accepted" });
     await pass(600_000);
     expect(r.calls).toHaveLength(2);
-    expect(await r.counter.load(INTENT.command_id)).toBeNull(); // the count goes with the settled action
+    expect(await r.marks()).toBeNull(); // the count goes with the settled action
   });
 
   it("8.2 confirmed absence: 2 s pause, a check right before the retry, the same command_id and the same body", async () => {
@@ -257,12 +265,12 @@ describe("automatic recovery of one action", () => {
   });
 
   it("8.7 (stage 1 form) a machine re-created inside the same document continues the count: 3 + 3 sends", async () => {
-    const counter = new MemorySendCounter();
-    const first = rig({ counter });
+    const store = new MemorySendBudget();
+    const first = rig({ store });
     first.machine.begin();
     await pass(7_000);
     first.machine.dispose();
-    const again = rig({ counter });
+    const again = rig({ store });
     again.machine.resume();
     await pass(600_000);
     // No loss time is known after re-creation: each pause is a full pause from the confirming check.
@@ -310,26 +318,26 @@ describe("automatic recovery of one action", () => {
     expect(r.posts()).toEqual([0, 5_000, 15_000, 35_000, 65_000, 95_000]);
     expect(r.machine.snapshot()).toMatchObject({ state: { name: "maintenance", budgetSpent: true }, sends: 6, transmitted: 6 });
     expect(r.updates.map((update) => update.state.name)).not.toContain("exhausted");
-    expect(await r.counter.load(INTENT.command_id)).toEqual({ reserved: 6, transmitted: 6, lastMaintenance: true });
+    expect(await r.marks()).toEqual({ reserved: 6, transmitted: 6, lastMaintenance: true });
   });
 
   it("Н10 / D17 a machine re-created on the shared count {6, 6, last in a pause}: the pause again, not an exhaustion", async () => {
-    const counter = new MemorySendCounter();
-    const first = rig({ counter, send: (n) => n < 6 ? LOST : new ApiError("http", 503, "MAINTENANCE") });
+    const store = new MemorySendBudget();
+    const first = rig({ store, send: (n) => n < 6 ? LOST : new ApiError("http", 503, "MAINTENANCE") });
     first.machine.begin();
     await pass(600_000);
     expect(first.machine.snapshot().state).toMatchObject({ name: "maintenance", budgetSpent: true });
     first.machine.dispose();
-    const again = rig({ counter });
+    const again = rig({ store });
     again.machine.resume();
     await pass(600_000);
     expect(again.posts()).toEqual([]);
     expect(again.machine.snapshot()).toMatchObject({ state: { name: "maintenance", budgetSpent: true }, sends: 6, transmitted: 6 });
     expect(again.updates.map((update) => update.state.name)).not.toContain("exhausted");
     // An older record without the flag is {6, 6} with lastMaintenance false: the exhaustion stays as before.
-    const old = new MemorySendCounter();
-    await old.save(INTENT.command_id, { reserved: 6, transmitted: 6 });
-    const plain = rig({ counter: old });
+    const old = new MemorySendBudget();
+    await seedMarks(old, INTENT, { reserved: 6, transmitted: 6 });
+    const plain = rig({ store: old });
     plain.machine.resume();
     await pass(0);
     expect(plain.state()).toBe("exhausted");
@@ -340,9 +348,9 @@ describe("automatic recovery of one action", () => {
       probe: (n) => n === 1 });
     r.machine.begin();
     await pass(0);
-    expect(await r.counter.load(INTENT.command_id)).toEqual({ reserved: 1, transmitted: 1, lastMaintenance: true });
+    expect(await r.marks()).toEqual({ reserved: 1, transmitted: 1, lastMaintenance: true });
     await pass(5_000);
-    expect(await r.counter.load(INTENT.command_id)).toEqual({ reserved: 2, transmitted: 2 });
+    expect(await r.marks()).toEqual({ reserved: 2, transmitted: 2 });
   });
 
   it("8.10 / D4 an overrun pause (wait 0) whose readiness probe refuses, with returns from the background: one POST, no close", async () => {
@@ -423,7 +431,7 @@ describe("automatic recovery of one action", () => {
     await pass(0);
     expect(r.ops()).toEqual(["send", "check"]);
     expect(r.machine.snapshot()).toMatchObject({ state: { name: "retry_wait" }, sends: 1, transmitted: 1 });
-    expect(await r.counter.load(INTENT.command_id)).toEqual({ reserved: 1, transmitted: 1 });
+    expect(await r.marks()).toEqual({ reserved: 1, transmitted: 1 });
     await pass(600_000);
     expect(r.posts()).toEqual([0, 2_000]);
   });
@@ -526,14 +534,11 @@ describe("automatic recovery of one action", () => {
     expect(r.posts()).toEqual([0]);
   });
 
-  it("8.20 a failed counter write: the POST does not go out, the count is unknown, only checks follow", async () => {
-    const failing: SendCounter = {
-      load: async () => null,
-      forbidSends: async () => undefined,
-      save: async () => { throw new Error("quota"); },
-      clear: async () => undefined,
-    };
-    const r = rig({ counter: failing });
+  it("8.20 a failed budget write: the POST does not go out, the count is unknown, only checks follow", async () => {
+    class Failing extends MemorySendBudget {
+      override createAndReserve(): never { throw new Error("quota"); }
+    }
+    const r = rig({ store: new Failing() });
     r.machine.begin();
     await pass(600_000);
     expect(r.at("send")).toEqual([]);
@@ -541,16 +546,12 @@ describe("automatic recovery of one action", () => {
     expect(r.machine.snapshot()).toMatchObject({ state: { name: "counter_unknown" }, sends: null });
   });
 
-  it("a failed counter write before a retry stops the retries; the recorded fact still settles", async () => {
+  it("a failed budget write before a retry stops the retries; the recorded fact still settles", async () => {
     let fail = false;
-    const counter = new MemorySendCounter();
-    const flaky: SendCounter = {
-      load: (id) => counter.load(id),
-      forbidSends: (id) => counter.forbidSends(id),
-      save: (id, marks) => fail ? Promise.reject(new Error("quota")) : counter.save(id, marks),
-      clear: (id) => counter.clear(id),
-    };
-    const r = rig({ counter: flaky, check: (_n, t) => t < 100_000 ? ABSENT : RECORDED });
+    class Flaky extends MemorySendBudget {
+      override reserve(...args: Parameters<MemorySendBudget["reserve"]>) { return fail ? Promise.reject(new Error("quota")) : super.reserve(...args); }
+    }
+    const r = rig({ store: new Flaky(), check: (_n, t) => t < 100_000 ? ABSENT : RECORDED });
     r.machine.begin();
     await pass(0);
     fail = true;
@@ -723,9 +724,9 @@ describe("automatic recovery of one action", () => {
   });
 
   it("a resumed action loads its count before the check even if the window returns meanwhile", async () => {
-    const counter = new MemorySendCounter();
-    await counter.save(INTENT.command_id, { reserved: 5, transmitted: 5 });
-    const r = rig({ counter, active: false });
+    const store = new MemorySendBudget();
+    await seedMarks(store, INTENT, { reserved: 5, transmitted: 5 });
+    const r = rig({ store, active: false });
     r.machine.resume();
     r.machine.setActive(true);
     await pass(600_000);
@@ -820,11 +821,14 @@ describe("automatic recovery of one action", () => {
   });
 
   it("Q25 a corrupt loaded count is not trusted: only checks, no POST, no exhaustion", async () => {
-    const corrupt: unknown[] = [7, -1, 2.5, Number.NaN, "3", { reserved: 7, transmitted: 7 }, { reserved: -1, transmitted: 0 },
-      { reserved: 2.5, transmitted: 1 }, { reserved: 3, transmitted: 4 }, { reserved: 3 }, { reserved: 6, transmitted: 6, lastMaintenance: "yes" }, null];
+    const valid = await seedMarks(new MemorySendBudget(), INTENT, { reserved: 2, transmitted: 2 });
+    const corrupt: unknown[] = [7, -1, 2.5, Number.NaN, "3", { reserved: 7, transmitted: 7 }, { ...valid, slots: valid.slots.slice(1) },
+      { ...valid, slots: [...valid.slots.slice(0, 5), { state: "lost" }] }, { ...valid, intentHash: "0".repeat(64) },
+      { ...valid, lastMaintenance: "yes" }, { ...valid, sendBan: false }, { ...valid, extra: 1 }, null];
     for (const value of corrupt) {
-      const counter: SendCounter = { load: async () => value as never, save: async () => undefined, forbidSends: async () => undefined, clear: async () => undefined };
-      const r = rig({ counter });
+      const store = new MemorySendBudget();
+      store.seed(INTENT.command_id, value);
+      const r = rig({ store });
       r.machine.resume();
       await pass(600_000);
       expect(r.posts()).toEqual([]);
@@ -848,13 +852,13 @@ describe("automatic recovery of one action", () => {
   });
 
   it("two marks: reserved before the network, transmitted once the request starts", async () => {
-    const counter = new MemorySendCounter();
+    const store = new MemorySendBudget();
     const seen: unknown[] = [];
-    const r = rig({ counter, transmit: () => false, send: async () => { seen.push(await counter.load(INTENT.command_id)); return LOST; } });
+    const r = rig({ store, transmit: () => false, send: async () => { seen.push(await storedMarks(store, INTENT.command_id)); return LOST; } });
     r.machine.begin();
     await pass(0);
     expect(seen).toEqual([{ reserved: 1, transmitted: 0 }]); // reserved before the POST, nothing proven sent yet
-    const marked = rig({ counter: new MemorySendCounter(), send: () => ACCEPTED });
+    const marked = rig({ send: () => ACCEPTED });
     marked.machine.begin();
     await pass(0);
     expect(marked.machine.snapshot()).toMatchObject({ sends: 1, transmitted: 1 });
@@ -862,19 +866,15 @@ describe("automatic recovery of one action", () => {
 
   it("two marks: a reservation stopped before the network (background) is given back; the return sends #1, not #2", async () => {
     let unblock!: () => void;
-    const memory = new MemorySendCounter();
-    let first = true;
-    const slow: SendCounter = {
-      load: (id) => memory.load(id),
-      forbidSends: (id) => memory.forbidSends(id),
-      save: (id, marks) => {
-        if (!first) return memory.save(id, marks);
-        first = false;
-        return new Promise<void>((resolve) => { unblock = () => { void memory.save(id, marks).then(resolve); }; });
-      },
-      clear: (id) => memory.clear(id),
-    };
-    const r = rig({ counter: slow, send: () => ACCEPTED });
+    class Slow extends MemorySendBudget {
+      override createAndReserve(...args: Parameters<MemorySendBudget["createAndReserve"]>) {
+        return new Promise<Awaited<ReturnType<MemorySendBudget["createAndReserve"]>>>((resolve) => {
+          unblock = () => { void super.createAndReserve(...args).then(resolve); };
+        });
+      }
+    }
+    const memory = new Slow();
+    const r = rig({ store: memory, send: () => ACCEPTED });
     r.machine.begin();
     await pass(0);
     r.machine.setActive(false);
@@ -882,7 +882,7 @@ describe("automatic recovery of one action", () => {
     await pass(10_000);
     expect(r.calls).toEqual([]);
     expect(r.machine.snapshot()).toMatchObject({ sends: 0, transmitted: 0 });
-    expect(await memory.load(INTENT.command_id)).toEqual({ reserved: 0, transmitted: 0 });
+    expect(await storedMarks(memory, INTENT.command_id)).toEqual({ reserved: 0, transmitted: 0 });
     r.machine.setActive(true);
     await pass(0);
     expect(r.ops()).toEqual(["check", "send"]);
@@ -898,30 +898,34 @@ describe("automatic recovery of one action", () => {
     expect(r.machine.snapshot()).toMatchObject({ state: { name: "settled" }, sends: 1, transmitted: 1 });
   });
 
-  it("two marks: six reservations but one never proven sent — no exhaustion, only checks (root decision, pending owner)", async () => {
+  it("two marks: a send never proven sent stays unsettled — no further send, no exhaustion, only checks (CP5a reserveStep, R2-07Б)", async () => {
+    // Send 3 reported no start and its reply was lost: nobody can write its outcome, so its slot is not retryable and no
+    // later reservation is allowed — CP5a reserveStep answers "unsettled" while a held slot is not retryable (C060 states
+    // the same rule for a reload: a slot whose outcome nobody wrote forbids the next send in every window); an unknown
+    // count only checks (R2-07Б). The earlier page count let three more go out over it.
     const r = rig({ transmit: (n) => n !== 3 });
     r.machine.begin();
     await pass(600_000);
-    expect(r.posts()).toHaveLength(6);
-    expect(r.machine.snapshot()).toMatchObject({ state: { name: "counter_unknown", cause: "unconfirmed" }, sends: 6, transmitted: 5 });
+    expect(r.posts()).toHaveLength(3);
+    expect(r.machine.snapshot()).toMatchObject({ state: { name: "counter_unknown", cause: "unconfirmed" }, sends: 3, transmitted: 2 });
     expect(r.updates.map((update) => update.state.name)).not.toContain("exhausted");
     const checks = r.at("check").length;
     await pass(600_000);
-    expect(r.posts()).toHaveLength(6);
+    expect(r.posts()).toHaveLength(3);
     expect(r.at("check").length).toBeGreaterThan(checks);
   });
 
   it("two marks after a reload (durable form): 6 reserved and 5 transmitted only checks; 6 and 6 exhausts after the check", async () => {
-    const unconfirmed = new MemorySendCounter();
-    await unconfirmed.save(INTENT.command_id, { reserved: 6, transmitted: 5 });
-    const a = rig({ counter: unconfirmed });
+    const unconfirmed = new MemorySendBudget();
+    await seedMarks(unconfirmed, INTENT, { reserved: 6, transmitted: 5 });
+    const a = rig({ store: unconfirmed });
     a.machine.resume();
     await pass(600_000);
     expect(a.posts()).toEqual([]);
     expect(a.state()).toBe("counter_unknown");
-    const spent = new MemorySendCounter();
-    await spent.save(INTENT.command_id, { reserved: 6, transmitted: 6 });
-    const b = rig({ counter: spent });
+    const spent = new MemorySendBudget();
+    await seedMarks(spent, INTENT, { reserved: 6, transmitted: 6 });
+    const b = rig({ store: spent });
     b.machine.resume();
     await pass(0);
     expect(b.ops()).toEqual(["check"]);
@@ -988,14 +992,14 @@ describe("keepChecking: checks without sends (D-CP2C-START 2.4.1б.3, C038 п. 3
   });
 
   it("a definite refusal of a send: no further POST, even with the budget left; checks at 5, 15, 35 s; a fact found later settles", async () => {
-    const counter = new MemorySendCounter();
-    const r = rig({ keepChecking: true, counter, send: () => REFUSED, check: (_n, t) => t >= 60_000 ? RECORDED : ABSENT });
+    const store = new MemorySendBudget();
+    const r = rig({ keepChecking: true, store, send: () => REFUSED, check: (_n, t) => t >= 60_000 ? RECORDED : ABSENT });
     r.machine.begin();
     await pass(0);
     // The closure is stored with the count (C053): one send went out, none is left for any owner.
     expect(r.machine.snapshot()).toMatchObject({ state: { name: "checks_only", check: 1, cause: "refused", code: "SESSION_BUSY" },
       sends: 1, transmitted: 1, remaining: 0 });
-    expect(await counter.load(INTENT.command_id)).toEqual({ reserved: 1, transmitted: 1, forbidden: true });
+    expect(await storedMarks(store, INTENT.command_id)).toEqual({ reserved: 1, transmitted: 1, forbidden: true });
     await pass(600_000);
     expect(r.posts()).toEqual([0]);
     expect(r.at("check")).toEqual([5_000, 15_000, 35_000, 65_000]);
@@ -1015,14 +1019,14 @@ describe("keepChecking: checks without sends (D-CP2C-START 2.4.1б.3, C038 п. 3
 
   it("C053 (а, б) a later owner or a reloaded machine on the same count after a refusal or a conflict: only checks, never a POST", async () => {
     for (const reply of [REFUSED, MISMATCH]) {
-      const counter = new MemorySendCounter();
-      const a = rig({ keepChecking: true, counter, send: () => reply });
+      const store = new MemorySendBudget();
+      const a = rig({ keepChecking: true, store, send: () => reply });
       a.machine.begin();
       await pass(1_000);
       a.machine.dispose();
-      expect(await counter.load(INTENT.command_id)).toEqual({ reserved: 1, transmitted: 1, forbidden: true });
+      expect(await storedMarks(store, INTENT.command_id)).toEqual({ reserved: 1, transmitted: 1, forbidden: true });
       // A trustworthy count alone allows no POST once a proven refusal closed the sends.
-      const b = rig({ keepChecking: true, counter, send: () => ACCEPTED });
+      const b = rig({ keepChecking: true, store, send: () => ACCEPTED });
       b.machine.resume();
       await pass(600_000);
       expect(b.posts()).toEqual([]);
@@ -1030,36 +1034,35 @@ describe("keepChecking: checks without sends (D-CP2C-START 2.4.1б.3, C038 п. 3
     }
   });
 
-  it("C053 the ban is part of the count: a corrupt flag is an unknown count; a later save cannot lift it; a machine without keepChecking honours it", async () => {
-    const corrupt: SendCounter = { load: async () => ({ reserved: 1, transmitted: 1, forbidden: "maybe" } as never),
-      save: async () => undefined, forbidSends: async () => undefined, clear: async () => undefined };
-    const r = rig({ keepChecking: true, counter: corrupt, send: () => ACCEPTED });
+  it("C053 the ban is part of the record: a corrupt flag is an unknown count; a machine without keepChecking honours it", async () => {
+    const corrupt = new MemorySendBudget();
+    const record = await seedMarks(new MemorySendBudget(), INTENT, { reserved: 1, transmitted: 1 });
+    corrupt.seed(INTENT.command_id, { ...record, sendBan: "maybe" });
+    const r = rig({ keepChecking: true, store: corrupt, send: () => ACCEPTED });
     r.machine.resume();
     await pass(120_000);
     expect(r.posts()).toEqual([]);
     expect(r.state()).toBe("counter_unknown");
-    const closed = new MemorySendCounter();
-    await closed.save(INTENT.command_id, { reserved: 1, transmitted: 1 });
-    await closed.forbidSends(INTENT.command_id);
-    await closed.forbidSends(INTENT.command_id);
-    await closed.save(INTENT.command_id, { reserved: 1, transmitted: 1 });
-    expect(await closed.load(INTENT.command_id)).toEqual({ reserved: 1, transmitted: 1, forbidden: true });
-    const plain = rig({ counter: closed, send: () => ACCEPTED });
+    const closed = new MemorySendBudget();
+    await seedMarks(closed, INTENT, { reserved: 1, transmitted: 1, forbidden: true });
+    expect(await storedMarks(closed, INTENT.command_id)).toEqual({ reserved: 1, transmitted: 1, forbidden: true });
+    const plain = rig({ store: closed, send: () => ACCEPTED });
     plain.machine.resume();
     await pass(120_000);
     expect(plain.posts()).toEqual([]);
   });
 
-  it("C053 (в) the ban cannot be stored: the count is dropped, so the next owner only checks", async () => {
-    const memory = new MemorySendCounter();
-    const failing: SendCounter = { load: id => memory.load(id), clear: id => memory.clear(id), save: (id, marks) => memory.save(id, marks),
-      forbidSends: async () => { throw new Error("storage"); } };
-    const a = rig({ keepChecking: true, counter: failing, send: () => REFUSED });
+  it("C053 (в), 10.7.2.12 the ban cannot be stored: the record is NOT dropped; its refused slot was never written retryable, so the next owner only checks", async () => {
+    class Failing extends MemorySendBudget {
+      override forbidSends(): Promise<boolean> { return Promise.reject(new Error("storage")); }
+    }
+    const memory = new Failing();
+    const a = rig({ keepChecking: true, store: memory, send: () => REFUSED });
     a.machine.begin();
     await pass(1_000);
     a.machine.dispose();
-    expect(await memory.load(INTENT.command_id)).toBeNull();
-    const b = rig({ keepChecking: true, counter: failing, send: () => ACCEPTED });
+    expect(await storedMarks(memory, INTENT.command_id)).toEqual({ reserved: 1, transmitted: 1 });
+    const b = rig({ keepChecking: true, store: memory, send: () => ACCEPTED });
     b.machine.resume();
     await pass(600_000);
     expect(b.posts()).toEqual([]);
@@ -1083,9 +1086,9 @@ describe("keepChecking: checks without sends (D-CP2C-START 2.4.1б.3, C038 п. 3
   });
 
   it("a resumed command at six proven sends goes straight to checks; an unknown count stays counter_unknown", async () => {
-    const spent = new MemorySendCounter();
-    await spent.save(INTENT.command_id, { reserved: 6, transmitted: 6 });
-    const a = rig({ keepChecking: true, counter: spent });
+    const spent = new MemorySendBudget();
+    await seedMarks(spent, INTENT, { reserved: 6, transmitted: 6 });
+    const a = rig({ keepChecking: true, store: spent });
     a.machine.resume();
     await pass(0);
     expect(a.state()).toBe("checks_only");

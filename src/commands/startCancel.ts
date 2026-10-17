@@ -4,9 +4,9 @@ import { sameId } from "../api/wireValidation";
 import type { Pair } from "./commandLane";
 import type { PendingSlot } from "./pendingSlot";
 import type { RecoveryClock } from "./recoveryClock";
-import { MAX_SENDS, RecoveryMachine, type RecoverySnapshot } from "./recoveryMachine";
+import type { RecoveryBudget } from "./intentBudget";
+import { MAX_SENDS, RecoveryMachine, type RecoverySnapshot, type RequestHooks } from "./recoveryMachine";
 import type { CheckResult, SendResult, TerminationReason } from "./recoveryReplies";
-import type { SendCounter } from "./sendCounter";
 import { startCancelIntent, type StartCancelCurrent, type StartCancelIntent, type StartCancelOutcome,
   type StartCancelReply, type StartCancelStatus } from "./startCancelApi";
 import type { StartCancelPending } from "./startCancelPending";
@@ -35,8 +35,11 @@ export function cancelDue(end: StartEnd, policy: StartCancelPolicy = noFurtherCa
 
 /** The document a cancel runs in; the host sends through the current open handle and never before Stop (2.4.1). */
 export type StartCancelHost = {
-  /** One POST of the cancel; transmitted is told right before the request starts, a refusal before it sent nothing. */
-  send(intent: StartCancelIntent, transmitted: () => void): Promise<StartCancelReply>;
+  /**
+   * One POST of the cancel: hooks.prepare is its last await before the request (false — no request), hooks.started is
+   * told right before the request starts; a refusal before it sent nothing.
+   */
+  send(intent: StartCancelIntent, hooks: RequestHooks): Promise<StartCancelReply>;
   /** GET /commands/{cancel_id} with the cancel's fingerprint and the session number. */
   status(intent: StartCancelIntent): Promise<StartCancelStatus>;
   isLive(): boolean;
@@ -49,7 +52,8 @@ export type StartCancelHost = {
 export type StartCancelOptions = {
   host: StartCancelHost;
   store: PendingSlot<StartCancelPending>;
-  counter: SendCounter;
+  /** The durable budget of the cancel (CP5b; family start_cancel, target its session): the page's store, fail-closed. */
+  budget(intent: StartCancelIntent): RecoveryBudget;
   clock: RecoveryClock;
   active: boolean;
   profileId: string;
@@ -215,12 +219,12 @@ export class StartCancelRecovery {
     const host = this.options.host;
     // pending owner: CL044 А-5.1.3 — no manual send after the automatic ones (unfinished default: only checks).
     // pending owner: CL044 А-5.1.5 — a send met by a planned pause counts, as the machine counts it today.
+    const intent = startCancelIntent(record.cancelCommandId, record.sessionId);
     const machine = new RecoveryMachine<StartCancelIntent>({
-      intent: startCancelIntent(record.cancelCommandId, record.sessionId),
-      counter: this.options.counter, clock: this.options.clock, active: this.active, keepChecking: true,
+      intent, budget: this.options.budget(intent), clock: this.options.clock, active: this.active, keepChecking: true,
       ports: {
         // An answer that arrives after dispose (a replaced owner) changes nothing here; the machine drops it as well.
-        send: async (intent, transmitted) => this.sent(this.current(await host.send(intent, transmitted))),
+        send: async (copy, hooks) => this.sent(this.current(await host.send(copy, hooks))),
         check: async (intent) => this.checked(this.current(await this.read(intent))),
         // 4.6-В9 variant Б, as the lanes (root decision, pending owner): the probe pauses pace the fact checks.
         probe: () => Promise.resolve(true),

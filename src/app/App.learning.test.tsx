@@ -1,3 +1,4 @@
+import { testBudgetLog } from "../commands/budget.test-support";
 import { withJournalIntake } from "../journal/intake.test-support";
 import { appInstallationRecords } from "./installationApp.test-support";
 import { activeButton } from "./gateButton.test-support";
@@ -26,33 +27,9 @@ import { besidesContext, launch, serveLaunchCard } from "./launchCard.test-suppo
 import { lsPendingRaw, lsSeedRaw } from "../commands/lsPending.test-support";
 
 /**
- * 2.3-А with a known send count (QA-R1-V3 F6): the page's send counter as the owners get it. Transparent unless a test
- * seeds marks: every load is recorded, and `marks` is stored for `ids` whenever an owner takes the counter.
+ * 2.3-А with a known send count (QA-R1-V3 F6), CP5b: the count is seeded into the store of the page for X (materialized
+ * under the identity of the owner that reads it first), and every read of it is logged (testBudgetLog).
  */
-const sendCount = vi.hoisted(() => ({ marks: null as number | null, ids: [] as string[], loads: [] as string[],
-  loaded: [] as { commandId: string; transmitted: number | null }[] }));
-vi.mock("../commands/laneRecovery", async importOriginal => {
-  const original = await importOriginal<typeof import("../commands/laneRecovery")>();
-  const wrapped = new WeakSet<object>();
-  return { ...original, pageSendCounter: (storage: Parameters<typeof original.pageSendCounter>[0]) => {
-    const counter = original.pageSendCounter(storage);
-    if (!wrapped.has(counter)) {
-      wrapped.add(counter);
-      const load = counter.load.bind(counter);
-      counter.load = async (commandId: string) => {
-        sendCount.loads.push(commandId);
-        const marks = await load(commandId);
-        sendCount.loaded.push({ commandId, transmitted: marks?.transmitted ?? null });
-        return marks;
-      };
-    }
-    // Stored again for every owner that takes the counter: an owner of the old pair may clear X meanwhile.
-    if (sendCount.marks !== null) for (const commandId of sendCount.ids) {
-      void counter.save(commandId, { reserved: sendCount.marks, transmitted: sendCount.marks });
-    }
-    return counter;
-  } };
-});
 
 type Fetch = (url: string | URL | Request, init?: RequestInit) => Promise<Response>;
 type Route = (url: string | URL | Request, init: RequestInit | undefined, base: Fetch) => Promise<Response>;
@@ -1929,7 +1906,7 @@ describe("Learning R1: the window refreshes itself into the session of the new p
   // server's «not found» proves no open step of X here, so X is never sent, whatever k is.
   it.each([null, 1, 5])("2.3-А: an old automatic record X with the known send count %s is only checked, never sent", async marks => {
     const X = "7a1b2c3d-0000-4000-8000-00000000dd01", Z = "7a1b2c3d-0000-4000-8000-00000000dd02";
-    sendCount.loads = []; sendCount.loaded = []; sendCount.marks = marks; sendCount.ids = marks === null ? [] : [X];
+    if (marks !== null) testBudgetLog.seeds.set(X, { reserved: marks, transmitted: marks });
     try {
       const a = app(); const world = pairMoved(a.fetcher);
       // The server never received X: its status by ID is «not found» at the current profile.
@@ -1953,14 +1930,14 @@ describe("Learning R1: the window refreshes itself into the session of the new p
       expect(await screen.findByText("Hallo", undefined, exchange)).toBeTruthy();
       await pause(4000);
       // The automatic recovery took X with the page's count (the decision about a send was reached).
-      expect(sendCount.loads).toContain(X);
-      expect(sendCount.loaded.filter(entry => entry.commandId === X).map(entry => entry.transmitted)).toContain(marks);
+      expect(testBudgetLog.loads.map(entry => entry.commandId)).toContain(X);
+      expect(testBudgetLog.loads.filter(entry => entry.commandId === X).map(entry => entry.transmitted)).toContain(marks);
       const onX = a.fetcher.mock.calls.slice(mark).filter(([url, init]) => String(url).includes(X) || String(init?.body ?? "").includes(X))
         .map(([url, init]) => `${init?.method ?? "GET"} ${new URL(String(url), "http://localhost").pathname}`);
       expect(onX.length).toBeGreaterThan(0);
       expect(new Set(onX)).toEqual(new Set([`GET /api/v1/commands/${X}`]));
       expect(a.studyPosts().map(post => post.kind)).toEqual(["session.start"]);
-    } finally { sendCount.marks = null; sendCount.ids = []; }
+    } finally { testBudgetLog.seeds.clear(); }
   }, 30000);
   // C151 forks: a reply below the floor, a reply naming another session, and a refresh that finds the created session
   // closed, another session open or the pair changed again. None is this start's R1 landing: no refresh into it, no new

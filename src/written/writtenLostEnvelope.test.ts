@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { WrittenViewController } from "./writtenViewController";
 import { tick, writtenFixture } from "./writtenFixtures.test-support";
 import { writtenPrimaryKey } from "./writtenPending";
-import { pageSendCounter } from "../commands/laneRecovery";
+import { pageMarks } from "../commands/budget.test-support";
 import { hasPending, readPending } from "../commands/pendingSeed.test-support";
 import { freshTestGate } from "../commands/testGate.test-support";
 
@@ -62,7 +62,7 @@ describe("Q27 written: a lost answer is read by its own ID only", () => {
   it("recorded by the server: the same ID is read without a fingerprint, the result is restored; no new ID, budget or POST", async () => {
     const h = harness();
     const sent = await unknownAnswer(h, "committed", { text: "Haus" });
-    const budget = await pageSendCounter(h.storage).load(sent.command_id);
+    const budget = await pageMarks(h.storage, sent.command_id);
     const ids = h.newId.mock.calls.length, posts = h.answers().length;
     expect(h.deletePayloads()).toBe(1);
     const from = h.fetcher.mock.calls.length;
@@ -75,7 +75,7 @@ describe("Q27 written: a lost answer is read by its own ID only", () => {
       resolved: { commandId: sent.command_id, restored: true } });
     expect(hasPending(h.values, writtenPrimaryKey)).toBe(false);
     expect(h.answers()).toHaveLength(posts); expect(h.newId.mock.calls.length).toBe(ids);
-    expect(await pageSendCounter(h.storage).load(sent.command_id)).toEqual(budget);
+    expect(await pageMarks(h.storage, sent.command_id)).toEqual(budget);
   });
 
   it.each([["a typed answer", { text: "Haus" }], ["«Забыл»", { forgot: true as const }]])(
@@ -83,7 +83,7 @@ describe("Q27 written: a lost answer is read by its own ID only", () => {
       const h = harness();
       const sent = await unknownAnswer(h, "dropped", draft);
       const ids = h.newId.mock.calls.length, posts = h.answers().length;
-      const budget = await pageSendCounter(h.storage).load(sent.command_id);
+      const budget = await pageMarks(h.storage, sent.command_id);
       expect(h.deletePayloads()).toBe(1);
       const from = h.fetcher.mock.calls.length;
       const next = h.own(); await next.refresh(); await h.run(60_000, 5000);
@@ -92,7 +92,7 @@ describe("Q27 written: a lost answer is read by its own ID only", () => {
         pendingIntent: null, lost: { commandId: sent.command_id, sessionOpen: true } });
       expect(state.commands.canStop).toBe(true);
       expect(h.answers()).toHaveLength(posts); expect(h.newId.mock.calls.length).toBe(ids);
-      expect(await pageSendCounter(h.storage).load(sent.command_id)).toEqual(budget);
+      expect(await pageMarks(h.storage, sent.command_id)).toEqual(budget);
       const reads = h.statusReads(sent.command_id, from);
       expect(reads.length).toBeGreaterThan(0);
       expect(reads.every(url => !url.includes("expected_intent_hash"))).toBe(true);
@@ -145,7 +145,7 @@ describe("Q27 written: a lost answer is read by its own ID only", () => {
     expect(grade).toBeDefined();
     view.dispose(); h.fetcher.mockImplementation(h.server.handle);
     const gradesBefore = h.posts().filter(post => post.kind === "result.grade").length;
-    const ids = h.newId.mock.calls.length, budget = await pageSendCounter(h.storage).load(grade.command_id);
+    const ids = h.newId.mock.calls.length, budget = await pageMarks(h.storage, grade.command_id);
     expect(h.deletePayloads()).toBe(1);
     const from = h.fetcher.mock.calls.length;
     const next = h.own(); await next.refresh(); await h.run(5000);
@@ -159,7 +159,7 @@ describe("Q27 written: a lost answer is read by its own ID only", () => {
     const after = sinceReload;
     expect(after.every(post => post.kind === "assignment.present")).toBe(true);
     expect(h.newId.mock.calls.length - ids).toBe(after.length);
-    expect(await pageSendCounter(h.storage).load(grade.command_id)).toEqual(budget);
+    expect(await pageMarks(h.storage, grade.command_id)).toEqual(budget);
     expect(hasPending(h.values, writtenPrimaryKey)).toBe(false);
   });
 

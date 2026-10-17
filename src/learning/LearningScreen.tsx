@@ -167,6 +167,10 @@ export function LearningScreen({ state, language, submitOnEnter, actions, render
     {problem && !isClosed && <p role="status">{problem}</p>}
     {/* 9.2.12 + Q30: the closure C's own budget ran out with the session open (documentLanes closureFailed). */}
     {state.commands.closureFailed && <p role="status">{recoveryCopy[language].closeFailed}</p>}
+    {/* WORKING STUB (Q34, C556 В3; text №16 waits for the owner): the send budget of this page cannot be opened, or the last
+      «Начать» met damaged records; no study send was made. The screen's general unavailability line, no «no connection»,
+      no promise that a restart helps. */}
+    {(state.commands.storageUnavailable || state.commands.startBlocked) && <p role="status">{t.unavailable}</p>}
     {showRecovery && <CommandRecovery className="learning-recovery" language={language} lanes={manualLanes} localOnly={localOnly}
       canRetryPrimary={state.canRetryPrimary} canRetryStop={stop.canRetry} gate={state.commands.gate}
       onCheck={() => { void (localOnly ? actions.cleanup() : actions.refresh()); }} onRetry={lane => { void actions.retry(lane); }} />}

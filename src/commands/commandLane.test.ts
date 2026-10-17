@@ -519,12 +519,12 @@ describe("an unreadable record in the shared slot meets a new intent", () => {
   it("the automatic path (prepare, start) is dropped the same way and never calls the transport hook", async () => {
     const f = fixture(); await f.controller.refresh();
     f.values.set("test.pending", "{not json");
-    const intent = f.controller.prepare(mark) as Intent, transmitted = vi.fn();
-    await f.controller.start(intent, transmitted);
+    const intent = f.controller.prepare(mark) as Intent, hooks = { prepare: vi.fn(async () => true), started: vi.fn() }, transmitted = hooks.started;
+    await f.controller.start(intent, hooks);
     expect(f.controller.snapshot()).toMatchObject({ phase: "blocked", problem: "invalid_pending", pending: false });
-    expect(transmitted).not.toHaveBeenCalled(); expect(f.send).not.toHaveBeenCalled(); expect(f.check).not.toHaveBeenCalled();
+    expect(transmitted).not.toHaveBeenCalled(); expect(hooks.prepare).not.toHaveBeenCalled(); expect(f.send).not.toHaveBeenCalled(); expect(f.check).not.toHaveBeenCalled();
     // Nothing waits for it: a resend has no intent to send.
-    await f.controller.resend(transmitted);
+    await f.controller.resend(hooks);
     expect(f.send).not.toHaveBeenCalled();
   });
   it("once the record is gone, a new action is sent exactly once under a new ID", async () => {
@@ -652,5 +652,56 @@ describe("fix5 (QA r7 Y12): only a direct SESSION_BUSY refusal of a session.star
     await f.controller.begin({ kind, session_id: id(3) });
     expect(f.send).toHaveBeenCalledOnce();
     expect(noted.mock.calls.map(([commandId]) => commandId)).toEqual(signals ? [f.send.mock.calls[0][0].command_id] : []);
+  });
+});
+
+// C561: an automatic first send (with the recovery hooks) dropped over a readable record of another window keeps that block
+// across a refresh while any record is in the slot — a local read only: no check of the record, no send, no new ID. Once the
+// slot is free, the lane is idle again and a new action may begin. A manual action keeps its single drop (as before).
+describe("the block of a dropped automatic intent while the slot is held (C561)", () => {
+  const otherWindow = (): string => JSON.stringify({ schemaVersion: 1, profileId: id(1), clientInstanceId: id(9), pair: "ru-de",
+    intent: { command_id: id(60), kind: "item.mark", session_id: id(3) } });
+  const hooks = () => ({ automatic: true as const, prepare: vi.fn(async () => true), started: vi.fn() });
+  it("refresh keeps it blocked while the record is there; reads only the slot; free slot — idle, and one new action goes", async () => {
+    const f = fixture(); await f.controller.refresh();
+    f.values.set("test.pending", otherWindow());
+    const intent = f.controller.prepare(mark) as Intent, h = hooks();
+    await f.controller.start(intent, h);
+    expect(f.controller.snapshot()).toMatchObject({ phase: "blocked", problem: "pending_changed", pending: false });
+    expect(h.prepare).not.toHaveBeenCalled();
+    const reads = vi.mocked(f.storage.get).mock.calls.length;
+    for (let round = 0; round < 3; round++) {
+      await f.controller.refresh();
+      expect(f.controller.snapshot()).toMatchObject({ phase: "blocked", problem: "pending_changed", pending: false, pendingIntent: null });
+    }
+    expect(vi.mocked(f.storage.get).mock.calls.length).toBeGreaterThan(reads);
+    expect(f.send).not.toHaveBeenCalled(); expect(f.check).not.toHaveBeenCalled(); expect(f.read).not.toHaveBeenCalled();
+    expect(vi.mocked(f.storage.set)).not.toHaveBeenCalled();
+    expect(f.values.get("test.pending")).toBe(otherWindow());
+    f.values.delete("test.pending");
+    await f.controller.refresh();
+    expect(f.controller.snapshot()).toMatchObject({ phase: "idle", problem: null, pending: false });
+    f.send.mockResolvedValueOnce({ outcome: "accepted", state_version: "6" } as unknown as Reply);
+    const ids = f.newId.mock.calls.length;
+    await f.controller.begin(mark);
+    expect(f.send).toHaveBeenCalledOnce();
+    expect(f.newId.mock.calls.length).toBe(ids + 1);
+  });
+  it("a counted manual send (a start: hooks without the automatic mark) keeps its single drop too (CP5b stage 3)", async () => {
+    const f = fixture(); await f.controller.refresh();
+    f.values.set("test.pending", otherWindow());
+    const intent = f.controller.prepare(mark) as Intent;
+    await f.controller.start(intent, { prepare: vi.fn(async () => true), started: vi.fn() });
+    expect(f.controller.snapshot()).toMatchObject({ phase: "blocked", problem: "pending_changed" });
+    await f.controller.refresh();
+    expect(f.controller.snapshot()).toMatchObject({ phase: "idle", pending: false });
+  });
+  it("a manual action dropped over the same record keeps its single drop: the next refresh is idle (accepted before)", async () => {
+    const f = fixture(); await f.controller.refresh();
+    f.values.set("test.pending", otherWindow());
+    await f.controller.begin(mark);
+    expect(f.controller.snapshot()).toMatchObject({ phase: "blocked", problem: "pending_changed" });
+    await f.controller.refresh();
+    expect(f.controller.snapshot()).toMatchObject({ phase: "idle", pending: false });
   });
 });

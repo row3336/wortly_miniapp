@@ -1,3 +1,4 @@
+import type { RequestHooks } from "../commands/recoveryMachine";
 import type { ClosedSessionBoundary, LearningAnswerResponse, LearningSessionProjection, UnavailableCurrent } from "../api/generated";
 import { oneOf, sameId, uuid, version } from "../api/wireValidation";
 import { LaneCore, lostIntent, missingProblem, retryStep, type CommandProblem, type LaneResolved, type LaneSnapshot,
@@ -46,8 +47,11 @@ type Options = {
   pendingStore: PendingSlot<LearningSessionPending>;
   isLive(): boolean;
   newId(): string;
-  /** transmitted, when given, is called right before the request starts (automatic recovery, CT §6.1 п. 4). */
-  send(intent: LearningCommandIntent, transmitted?: () => void): Promise<Reply>;
+  /**
+   * hooks, when given (automatic recovery, CT §6.1 п. 4; CP5b): prepare is awaited as the last step before the request
+   * (false — no request), started is called right before the request starts.
+   */
+  send(intent: LearningCommandIntent, hooks?: RequestHooks): Promise<Reply>;
   check(intent: LearningCommandIntent): Promise<Status>;
   /** Q27 (C458/C467): the status of a lost answer or grade by its ID only; without it a lost command stays unresolved. */
   checkLost?(lost: LostCommand): Promise<Extract<LearningAnswerStatus, { outcome: "accepted" }> | LostMissing>;
@@ -221,7 +225,7 @@ export class LearningCommandController extends LaneCore<LearningCommandIntent, L
       if (!this.live() || !await this.loadPending()) return;
       if (this.outcome) { await this.clearSettled(); return; }
       if (this.lost) { await this.reconcileLost(this.lost); return; }
-      if (!this.pending) { this.phase = "idle"; return; }
+      if (!this.pending) { if (!await this.keepSlotBlock()) this.phase = "idle"; return; }
       if (this.pending.mismatch) {
         this.registry?.settled("mismatch");
         await this.options.pendingStore.markMismatch(this.pending, this.lifetime.signal);
@@ -289,7 +293,7 @@ export class LearningCommandController extends LaneCore<LearningCommandIntent, L
   }
 
   /** first: the new intent of start, never stored or sent before; resend and retry pass a retained one. */
-  private async sendPending(transmitted?: () => void, first = false): Promise<void> {
+  private async sendPending(hooks?: RequestHooks, first = false): Promise<void> {
     const pending = this.pending;
     // The closure C goes out like every intent of this lane; its budget and manual retry are the document's (closureRecovery).
     if (!pending || !this.live() || !sendableIntent(pending.intent)) return;
@@ -301,14 +305,18 @@ export class LearningCommandController extends LaneCore<LearningCommandIntent, L
     catch (error: unknown) {
       // A new intent the shared slot refused (another record, or one it cannot read) was neither stored nor sent: it is no
       // unknown outcome to check or retry, and the record in the slot stays exactly as it is. A retained intent keeps its record.
-      if (first && refusedUnsent(error)) { this.pending = null; this.registry?.cleared(); }
+      if (first && refusedUnsent(error)) {
+        this.pending = null; this.registry?.cleared();
+        // C561: a new automatic intent dropped over another window's record keeps the block while the slot holds it.
+        if (hooks?.automatic) this.holdSlotBlock(error);
+      }
       throw error;
     }
     if (!this.live()) return;
     if (this.preparingStart) this.storedUnsent = pending.intent.command_id;
     // A manual send passes no hook: its exchange stays exactly what it was before automatic recovery.
     const intent = copyLearningCommandIntent(pending.intent);
-    const reply = await (transmitted ? this.options.send(intent, transmitted) : this.options.send(intent));
+    const reply = await (hooks ? this.options.send(intent, hooks) : this.options.send(intent));
     if (!this.live()) return;
     if (reply.outcome === "mismatch") {
       this.observe(reply.state_version);
@@ -345,8 +353,8 @@ export class LearningCommandController extends LaneCore<LearningCommandIntent, L
     const intent = { ...action, command_id: this.options.newId() };
     return validLearningCommandIntent(intent) ? copyLearningCommandIntent(intent) : new Error("invalid Learning action");
   }
-  /** Send a prepared intent once, as begin does; transmitted is told right before its request starts. */
-  start(intent: LearningCommandIntent, transmitted?: () => void): Promise<void> {
+  /** Send a prepared intent once, as begin does; hooks: the pre-request step and the start of its request. */
+  start(intent: LearningCommandIntent, hooks?: RequestHooks): Promise<void> {
     if (this.busy()) return this.running ?? Promise.resolve();
     const pending: LearningSessionPending = { schemaVersion: 1, profileId: this.options.profileId,
       clientInstanceId: this.options.clientInstanceId, pair: this.options.pair, intent: copyLearningCommandIntent(intent) };
@@ -358,7 +366,7 @@ export class LearningCommandController extends LaneCore<LearningCommandIntent, L
     return this.run(async () => {
       this.outcome = null; this.resolved = null; this.rejectionCode = null; this.pending = pending;
       // Every end of this send (refused, failed, or a transport that never started a request) ends the preparation.
-      try { await this.sendPending(transmitted, true); }
+      try { await this.sendPending(hooks, true); }
       catch (error: unknown) {
         // A send refused before its request (a handle replaced under this live owner, or a command the API refused
         // locally) keeps «stored, not sent»; a closed or denied owner keeps nothing.
@@ -371,13 +379,14 @@ export class LearningCommandController extends LaneCore<LearningCommandIntent, L
    * The automatic retry: the retained intent, only while the check that just ran still grants it (canRetry needs
    * retryVerified). The recovery machine checks right before every call (Я15.6), unlike the manual retry below.
    */
-  resend(transmitted?: () => void): Promise<void> {
+  resend(hooks?: RequestHooks): Promise<void> {
     if (!this.snapshot().canRetry) return this.running ?? Promise.resolve();
-    return this.run(() => this.sendPending(transmitted));
+    return this.run(() => this.sendPending(hooks));
   }
-  retry(): Promise<void> {
+  /** hooks: when the send is counted in the durable budget (a start, CP5b stage 3); a plain manual retry passes none. */
+  retry(hooks?: RequestHooks): Promise<void> {
     if (!this.snapshot().canRetry) return this.running ?? Promise.resolve();
-    return this.run(() => this.sendPending());
+    return this.run(() => this.sendPending(hooks));
   }
   release(commandId: string): Promise<void> { return this.forgetCleared(super.release(commandId)); }
   releaseClosed(sessionId: string): Promise<void> { return this.forgetCleared(super.releaseClosed(sessionId)); }

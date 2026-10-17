@@ -6,7 +6,17 @@ import { PendingStoreError } from "./pendingSlot";
 import { LaneRecovery, type LaneRecoveryHost, type RecoveryIntent, type RecoveryLaneState } from "./laneRecovery";
 import { systemRecoveryClock } from "./recoveryClock";
 import { RETRY_PAUSES_MS } from "./recoveryLimits";
-import { MemorySendCounter, type SendCounter } from "./sendCounter";
+import { seedMarks, storedMarks, testLaneBudgets } from "./budget.test-support";
+import type { LaneBudgets } from "./laneRecovery";
+import { NotPreparedError } from "./recoveryReplies";
+import { MemorySendBudget } from "./sendBudget";
+
+type SendCounter = LaneBudgets & { store: MemorySendBudget };
+/** The budgets of one page: one memory store, the key of its pending losses (CP5b). */
+function budgets(): SendCounter {
+  const store = new MemorySendBudget();
+  return Object.assign(testLaneBudgets(store), { store });
+}
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const SESSION = id(9);
@@ -37,15 +47,17 @@ function page() {
       automatic: () => true,
       primary: () => state,
       failure: () => failure,
-      async send(sent, first, transmitted) {
+      async send(sent, first, hooks) {
         if (first && server.refuseFirstSave) {
           failure = new PendingStoreError("changed");
           state = { pending: false, pendingIntent: null, outcome: null, resolved: null, problem: "pending_changed", canRetry: false };
           return;
         }
-        if (server.down) { transmitted(); failure = new ApiError("network"); return; }
+        // The pre-request step is the last await before the request (CP5b).
+        if (!(await hooks.prepare())) { failure = new NotPreparedError(); return; }
+        if (server.down) { hooks.started(); failure = new ApiError("network"); return; }
         calls.push({ at: now(), op: "post", commandId: sent.command_id });
-        transmitted();
+        hooks.started();
         if (server.hold) await server.hold;
         const reply = server.replies.shift() ?? "accepted";
         if (reply === "accepted") { failure = null; state = settled(); return; }
@@ -92,7 +104,7 @@ async function loseSend(r: number, p: ReturnType<typeof page>, counter: SendCoun
   p.server.replies = ["lost"];
   const first = p.owner(counter, DOCUMENT);
   if (r === 1) void first.begin({ ...X });
-  else { await counter.save(X.command_id, { reserved: r - 1, transmitted: r - 1 }); first.sync(); }
+  else { await seedMarks(counter.store, X, { reserved: r - 1, transmitted: r - 1 }); first.sync(); }
   for (let spent = 0; spent < 100_000 && p.lostAt() < 0; spent += 500) await pass(500);
   expect(p.lostAt()).toBeGreaterThanOrEqual(0);
   return first;
@@ -105,7 +117,7 @@ describe("a new owner of the same document after a lost send", () => {
   for (const [index, pause] of RETRY_PAUSES_MS.entries()) {
     const r = index + 1;
     it(`sends at once after its check once the pause of send ${r + 1} has run out, not a full pause later`, async () => {
-      const p = page(), counter = new MemorySendCounter();
+      const p = page(), counter = budgets();
       const first = await loseSend(r, p, counter);
       await pass(100); first.dispose(); p.server.down = false;
       await p.until(pause + 3_000);
@@ -115,7 +127,7 @@ describe("a new owner of the same document after a lost send", () => {
       expect(p.checkedFirst()).toBe(true);
     });
     it(`waits only the rest of the pause of send ${r + 1} when it comes before its end`, async () => {
-      const p = page(), counter = new MemorySendCounter();
+      const p = page(), counter = budgets();
       const first = await loseSend(r, p, counter);
       await pass(100); first.dispose(); p.server.down = false;
       await p.until(Math.round(pause / 2));
@@ -127,7 +139,7 @@ describe("a new owner of the same document after a lost send", () => {
   }
 
   it("gets nothing from another document of the same page and waits its own full pause", async () => {
-    const p = page(), counter = new MemorySendCounter();
+    const p = page(), counter = budgets();
     const first = await loseSend(1, p, counter);
     await pass(100); first.dispose(); p.server.down = false;
     await p.until(1_000);
@@ -142,7 +154,7 @@ describe("the announced end of a planned pause", () => {
   afterEach(() => { vi.useRealTimers(); });
 
   it("still holds a new owner when the send itself met MAINTENANCE", async () => {
-    const p = page(), counter = new MemorySendCounter();
+    const p = page(), counter = budgets();
     p.server.replies = [{ maintenance: 20 }];
     const first = p.owner(counter, DOCUMENT);
     void first.begin({ ...X });
@@ -157,8 +169,8 @@ describe("the announced end of a planned pause", () => {
   });
 
   it("still holds a new owner when only a check met MAINTENANCE and no loss time was known", async () => {
-    const p = page(), counter = new MemorySendCounter();
-    await counter.save(X.command_id, { reserved: 1, transmitted: 1 });
+    const p = page(), counter = budgets();
+    await seedMarks(counter.store, X, { reserved: 1, transmitted: 1 });
     p.lostNow();
     p.server.maintenance = 60;
     const checker = p.owner(counter, DOCUMENT); checker.sync();
@@ -173,8 +185,8 @@ describe("the announced end of a planned pause", () => {
   });
 
   it("is never shortened by a later, shorter pause of another owner", async () => {
-    const p = page(), counter = new MemorySendCounter();
-    await counter.save(X.command_id, { reserved: 1, transmitted: 1 });
+    const p = page(), counter = budgets();
+    await seedMarks(counter.store, X, { reserved: 1, transmitted: 1 });
     p.lostNow();
     p.server.maintenance = 60;
     const long = p.owner(counter, DOCUMENT); long.sync();
@@ -196,7 +208,7 @@ describe("a replaced owner", () => {
   afterEach(() => { vi.useRealTimers(); });
 
   it("never records its late loss for the next owner of the same command", async () => {
-    const p = page(), counter = new MemorySendCounter();
+    const p = page(), counter = budgets();
     let answer!: () => void;
     p.server.hold = new Promise<void>(resolve => { answer = resolve; });
     p.server.replies = ["lost"];
@@ -226,7 +238,7 @@ describe("a new action whose first save is refused over another record (C164)", 
   afterEach(() => { vi.useRealTimers(); });
 
   it("leaves the counts and the loss times of the older actions X and Z, and an unknown count stays unknown", async () => {
-    const p = page(), counter = new MemorySendCounter();
+    const p = page(), counter = budgets();
     // X and Z each lost a send on this page; their owners are gone, their records may still be resumed.
     const x = await loseSend(1, p, counter);
     await pass(100); x.dispose();
@@ -235,7 +247,7 @@ describe("a new action whose first save is refused over another record (C164)", 
     void z.begin({ ...Z });
     await pass(100); z.dispose();
     const [zLost] = p.posts(Z.command_id);
-    const marks = { x: await counter.load(X.command_id), z: await counter.load(Z.command_id) };
+    const marks = { x: await storedMarks(counter.store, X.command_id), z: await storedMarks(counter.store, Z.command_id) };
     expect(marks.x).toEqual({ reserved: 1, transmitted: 1 });
     expect(marks.z).toEqual({ reserved: 1, transmitted: 1 });
     // Y: a new action of this page; its very first save meets another window's record and is refused before any request.
@@ -246,10 +258,10 @@ describe("a new action whose first save is refused over another record (C164)", 
     expect(y.view()).toBeNull();
     expect(p.posts(Y.command_id)).toEqual([]);
     p.server.refuseFirstSave = false;
-    expect(await counter.load(Y.command_id)).toBeNull();
-    expect(await counter.load(X.command_id)).toEqual(marks.x);
-    expect(await counter.load(Z.command_id)).toEqual(marks.z);
-    expect(await counter.load(W)).toBeNull();
+    expect(await storedMarks(counter.store, Y.command_id)).toBeNull();
+    expect(await storedMarks(counter.store, X.command_id)).toEqual(marks.x);
+    expect(await storedMarks(counter.store, Z.command_id)).toEqual(marks.z);
+    expect(await storedMarks(counter.store, W)).toBeNull();
     // The loss times of X and Z still shorten their next owners' wait: both send at the end of their own pause.
     await p.until(1_000);
     p.owner(counter, DOCUMENT, X).sync();

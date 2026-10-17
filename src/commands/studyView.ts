@@ -808,7 +808,15 @@ export abstract class StudyView<K extends StudyCommands, C extends StudyCurrent,
     const state = this.commands.snapshot();
     const pending = state.primary.pendingIntent;
     const ownPresent = pending?.kind === "assignment.present" && sameId(pending.assignment_id, assignment.id);
-    if (!state.canBegin && !ownPresent) return;
+    if (!state.canBegin && !ownPresent) {
+      // C561: the present of B was dropped over another record of the slot (it was neither stored nor sent) and the lane
+      // still holds that block: B stays as it was shown when its present began, waiting for the check of the slot; no
+      // new present (no new ID) begins until the slot is free.
+      if (this.unsentSlot() && !["result_correct", "result_wrong", "previous_result"].includes(was.phase)) {
+        this.setQuestion(assignment); this.phase = "visible_unconfirmed"; this.problem = state.primary.problem; this.emit();
+      }
+      return;
+    }
     this.setQuestion(assignment);
     if (assignment.status === "presented" && !ownPresent) {
       this.phase = "question"; if (this.answer?.result) await this.refreshAnswer(); this.emit(); return;

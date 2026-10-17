@@ -4,8 +4,9 @@
 // the machine after the awaited reservation (send) and its active/writable check on every gate event (waitForGate).
 import { describe, expect, it } from "vitest";
 import { RecoveryMachine } from "./recoveryMachine";
-import type { CheckResult, SendResult } from "./recoveryReplies";
-import { MemorySendCounter, type SendMarks } from "./sendCounter";
+import { NotPreparedError, type CheckResult, type SendResult } from "./recoveryReplies";
+import { testBudget } from "./budget.test-support";
+import { MemorySendBudget, type BudgetIdentity, type ReserveResult } from "./sendBudget";
 import { WriteGate } from "./writeGate";
 import { ManualClock, scriptedProbe, settle, type ProbeAnswer } from "./writeGate.test-support";
 
@@ -14,16 +15,16 @@ const INTENT: Intent = { command_id: "11111111-1111-4111-8111-111111111111", kin
   session_id: "22222222-2222-4222-8222-222222222222" };
 const S = 1_000;
 
-/** A counter whose save may be held: the window can go hidden between the reservation and the network. */
-class HeldCounter extends MemorySendCounter {
+/** A store whose reservation may be held: the window can go hidden between the reservation and the network. */
+class HeldBudget extends MemorySendBudget {
   hold: { release: () => void } | null = null;
   holdNext = false;
-  override async save(commandId: string, marks: SendMarks): Promise<void> {
+  override async reserve(identity: BudgetIdentity, attempt: string): Promise<ReserveResult> {
     if (this.holdNext) {
       this.holdNext = false;
       await new Promise<void>(resolve => { this.hold = { release: resolve }; });
     }
-    return super.save(commandId, marks);
+    return super.reserve(identity, attempt);
   }
 }
 
@@ -31,16 +32,17 @@ function rig(options: { send: (n: number, gate: WriteGate) => SendResult; check?
   const clock = new ManualClock();
   const availability = scriptedProbe(clock, options.probes ?? []);
   const gate = new WriteGate({ clock, probe: availability.probe });
-  const counter = new HeldCounter();
+  const counter = new HeldBudget();
   const posts: number[] = [], checks: number[] = [];
   let sends = 0, reads = 0;
   const machine = new RecoveryMachine<Intent>({
-    intent: INTENT, counter, clock, active: true,
+    intent: INTENT, budget: testBudget(INTENT, { store: counter }), clock, active: true,
     ports: {
-      send: async (_intent, transmitted) => {
-        // L2 as the transport does it: a request the gate refuses never leaves.
+      send: async (_intent, hooks) => {
+        // The pre-request step (CP5b), then L2 as the transport does it: a request the gate refuses never leaves.
+        if (!(await hooks.prepare())) throw new NotPreparedError();
         if (!gate.mayWrite(INTENT.command_id)) throw new Error("L2 would refuse");
-        transmitted(); posts.push(clock.now());
+        hooks.started(); posts.push(clock.now());
         return options.send(++sends, gate);
       },
       // The check goes through the gate's readback (R6): a closed window refuses it.

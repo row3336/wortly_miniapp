@@ -150,7 +150,7 @@ describe.each(SUBJECTS)("send budget protocol (D-CP5 2.3) — %s", (_name, make)
     const before = peek(COMMAND);
     expect(await store.createAndReserve(binding, attempt(2), 2_000)).toEqual({ outcome: "exists" });
     expect(peek(COMMAND)).toEqual(before);
-    expect(await store.load(identity)).toEqual({ occupied: 1, transmitted: 1, unsettled: 1, lastMaintenance: false, loss: null, forbidden: false });
+    expect(await store.load(identity)).toEqual({ occupied: 1, transmitted: 1, unsettled: 1, manualUnsettled: false, lastMaintenance: false, loss: null, forbidden: false });
   });
 
   it("5.3.1: create+reserve over a corrupt record is refused and leaves it as it was", async () => {
@@ -283,7 +283,7 @@ describe.each(SUBJECTS)("send budget protocol (D-CP5 2.3) — %s", (_name, make)
     seed(COMMAND, { ...baseRecord(), slots: [slot("transmitted", 1), slot("transmitted", 2), slot("transmitted", 3),
       slot("transmitted", 4), slot("sending", 5), slot("reserved", 6)] });
     const summary = await store.load(identity);
-    expect(summary).toEqual({ occupied: 6, transmitted: 4, unsettled: 6, lastMaintenance: false, loss: null, forbidden: false });
+    expect(summary).toEqual({ occupied: 6, transmitted: 4, unsettled: 6, manualUnsettled: false, lastMaintenance: false, loss: null, forbidden: false });
     expect(budgetVerdict(summary)).toBe("unconfirmed");
     expect(await store.reserve(identity, attempt(7))).toEqual({ outcome: "no_slots" });
   });
@@ -332,7 +332,7 @@ describe.each(SUBJECTS)("send budget protocol (D-CP5 2.3) — %s", (_name, make)
     const { store, seed } = await make();
     expect(validBudgetRecord(baseRecord())).toBe(true);
     seed(COMMAND, baseRecord());
-    expect(await store.load(identity)).toEqual({ occupied: 3, transmitted: 2, unsettled: 3, lastMaintenance: false, loss: null, forbidden: false });
+    expect(await store.load(identity)).toEqual({ occupied: 3, transmitted: 2, unsettled: 3, manualUnsettled: false, lastMaintenance: false, loss: null, forbidden: false });
   });
 
   it("keeps the maintenance flag and the loss across operations", async () => {
@@ -341,7 +341,7 @@ describe.each(SUBJECTS)("send budget protocol (D-CP5 2.3) — %s", (_name, make)
     expect(await store.setMaintenance(identity, true)).toBe(true);
     expect(await store.setLoss(identity, { server: 50_000, next: 2, device: 49_000 })).toBe(true);
     await walk(store, 2, "reserved");
-    expect(await store.load(identity)).toEqual({ occupied: 2, transmitted: 1, unsettled: 1, lastMaintenance: true,
+    expect(await store.load(identity)).toEqual({ occupied: 2, transmitted: 1, unsettled: 1, manualUnsettled: false, lastMaintenance: true,
       loss: { server: 50_000, next: 2, device: 49_000 }, forbidden: false });
     expect(await store.setMaintenance(identity, false)).toBe(true);
     expect(await store.load(identity)).toMatchObject({ lastMaintenance: false });
@@ -416,7 +416,9 @@ describe.each(SUBJECTS)("send budget protocol (D-CP5 2.3) — %s", (_name, make)
     const { store } = await make();
     expect(() => store.reserve(identity, "not-a-uuid")).toThrow(SendBudgetError);
     expect(() => store.load({ ...identity, intentHash: "short" })).toThrow(SendBudgetError);
-    expect(() => store.release(identity, { slot: 6, attempt: attempt(1) })).toThrow(SendBudgetError);
+    // Slot 6 is the manual attempt of a closure C (C556 В1); 7 names no cell.
+    expect(() => store.release(identity, { slot: 7, attempt: attempt(1) })).toThrow(SendBudgetError);
+    expect(() => store.release(identity, { slot: -1, attempt: attempt(1) })).toThrow(SendBudgetError);
   });
 
   it("C053: the ban stops new reservations and the gate, the count stays known and outranked", async () => {
@@ -432,7 +434,7 @@ describe.each(SUBJECTS)("send budget protocol (D-CP5 2.3) — %s", (_name, make)
     expect(await store.markRetryable(identity, leaving)).toBe(false);
     expect((peek(COMMAND) as { slots: unknown[] }).slots[1]).toEqual(slot("sending", 2));
     const summary = await store.load(identity);
-    expect(summary).toEqual({ occupied: 2, transmitted: 1, unsettled: 1, lastMaintenance: false, loss: null, forbidden: true });
+    expect(summary).toEqual({ occupied: 2, transmitted: 1, unsettled: 1, manualUnsettled: false, lastMaintenance: false, loss: null, forbidden: true });
     expect(budgetVerdict(summary)).toBe("forbidden");
   });
 

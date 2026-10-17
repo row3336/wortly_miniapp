@@ -4,7 +4,10 @@ import { ClosedAccessError, type OpenedAccess } from "../app/openedAccess";
 import type { AsyncStorage } from "../platform/storage";
 import type { ClosedSessionBoundary } from "../api/generated";
 import type { Pair } from "./commandLane";
-import { LaneRecovery, pageSendCounter, type RecoveryIntent, type RecoveryView } from "./laneRecovery";
+import { budgetBinding, finalRefusals, pageBudgetSource, recordOutcome, recoveryBudget, type BudgetIntent, type RecoveryBudget } from "./intentBudget";
+import { LaneRecovery, type LaneBudgets, type RecoveryIntent, type RecoveryView } from "./laneRecovery";
+import type { RequestHooks } from "./recoveryMachine";
+import type { BudgetFamily } from "./sendBudget";
 import { systemRecoveryClock } from "./recoveryClock";
 import { createdHere, noteCreatedHere } from "./pageOrigin";
 import { laneGate, type LaneGate } from "./gateWait";
@@ -36,11 +39,13 @@ type LaneState = {
   lost?: { sessionOpen: boolean } | null;
 };
 type Lane<C, T> = {
-  snapshot(): C; refresh(): Promise<void>; begin(action: T): Promise<void>; retry(): Promise<void>; dispose(): void;
+  snapshot(): C; refresh(): Promise<void>; begin(action: T): Promise<void>; dispose(): void;
   /** Automatic recovery (CP2): an intent with its new ID, its first send, a send after the machine's check, the last error. */
   prepare(action: T): RecoveryIntent | Error;
-  start(intent: RecoveryIntent, transmitted?: () => void): Promise<void>;
-  resend(transmitted?: () => void): Promise<void>;
+  start(intent: RecoveryIntent, hooks?: RequestHooks): Promise<void>;
+  resend(hooks?: RequestHooks): Promise<void>;
+  /** The manual retry; hooks when its send is counted in the durable budget (a start, CP5b stage 3). */
+  retry(hooks?: RequestHooks): Promise<void>;
   lastFailure(): unknown;
   release(commandId: string): Promise<void>;
   /** Я17: clear a conflict's record once its own session is confirmed closed (Н2). */
@@ -81,6 +86,18 @@ export type DocumentLanesSnapshot<C> = {
   unsavedClosures?: readonly string[];
   /** 9.2.12 (R10): the closure C's own budget ran out with the session open — «Повторить завершение» is offered (Q30). */
   closureFailed?: true;
+  /**
+   * Q34 (owner 12.10, var. 1; К19-029): the send budget of this page cannot be opened (no IndexedDB, a refused or failed
+   * open). No study send at all, the first one and session.start included (canBegin false); Stop keeps its own rules. A
+   * refresh tries the open again.
+   */
+  storageUnavailable?: true;
+  /**
+   * The last «Начать» sent nothing: the store holds damaged records it could not release for this new session
+   * (D-CP5A-DAMAGE-EXIT 3.2: blocked_by_damage, session_not_new), or the start's budget could not be written. A new
+   * press tries again (a new listing); nothing is retried by itself.
+   */
+  startBlocked?: "damage" | "storage";
 };
 export type DocumentLanesOptions<C> = {
   access(): OpenedAccess;
@@ -103,6 +120,11 @@ export type LaneWiring<C> = {
   newId(): string;
   /** A send only through the open handle of the tap that started it. */
   send<R>(operation: (credentials: Credentials) => Promise<R>): Promise<R>;
+  /**
+   * Whether send would go through that handle right now (the same test, nothing else). Asked before the pre-request step
+   * of an automatic send (CP5b), so a handle replaced meanwhile gives the reservation back instead of a slot "sending".
+   */
+  canSend(): boolean;
   /** Any read or status check through the current open handle. */
   run<R>(operation: (credentials: Credentials) => Promise<R>): Promise<R>;
   origin(credentials: Credentials): { client_instance_id: string; document_id: string };
@@ -201,6 +223,10 @@ export class DocumentLanes<C extends LaneState, T extends { kind: string; sessio
         if (!this.live() || !source?.isLive() || source !== options.access()) return Promise.reject(new ClosedAccessError());
         return source.run(operation);
       },
+      canSend: () => {
+        const source = this.sendSources[lane];
+        return this.live() && !!source?.isLive() && source === options.access();
+      },
       onUpdate: state => this.observe(state),
       slotConflict: () => { if (lane === "primary") this.slotBlocked = true; },
     }, reads);
@@ -211,7 +237,7 @@ export class DocumentLanes<C extends LaneState, T extends { kind: string; sessio
       automatic: kind => this.automatic.has(kind),
       primary: () => this.controllers.primary.snapshot(),
       failure: () => this.controllers.primary.lastFailure(),
-      send: (intent, first, transmitted) => this.recoverySend(intent, first, transmitted),
+      send: (intent, first, hooks) => this.recoverySend(intent, first, hooks),
       check: () => this.live() ? this.track("primary", () => this.controllers.primary.refresh()) : Promise.resolve(),
       release: commandId => this.live() ? this.track("primary", () => this.controllers.primary.release(commandId)) : Promise.resolve(),
       isLive: () => this.live(),
@@ -219,7 +245,7 @@ export class DocumentLanes<C extends LaneState, T extends { kind: string; sessio
       maySend: commandId => createdHere(options.storage, commandId),
       blocked: () => { if (this.live()) this.adoptBlocked(); },
       gate: options.transport.gate,
-    }, pageSendCounter(options.storage), systemRecoveryClock,
+    }, this.budgets("primary"), systemRecoveryClock,
     `${this.profileId}:${this.clientInstanceId}:${access.document.documentId}:${access.document.epoch}`);
     // The Stop lane as the closure machine sees it: only a retained C is its intent; a voluntary Stop keeps its rules.
     const closureLane = () => {
@@ -230,7 +256,7 @@ export class DocumentLanes<C extends LaneState, T extends { kind: string; sessio
       automatic: kind => kind === "session.stop",
       primary: closureLane,
       failure: () => this.controllers.stop.lastFailure(),
-      send: (intent, first, transmitted) => this.closureSend(intent, first, transmitted),
+      send: (intent, first, hooks) => this.closureSend(intent, first, hooks),
       check: () => this.live() ? this.track("stop", () => this.controllers.stop.refresh()) : Promise.resolve(),
       // The machine never drops a C record itself: only the lane's own reconcile may clear it, after the server proved its
       // outcome or the closure (CON §6.1 п.8: the local wait is cleared only after the server confirmed the closing).
@@ -239,7 +265,7 @@ export class DocumentLanes<C extends LaneState, T extends { kind: string; sessio
       onUpdate: () => this.emit(),
       maySend: commandId => createdHere(options.storage, commandId),
       gate: options.transport.gate,
-    }, pageSendCounter(options.storage), systemRecoveryClock,
+    }, this.budgets("stop"), systemRecoveryClock,
     `${this.profileId}:${this.clientInstanceId}:${access.document.documentId}:${access.document.epoch}:closure`);
     this.controllers = { primary: controller("primary"), stop: controller("stop") };
     // M03 (P03 §5.2): once the gate lets a write through again, a manual intent the gate kept on the client is read by
@@ -251,9 +277,49 @@ export class DocumentLanes<C extends LaneState, T extends { kind: string; sessio
       const shown = JSON.stringify(this.laneGate());
       if (shown !== this.shownGate) { this.shownGate = shown; this.emit(); }
     });
+    // Q34: the store of the page is opened with the document. Е02, D-CP5 10.6.2: the records of another profile lose
+    // their content fingerprint (nothing else of them is read, changed or removed: 10.6.3).
+    void this.checkStorage().then(ok => {
+      if (!ok || this.disposed) return;
+      void pageBudgetSource(options.storage).store().then(store => store.forgetHashOfOtherProfiles(this.profileId)).catch(() => undefined);
+    });
   }
   private readonly unsubscribeGate: () => void;
   private shownGate = "";
+  /** Q34: whether the send budget of this page opens (checking until the first answer). */
+  private storage: "checking" | "available" | "unavailable" = "checking";
+  private storageCheck: Promise<boolean> | null = null;
+  private startBlocked: "damage" | "storage" | null = null;
+  /** A counted start is creating its record: no Stop may go before the lane holds the start (21.1-А, as preparingStart). */
+  private creatingStart = false;
+  /** One open of the page's store; a failed one is tried again by the next call (refresh, «Начать»). */
+  private checkStorage(): Promise<boolean> {
+    if (this.storageCheck) return this.storageCheck;
+    const available = pageBudgetSource(this.options.storage).available;
+    const task: Promise<boolean> = (available ? available() : Promise.resolve(false)).then(ok => {
+      if (this.storageCheck === task) this.storageCheck = null;
+      const next = ok ? "available" : "unavailable";
+      // P3 (QA stage 3): a start blocked only because the store did not open is no longer blocked once it opens.
+      const unblocked = ok && this.startBlocked === "storage";
+      if (unblocked) this.startBlocked = null;
+      const shown = unblocked || (this.storage === "unavailable") !== (next === "unavailable");
+      this.storage = next;
+      // Only a change of what the screen shows (unavailable or not) is published; the first open answers silently.
+      if (shown && !this.disposed && this.live()) this.emit();
+      return ok;
+    });
+    this.storageCheck = task;
+    return task;
+  }
+  /**
+   * The durable budgets of one lane family (CP5b): the store of the page (IndexedDB, fail-closed) and the binding of each
+   * intent's envelope to this document's profile, installation and pair. primary — the study action X, stop — its C.
+   */
+  private budgets(family: BudgetFamily): LaneBudgets {
+    const source = pageBudgetSource(this.options.storage), owner = { profileId: this.profileId, clientInstanceId: this.clientInstanceId, pair: this.pair };
+    return { page: this.options.storage, of: intent => recoveryBudget(source, () => budgetBinding(intent as BudgetIntent, owner, family),
+      { finalRefusal: finalRefusals(this.label, intent.kind) }) };
+  }
   private laneGate(): LaneGate {
     return laneGate(this.options.transport.gate, this.controllers.primary.snapshot(), this.controllers.stop.snapshot());
   }
@@ -364,11 +430,11 @@ export class DocumentLanes<C extends LaneState, T extends { kind: string; sessio
     queueMicrotask(() => { if (this.live()) void this.closureRecovery.begin(closure); });
   }
   /** One send of the closure machine: the same C through the current open handle; never overtakes the Stop lane's work. */
-  private closureSend(intent: RecoveryIntent, first: boolean, transmitted: () => void): Promise<void> {
+  private closureSend(intent: RecoveryIntent, first: boolean, hooks: RequestHooks): Promise<void> {
     if (!this.live() || this.work.stop || this.closed.has(intent.session_id.toLowerCase())) return Promise.resolve();
     this.sendSources.stop = this.options.access();
     const lane = this.controllers.stop;
-    return this.track("stop", () => first ? lane.start(intent, transmitted) : lane.resend(transmitted));
+    return this.track("stop", () => first ? lane.start(intent, hooks) : lane.resend(hooks));
   }
   /**
    * Q30 of 08.10 (CON §6.1 п.8): the manual «Повторить завершение» of C — only once its own budget provably ran out (six
@@ -391,23 +457,29 @@ export class DocumentLanes<C extends LaneState, T extends { kind: string; sessio
     // page its lane decides (lanePage) is told apart there, by the same page for the lane and this document.
     const foreign = lane.canRetry && !this.lanePage.has(lane.kind ?? "")
       && !createdHere(this.options.storage, lane.pendingIntent?.command_id);
-    const primary = automaticPrimary || foreign ? { ...lane, canRetry: false } : lane;
+    const own = automaticPrimary || foreign ? { ...lane, canRetry: false } : lane;
+    // 21.1-А: while a counted start writes its record, the start is being prepared on this device, as the lane says
+    // itself once it holds the start (Learning preparingStart); no Stop goes meanwhile (canStop below).
+    const primary = this.creatingStart && "preparingStart" in own ? { ...own, preparingStart: true } : own;
     // ACTION_ALREADY_SAVED closed nothing and is no refusal to show: the Stop lane is as before, X is being read again.
     const shownStop = this.alreadySaved(stop) ? { ...stop, outcome: null, resolved: null, rejectionCode: null, problem: null } as C
       // C has no manual retry while its own machine sends or checks; only the exhausted budget opens «Повторить завершение».
       : isClosureIntent(stop.pendingIntent) && stop.canRetry && !this.closureRetryable(stop) ? { ...stop, canRetry: false } as C : stop;
     const gate = this.laneGate();
     this.shownGate = JSON.stringify(gate);
-    const begin = live && !this.refreshing && !this.work.primary && !this.work.stop && ready(primary) && ready(stop) && !this.recovery.busy();
+    const begin = live && !this.refreshing && !this.work.primary && !this.work.stop && ready(primary) && ready(stop) && !this.recovery.busy()
+      && this.storage !== "unavailable";
     return { live, stateVersion, primary, stop: shownStop, gate,
       // §4.1 «Правило кнопки» (K01s start, K03 Stop; C335, M-P03-10): a new action waits for mayWrite — visibly inactive.
       canBegin: begin && this.options.transport.gate.mayWrite(),
       heldByGate: begin && !this.options.transport.gate.mayWrite(),
       // Q27: with a lost answer, Stop follows its usual rights only once the session of that answer was read open.
-      canStop: live && !this.work.stop && ready(stop) && (!lane.lost || lane.lost.sessionOpen)
+      canStop: live && !this.work.stop && ready(stop) && (!lane.lost || lane.lost.sessionOpen) && !this.creatingStart
         && this.options.transport.gate.mayWrite(), recovery: live ? this.recovery.view() : null, automaticPrimary,
       closedAction: live ? this.closedActionView(lane, stop) : null,
       ...(live && this.closureRetryable(stop) ? { closureFailed: true } : {}),
+      ...(live && this.storage === "unavailable" ? { storageUnavailable: true } : {}),
+      ...(live && this.startBlocked ? { startBlocked: this.startBlocked } : {}),
       ...(live && this.unsavedClosures.size ? { unsavedClosures: [...this.unsavedClosures] } : {}) };
   }
   private closedActionView(primary: C, stop: C): ClosedAction | null {
@@ -487,6 +559,9 @@ export class DocumentLanes<C extends LaneState, T extends { kind: string; sessio
     if (!this.live()) return Promise.resolve();
     if (this.refreshing) return this.refreshing;
     this.closedReleases.clear();
+    // Q34: every refresh asks the page's store again: one that did not open is opened again (the open is not kept as
+    // failed), one that closed meanwhile (versionchange, a failed operation) shows as unavailable.
+    void this.checkStorage();
     const refreshLane = async (lane: DocumentLane) => {
       const joined = this.work[lane];
       await this.track(lane, () => this.controllers[lane].refresh());
@@ -529,6 +604,8 @@ export class DocumentLanes<C extends LaneState, T extends { kind: string; sessio
     const lane: DocumentLane = action.kind === "session.stop" ? "stop" : "primary";
     if (this.work[lane]) return this.work[lane];
     if (this.closed.has(action.session_id.toLowerCase())) return Promise.resolve();
+    // Q34: no study send before the page's store is known to open; a press while it is being opened waits for that answer.
+    if (lane === "primary" && this.storage === "checking") return this.checkStorage().then(ok => ok ? this.begin(action) : undefined);
     const state = this.snapshot();
     if (!(lane === "stop" ? state.canStop : state.canBegin)) return Promise.resolve();
     if (lane === "stop") this.ownStops.add(action.session_id.toLowerCase());
@@ -543,8 +620,60 @@ export class DocumentLanes<C extends LaneState, T extends { kind: string; sessio
       this.slotBlocked = false;
       return this.recovery.begin(intent);
     }
+    if (lane === "primary" && action.kind === "session.start") {
+      const intent = this.controllers.primary.prepare(action);
+      if (intent instanceof Error) return Promise.reject(intent);
+      this.sendSources.primary = this.options.access();
+      return this.countedStart(intent, true);
+    }
     this.sendSources[lane] = this.options.access();
     return this.track(lane, () => this.controllers[lane].begin(action));
+  }
+  /**
+   * session.start counted in its durable budget (D-CP5A-DAMAGE-EXIT 3.2; Q26 «first up to six sends»): «Начать» lists the
+   * damaged records and creates the start's record with their release; a manual retry reserves the next slot. Every
+   * request leaves only after its slot went to "sending"; its answer is written into the slot, as for the automatic
+   * sends (C060, C053, D-CP5 9.2). No slot, a damaged store or a failed write — no POST. Nothing here retries by itself.
+   */
+  private countedStart(intent: RecoveryIntent, first: boolean): Promise<void> {
+    const lane = this.controllers.primary, budget = this.budgets("primary").of(intent), attempt = budget.newAttempt();
+    if (first) this.creatingStart = true;
+    return this.track("primary", async () => {
+      this.startBlocked = null;
+      let reserved: Awaited<ReturnType<RecoveryBudget["reserve"]>> | Awaited<ReturnType<RecoveryBudget["createStart"]>>;
+      try { reserved = first ? await budget.createStart(attempt) : await budget.reserve(attempt); }
+      finally { if (first) this.creatingStart = false; }
+      if (!this.live()) { if (reserved?.outcome === "reserved") await budget.release(reserved.claim); return; }
+      if (reserved?.outcome !== "reserved") {
+        if (first) this.startBlocked = reserved?.outcome === "blocked_by_damage" || reserved?.outcome === "session_not_new" ? "damage" : "storage";
+        return;
+      }
+      const claim = reserved.claim;
+      await this.countedSend(budget, claim, hooks => first ? lane.start(intent, hooks) : lane.retry(hooks), intent.command_id);
+    });
+  }
+  /** One counted send of a manual primary action: the pre-request step, the start, then the answer into its slot. */
+  private async countedSend(budget: RecoveryBudget, claim: { slot: number; attempt: string }, send: (hooks: RequestHooks) => Promise<void>,
+    commandId: string): Promise<void> {
+    let prepared = false, started = false, marks: Promise<unknown> = Promise.resolve();
+    const hooks: RequestHooks = {
+      prepare: async () => {
+        if (!this.live() || prepared) return false;
+        prepared = await budget.beginSending(claim);
+        return prepared && this.live();
+      },
+      started: () => { if (!prepared || started) return; started = true; marks = marks.then(() => budget.markTransmitted(claim)); },
+    };
+    try { await send(hooks); }
+    finally {
+      await marks;
+      const state = this.controllers.primary.snapshot(), own = state.resolved?.commandId.toLowerCase() === commandId.toLowerCase();
+      if (!started) { if (!prepared) await budget.release(claim); }
+      else if (own && (state.outcome === "accepted" || state.outcome === "rejected" || state.outcome === "not_applied")) {
+        await recordOutcome(budget, state.outcome, (state as C & { rejectionCode?: string | null }).rejectionCode ?? null);
+      } else if (state.problem === "mismatch") await budget.forbidSends();
+      else await budget.markRetryable(claim);
+    }
   }
   private withUnsaved(action: T): T {
     const payload = (action as T & { payload?: Record<string, unknown> }).payload;
@@ -557,12 +686,12 @@ export class DocumentLanes<C extends LaneState, T extends { kind: string; sessio
    * One send of the recovery machine. Like a retry it goes through the current open handle (DESIGN 5.8) and never
    * overtakes Stop; a refusal here starts no request, which the machine counts as nothing sent.
    */
-  private recoverySend(intent: RecoveryIntent, first: boolean, transmitted: () => void): Promise<void> {
+  private recoverySend(intent: RecoveryIntent, first: boolean, hooks: RequestHooks): Promise<void> {
     if (!this.live() || this.work.primary || this.work.stop || !ready(this.controllers.stop.snapshot())
       || this.closed.has(intent.session_id.toLowerCase())) return Promise.resolve();
     this.sendSources.primary = this.options.access();
     const lane = this.controllers.primary;
-    return this.track("primary", () => first ? lane.start(intent, transmitted) : lane.resend(transmitted));
+    return this.track("primary", () => first ? lane.start(intent, hooks) : lane.resend(hooks));
   }
   /**
    * S07 «Продолжить»: the server confirmed the primary action and only its local record is left. The lane repeats exactly
@@ -586,8 +715,17 @@ export class DocumentLanes<C extends LaneState, T extends { kind: string; sessio
     if (lane === "primary" && !state.primary.canRetry) return Promise.resolve();
     if (lane === "primary" && (this.work.stop || !ready(state.stop))) return Promise.resolve();
     // Q30: a C is retried by hand only through «Повторить завершение» (state.stop.canRetry is already masked by its budget).
-    if (lane === "stop" && isClosureIntent(this.controllers.stop.snapshot().pendingIntent) && !state.stop.canRetry) return Promise.resolve();
+    if (lane === "stop" && isClosureIntent(this.controllers.stop.snapshot().pendingIntent)) {
+      // C556 В1: the press goes through the closure machine — a check, then one send of the manual attempt of its record;
+      // the six automatic sends stay spent and no automatic one follows.
+      if (state.stop.canRetry && this.closureRecovery.manual()) this.emit();
+      return Promise.resolve();
+    }
+    // Q34: no study send without the page's store, a manual retry of a start included.
+    if (lane === "primary" && this.storage !== "available") return Promise.resolve();
     this.sendSources[lane] = this.options.access();
+    const pending = this.controllers.primary.snapshot().pendingIntent;
+    if (lane === "primary" && pending?.kind === "session.start") return this.countedStart(pending, false);
     return this.track(lane, () => this.controllers[lane].retry());
   }
   dispose(): void {

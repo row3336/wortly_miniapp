@@ -247,6 +247,8 @@ export class WrittenViewController extends StudyView<WrittenDocumentCommands, Cu
       this.phase = "loading"; this.problem = null;
       await this.commands.begin({ kind: "session.start", session_id: this.sessionId!, payload: { mode: "written", bucket } });
       if (!this.live() || this.is("closed", "stopping")) return;
+      // Q34 / D-CP5A-DAMAGE-EXIT 3.2: nothing was sent and no session of this number exists: the view is idle again.
+      if (this.commands.snapshot().startBlocked || this.commands.snapshot().storageUnavailable) { this.sessionId = null; this.phase = "idle"; return; }
       this.consume();
       if (this.commands.snapshot().primary.outcome === "accepted") {
         this.chooseCurrent();

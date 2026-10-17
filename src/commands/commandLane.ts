@@ -1,3 +1,4 @@
+import type { RequestHooks } from "./recoveryMachine";
 import { ApiError } from "../api/http";
 import type { ClosedSessionBoundary, Profile } from "../api/generated";
 import { exactKeys, oneOf, record, sameId, uuid, version } from "../api/wireValidation";
@@ -118,10 +119,11 @@ export type LaneOptions<S extends LaneSpec> = {
   isLive(): boolean;
   newId(): string;
   /**
-   * transmitted, when given, must be called right before the request starts (automatic recovery counts it as a send
-   * that may have gone out, CT §6.1 п. 4); a refusal before that point means nothing went out.
+   * hooks, when given (automatic recovery, CT §6.1 п. 4; CP5b): prepare must be awaited as the last step before the
+   * request (false — no request), started called right before the request starts; a refusal before that point means
+   * nothing went out.
    */
-  send(intent: S["intent"], transmitted?: () => void): Promise<S["reply"]>;
+  send(intent: S["intent"], hooks?: RequestHooks): Promise<S["reply"]>;
   /** Verifies the server fingerprint of the full intent; a different payload under this ID is an HTTP 409. */
   check(intent: S["intent"]): Promise<S["status"]>;
   /**
@@ -234,6 +236,17 @@ export abstract class LaneCore<I extends LaneIntent, Snapshot> {
   protected lost: LostCommand | null = null;
   /** The session of the lost command was read open after its ID proved absent: Stop follows the usual rights then. */
   protected lostOpen = false;
+  /**
+   * C561 (14.8.8.1 А): a new automatic intent of this lane (its first send came with the recovery hooks) was dropped over
+   * a readable record of another window in the shared slot. A later refresh keeps that block while any record is in the
+   * slot (a local read: nothing checked, sent or adopted), so a screen cannot begin the same automatic step again, get a new
+   * ID and be dropped again. A manual action (a start) and an unreadable record keep their accepted single drop (C147).
+   */
+  private slotBlock: CommandProblem | null = null;
+  /** sendPending: the new automatic intent was refused over a readable record of another window (PendingStoreError "changed"). */
+  protected holdSlotBlock(error: unknown): void {
+    if (error instanceof PendingStoreError && error.kind === "changed") this.slotBlock = "pending_changed";
+  }
 
   /** The owner's part in the readback registry of the write gate (P03 §4.11 R1–R9, M-P03-8); none without a gate. */
   protected readonly registry: GatePending | null;
@@ -281,6 +294,28 @@ export abstract class LaneCore<I extends LaneIntent, Snapshot> {
       if (this.pending) this.registry?.hold(this.pending.intent.command_id);
       else if (this.lost) this.registry?.hold(this.lost.commandId);
     }
+    return true;
+  }
+  /**
+   * Whether the durable slot of this lane holds any record of this profile now, whoever wrote it (C561): a local read
+   * that writes, checks and sends nothing and adopts nothing. An unreadable record or a pointer without its payload is
+   * held as well.
+   */
+  async slotHeld(): Promise<boolean> {
+    try { return await this.core.pendingStore.load(this.core.profileId, this.lifetime.signal) !== null; }
+    catch { return true; }
+  }
+  /**
+   * The refresh of a lane without an intent of its own (C561): true when the block of a dropped intent still holds —
+   * the slot still holds a record — and the lane stays blocked with that problem; false once the slot is free.
+   */
+  protected async keepSlotBlock(): Promise<boolean> {
+    const block = this.slotBlock;
+    if (block === null || this.pending || this.lost) { this.slotBlock = null; return false; }
+    const held = await this.slotHeld();
+    if (!this.live()) return true;
+    if (!held) { this.slotBlock = null; return false; }
+    this.problem = block; this.phase = "blocked";
     return true;
   }
   /** Q27: removes the pointer of the lost command once its outcome is proven (the slot compares the exact pointer). */
@@ -552,7 +587,7 @@ export abstract class CommandLane<S extends LaneSpec, O extends LaneOptions<S> =
     if (this.outcome) { await this.clearSettled(); return; }
     if (this.lost) { await this.reconcileLost(this.lost); return; }
     const pending = this.pending;
-    if (!pending) { this.phase = "idle"; return; }
+    if (!pending) { if (!await this.keepSlotBlock()) this.phase = "idle"; return; }
     if ((pending.intent.kind === "session.stop") !== (this.options.lane === "stop")) throw new PendingStoreError("invalid");
     if (pending.mismatch) { await this.markMismatch(pending); return; }
     let reply: S["status"];
@@ -601,7 +636,7 @@ export abstract class CommandLane<S extends LaneSpec, O extends LaneOptions<S> =
     this.retryVerified = false; this.problem = "stale_response"; this.phase = "unresolved";
     return false;
   }
-  private async sendPending(retry = false, transmitted?: () => void): Promise<void> {
+  private async sendPending(retry = false, hooks?: RequestHooks): Promise<void> {
     const pending = this.pending;
     // A stored closure record is only checked by its ID (D-CP4 4.6.1): never sent from here.
     // Open question В-2 (D-STALE-WINDOW 5, Codex C093 п. 5): the record names no document, so a record kept after
@@ -623,6 +658,7 @@ export abstract class CommandLane<S extends LaneSpec, O extends LaneOptions<S> =
       // was stored, and may have been sent, before the slot changed under it.
       if (!retry && refusedUnsent(error)) {
         this.pending = null;
+        if (hooks?.automatic) this.holdSlotBlock(error);
         this.registry?.cleared();
         // Only a record of another window (X) can be checked; an unreadable one names no ID, so there is nothing to look for.
         if (error.kind === "changed") this.options.slotConflict?.();
@@ -632,7 +668,7 @@ export abstract class CommandLane<S extends LaneSpec, O extends LaneOptions<S> =
     if (!this.live() || retry && !this.retryFresh()) return;
     // A manual send passes no hook: its exchange stays exactly what it was before automatic recovery.
     const intent = this.mode.copy(pending.intent);
-    const reply = await (transmitted ? this.options.send(intent, transmitted) : this.options.send(intent));
+    const reply = await (hooks ? this.options.send(intent, hooks) : this.options.send(intent));
     if (!this.live()) return;
     if (reply.outcome === "mismatch") {
       this.observe(reply.state_version);
@@ -653,31 +689,32 @@ export abstract class CommandLane<S extends LaneSpec, O extends LaneOptions<S> =
   }
   /** The intent of an action with its new command_id, not yet sent: automatic recovery counts its sends (CP2). */
   prepare(action: WithoutId<S["intent"]>): S["intent"] | Error { return this.intent(action); }
-  /** Send a prepared intent once, as begin does; transmitted is told right before its request starts. */
-  start(intent: S["intent"], transmitted?: () => void): Promise<void> {
+  /** Send a prepared intent once, as begin does; hooks: the pre-request step and the start of its request. */
+  start(intent: S["intent"], hooks?: RequestHooks): Promise<void> {
     if (this.busy()) return this.running ?? Promise.resolve();
     const pending: LanePending<S["intent"]> = { schemaVersion: 1, profileId: this.options.profileId,
       clientInstanceId: this.options.clientInstanceId, pair: this.options.pair, intent: this.mode.copy(intent) };
     this.noteCreated(pending.intent.command_id);
     return this.run(async () => {
       this.outcome = null; this.resolved = null; this.rejectionCode = null; this.pending = pending;
-      await this.sendPending(false, transmitted);
+      await this.sendPending(false, hooks);
     });
   }
   /**
    * The automatic retry: exactly the retained intent, only while the check that just ran still grants it (canRetry).
    * Unlike retry it checks nothing itself: the recovery machine has checked right before (Я15.6, CT §6.1 п. 5).
    */
-  resend(transmitted?: () => void): Promise<void> {
+  resend(hooks?: RequestHooks): Promise<void> {
     if (!this.snapshot().canRetry) return this.running ?? Promise.resolve();
-    return this.run(() => this.sendPending(true, transmitted));
+    return this.run(() => this.sendPending(true, hooks));
   }
-  retry(): Promise<void> {
+  /** hooks: when the send is counted in the durable budget (a start, CP5b stage 3); a plain manual retry passes none. */
+  retry(hooks?: RequestHooks): Promise<void> {
     if (!this.snapshot().canRetry) return this.running ?? Promise.resolve();
     return this.run(async () => {
       await this.reconcile();
       if (!this.live()) return;
-      if (this.retryVerified && this.pending && !this.pending.mismatch && !this.outcome) await this.sendPending(true);
+      if (this.retryVerified && this.pending && !this.pending.mismatch && !this.outcome) await this.sendPending(true, hooks);
     });
   }
 }

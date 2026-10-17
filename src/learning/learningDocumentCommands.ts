@@ -6,6 +6,8 @@ import { createLearningResultApi, type LearningResultRead } from "./learningAnsw
 import { createLearningSessionApi, type LearningSessionRead } from "./learningSessionApi";
 import { LearningSessionPendingStore, LearningStopPendingStore } from "./learningSessionPending";
 import type { LearningPageStarts } from "./learningPageStarts";
+import { ClosedAccessError } from "../app/openedAccess";
+import { NotPreparedError } from "../commands/recoveryReplies";
 import { PausedBeforeSendError } from "../commands/writeGate";
 import { lostAddress } from "../commands/lostEnvelope";
 
@@ -44,22 +46,29 @@ export class LearningDocumentCommands extends DocumentLanes<LearningCommandSnaps
           isLive: wiring.isLive, newId: wiring.newId,
           pendingStore: wiring.lane === "primary" ? new LearningSessionPendingStore(options.storage) : new LearningStopPendingStore(options.storage),
           // Answers, their revisions and their undo go to the result endpoint; every other transition is a session command.
-          // transmitted is told inside the open handle, right before the request: a refusal before it sent nothing.
-          // sendStarted is told by the transport once the request is built, right before fetch.
-          send: (intent, transmitted) => wiring.send(async credentials => {
-            const address = wiring.origin(credentials), sendStarted = () => controller.sendStarted();
-            // L1 (P03 §4.1, M-P03-5), both branches (results.send and sessions.send): the gate is asked before the send
-            // is counted as gone; transmitted, the request and L2 follow in the same synchronous stretch (I3).
-            if (!gate.mayWrite(intent.command_id)) throw new PausedBeforeSendError("paused");
-            transmitted?.();
-            // The live open handle was checked by wiring.send (access.run) right before this; started is told by the
-            // transport once the request is built, right before fetch (21.1-А, 33.1-А boundary). A start is always a
-            // session command. The same moment ends an inherited intent for the timer (sendStarted, 20.1-А/22.1-А).
-            return resultCommand(intent)
-              ? results.send(credentials.token, credentials.proof, { ...intent, ...address }, sendStarted)
-              : sessions.send(credentials.token, credentials.proof, { ...intent, ...address },
-                () => { controller.requestStarted(); sendStarted(); });
-          }),
+          // CP5b: the pre-request step (hooks.prepare: the slot goes to "sending") is the last await before the request; a
+          // false answer sends nothing. started is told inside the open handle, right before the request; sendStarted is
+          // told by the transport once the request is built, right before fetch.
+          send: async (intent, hooks) => {
+            // A handle replaced meanwhile refuses before the slot moves: the reservation goes back (ClosedAccessError).
+            if (hooks && !wiring.canSend()) throw new ClosedAccessError();
+            if (hooks && !(await hooks.prepare())) throw new NotPreparedError();
+            return wiring.send(async credentials => {
+              // C565: the send is counted as gone (hooks.started) only by the transport's own callback, after L2 and right
+              // before fetch: a request L2 refuses is never transmitted.
+              const address = wiring.origin(credentials), sendStarted = () => { hooks?.started(); controller.sendStarted(); };
+              // L1 (P03 §4.1, M-P03-5), both branches (results.send and sessions.send): the gate is asked first; the request,
+              // L2 and fetch follow in the same synchronous stretch (I3).
+              if (!gate.mayWrite(intent.command_id)) throw new PausedBeforeSendError("paused");
+              // The live open handle was checked by wiring.send (access.run) right before this; started is told by the
+              // transport once the request is built, right before fetch (21.1-А, 33.1-А boundary). A start is always a
+              // session command. The same moment ends an inherited intent for the timer (sendStarted, 20.1-А/22.1-А).
+              return resultCommand(intent)
+                ? results.send(credentials.token, credentials.proof, { ...intent, ...address }, sendStarted)
+                : sessions.send(credentials.token, credentials.proof, { ...intent, ...address },
+                  () => { controller.requestStarted(); sendStarted(); });
+            });
+          },
           // R6: the status of this ID is read only with the gate's ticket (after the identity check, if one is due).
           check: intent => gate.runReadback(intent.command_id, ticket => wiring.run(async credentials => {
             const address = wiring.origin(credentials);

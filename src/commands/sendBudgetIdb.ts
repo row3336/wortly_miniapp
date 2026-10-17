@@ -2,7 +2,7 @@ import { DatabaseOpenError, openWortlyDatabase, SEND_BUDGET_STORE } from "../pla
 import {
   beginSendingStep, canonicalClaim, canonicalId, canonicalIdentity, canonicalLoss, canonicalRelease, canonicalStoreKey, clearAllowed,
   createConflict, damagedKeys, damageGate, forbidStep, forgetHashStep, isDamaged, lossStep, releasesWithout,
-  maintenanceStep, markRetryableStep, markTransmittedStep, newBudgetRecord, orphanOf, releaseStep, reserveStep, reservedClaim,
+  maintenanceStep, markRetryableStep, markTransmittedStep, newBudgetRecord, orphanOf, releaseStep, reserveManualStep, reserveStep, reservedClaim,
   SendBudgetError, summarize,
   type BudgetBinding, type BudgetIdentity, type BudgetLoss, type BudgetOrphan, type BudgetStep, type BudgetSummary,
   type CreateResult, type ReserveResult, type SendBudgetStore, type SlotClaim, type StoreEntry, type StoreKey,
@@ -34,6 +34,9 @@ export class IdbSendBudget implements SendBudgetStore {
   private closed = false;
 
   private constructor(private readonly db: IDBDatabase, private readonly timeoutMs: number) {}
+
+  /** false once the connection closed (versionchange, closed by the browser): no transaction is tried on it any more. */
+  isOpen(): boolean { return !this.closed; }
 
   /** Opens the installation database; rejects with SendBudgetError("unavailable") when it is missing or does not open. */
   static async open(factory: IDBFactory | undefined = globalThis.indexedDB,
@@ -134,6 +137,11 @@ export class IdbSendBudget implements SendBudgetStore {
     const own = canonicalIdentity(identity);
     const id = canonicalId(attempt);
     return this.step(own.commandId, current => reserveStep(current, own, id));
+  }
+  reserveManual(identity: BudgetIdentity, attempt: string): Promise<ReserveResult> {
+    const own = canonicalIdentity(identity);
+    const id = canonicalId(attempt);
+    return this.step(own.commandId, current => reserveManualStep(current, own, id));
   }
   beginSending(identity: BudgetIdentity, claim: SlotClaim): Promise<boolean> {
     const own = canonicalIdentity(identity);

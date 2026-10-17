@@ -2,8 +2,9 @@
 import { describe, expect, it } from "vitest";
 import { ApiError } from "../api/http";
 import { RecoveryMachine, type RecoverySnapshot } from "./recoveryMachine";
-import { checkFailure, sendFailure, type CheckResult, type SendResult } from "./recoveryReplies";
-import { MemorySendCounter, type SendCounter } from "./sendCounter";
+import { checkFailure, NotPreparedError, sendFailure, type CheckResult, type SendResult } from "./recoveryReplies";
+import { seedMarks, storedMarks, testBudget } from "./budget.test-support";
+import { MemorySendBudget } from "./sendBudget";
 import { PausedBeforeSendError, WriteGate } from "./writeGate";
 import { ManualClock, scriptedProbe, settle, type ProbeAnswer } from "./writeGate.test-support";
 
@@ -16,24 +17,29 @@ type Script = {
   send?: (n: number, gate: WriteGate) => SendResult | Error;
   check?: (n: number, gate: WriteGate) => CheckResult | Error;
   probes?: ProbeAnswer[];
-  counter?: SendCounter;
+  store?: MemorySendBudget;
+  /** What happens to the gate before the pre-request step of send n (between the decision and the send). */
+  before?: (n: number, gate: WriteGate) => void;
 };
 
 function rig(script: Script = {}) {
   const clock = new ManualClock();
   const availability = scriptedProbe(clock, script.probes ?? []);
   const gate = new WriteGate({ clock, probe: availability.probe });
-  const counter = script.counter ?? new MemorySendCounter();
+  const store = script.store ?? new MemorySendBudget();
   const posts: number[] = [], checks: number[] = [], ownProbes: number[] = [];
   let sends = 0, reads = 0;
   const machine = new RecoveryMachine<Intent>({
-    intent: INTENT, counter, clock, active: true,
+    intent: INTENT, budget: testBudget(INTENT, { store }), clock, active: true,
     ports: {
-      send: async (_intent, transmitted) => {
-        const reply = (script.send ?? (() => ({ kind: "settled", outcome: "accepted" }) as SendResult))(++sends, gate);
-        // PAUSED_BEFORE_SEND is refused before transmitted (L1), like the lane does.
+      send: async (_intent, hooks) => {
+        const n = ++sends;
+        script.before?.(n, gate);
+        // The pre-request step first (CP5b), then L1: PAUSED_BEFORE_SEND is refused before started, like the lane does.
+        if (!(await hooks.prepare())) throw new NotPreparedError();
+        const reply = (script.send ?? (() => ({ kind: "settled", outcome: "accepted" }) as SendResult))(n, gate);
         if (reply instanceof PausedBeforeSendError) throw reply;
-        transmitted();
+        hooks.started();
         posts.push(clock.now());
         if (reply instanceof Error) throw reply;
         return reply;
@@ -51,7 +57,7 @@ function rig(script: Script = {}) {
     },
   });
   const state = (): RecoverySnapshot["state"]["name"] => machine.snapshot().state.name;
-  return { machine, gate, clock, posts, checks, ownProbes, gateProbes: availability.calls, counter, state };
+  return { machine, gate, clock, posts, checks, ownProbes, gateProbes: availability.calls, store, state };
 }
 
 describe("automatic recovery waits for the write gate (M-P03-6)", () => {
@@ -112,10 +118,9 @@ describe("automatic recovery waits for the write gate (M-P03-6)", () => {
 
   it("AC-21: the gate closes between the decision and the send: not_sent, the reservation goes back, transmitted unchanged", async () => {
     const r = rig({
-      send: (n, gate) => {
-        if (n === 1) { gate.closeByFailure(); return new PausedBeforeSendError("paused"); }
-        return { kind: "settled", outcome: "accepted" };
-      },
+      // The gate closes before the pre-request step: the slot is not moved to "sending" and goes back.
+      before: (n, gate) => { if (n === 1) gate.closeByFailure(); },
+      send: () => ({ kind: "settled", outcome: "accepted" }),
       probes: [{ status: "ready" }],
     });
     r.machine.begin();
@@ -155,9 +160,9 @@ describe("automatic recovery waits for the write gate (M-P03-6)", () => {
   });
 
   it("AC-09/T18: six provable sends, the last met MAINTENANCE: after the gate proves the end of the pause — exhaustion, not an endless pause", async () => {
-    const counter = new MemorySendCounter();
-    await counter.save(INTENT.command_id, { reserved: 6, transmitted: 6, lastMaintenance: true });
-    const r = rig({ counter });
+    const store = new MemorySendBudget();
+    await seedMarks(store, INTENT, { reserved: 6, transmitted: 6, lastMaintenance: true });
+    const r = rig({ store });
     r.machine.resume();
     await settle();
     expect(r.state()).toBe("exhausted");
@@ -192,7 +197,7 @@ describe("401 asks for a new sign-in (M-P03-7)", () => {
     r.machine.begin();
     await settle();
     expect(r.machine.snapshot()).toMatchObject({ state: { name: "terminated", reason: "reauth" }, sends: 1, transmitted: 1 });
-    expect(await r.counter.load(INTENT.command_id)).toMatchObject({ reserved: 1, transmitted: 1 });
+    expect(await storedMarks(r.store, INTENT.command_id)).toMatchObject({ reserved: 1, transmitted: 1 });
     await r.clock.advanceTo(120 * S);
     expect(r.posts).toEqual([0]);
   });

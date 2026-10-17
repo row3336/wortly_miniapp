@@ -1,9 +1,8 @@
-import type { AsyncStorage } from "../platform/storage";
+import { recordOutcome, type RecoveryBudget } from "./intentBudget";
 import { refusedUnsent } from "./pendingSlot";
 import type { RecoveryClock } from "./recoveryClock";
-import { FINAL_RECOVERY_STATES, RecoveryMachine, type KnownLoss, type RecoverySnapshot } from "./recoveryMachine";
+import { FINAL_RECOVERY_STATES, RecoveryMachine, type KnownLoss, type RecoverySnapshot, type RequestHooks } from "./recoveryMachine";
 import { checkFailure, sendFailure, type CheckResult, type SendResult } from "./recoveryReplies";
-import { MemorySendCounter, type SendCounter } from "./sendCounter";
 import type { WriteGate } from "./writeGate";
 import { journalRecord } from "../journal/clientJournal";
 import { isErrorCode, type ScreenEvent } from "../journal/events";
@@ -17,6 +16,8 @@ export type RecoveryLaneState = {
   resolved: { commandId: string } | null;
   problem: string | null;
   canRetry: boolean;
+  /** The code of the refusal the lane settled on (rejected), when it knows one. */
+  rejectionCode?: string | null;
 };
 /** What a screen needs of the automatic recovery of the primary lane. */
 /**
@@ -60,8 +61,11 @@ export type LaneRecoveryHost = {
   primary(): RecoveryLaneState;
   /** The raw error of the primary lane's last step. */
   failure(): unknown;
-  /** One send of the primary lane through the document: first = the intent was never handed to the lane yet. */
-  send(intent: RecoveryIntent, first: boolean, transmitted: () => void): Promise<void>;
+  /**
+   * One send of the primary lane through the document: first = the intent was never handed to the lane yet. hooks: the
+   * pre-request step (its last await before the request) and the start of the request (RequestHooks).
+   */
+  send(intent: RecoveryIntent, first: boolean, hooks: RequestHooks): Promise<void>;
   /** One fact check of the primary lane: its status by ID plus the targeted read of its right to continue. */
   check(): Promise<void>;
   /** Clear the pending intent whose outcome the machine proved final without a reply to show (refused, changed step). */
@@ -81,7 +85,9 @@ export function laneSendResult(state: RecoveryLaneState, failure: unknown, start
   // A refusal before the request (closed handle, busy Stop lane, a local store failure) sent nothing.
   if (!started) return { kind: "not_sent" };
   const own = state.resolved?.commandId === commandId;
-  if (own && (state.outcome === "accepted" || state.outcome === "rejected")) return { kind: "settled", outcome: state.outcome };
+  if (own && (state.outcome === "accepted" || state.outcome === "rejected")) {
+    return { kind: "settled", outcome: state.outcome, ...(state.outcome === "rejected" ? { code: state.rejectionCode ?? null } : {}) };
+  }
   if (state.problem === "mismatch") return { kind: "mismatch" };
   if (failure !== null) return sendFailure(failure);
   // The request began and no answer was accepted: its outcome is unknown.
@@ -93,7 +99,8 @@ export function laneCheckResult(state: RecoveryLaneState, failure: unknown, comm
   if (state.resolved?.commandId === commandId && state.outcome !== null) {
     // not_applied: one locked observation of absence plus the closure of exactly this session (missingProblem).
     return state.outcome === "not_applied" ? { kind: "terminated", reason: "session_closed" }
-      : { kind: "recorded", outcome: state.outcome === "rejected" ? "rejected" : "accepted" };
+      : state.outcome === "rejected" ? { kind: "recorded", outcome: "rejected", code: state.rejectionCode ?? null }
+        : { kind: "recorded", outcome: "accepted" };
   }
   if (state.problem === "mismatch") return { kind: "mismatch" };
   if (failure !== null) return checkFailure(failure);
@@ -112,27 +119,22 @@ export function laneCheckResult(state: RecoveryLaneState, failure: unknown, comm
   }
 }
 
-const counters = new WeakMap<AsyncStorage, SendCounter>();
 /**
- * Stage 1 of the send count (DESIGN D-RECOV 4.1): the memory of this page, shared by its document owners through the
- * storage they share, like the pending slots. A reload starts without it, so a resumed action is only checked.
+ * The durable budgets of one document's lane (CP5b): the page they share (the key of the pending losses below) and the
+ * budget of an intent. The budget itself lives in the store of the page (intentBudget.ts), not in this adapter.
  */
-export function pageSendCounter(storage: AsyncStorage): SendCounter {
-  let counter = counters.get(storage);
-  if (!counter) { counter = new MemorySendCounter(); counters.set(storage, counter); }
-  return counter;
-}
+export type LaneBudgets = { page: object; of(intent: RecoveryIntent): RecoveryBudget };
 
 type PageLoss = KnownLoss & { scope: string };
-const losses = new WeakMap<SendCounter, Map<string, PageLoss>>();
+const losses = new WeakMap<object, Map<string, PageLoss>>();
 /**
- * The earliest next send of each command_id, next to the page count and in the same memory (CT §6.1 п. 4): an owner
- * re-created inside the same document (a failed foreground, a reseed) waits only the rest of the pause. Bound to the
- * document (scope): another document gets nothing from here. A reload starts without it, like the count.
+ * The earliest next send of each command_id, in the memory of the page (CT §6.1 п. 4): an owner re-created inside the
+ * same document (a failed foreground, a reseed) waits only the rest of the pause. Bound to the document (scope): another
+ * document gets nothing from here. A reload starts without it (decision 2.3 А: it only checks there anyway).
  */
-function pageLosses(counter: SendCounter): Map<string, PageLoss> {
-  let map = losses.get(counter);
-  if (!map) { map = new Map(); losses.set(counter, map); }
+function pageLosses(page: object): Map<string, PageLoss> {
+  let map = losses.get(page);
+  if (!map) { map = new Map(); losses.set(page, map); }
   return map;
 }
 
@@ -143,6 +145,7 @@ function pageLosses(counter: SendCounter): Map<string, PageLoss> {
 export class LaneRecovery {
   private machine: RecoveryMachine<RecoveryIntent> | null = null;
   private commandId: string | null = null;
+  private intent: RecoveryIntent | null = null;
   private afterLoss = false;
   private active = true;
   /** Resolves the promise of begin: once the first send has its answer, or the machine stopped before sending it. */
@@ -153,7 +156,7 @@ export class LaneRecovery {
   private releasing: Promise<void> | null = null;
 
   /** scope: the document this owner belongs to (profile, installation, document and epoch); none keeps no loss. */
-  constructor(private readonly host: LaneRecoveryHost, private readonly counter: SendCounter, private readonly clock: RecoveryClock,
+  constructor(private readonly host: LaneRecoveryHost, private readonly budgets: LaneBudgets, private readonly clock: RecoveryClock,
     private readonly scope?: string) {}
 
   /** A machine that still checks or sends owns the primary lane: no new action, no other check of it. */
@@ -167,6 +170,13 @@ export class LaneRecovery {
   }
   view(): RecoveryView | null {
     return this.machine && this.commandId ? { ...this.machine.snapshot(), commandId: this.commandId, afterLoss: this.afterLoss } : null;
+  }
+  /**
+   * C556 В1 / Q30: the explicit press of «Повторить завершение» for the intent this machine drove to an exhausted budget.
+   * false: no such state (nothing is sent then).
+   */
+  manual(): boolean {
+    return this.machine?.manual() ?? false;
   }
   /** A new action: the machine sends it; resolves once the first send has its answer (or never started), as begin did. */
   begin(intent: RecoveryIntent): Promise<void> {
@@ -186,8 +196,10 @@ export class LaneRecovery {
     const state = this.host.primary(), intent = state.pendingIntent;
     if (this.machine && this.busy() && !this.exchanging() && state.outcome !== null && state.resolved?.commandId === this.commandId) {
       this.machine.dispose(); this.machine = null;
-      pageLosses(this.counter).delete(this.commandId.toLowerCase());
-      void this.counter.clear(this.commandId).catch(() => undefined);
+      pageLosses(this.budgets.page).delete(this.commandId.toLowerCase());
+      // The lane proved the outcome outside the machine: the record follows it as after the machine's own settle.
+      const outcome = state.outcome === "accepted" || state.outcome === "rejected" || state.outcome === "not_applied" ? state.outcome : null;
+      if (outcome && this.intent) void recordOutcome(this.budgets.of(this.intent), outcome, state.rejectionCode).catch(() => undefined);
       return;
     }
     if (!state.pending || state.outcome !== null || !intent || !this.host.automatic(intent.kind)) return;
@@ -214,8 +226,9 @@ export class LaneRecovery {
     if (this.commandId === null || this.commandId.toLowerCase() !== commandId.toLowerCase()) return;
     this.machine?.dispose(); this.machine = null;
     this.settleFirst();
-    pageLosses(this.counter).delete(commandId.toLowerCase());
-    void this.counter.clear(commandId).catch(() => undefined);
+    pageLosses(this.budgets.page).delete(commandId.toLowerCase());
+    // D-CP5 9.2: a conflict after the confirmed closure of its own session — the record goes with the lane's.
+    if (this.intent) void this.budgets.of(this.intent).clear().catch(() => undefined);
     this.host.onUpdate();
   }
   /**
@@ -255,22 +268,22 @@ export class LaneRecovery {
   private replace(intent: RecoveryIntent, resumed: boolean): void {
     this.machine?.dispose();
     this.settleFirst();
-    this.commandId = intent.command_id; this.afterLoss = resumed;
-    const key = intent.command_id.toLowerCase(), scope = this.scope, known = scope ? pageLosses(this.counter).get(key) : undefined;
-    const machine: RecoveryMachine<RecoveryIntent> = new RecoveryMachine({ intent, counter: this.counter, clock: this.clock, active: this.active,
+    this.commandId = intent.command_id; this.afterLoss = resumed; this.intent = intent;
+    const key = intent.command_id.toLowerCase(), scope = this.scope, known = scope ? pageLosses(this.budgets.page).get(key) : undefined;
+    const machine: RecoveryMachine<RecoveryIntent> = new RecoveryMachine({ intent, budget: this.budgets.of(intent), clock: this.clock, active: this.active,
       knownLoss: resumed && known && known.scope === scope ? { next: known.next, dueAt: known.dueAt, holdUntil: known.holdUntil } : null,
       onLoss: loss => {
         // Only the machine that drives the intent now: a replaced or disposed one never writes over its successor.
         if (!scope || this.machine !== machine) return;
-        if (loss) pageLosses(this.counter).set(key, { ...loss, scope });
-        else pageLosses(this.counter).delete(key);
+        if (loss) pageLosses(this.budgets.page).set(key, { ...loss, scope });
+        else pageLosses(this.budgets.page).delete(key);
       },
       ports: {
-        send: async (copy, transmitted) => {
+        send: async (copy, hooks) => {
           let started = false;
           const first = !this.stored(copy.command_id);
           this.sending = true;
-          try { await this.host.send(copy, first, () => { started = true; transmitted(); }); }
+          try { await this.host.send(copy, first, { automatic: true, prepare: () => hooks.prepare(), started: () => { started = true; hooks.started(); } }); }
           finally { this.sending = false; }
           // Proof of an unsent intent: its first send (never handed to the lane before), no request began (started), the
           // lane holds no intent any more, and the last failure is the refusal of its save over another record. Nothing is
@@ -338,13 +351,13 @@ export class LaneRecovery {
     const state = snapshot.state;
     const decision = this.commandId ? screenDecision(state, this.afterLoss) : null;
     if (decision && this.commandId) journalRecord({ ev: "c.screen", cmd: this.commandId, ...decision });
-    // A definite refusal or a changed step: the old command will never apply, so its record goes and the view continues
-    // by the server's state (CT §6.1 п. 7). Not a conflict, not a closure or a replaced window: those keep their rules.
+    // A definite refusal or a changed step: the old command will never apply, so the lane's record goes and the view
+    // continues by the server's state (CT §6.1 п. 7). Not a conflict, not a closure or a replaced window: those keep their
+    // rules. The durable budget record stays (D-CP5 10.7.2.5, V-1): a refusal has written its ban, a changed step none.
     if (this.commandId && (state.name === "refused" || state.name === "terminated" && state.reason === "step_stale")) {
       const commandId = this.commandId;
       void this.release(commandId);
-      pageLosses(this.counter).delete(commandId.toLowerCase());
-      void this.counter.clear(commandId).catch(() => undefined);
+      pageLosses(this.budgets.page).delete(commandId.toLowerCase());
     }
     const firstSend = state.name === "idle" || state.name === "sending" && state.attempt === 1 && !this.afterLoss;
     if (!firstSend && state.name !== "settled") this.afterLoss = true;

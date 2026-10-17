@@ -28,7 +28,13 @@ export type BudgetSlot =
 /** Which budget a command spends: the action itself, the closing C of D-CP4, or the cancel of a start (DST). */
 export type BudgetFamily = "primary" | "stop" | "start_cancel";
 /** The step an action belongs to; the guard of a lost envelope (CP5c) matches it with the open step. */
-export type BudgetTarget = { field: "assignment_id" | "result_id" | "session_id"; id: string };
+export type BudgetTarget = { field: "assignment_id" | "result_id" | "preview_id" | "session_id"; id: string };
+/**
+ * The slot index of the manual attempt of a closure C (Q30 of 08.10; C556 В1): after its six automatic sends are spent,
+ * each explicit press of «Повторить завершение» sends the same C once more. It is kept apart from the six automatic slots,
+ * which it never changes: they stay exhausted, and no automatic send can ever take this slot.
+ */
+export const MANUAL_SLOT = MAX_SENDS;
 /**
  * When the loss of a reply was found, by the server clock (ms), the send the pause stands before (2–6) and the device
  * clock only for diagnostics (D-CP5 10.3). Absent until a loss has been found.
@@ -49,6 +55,11 @@ export type SendBudgetRecord = {
   target: BudgetTarget;
   slots: BudgetSlot[];
   lastMaintenance?: true;
+  /**
+   * C556 В1: the one manual attempt of a closure C after its automatic budget (claim slot MANUAL_SLOT). One field, not a
+   * log: a new press replaces a retryable or released one with its own new attempt; the record goes on a proven outcome.
+   */
+  manual?: BudgetSlot;
   /** New sends are forbidden (C053): no reservation, no "sending", no "transmitted" from then on. Never removed. */
   sendBan?: true;
   /** Device time of creation, diagnostics only: no pause and no cleanup is computed from it. */
@@ -97,6 +108,8 @@ export type BudgetSummary = {
   occupied: number;
   transmitted: number;
   unsettled: number;
+  /** The manual attempt of a closure C is taken and its outcome not written as retryable (C556 В1). */
+  manualUnsettled: boolean;
   lastMaintenance: boolean;
   loss: BudgetLoss | null;
   forbidden: boolean;
@@ -158,6 +171,8 @@ export interface SendBudgetStore {
   createAndReserve(binding: BudgetBinding, attempt: string, createdAt: number, release?: readonly StoreKey[]): Promise<CreateResult>;
   /** 2.3.2: the lowest empty or released slot. */
   reserve(identity: BudgetIdentity, attempt: string): Promise<ReserveResult>;
+  /** C556 В1: the manual attempt of a closure C after its six automatic sends (reserveManualStep). */
+  reserveManual(identity: BudgetIdentity, attempt: string): Promise<ReserveResult>;
   /** 2.3.3: reserved(P) → sending(P). false: the request must not be made. */
   beginSending(identity: BudgetIdentity, claim: SlotClaim): Promise<boolean>;
   /** 2.3.4: sending(P) → transmitted(P); true again when already transmitted(P) or retryable(P). */
@@ -199,6 +214,8 @@ export interface SendBudgetStore {
    * nothing. A record damaged after this read is not in the list, so the start that offers it is blocked_by_damage.
    */
   listDamagedKeys(): Promise<StoreKey[]>;
+  /** false once the store's connection closed for good (IndexedDB); absent — the store does not close (memory model). */
+  isOpen?(): boolean;
 }
 
 const LOWER_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -206,13 +223,13 @@ const HASH = /^[0-9a-f]{64}$/;
 const KIND = /^[a-z][a-z_]*(\.[a-z][a-z_]*)+$/;
 const PAIRS: readonly string[] = ["ru-de", "uk-de", "en-de"];
 const FAMILIES: readonly string[] = ["primary", "stop", "start_cancel"];
-const TARGET_FIELDS: readonly string[] = ["assignment_id", "result_id", "session_id"];
+const TARGET_FIELDS: readonly string[] = ["assignment_id", "result_id", "preview_id", "session_id"];
 const HELD: readonly string[] = ["reserved", "sending", "transmitted", "retryable"];
 const SENT: readonly string[] = ["transmitted", "retryable"];
 const FREE: readonly string[] = ["empty", "released"];
 const RECORD_KEYS = ["schemaVersion", "commandId", "profileId", "clientInstanceId", "pair", "sessionId", "kind", "family",
   "target", "slots", "createdAt"];
-const OPTIONAL_KEYS = ["intentHash", "lastMaintenance", "sendBan", "loss"];
+const OPTIONAL_KEYS = ["intentHash", "lastMaintenance", "manual", "sendBan", "loss"];
 
 function lowerId(value: unknown): value is string {
   return typeof value === "string" && LOWER_UUID.test(value);
@@ -251,10 +268,12 @@ export function validBudgetRecord(value: unknown): value is SendBudgetRecord {
   if (Object.hasOwn(value, "lastMaintenance") && value.lastMaintenance !== true) return false;
   if (Object.hasOwn(value, "sendBan") && value.sendBan !== true) return false;
   if (Object.hasOwn(value, "loss") && !validLoss(value.loss)) return false;
+  if (Object.hasOwn(value, "manual") && !validSlot(value.manual)) return false;
   const slots = value.slots;
   // Array.from turns holes into undefined: every() alone skips them and would accept a sparse array.
   if (!Array.isArray(slots) || slots.length !== MAX_SENDS || !Array.from(slots).every(validSlot)) return false;
-  const attempts = slots.flatMap(slot => "attempt" in slot ? [slot.attempt] : []);
+  const cells = Object.hasOwn(value, "manual") ? [...slots, value.manual as BudgetSlot] : slots;
+  const attempts = cells.flatMap(slot => "attempt" in slot ? [slot.attempt] : []);
   return new Set(attempts).size === attempts.length;
 }
 
@@ -267,6 +286,8 @@ export function copyBudgetRecord(value: SendBudgetRecord): SendBudgetRecord {
     family: value.family, target: { field: value.target.field, id: value.target.id },
     slots: value.slots.map(slot => "attempt" in slot ? { state: slot.state, attempt: slot.attempt } : { state: slot.state }),
     ...(value.lastMaintenance ? { lastMaintenance: true as const } : {}),
+    ...(value.manual ? { manual: "attempt" in value.manual ? { state: value.manual.state, attempt: value.manual.attempt }
+      : { state: value.manual.state } } : {}),
     ...(value.sendBan ? { sendBan: true as const } : {}),
     createdAt: value.createdAt,
     ...(value.loss ? { loss: { server: value.loss.server, next: value.loss.next, device: value.loss.device } } : {}),
@@ -298,7 +319,7 @@ export function canonicalId(id: string): string {
   return value;
 }
 export function canonicalClaim(claim: SlotClaim): SlotClaim {
-  if (!Number.isInteger(claim.slot) || claim.slot < 0 || claim.slot >= MAX_SENDS) invalidInput();
+  if (!Number.isInteger(claim.slot) || claim.slot < 0 || claim.slot > MANUAL_SLOT) invalidInput();
   return { slot: claim.slot, attempt: canonicalId(claim.attempt) };
 }
 
@@ -354,13 +375,21 @@ export function reserveStep(current: unknown, identity: BudgetIdentity, attempt:
 function moveSlot(current: unknown, identity: BudgetIdentity, claim: SlotClaim, from: readonly SlotState[],
   to: BudgetSlot, banned: boolean): BudgetStep<boolean> {
   const own = ownRecord(current, identity);
-  const cell = own?.slots[claim.slot];
+  const cell = own ? cellAt(own, claim.slot) : undefined;
   if (!own || !cell || !("attempt" in cell) || cell.attempt !== claim.attempt || !from.includes(cell.state)
     || (banned && own.sendBan)) {
     return { result: false };
   }
-  own.slots[claim.slot] = to;
-  return { result: true, write: own };
+  return { result: true, write: withCell(own, claim.slot, to) };
+}
+/** The cell a claim names: one of the six automatic slots, or the manual attempt of a closure (MANUAL_SLOT). */
+function cellAt(own: SendBudgetRecord, slot: number): BudgetSlot | undefined {
+  return slot === MANUAL_SLOT ? own.manual : own.slots[slot];
+}
+function withCell(own: SendBudgetRecord, slot: number, cell: BudgetSlot): SendBudgetRecord {
+  if (slot === MANUAL_SLOT) return copyBudgetRecord({ ...own, manual: cell });
+  own.slots[slot] = cell;
+  return own;
 }
 
 export function beginSendingStep(current: unknown, identity: BudgetIdentity, claim: SlotClaim): BudgetStep<boolean> {
@@ -369,7 +398,7 @@ export function beginSendingStep(current: unknown, identity: BudgetIdentity, cla
 
 export function markTransmittedStep(current: unknown, identity: BudgetIdentity, claim: SlotClaim): BudgetStep<boolean> {
   const own = ownRecord(current, identity);
-  const cell = own?.slots[claim.slot];
+  const cell = own ? cellAt(own, claim.slot) : undefined;
   // Marked again on the server's answer: already sent by the same attempt is a success without a write.
   if (cell && "attempt" in cell && SENT.includes(cell.state) && cell.attempt === claim.attempt) return { result: true };
   // After the ban a slot stays "sending": it still bounds the count, and nothing can read it as a spent budget.
@@ -378,9 +407,29 @@ export function markTransmittedStep(current: unknown, identity: BudgetIdentity, 
 
 export function markRetryableStep(current: unknown, identity: BudgetIdentity, claim: SlotClaim): BudgetStep<boolean> {
   const own = ownRecord(current, identity);
-  const cell = own?.slots[claim.slot];
+  const cell = own ? cellAt(own, claim.slot) : undefined;
   if (cell && cell.state === "retryable" && cell.attempt === claim.attempt) return { result: true };
   return moveSlot(current, identity, claim, ["transmitted"], { state: "retryable", attempt: claim.attempt }, true);
+}
+
+/**
+ * C556 В1: the manual attempt of the same closure C, only after its six automatic sends are provably spent (budgetVerdict
+ * exhausted), never under the ban, and only while no earlier manual attempt is unsettled. The six automatic slots are
+ * not touched; the new attempt replaces a retryable or released one, so a late handler of the older one finds no slot.
+ * "unsettled": the automatic budget is not exhausted, or a manual attempt is still under way or unwritten.
+ */
+export function reserveManualStep(current: unknown, identity: BudgetIdentity, attempt: string): BudgetStep<ReserveResult> {
+  const own = ownRecord(current, identity);
+  if (!own) return { result: { outcome: "unknown" } };
+  if (own.sendBan) return { result: { outcome: "forbidden" } };
+  if (own.family !== "stop" || own.kind !== "session.stop") return { result: { outcome: "unknown" } };
+  const { occupied, transmitted, unsettled } = counts(own);
+  if (occupied < MAX_SENDS || transmitted < MAX_SENDS || unsettled > 0) return { result: { outcome: "unsettled" } };
+  if (own.manual && "attempt" in own.manual && own.manual.state !== "retryable") return { result: { outcome: "unsettled" } };
+  if (own.slots.some(cell => "attempt" in cell && cell.attempt === attempt)
+    || own.manual && "attempt" in own.manual && own.manual.attempt === attempt) return { result: { outcome: "unsettled" } };
+  return { result: { outcome: "reserved", claim: { slot: MANUAL_SLOT, attempt } },
+    write: copyBudgetRecord({ ...own, manual: { state: "reserved", attempt } }) };
 }
 
 /** Never after "sending": from then on the request may have left at any moment (CL 4.13.1а). */
@@ -424,7 +473,9 @@ function counts(value: SendBudgetRecord): { occupied: number; transmitted: numbe
 export function summarize(current: unknown, identity: BudgetIdentity): BudgetSummary | null {
   const own = ownRecord(current, identity);
   if (!own) return null;
-  return { ...counts(own), lastMaintenance: own.lastMaintenance === true, loss: own.loss ?? null, forbidden: own.sendBan === true };
+  const manual = own.manual;
+  return { ...counts(own), manualUnsettled: !!manual && HELD.includes(manual.state) && manual.state !== "retryable",
+    lastMaintenance: own.lastMaintenance === true, loss: own.loss ?? null, forbidden: own.sendBan === true };
 }
 
 /**
@@ -438,7 +489,8 @@ export function budgetVerdict(summary: BudgetSummary | null): BudgetVerdict {
   if (summary === null) return "unknown";
   if (summary.forbidden) return "forbidden";
   if (summary.occupied >= MAX_SENDS) {
-    return summary.transmitted >= MAX_SENDS && summary.unsettled === 0 ? "exhausted" : "unconfirmed";
+    // A manual attempt of a closure C still under way (C556 В1) makes the outcome unknown again: no press, only checks.
+    return summary.transmitted >= MAX_SENDS && summary.unsettled === 0 && !summary.manualUnsettled ? "exhausted" : "unconfirmed";
   }
   return summary.unsettled > 0 ? "unsettled" : "can_send";
 }
@@ -573,7 +625,7 @@ export function orphanOf(key: StoreKey, current: unknown, profileId: string, ses
     return {
       commandId: current.commandId, damaged: false, kind: current.kind, family: current.family,
       target: { field: current.target.field, id: current.target.id }, intentHash: current.intentHash ?? null,
-      started: current.slots.some(slot => slot.state === "sending" || SENT.includes(slot.state)),
+      started: [...current.slots, ...(current.manual ? [current.manual] : [])].some(slot => slot.state === "sending" || SENT.includes(slot.state)),
       forbidden: current.sendBan === true, occupied, transmitted,
     };
   }
@@ -639,6 +691,11 @@ export class MemorySendBudget implements SendBudgetStore {
     const own = canonicalIdentity(identity);
     const id = canonicalId(attempt);
     return this.apply(own.commandId, current => reserveStep(current, own, id));
+  }
+  reserveManual(identity: BudgetIdentity, attempt: string): Promise<ReserveResult> {
+    const own = canonicalIdentity(identity);
+    const id = canonicalId(attempt);
+    return this.apply(own.commandId, current => reserveManualStep(current, own, id));
   }
   beginSending(identity: BudgetIdentity, claim: SlotClaim): Promise<boolean> {
     const own = canonicalIdentity(identity);

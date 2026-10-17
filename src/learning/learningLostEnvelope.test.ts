@@ -7,7 +7,7 @@ import { tick } from "../commands/recoveryTime.test-support";
 import { id, missing, primaryKey, response } from "./learningFixtures.test-support";
 import { learningViewFixture } from "./learningView.test-support";
 import { LearningViewController } from "./learningViewController";
-import { pageSendCounter } from "../commands/laneRecovery";
+import { pageMarks } from "../commands/budget.test-support";
 import { hasPending, readPending } from "../commands/pendingSeed.test-support";
 import { testGate } from "../commands/testGate.test-support";
 
@@ -71,7 +71,7 @@ describe("Q27 Learning: a lost answer is read by its own ID only", () => {
   it("recorded by the server: the result is restored by its ID; no new ID, budget or answer POST; the pointer goes", async () => {
     const h = harness();
     const sent = await unknownAnswer(h, "lose");
-    const ids = h.newId.mock.calls.length, budget = await pageSendCounter(h.storage).load(sent.command_id);
+    const ids = h.newId.mock.calls.length, budget = await pageMarks(h.storage, sent.command_id);
     expect(h.deletePayloads()).toBe(1);
     const from = h.fetcher.mock.calls.length;
     const next = h.own(); await next.refresh(); await tick();
@@ -81,14 +81,14 @@ describe("Q27 Learning: a lost answer is read by its own ID only", () => {
     expect(hasPending(h.values, primaryKey)).toBe(false);
     expect(h.postsSince(from).filter(post => post.kind === "answer.submit")).toEqual([]);
     expect(h.newId.mock.calls.length).toBe(ids);
-    expect(await pageSendCounter(h.storage).load(sent.command_id)).toEqual(budget);
+    expect(await pageMarks(h.storage, sent.command_id)).toEqual(budget);
   });
 
   it.each([["a typed answer", false], ["«Забыл»", true]])(
     "never reached the server (%s): not_found → unresolved, never resent; Stop only once the open session is read", async (_name, forgot) => {
       const h = harness();
       const sent = await unknownAnswer(h, "drop", forgot);
-      const ids = h.newId.mock.calls.length, budget = await pageSendCounter(h.storage).load(sent.command_id);
+      const ids = h.newId.mock.calls.length, budget = await pageMarks(h.storage, sent.command_id);
       expect(h.deletePayloads()).toBe(1);
       const from = h.fetcher.mock.calls.length;
       const next = h.own(); await next.refresh(); await h.run(60_000, 5000);
@@ -98,7 +98,7 @@ describe("Q27 Learning: a lost answer is read by its own ID only", () => {
       expect(h.statusReads(sent.command_id, from).length).toBeGreaterThan(0);
       expect(h.postsSince(from)).toEqual([]);
       expect(h.newId.mock.calls.length).toBe(ids);
-      expect(await pageSendCounter(h.storage).load(sent.command_id)).toEqual(budget);
+      expect(await pageMarks(h.storage, sent.command_id)).toEqual(budget);
       await next.stop("stop"); await h.run(10_000);
       expect(h.postsSince(from).map(post => post.kind)).toEqual(["session.stop"]);
     });
@@ -113,7 +113,7 @@ describe("Q27 Learning: a lost answer is read by its own ID only", () => {
     expect(grade).toBeDefined();
     h.view.dispose(); h.route(() => undefined);
     const grades = h.posts().filter(post => post.kind === "result.grade").length;
-    const budget = await pageSendCounter(h.storage).load(grade.command_id);
+    const budget = await pageMarks(h.storage, grade.command_id);
     expect(h.deletePayloads()).toBe(1);
     const from = h.fetcher.mock.calls.length;
     const next = h.own(); await next.refresh(); await tick();
@@ -122,7 +122,7 @@ describe("Q27 Learning: a lost answer is read by its own ID only", () => {
     expect(h.restored(grade.command_id)).toBe(true);
     expect(h.postsSince(from).filter(post => post.kind === "result.grade" || post.command_id === grade.command_id)).toEqual([]);
     expect(h.posts().filter(post => post.kind === "result.grade")).toHaveLength(grades);
-    expect(await pageSendCounter(h.storage).load(grade.command_id)).toEqual(budget);
+    expect(await pageMarks(h.storage, grade.command_id)).toEqual(budget);
     expect(hasPending(h.values, primaryKey)).toBe(false);
   });
 

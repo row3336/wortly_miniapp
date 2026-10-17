@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { pageSendCounter } from "../commands/laneRecovery";
+import { pageMarks, pageStore, seedMarks } from "../commands/budget.test-support";
 import { tick } from "../commands/recoveryTime.test-support";
 import { id, primaryKey, stopKey, prefetched, action, stop, original, pending, missing, response, fixture } from "./learningFixtures.test-support";
 import { pendingRaw, seedRaw, pointerKeyOf } from "../commands/pendingSeed.test-support";
@@ -15,8 +15,9 @@ describe("Learning: a new action meets another window's record in the shared slo
   it("an automatic answer is dropped: no request, no lost connection, X and its count untouched, no late write of Y", async () => {
     vi.useFakeTimers();
     const f = fixture(); await f.owner.refresh(); await tick();
-    const counter = pageSendCounter(f.storage);
-    await counter.save(id(777), { reserved: 2, transmitted: 1 });
+    // CP5b: X's count in the store of the page, under the identity of its envelope.
+    await seedMarks(await pageStore(f.storage), original(action(), 777), { reserved: 2, transmitted: 1 },
+      { owner: { profileId: id(50), clientInstanceId: id(1), pair: "ru-de" } });
     const x = other(); seedRaw(f.values, primaryKey, x, id(50));
     await f.owner.begin(action()); await tick();
     expect(f.newId).toHaveBeenCalledOnce();
@@ -26,8 +27,8 @@ describe("Learning: a new action meets another window's record in the shared slo
     for (let second = 0; second < 120; second += 5) await tick(5000);
     expect(f.fetcher).not.toHaveBeenCalled();
     expect(pendingRaw(f.values, primaryKey)).toBe(x);
-    expect(await counter.load(id(777))).toEqual({ reserved: 2, transmitted: 1 });
-    expect(await counter.load(id(100))).toBeNull();
+    expect(await pageMarks(f.storage, id(777))).toEqual({ reserved: 2, transmitted: 1 });
+    expect(await pageMarks(f.storage, id(100))).toBeNull();
     f.owner.dispose();
   });
   it("after the conflict is resolved a new action Z gets its own ID and is sent once; Y is never sent or checked", async () => {
