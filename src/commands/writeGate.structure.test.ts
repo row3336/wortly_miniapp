@@ -116,10 +116,12 @@ describe("structure of the write path (RD-7 п.5, AC-42)", () => {
 });
 
 /**
- * The POST paths of core/docs/openapi.json at core ceec5c9 (P03 RD-8; without /api/v1). The live file of the sibling
- * core checkout is compared too when it is there (the product layout /…/wortly/{core,miniapp}).
+ * The POST paths of core/docs/openapi.json at core a2c29f4 (P03 RD-8; without /api/v1): those of ceec5c9 and the notice
+ * acknowledgement (N1). The live file of the sibling core checkout is compared too when it is there (the product layout
+ * /…/wortly/{core,miniapp}).
  */
-const CORE_POST_PATHS_CEEC5C9 = ["/access/reapply", "/auth/telegram", "/client/events", "/client/open", "/client/register", "/commands", "/profile/delete"];
+const CORE_POST_PATHS_A2C29F4 = ["/access/reapply", "/auth/telegram", "/client/events", "/client/open", "/client/register", "/commands",
+  "/notices/{notice_id}/ack", "/profile/delete"];
 
 function postPaths(openapi: { paths: Record<string, Record<string, unknown>> }): string[] {
   return Object.entries(openapi.paths)
@@ -130,7 +132,7 @@ function postPaths(openapi: { paths: Record<string, Record<string, unknown>> }):
 
 describe("the registry of POST routes (RD-8, AC-43)", () => {
   it("classifies every POST of the core and nothing else", () => {
-    expect(Object.keys(POST_ROUTES).sort()).toEqual([...CORE_POST_PATHS_CEEC5C9].sort());
+    expect(Object.keys(POST_ROUTES).sort()).toEqual([...CORE_POST_PATHS_A2C29F4].sort());
     for (const value of Object.values(POST_ROUTES)) expect(["exception", "foreground_only", "gated"]).toContain(value);
     expect(Object.entries(POST_ROUTES).filter(([, value]) => value !== "gated").map(([path]) => path).sort())
       .toEqual(["/auth/telegram", "/client/open", "/client/register"]);

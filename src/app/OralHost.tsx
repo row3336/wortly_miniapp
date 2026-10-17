@@ -11,6 +11,8 @@ import type { SettingsDocument } from "../settings/useSettingsDocument";
 import type { OrdinaryQuiz } from "../today/TodayScreen";
 import { useBackLayer } from "./navigationBack";
 import type { OpenedAccess } from "./openedAccess";
+import { noticePendingStart, useNoticePendingSignal } from "../notices/noticePending";
+import { FORCED_ORAL_REASONS, NOTICE_ORAL_REASONS } from "../oral/OralScreen";
 
 /** One pair per storage: the pending slots serialize through their shared in-memory queue. */
 export type OralStores = { study: OralSessionPendingStore; stop: OralStopPendingStore };
@@ -43,6 +45,23 @@ export type OralHostOptions = {
    * refreshes its access once per such session and goes into it; the owner only reports it.
    */
   onForeignStart?(sessionId: string): void;
+  /**
+   * NOTICE_PENDING (project notices ed.2.4 §6.1): a start of this owner was refused because a notice waits. The document
+   * reads GET /notices and shows it; the owner sends nothing more for that start (no new ID, no POST).
+   */
+  onNoticePending?(): void;
+  /**
+   * Q32 / Д4 (project notices ed.2.4 §6): the own session was closed by the calendar (midnight, a new date) — the only
+   * causes with an oral_forced_close (NOTICE_ORAL_REASONS). The document reads GET /notices for it (Т2). Every forced
+   * cause, these and remote_stop / pair_changed, keeps the owner on its summary with the reason (FORCED_ORAL_REASONS).
+   */
+  onForcedClosure?(sessionId: string): void;
+  /**
+   * The «На Сегодня» (and native Back) of a calendar summary: acknowledges the session's oral_forced_close, then goes to
+   * Today; false when the
+   * acknowledgement did not end (the summary stays and the press can be repeated, §5). Without it: plain onToday.
+   */
+  onLeaveForcedClosure?(sessionId: string): Promise<boolean>;
 };
 export type OralHost = {
   /** Today waits for the first recovery and for own receipts or sessions it must show first. */
@@ -64,6 +83,8 @@ type Lifetime = {
   awaitingStart: string | null | false;
   recovered: boolean; claimed: string | null; idleNotified: boolean;
   notified: Set<string>; graded: string | null; completed: Set<string>;
+  /** P2-B: the earlier sessions whose closure summary (priorClosure) the person already left by «На Сегодня» or Back. */
+  priorLeft: Set<string>;
 };
 
 /** Route composition for the oral owner; Start is an explicit, cancellable UI event. */
@@ -77,7 +98,7 @@ export function useOralHost(options: OralHostOptions): OralHost {
     || bound.transport !== options.transport) {
     bound = { key: access.key, pair, stores: options.stores, transport: options.transport,
       floor: access.profile.state_version, request: null, starting: false, awaitingStart: false, recovered: false,
-      claimed: null, idleNotified: false, notified: new Set(), graded: null, completed: new Set() };
+      claimed: null, idleNotified: false, notified: new Set(), graded: null, completed: new Set(), priorLeft: new Set() };
     lifetime.current = bound;
   }
   const confirmed = options.settings.confirmed;
@@ -123,6 +144,11 @@ export function useOralHost(options: OralHostOptions): OralHost {
   }, [bound, route, access, gate, enabled, state, actions]);
 
   const study = state?.commands.study, stop = state?.commands.stop;
+  // P2-B: the closure of the own earlier session of the left pair, while not left yet (forced causes only).
+  const prior = state?.priorClosure ?? null;
+  const shownPrior = prior && FORCED_ORAL_REASONS.includes(prior.reason) && !bound.priorLeft.has(prior.sessionId.toLowerCase())
+    ? prior.sessionId : null;
+  const shownState = state && state.priorClosure && shownPrior === null ? { ...state, priorClosure: undefined } : state;
   const lanesPending = !!study?.pending || !!stop?.pending;
   const live = state !== null && state.phase !== "disposed" && state.phase !== "loading";
   // Own receipts and a still open own session are shown before Today; a closed session is not resumed.
@@ -158,22 +184,49 @@ export function useOralHost(options: OralHostOptions): OralHost {
       if (!bound.notified.has(resolvedStart!)) { bound.notified.add(resolvedStart!); bound.awaitingStart = false; }
       return;
     }
-    // The own Stop shows its summary; any other confirmed closure returns to Today once.
+    // The own Stop shows its summary; a closure without the person (Q32: any proven cause) shows its summary with the
+    // reason until «На Сегодня»; a calendar one also reads its notice (Т2). summary_home and the client's own automatic
+    // closure return to Today once.
     const reason = state.closed?.reason ?? null;
+    if (state.phase === "closed" && sessionId !== null && reason !== null && FORCED_ORAL_REASONS.includes(reason)) {
+      if (!bound.notified.has(sessionId)) {
+        bound.notified.add(sessionId);
+        if (NOTICE_ORAL_REASONS.includes(reason)) current.onForcedClosure?.(sessionId);
+      }
+      return;
+    }
     if (state.phase === "closed" && sessionId !== null && reason !== null && reason !== "stop" && !bound.notified.has(sessionId)) {
       bound.notified.add(sessionId);
       void current.onToday();
       return;
     }
+    // P2-B (C537): the proven closure of the own earlier session of the left pair stays on screen until the explicit exit.
+    if (shownPrior !== null) return;
     if (!current.seedPending && state.phase === "idle" && state.sessionId === null && !lanesPending
       && bound.request === null && !bound.starting && !bound.idleNotified) {
       bound.idleNotified = true;
       void current.onToday();
     }
-  }, [bound, state, route, claim, resolvedStart, startRefusedShown, study?.outcome, lanesPending, options.seedPending]);
+  }, [bound, state, route, claim, resolvedStart, startRefusedShown, study?.outcome, lanesPending, options.seedPending, shownPrior]);
 
   const startedElsewhere = state && state.phase !== "disposed" ? acceptedForeignStart(study, state) : null;
   useEffect(() => { if (startedElsewhere !== null) latest.current.onForeignStart?.(startedElsewhere); }, [startedElsewhere]);
+  useNoticePendingSignal(state && state.phase !== "disposed" ? noticePendingStart(study) : null, options.onNoticePending);
+  // Q32: the «На Сегодня» of a summary closed without the person acknowledges its notice first; held while that runs.
+  const leaving = useRef(false);
+  const leaveForced = (sessionId: string) => {
+    // P2-B: the earlier session of the left pair has no notice here (R22): plain navigation, remembered as left.
+    const prior = latestState.current?.priorClosure;
+    if (prior && prior.sessionId.toLowerCase() === sessionId.toLowerCase()) {
+      bound.priorLeft.add(sessionId.toLowerCase()); repaint(); void latest.current.onToday(); return;
+    }
+    const leave = latest.current.onLeaveForcedClosure, reason = latestState.current?.closed?.reason ?? null;
+    // remote_stop / pair_changed have no notice: plain navigation, no read and no acknowledgement.
+    if (!leave || reason === null || !NOTICE_ORAL_REASONS.includes(reason)) { void latest.current.onToday(); return; }
+    if (leaving.current) return;
+    leaving.current = true; repaint();
+    void leave(sessionId).finally(() => { leaving.current = false; if (lifetime.current === bound) repaint(); });
+  };
 
   const screenActions = useMemo<OralDocumentActions>(() => ({ ...actions, grade: correct => {
     bound.graded = latestState.current?.sessionId?.toLowerCase() ?? null;
@@ -186,9 +239,13 @@ export function useOralHost(options: OralHostOptions): OralHost {
   if (route === "oral" && state && !seedPending && state.phase !== "disposed") {
     const awaitingStop = state.phase === "stopping" || !!stop?.pending || ["sending", "checking", "loading"].includes(stop?.phase ?? "");
     const ownSummary = state.phase === "closed" && state.closed?.reason === "stop" && state.closed.summaryRead === "known";
+    const forcedSummary = state.phase === "closed" && state.closed !== null && state.closed.reason !== null
+      && FORCED_ORAL_REASONS.includes(state.closed.reason) && (state.closed.summaryRead === "known" || state.closed.summaryRead === "failed");
     if (state.phase === "summary" && state.canSummaryHome) back = () => { void actions.stop("summary_home"); };
     else if (state.phase !== "closed" && state.canStop) back = () => { void actions.stop("stop"); };
     else if (ownSummary) back = () => { void latest.current.onToday(); };
+    else if (forcedSummary) { const closedId = state.closed!.sessionId; back = () => leaveForced(closedId); }
+    else if (shownPrior !== null) { const priorId = shownPrior; back = () => leaveForced(priorId); }
     else if (awaitingStop) back = () => {};
   }
   useBackLayer("screen", back);
@@ -206,7 +263,8 @@ export function useOralHost(options: OralHostOptions): OralHost {
     blocksToday: !bound.recovered || claim !== null,
     canRequestStart: gate,
     requestStart,
-    screen: route === "oral" ? <OralScreen state={seedPending ? null : state} actions={screenActions} language={options.language}
-      active onToday={intent => { void latest.current.onToday(intent); }} onRefineFields={openCard} /> : null,
+    screen: route === "oral" ? <OralScreen state={seedPending ? null : shownState} actions={screenActions} language={options.language}
+      active onToday={intent => { void latest.current.onToday(intent); }} onRefineFields={openCard}
+      onForcedToday={leaveForced} leaving={leaving.current} /> : null,
   };
 }

@@ -76,3 +76,36 @@ describe("Written host: a closure of the quiz (Q27-А, TA:164)", () => {
     expect(f.posts().filter(post => post.kind === "session.stop")).toHaveLength(0);
   });
 });
+
+// NOTICE_PENDING (project notices §6.1, T5): a start refused because a notice waits tells the document once (it reads
+// GET /notices and shows the notice); the owner sends nothing more for it — no new ID, no POST.
+describe("Written host: a start refused NOTICE_PENDING", () => {
+  it.each([["NOTICE_PENDING", 1], ["SESSION_BUSY", 0]] as const)("%s tells a pending notice %s time(s); one start only", async (code, told) => {
+    const f = writtenFixture({ cards: [6, 7, 8] }), onNoticePending = vi.fn(), starts: string[] = [];
+    const transport = { ...f.transport, fetcher: (async (url: string | URL | Request, init?: RequestInit) => {
+      const body = init?.method === "POST" && init.body ? JSON.parse(String(init.body)) : null;
+      if (body?.kind === "session.start" && String(url).endsWith("/commands")) {
+        starts.push(body.command_id);
+        return new Response(JSON.stringify({ command: { id: body.command_id, status: "rejected" },
+          current: { session_id: body.session_id, status: "not_found" }, state_version: f.access().profile.state_version,
+          error: { code } }), { status: 409 });
+      }
+      return f.transport.fetcher(url, init);
+    }) as typeof fetch };
+    const seen: { host: ReturnType<typeof useWrittenHost> | null } = { host: null };
+    function Host() {
+      const host = useWrittenHost({ access: f.access(), transport, storage: f.storage, newId: f.newId, language: "ru",
+        settings: confirmedSettings("ru", f.access().profile.state_version), initialSessionId: null, route: "written",
+        onWritten: () => undefined, onToday: () => undefined, onNoticePending });
+      seen.host = host;
+      return <>{host.screen}</>;
+    }
+    render(<Host />);
+    await waitFor(() => expect(seen.host?.canRequestStart).toBe(true));
+    act(() => seen.host!.requestStart("words"));
+    await waitFor(() => expect(starts).toHaveLength(1));
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 200)); });
+    expect(onNoticePending).toHaveBeenCalledTimes(told);
+    expect(starts).toHaveLength(1);
+  });
+});

@@ -12,6 +12,7 @@ import type { Language } from "../i18n/language";
 import type { SettingsDocument } from "../settings/useSettingsDocument";
 import { useBackLayer } from "./navigationBack";
 import type { OpenedAccess } from "./openedAccess";
+import { noticePendingStart, useNoticePendingSignal } from "../notices/noticePending";
 
 /** One pair per storage: the pending slots serialize through their shared in-memory queue. */
 export type ConjugationStores = { study: ConjugationSessionPendingStore; stop: ConjugationStopPendingStore };
@@ -39,6 +40,11 @@ export type ConjugationHostOptions = {
    * refreshes its access once per such session and goes into it; the owner only reports it.
    */
   onForeignStart?(sessionId: string): void;
+  /**
+   * NOTICE_PENDING (project notices ed.2.4 §6.1): a start of this owner was refused because a notice waits. The document
+   * reads GET /notices and shows it; the owner sends nothing more for that start (no new ID, no POST).
+   */
+  onNoticePending?(): void;
 };
 export type ConjugationHost = {
   /** Today waits for the first recovery and for own receipts or sessions it must show first. */
@@ -58,7 +64,8 @@ export function leavesToToday(reason: CloseReason | null): boolean {
 }
 
 /** Refusals of session.start that end this start for good (Ж01): no retry of the same ID can succeed. */
-const finalStartRefusals: readonly string[] = ["SESSION_BUSY", "NO_MATERIAL", "SETUP_REQUIRED", "SESSION_CLOSED"];
+// NOTICE_PENDING (project notices ed.2.4 §6.1; core FINAL_START_CODES since a2c29f4): kept by its ID as well.
+const finalStartRefusals: readonly string[] = ["SESSION_BUSY", "NO_MATERIAL", "SETUP_REQUIRED", "SESSION_CLOSED", "NOTICE_PENDING"];
 
 // The written quiz's block for a start without confirmed settings (useWrittenHost.tsx). Not shared yet: src/written is
 // owned by another package now (D-CONJ-HOST 5.2.12, deferred); the wording is the same, no new strings.
@@ -172,6 +179,7 @@ export function useConjugationHost(options: ConjugationHostOptions): Conjugation
     ? state.sessionId ?? study?.sessionId ?? stop?.sessionId ?? "receipt" : null;
   const startedElsewhere = state && state.phase !== "disposed" ? acceptedForeignStart(study, state) : null;
   useEffect(() => { if (startedElsewhere !== null) latest.current.onForeignStart?.(startedElsewhere); }, [startedElsewhere]);
+  useNoticePendingSignal(refusedStart ? noticePendingStart(study) : null, options.onNoticePending);
   useEffect(() => {
     const current = latest.current;
     if (current.route !== "conjugation") bound.idleNotified = false;

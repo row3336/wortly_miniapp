@@ -24,7 +24,7 @@ export type BaseCounts = { "total": number; "words": number; "phrases": number; 
 
 export type BudgetEvent = { "cts": string; "ev": "c.budget"; "cmd": string; "n": number; "outcome": "failed" | "cancel_sent"; };
 
-export type BusyClient = { "status": "SESSION_BUSY"; "profile": Profile; "session": BusySession; "compatibility": Compatibility; };
+export type BusyClient = { "status": "SESSION_BUSY"; "profile": Profile; "session": BusySession; "compatibility": Compatibility; "notices"?: (Array<NoticeView> | null); };
 
 export type BusySession = { "status": "busy"; "stop_remote_target"?: (string | null); "document_conflict"?: boolean; "document_epoch"?: (string | null); };
 
@@ -66,7 +66,7 @@ export type ClosedSessionBoundary = { "session_id": string; "status": "closed"; 
 
 export type CommandFact = { "id": string; "status": "applied" | "already_applied"; "applied_at": string; "target_id": (string | null); "object_version": string; };
 
-export type CommandReplyEvent = { "cts": string; "ev": "c.cmd.reply"; "cmd"?: (string | null); "trace": string; "status"?: (number | null); "code"?: ("ACCESS_PENDING" | "ACCESS_REJECTED" | "ANSWER_SPEC_UNAVAILABLE" | "ASSIGNMENT_STALE" | "AUTH_EXPIRED" | "AUTH_INVALID" | "CAPABILITY_EXPIRED" | "CLIENT_INCOMPATIBLE" | "CLIENT_OPEN_REQUIRED" | "CLIENT_REGISTRATION_CONFLICT" | "COMMAND_PAYLOAD_MISMATCH" | "DICTIONARY_LANGUAGE_LOCKED" | "DOCUMENT_STALE" | "FORBIDDEN" | "INTERNAL_ERROR" | "LEASE_HELD" | "LEASE_LOST" | "MAINTENANCE" | "METHOD_NOT_ALLOWED" | "NOTIFICATIONS_NOT_OPENED" | "NOT_FOUND" | "NO_MATERIAL" | "PRECEDENCE_ANOMALY" | "PROFILE_DELETED" | "RATE_LIMITED" | "REQUEST_REFUSED" | "RESET_CANCELLED" | "RESET_EPOCH_STALE" | "SEARCH_CURSOR_STALE" | "SESSION_BUSY" | "SESSION_CLOSED" | "SETUP_REQUIRED" | "VALIDATION_FAILED" | "VERSION_CONFLICT" | "WRITE_UNAVAILABLE" | null); "outcome": "applied" | "already_applied" | "refused" | "unknown" | "network" | "timeout"; "ms"?: (number | null); };
+export type CommandReplyEvent = { "cts": string; "ev": "c.cmd.reply"; "cmd"?: (string | null); "trace": string; "status"?: (number | null); "code"?: ("ACCESS_PENDING" | "ACCESS_REJECTED" | "ANSWER_SPEC_UNAVAILABLE" | "ASSIGNMENT_STALE" | "AUTH_EXPIRED" | "AUTH_INVALID" | "CAPABILITY_EXPIRED" | "CLIENT_INCOMPATIBLE" | "CLIENT_OPEN_REQUIRED" | "CLIENT_REGISTRATION_CONFLICT" | "COMMAND_PAYLOAD_MISMATCH" | "DICTIONARY_LANGUAGE_LOCKED" | "DOCUMENT_STALE" | "FORBIDDEN" | "INTERNAL_ERROR" | "LEASE_HELD" | "LEASE_LOST" | "MAINTENANCE" | "METHOD_NOT_ALLOWED" | "NOTICE_PENDING" | "NOTIFICATIONS_NOT_OPENED" | "NOT_FOUND" | "NO_MATERIAL" | "PRECEDENCE_ANOMALY" | "PROFILE_DELETED" | "RATE_LIMITED" | "REQUEST_REFUSED" | "RESET_CANCELLED" | "RESET_EPOCH_STALE" | "SEARCH_CURSOR_STALE" | "SESSION_BUSY" | "SESSION_CLOSED" | "SETUP_REQUIRED" | "VALIDATION_FAILED" | "VERSION_CONFLICT" | "WRITE_UNAVAILABLE" | null); "outcome": "applied" | "already_applied" | "refused" | "unknown" | "network" | "timeout"; "ms"?: (number | null); };
 
 export type CommandSendEvent = { "cts": string; "ev": "c.cmd.send"; "cmd": string; "trace": string; "kind": "access.decide" | "access.mode" | "access.reapply" | "action.undo" | "action.undo_offer.close" | "action.undo_offer.open" | "answer.submit" | "assignment.present" | "card.exclude" | "card.relearn" | "card.return" | "conjugation.schedule" | "context.close" | "context.open" | "feedback.send" | "field.save" | "field.undo" | "interval.increase" | "learning.known" | "learning.preview_next" | "learning.select" | "learning.unselect" | "onboarding.advance" | "onboarding.complete" | "onboarding.dismiss" | "oral.grade" | "oral.reveal" | "result.correct" | "result.grade" | "result.undo" | "session.cancel_start" | "session.start" | "session.stop" | "session.stop_remote" | "setting.save" | "settings.reset" | "settings.reset_barrier" | "settings.reset_cancel" | "synonym.clear" | "synonym.link" | "synonym.link_many" | "synonym.unlink"; "attempt": number; };
 
@@ -140,9 +140,9 @@ export type DecideCommand = { "command_id": string; "kind": "access.decide"; "pa
 
 export type DecidePayload = { "request_id": string; "expected_version": string; "approve": boolean; "reason"?: (string | null); };
 
-export type DefectEvent = { "cts": string; "ev": "c.defect"; "cmd": string; "trace": string; "status": number; "code"?: ("ACCESS_PENDING" | "ACCESS_REJECTED" | "ANSWER_SPEC_UNAVAILABLE" | "ASSIGNMENT_STALE" | "AUTH_EXPIRED" | "AUTH_INVALID" | "CAPABILITY_EXPIRED" | "CLIENT_INCOMPATIBLE" | "CLIENT_OPEN_REQUIRED" | "CLIENT_REGISTRATION_CONFLICT" | "COMMAND_PAYLOAD_MISMATCH" | "DICTIONARY_LANGUAGE_LOCKED" | "DOCUMENT_STALE" | "FORBIDDEN" | "INTERNAL_ERROR" | "LEASE_HELD" | "LEASE_LOST" | "MAINTENANCE" | "METHOD_NOT_ALLOWED" | "NOTIFICATIONS_NOT_OPENED" | "NOT_FOUND" | "NO_MATERIAL" | "PRECEDENCE_ANOMALY" | "PROFILE_DELETED" | "RATE_LIMITED" | "REQUEST_REFUSED" | "RESET_CANCELLED" | "RESET_EPOCH_STALE" | "SEARCH_CURSOR_STALE" | "SESSION_BUSY" | "SESSION_CLOSED" | "SETUP_REQUIRED" | "VALIDATION_FAILED" | "VERSION_CONFLICT" | "WRITE_UNAVAILABLE" | null); };
+export type DefectEvent = { "cts": string; "ev": "c.defect"; "cmd": string; "trace": string; "status": number; "code"?: ("ACCESS_PENDING" | "ACCESS_REJECTED" | "ANSWER_SPEC_UNAVAILABLE" | "ASSIGNMENT_STALE" | "AUTH_EXPIRED" | "AUTH_INVALID" | "CAPABILITY_EXPIRED" | "CLIENT_INCOMPATIBLE" | "CLIENT_OPEN_REQUIRED" | "CLIENT_REGISTRATION_CONFLICT" | "COMMAND_PAYLOAD_MISMATCH" | "DICTIONARY_LANGUAGE_LOCKED" | "DOCUMENT_STALE" | "FORBIDDEN" | "INTERNAL_ERROR" | "LEASE_HELD" | "LEASE_LOST" | "MAINTENANCE" | "METHOD_NOT_ALLOWED" | "NOTICE_PENDING" | "NOTIFICATIONS_NOT_OPENED" | "NOT_FOUND" | "NO_MATERIAL" | "PRECEDENCE_ANOMALY" | "PROFILE_DELETED" | "RATE_LIMITED" | "REQUEST_REFUSED" | "RESET_CANCELLED" | "RESET_EPOCH_STALE" | "SEARCH_CURSOR_STALE" | "SESSION_BUSY" | "SESSION_CLOSED" | "SETUP_REQUIRED" | "VALIDATION_FAILED" | "VERSION_CONFLICT" | "WRITE_UNAVAILABLE" | null); };
 
-export type DeleteEvent = { "cts": string; "ev": "c.delete"; "cmd": string; "outcome": "refused" | "unknown"; "code"?: ("ACCESS_PENDING" | "ACCESS_REJECTED" | "ANSWER_SPEC_UNAVAILABLE" | "ASSIGNMENT_STALE" | "AUTH_EXPIRED" | "AUTH_INVALID" | "CAPABILITY_EXPIRED" | "CLIENT_INCOMPATIBLE" | "CLIENT_OPEN_REQUIRED" | "CLIENT_REGISTRATION_CONFLICT" | "COMMAND_PAYLOAD_MISMATCH" | "DICTIONARY_LANGUAGE_LOCKED" | "DOCUMENT_STALE" | "FORBIDDEN" | "INTERNAL_ERROR" | "LEASE_HELD" | "LEASE_LOST" | "MAINTENANCE" | "METHOD_NOT_ALLOWED" | "NOTIFICATIONS_NOT_OPENED" | "NOT_FOUND" | "NO_MATERIAL" | "PRECEDENCE_ANOMALY" | "PROFILE_DELETED" | "RATE_LIMITED" | "REQUEST_REFUSED" | "RESET_CANCELLED" | "RESET_EPOCH_STALE" | "SEARCH_CURSOR_STALE" | "SESSION_BUSY" | "SESSION_CLOSED" | "SETUP_REQUIRED" | "VALIDATION_FAILED" | "VERSION_CONFLICT" | "WRITE_UNAVAILABLE" | null); };
+export type DeleteEvent = { "cts": string; "ev": "c.delete"; "cmd": string; "outcome": "refused" | "unknown"; "code"?: ("ACCESS_PENDING" | "ACCESS_REJECTED" | "ANSWER_SPEC_UNAVAILABLE" | "ASSIGNMENT_STALE" | "AUTH_EXPIRED" | "AUTH_INVALID" | "CAPABILITY_EXPIRED" | "CLIENT_INCOMPATIBLE" | "CLIENT_OPEN_REQUIRED" | "CLIENT_REGISTRATION_CONFLICT" | "COMMAND_PAYLOAD_MISMATCH" | "DICTIONARY_LANGUAGE_LOCKED" | "DOCUMENT_STALE" | "FORBIDDEN" | "INTERNAL_ERROR" | "LEASE_HELD" | "LEASE_LOST" | "MAINTENANCE" | "METHOD_NOT_ALLOWED" | "NOTICE_PENDING" | "NOTIFICATIONS_NOT_OPENED" | "NOT_FOUND" | "NO_MATERIAL" | "PRECEDENCE_ANOMALY" | "PROFILE_DELETED" | "RATE_LIMITED" | "REQUEST_REFUSED" | "RESET_CANCELLED" | "RESET_EPOCH_STALE" | "SEARCH_CURSOR_STALE" | "SESSION_BUSY" | "SESSION_CLOSED" | "SETUP_REQUIRED" | "VALIDATION_FAILED" | "VERSION_CONFLICT" | "WRITE_UNAVAILABLE" | null); };
 
 export type DictionaryCardActions = { "exclude": boolean; "return": boolean; "relearn": boolean; };
 
@@ -314,6 +314,12 @@ export type ModePayload = { "mode": "manual" | "automatic"; "expected_version": 
 
 export type ModeState = { "mode": "manual" | "automatic"; "version": string; };
 
+export type NoticeAckRequest = { "command_id": string; "client_instance_id": string; };
+
+export type NoticeAcked = { "notice_id": string; "status": "applied" | "already_applied"; "acked_at": string; };
+
+export type NoticeView = { "notice_id": string; "kind": "answer_loss" | "oral_forced_close"; "session_id": string; "mode": "written" | "oral" | "learning" | "conjugation"; "close_reason": "midnight" | "pair_changed" | "timezone_date_changed" | "stop" | "remote_stop" | "summary_home" | "save_failed"; "defect_class"?: null; "created_at": string; "summary": ({ [key: string]: JsonValue; } | null); };
+
 export type NotificationsState = { "telegram_opened": boolean; };
 
 export type OnboardingAdvanceCommand = { "command_id": string; "kind": "onboarding.advance"; "client_instance_id": string; "document_id": string; "payload": OnboardingAdvancePayload; };
@@ -336,7 +342,7 @@ export type OpenDictionaryContext = { "status": "open"; "context": DictionaryCon
 
 export type OpenRequest = { "client_version": string; "contract_version": string; "client_instance_id": string; "document_id": string; "time_zone": string; "event": "open" | "foreground"; "holds_document_lock"?: boolean; "confirm_document_replacement"?: boolean; "expected_document_epoch"?: (string | null); };
 
-export type OpenedClient = { "status": "opened"; "client_instance_id": string; "document_id": string; "document_epoch": string; "proof_version": string; "profile": Profile; "session": (SessionReference | null); "compatibility": Compatibility; };
+export type OpenedClient = { "status": "opened"; "client_instance_id": string; "document_id": string; "document_epoch": string; "proof_version": string; "profile": Profile; "session": (SessionReference | null); "compatibility": Compatibility; "notices"?: (Array<NoticeView> | null); };
 
 export type OralAssignment = { "id": string; "card_id": string; "status": "prefetched" | "presented"; "kind": "original" | "drill"; "prompt": OralPrompt; "revealed": false; };
 
@@ -361,6 +367,8 @@ export type OrdinaryCounts = { "words": DirectionCounts; "phrases": DirectionCou
 export type OwnerMetric = { "profiles": Array<OwnerMetricProfile>; };
 
 export type OwnerMetricProfile = { "profile_id": string; "words": number; "phrases": number; };
+
+export type PendingNotices = { "notices": Array<NoticeView>; };
 
 export type PersonalCardText = { "value": string; "version": string; };
 
@@ -438,7 +446,7 @@ export type RemoteSessionCommandResponse = { "command": (SavedCommandFact | Reje
 
 export type RemoteSessionProjection = { "session_id": string; "status": "active" | "summary" | "closed"; "close_reason": ("midnight" | "pair_changed" | "timezone_date_changed" | "stop" | "remote_stop" | "summary_home" | "save_failed" | null); };
 
-export type ResetEvent = { "cts": string; "ev": "c.reset"; "cmd": string; "kind": "settings.reset" | "settings.reset_cancel"; "outcome": "applied" | "rejected_stale_epoch" | "rejected_invalid" | "rejected_incompatible" | "cancelled" | "unknown"; "code"?: ("ACCESS_PENDING" | "ACCESS_REJECTED" | "ANSWER_SPEC_UNAVAILABLE" | "ASSIGNMENT_STALE" | "AUTH_EXPIRED" | "AUTH_INVALID" | "CAPABILITY_EXPIRED" | "CLIENT_INCOMPATIBLE" | "CLIENT_OPEN_REQUIRED" | "CLIENT_REGISTRATION_CONFLICT" | "COMMAND_PAYLOAD_MISMATCH" | "DICTIONARY_LANGUAGE_LOCKED" | "DOCUMENT_STALE" | "FORBIDDEN" | "INTERNAL_ERROR" | "LEASE_HELD" | "LEASE_LOST" | "MAINTENANCE" | "METHOD_NOT_ALLOWED" | "NOTIFICATIONS_NOT_OPENED" | "NOT_FOUND" | "NO_MATERIAL" | "PRECEDENCE_ANOMALY" | "PROFILE_DELETED" | "RATE_LIMITED" | "REQUEST_REFUSED" | "RESET_CANCELLED" | "RESET_EPOCH_STALE" | "SEARCH_CURSOR_STALE" | "SESSION_BUSY" | "SESSION_CLOSED" | "SETUP_REQUIRED" | "VALIDATION_FAILED" | "VERSION_CONFLICT" | "WRITE_UNAVAILABLE" | null); };
+export type ResetEvent = { "cts": string; "ev": "c.reset"; "cmd": string; "kind": "settings.reset" | "settings.reset_cancel"; "outcome": "applied" | "rejected_stale_epoch" | "rejected_invalid" | "rejected_incompatible" | "cancelled" | "unknown"; "code"?: ("ACCESS_PENDING" | "ACCESS_REJECTED" | "ANSWER_SPEC_UNAVAILABLE" | "ASSIGNMENT_STALE" | "AUTH_EXPIRED" | "AUTH_INVALID" | "CAPABILITY_EXPIRED" | "CLIENT_INCOMPATIBLE" | "CLIENT_OPEN_REQUIRED" | "CLIENT_REGISTRATION_CONFLICT" | "COMMAND_PAYLOAD_MISMATCH" | "DICTIONARY_LANGUAGE_LOCKED" | "DOCUMENT_STALE" | "FORBIDDEN" | "INTERNAL_ERROR" | "LEASE_HELD" | "LEASE_LOST" | "MAINTENANCE" | "METHOD_NOT_ALLOWED" | "NOTICE_PENDING" | "NOTIFICATIONS_NOT_OPENED" | "NOT_FOUND" | "NO_MATERIAL" | "PRECEDENCE_ANOMALY" | "PROFILE_DELETED" | "RATE_LIMITED" | "REQUEST_REFUSED" | "RESET_CANCELLED" | "RESET_EPOCH_STALE" | "SEARCH_CURSOR_STALE" | "SESSION_BUSY" | "SESSION_CLOSED" | "SETUP_REQUIRED" | "VALIDATION_FAILED" | "VERSION_CONFLICT" | "WRITE_UNAVAILABLE" | null); };
 
 export type ResetTarget = { "command_id": string; "outcome": "applied" | "cancelled" | "rejected_stale_epoch" | "rejected_invalid" | "rejected_incompatible"; };
 
@@ -454,7 +462,7 @@ export type RevealedOralAssignment = { "id": string; "card_id": string; "status"
 
 export type SavedCommandFact = { "id": string; "kind": string; "status": "applied" | "already_applied"; "applied_at": string; "target_id": (string | null); "action_id": (string | null); "result_id": (string | null); "context_id": (string | null); "object_version": (string | null); };
 
-export type ScreenEvent = { "cts": string; "ev": "c.screen"; "cmd"?: (string | null); "kind": "result_shown" | "already_recorded" | "lost" | "unsaved_shown" | "refusal_shown" | "update_required"; "code"?: ("ACCESS_PENDING" | "ACCESS_REJECTED" | "ANSWER_SPEC_UNAVAILABLE" | "ASSIGNMENT_STALE" | "AUTH_EXPIRED" | "AUTH_INVALID" | "CAPABILITY_EXPIRED" | "CLIENT_INCOMPATIBLE" | "CLIENT_OPEN_REQUIRED" | "CLIENT_REGISTRATION_CONFLICT" | "COMMAND_PAYLOAD_MISMATCH" | "DICTIONARY_LANGUAGE_LOCKED" | "DOCUMENT_STALE" | "FORBIDDEN" | "INTERNAL_ERROR" | "LEASE_HELD" | "LEASE_LOST" | "MAINTENANCE" | "METHOD_NOT_ALLOWED" | "NOTIFICATIONS_NOT_OPENED" | "NOT_FOUND" | "NO_MATERIAL" | "PRECEDENCE_ANOMALY" | "PROFILE_DELETED" | "RATE_LIMITED" | "REQUEST_REFUSED" | "RESET_CANCELLED" | "RESET_EPOCH_STALE" | "SEARCH_CURSOR_STALE" | "SESSION_BUSY" | "SESSION_CLOSED" | "SETUP_REQUIRED" | "VALIDATION_FAILED" | "VERSION_CONFLICT" | "WRITE_UNAVAILABLE" | null); "grade"?: ("correct" | "wrong" | "partial" | null); };
+export type ScreenEvent = { "cts": string; "ev": "c.screen"; "cmd"?: (string | null); "kind": "result_shown" | "already_recorded" | "lost" | "unsaved_shown" | "refusal_shown" | "update_required"; "code"?: ("ACCESS_PENDING" | "ACCESS_REJECTED" | "ANSWER_SPEC_UNAVAILABLE" | "ASSIGNMENT_STALE" | "AUTH_EXPIRED" | "AUTH_INVALID" | "CAPABILITY_EXPIRED" | "CLIENT_INCOMPATIBLE" | "CLIENT_OPEN_REQUIRED" | "CLIENT_REGISTRATION_CONFLICT" | "COMMAND_PAYLOAD_MISMATCH" | "DICTIONARY_LANGUAGE_LOCKED" | "DOCUMENT_STALE" | "FORBIDDEN" | "INTERNAL_ERROR" | "LEASE_HELD" | "LEASE_LOST" | "MAINTENANCE" | "METHOD_NOT_ALLOWED" | "NOTICE_PENDING" | "NOTIFICATIONS_NOT_OPENED" | "NOT_FOUND" | "NO_MATERIAL" | "PRECEDENCE_ANOMALY" | "PROFILE_DELETED" | "RATE_LIMITED" | "REQUEST_REFUSED" | "RESET_CANCELLED" | "RESET_EPOCH_STALE" | "SEARCH_CURSOR_STALE" | "SESSION_BUSY" | "SESSION_CLOSED" | "SETUP_REQUIRED" | "VALIDATION_FAILED" | "VERSION_CONFLICT" | "WRITE_UNAVAILABLE" | null); "grade"?: ("correct" | "wrong" | "partial" | null); };
 
 export type SessionCancelStartCommand = { "command_id": string; "client_instance_id": string; "document_id": string; "session_id": string; "kind": "session.cancel_start"; "payload": EmptyPayload; };
 

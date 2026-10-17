@@ -523,19 +523,86 @@ describe("OralScreen: summary of the own Stop", () => {
     expect(after.reads).toBe(2); expect(f.posts.map(p => p.kind)).toEqual(["session.stop"]);
   });
 
-  it("V1-4 an external closure with a known summary keeps the plain closed line", async () => {
-    const { f, base } = await detached();
-    render(<OralScreen state={{ ...base, phase: "closed", current: null, closed: facts("midnight", "known") }} actions={f.actions} language="ru" active onToday={() => {}} />);
-    expect(screen.getByText("Занятие завершено.")).toBeTruthy(); expect(screen.queryByRole("region", { name: "Итог занятия" })).toBeNull();
+  // Q32 вар.1, R4-03 (tz_app.md:295, SHA-16 7d949301; Codex C520): in the open window every proven closure without the
+  // person shows the summary with the reason and an explicit «На Сегодня». Before M1a V1-4/V1-4b pinned the bare
+  // «Занятие завершено.» line here; Q32 replaces it (project notices ed.2.4 §6, C489).
+  const forcedLines = [["midnight", "Занятие закрыто: начался новый день"], ["timezone_date_changed", "Занятие закрыто: сменилась дата"],
+    ["remote_stop", "Занятие завершено на другом устройстве"], ["pair_changed", "Занятие закрыто: изменилась языковая пара"]] as const;
+  it.each(forcedLines)("V1-4 (Q32) a closure without the person (%s) with a known summary: the summary, the reason, «На Сегодня»",
+    async (reason, line) => {
+      const { f, base } = await detached(), onToday = vi.fn(), onForcedToday = vi.fn();
+      const state = { ...base, phase: "closed" as const, current: null, closed: facts(reason, "known") };
+      const { rerender } = render(<OralScreen state={state} actions={f.actions} language="ru" active onToday={onToday} onForcedToday={onForcedToday} />);
+      expect(screen.getByRole("region", { name: "Итог занятия" })).toBeTruthy(); expect(screen.getByText(line)).toBeTruthy();
+      // The frame shared with the notice of a closed Mini App (OralForcedSummary; C523), with «Осталось» (TZA М19 :83; C525).
+      expect(dd()).toEqual(["1", "1", "0", "1"]); expect(screen.getByText("Осталось")).toBeTruthy();
+      // Nothing to check here: the summary is known and no own action waits.
+      expect(screen.queryByRole("button", { name: "Проверить состояние" })).toBeNull();
+      fireEvent.click(button("На Сегодня"));
+      expect(onForcedToday).toHaveBeenCalledExactlyOnceWith(id(3)); expect(onToday).not.toHaveBeenCalled();
+      // While the host acknowledges the notice (calendar reasons) the press waits.
+      rerender(<OralScreen state={state} actions={f.actions} language="ru" active onToday={onToday} onForcedToday={onForcedToday} leaving />);
+      expect(button("На Сегодня").disabled).toBe(true);
+      f.controller.dispose();
+    });
+
+  const readLines = forcedLines.filter(([reason]) => reason !== "pair_changed");
+  it.each(readLines)("V1-4b (Q32) %s: a pending summary is read once behind the loader — no zeros, no button yet", async reason => {
+    const { f, base } = await detached(), refresh = vi.spyOn(f.actions, "refresh").mockResolvedValue(undefined);
+    render(<OralScreen state={{ ...base, phase: "closed", current: null, closed: facts(reason, "pending") }} actions={f.actions} language="ru" active onToday={() => {}} />);
+    await act(async () => {});
+    expect(document.querySelector(".wortly-loader")).toBeTruthy(); expect(refresh).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("region", { name: "Итог занятия" })).toBeNull(); expect(document.querySelectorAll("dd")).toHaveLength(0);
+    expect(screen.queryByRole("button", { name: "На Сегодня" })).toBeNull();
     f.controller.dispose();
   });
 
-  it.each(["pending", "reading"] as const)("V1-4b an external closure with a %s summary shows no loader and reads nothing", async summaryRead => {
+  it.each(readLines)("V1-4b (Q32) %s: a summary being read shows the loader and reads nothing more", async reason => {
     const { f, base } = await detached(), refresh = vi.spyOn(f.actions, "refresh");
-    render(<OralScreen state={{ ...base, phase: "closed", current: null, closed: facts("midnight", summaryRead) }} actions={f.actions} language="ru" active onToday={() => {}} />);
+    render(<OralScreen state={{ ...base, phase: "closed", current: null, closed: facts(reason, "reading") }} actions={f.actions} language="ru" active onToday={() => {}} />);
     await act(async () => {});
-    expect(document.querySelector(".wortly-loader")).toBeNull(); expect(screen.getByText("Занятие завершено.")).toBeTruthy();
-    expect(refresh).not.toHaveBeenCalled(); f.controller.dispose();
+    expect(document.querySelector(".wortly-loader")).toBeTruthy(); expect(refresh).not.toHaveBeenCalled();
+    expect(document.querySelectorAll("dd")).toHaveLength(0);
+    f.controller.dispose();
+  });
+
+  it.each(forcedLines)("V1-4c (Q32) %s: an unread summary keeps the reason and the explicit way to Today, without numbers", async (reason, line) => {
+    const { f, base } = await detached(), onToday = vi.fn(), onForcedToday = vi.fn();
+    render(<OralScreen state={{ ...base, phase: "closed", current: null, closed: facts(reason, "failed") }} actions={f.actions} language="ru" active
+      onToday={onToday} onForcedToday={onForcedToday} />);
+    await act(async () => {});
+    expect(screen.getByText(line)).toBeTruthy();
+    // A closure in another pair is a fact, not a failed read (C178): only the other reasons name the failed read.
+    expect(screen.queryAllByText("Не удалось обновить занятие. Проверь состояние.").length > 0).toBe(reason !== "pair_changed");
+    // The same frame without numbers: never zeros of an unread summary.
+    expect(screen.getByRole("region", { name: "Итог занятия" }).querySelector("dl")).toBeNull();
+    expect(document.querySelectorAll("dd")).toHaveLength(0);
+    // The repeat of the failed read stays; for the other pair there is nothing to read (C178).
+    expect(screen.queryAllByRole("button", { name: "Проверить состояние" }).length > 0).toBe(reason !== "pair_changed");
+    fireEvent.click(button("На Сегодня"));
+    expect(onForcedToday).toHaveBeenCalledExactlyOnceWith(id(3)); expect(onToday).not.toHaveBeenCalled();
+    f.controller.dispose();
+  });
+
+  // P2-B (Codex C537): the closure of the own earlier session of the left pair, on an owner with no session of its own.
+  it("P2-B priorClosure pair_changed: the reason and «На Сегодня» only — no numbers, no check", async () => {
+    const { f, base } = await detached(), onToday = vi.fn(), onForcedToday = vi.fn();
+    render(<OralScreen state={{ ...base, phase: "idle", sessionId: null, current: null, closed: null,
+      priorClosure: { sessionId: id(7), reason: "pair_changed" } }} actions={f.actions} language="ru" active onToday={onToday} onForcedToday={onForcedToday} />);
+    expect(screen.getByText("Занятие закрыто: изменилась языковая пара")).toBeTruthy();
+    expect(document.querySelectorAll("dd")).toHaveLength(0);
+    expect(screen.queryByRole("button", { name: "Проверить состояние" })).toBeNull();
+    fireEvent.click(button("На Сегодня"));
+    expect(onForcedToday).toHaveBeenCalledExactlyOnceWith(id(7)); expect(onToday).not.toHaveBeenCalled();
+    f.controller.dispose();
+  });
+  it("P2-B priorClosure of the own Stop (no forced cause) shows no closure frame", async () => {
+    const { f, base } = await detached();
+    render(<OralScreen state={{ ...base, phase: "idle", sessionId: null, current: null, closed: null,
+      priorClosure: { sessionId: id(7), reason: "stop" } }} actions={f.actions} language="ru" active onToday={() => {}} />);
+    expect(screen.queryByRole("region", { name: "Итог занятия" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "На Сегодня" })).toBeNull();
+    f.controller.dispose();
   });
 
   it("V1-5 the natural summary still finishes the session through summary_home", async () => {
@@ -558,6 +625,10 @@ describe("OralScreen: summary of the own Stop", () => {
     expect(screen.getByText("Занятие завершено.")).toBeTruthy();
     expect(screen.queryByText(/Не удалось обновить занятие/)).toBeNull();
     expect(document.querySelector(".wortly-loader")).toBeNull(); expect(document.querySelector("[aria-busy]")).toBeNull();
+    // Q32 (tz_app.md:295; Codex C520): the reason and the explicit way to Today, never the numbers of the other pair.
+    expect(screen.getByText("Занятие закрыто: изменилась языковая пара")).toBeTruthy();
+    expect(document.querySelectorAll("dd")).toHaveLength(0);
+    fireEvent.click(button("На Сегодня")); expect(onToday).toHaveBeenCalledOnce();
     expect(refresh).not.toHaveBeenCalled(); f.controller.dispose();
   });
 

@@ -49,12 +49,15 @@ export const POST_ROUTES: Readonly<Record<string, PostRouteClass>> = Object.free
   "/client/open": "foreground_only",
   "/client/register": "exception",
   "/commands": "gated",
+  // The acknowledgement of a notice (project notices ed.2.4 §5; core a2c29f4): a write of the profile, gated like the
+  // others. Its path names the notice; the template is the core's own (docs/openapi.json).
+  "/notices/{notice_id}/ack": "gated",
   "/profile/delete": "gated",
 });
 /**
  * Routes classified ahead of the core (RD-7 п.3). `/client/window-return` belongs to K-5, which stays off until the
  * owner approves the server contract Я19: until then it is refused like `return_marker` (§4.1 п.8). Every other future
- * POST (`/notices/{id}/ack`, the contact after a second refusal, `/auth/logout`) is gated by default-deny.
+ * POST (the contact after a second refusal, `/auth/logout`) is gated by default-deny.
  */
 export const FUTURE_POST_ROUTES: Readonly<Record<string, "blocked_until_ya19">> = Object.freeze({
   "/client/window-return": "blocked_until_ya19",

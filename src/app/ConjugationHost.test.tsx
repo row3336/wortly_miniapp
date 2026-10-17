@@ -66,7 +66,7 @@ function setup(options: Options = {}) {
   const stores = { study: new ConjugationSessionPendingStore(storage), stop: new ConjugationStopPendingStore(storage) };
   const settingsStore = new SettingsPendingStore(storage), back = fakeBack(), haptic = vi.fn();
   vi.stubGlobal("Telegram", { WebApp: { HapticFeedback: { notificationOccurred: haptic }, BackButton: back.api } });
-  const onToday = vi.fn(), onConjugation = vi.fn(), host: { current: ConjugationHost | null } = { current: null };
+  const onToday = vi.fn(), onConjugation = vi.fn(), onNoticePending = vi.fn(), host: { current: ConjugationHost | null } = { current: null };
   let setRoute!: (route: ConjugationHostOptions["route"]) => void, setAccess!: (access: OpenedAccess) => void, generation = 1;
   let renders = 0;
   function Harness() {
@@ -78,14 +78,14 @@ function setup(options: Options = {}) {
     const value = useConjugationHost({ access, transport, stores, newId: model.newId, language: "ru", settings,
       initialSessionId: seed, seedPending: options.seedPending ?? false, route,
       onConjugation: () => { onConjugation(); if (!options.holdRoute) update("conjugation"); },
-      onToday: intent => { onToday(intent); update("today"); } });
+      onToday: intent => { onToday(intent); update("today"); }, onNoticePending });
     host.current = value;
     return <>{value.screen}{route === "today" && <p data-testid="today">{value.blocksToday ? "held" : "shown"}</p>}</>;
   }
   render(options.strict ?? suiteStrict ? <StrictMode><Harness /></StrictMode> : <Harness />);
   const starts = () => model.posted.filter(post => post.kind === "session.start");
   const stops = () => model.posted.filter(post => post.kind === "session.stop");
-  return { model, fetcher, values, fail, override, reads, renders: () => renders, onToday, onConjugation, host, back, haptic, starts, stops, releaseSettings,
+  return { model, fetcher, values, fail, override, reads, renders: () => renders, onToday, onConjugation, onNoticePending, host, back, haptic, starts, stops, releaseSettings,
     route: (route: ConjugationHostOptions["route"]) => act(() => setRoute(route)),
     /** A new access object of the same document tuple, as after a foreground. */
     reopen: () => act(() => setAccess(opened(++generation))),
@@ -390,6 +390,29 @@ describe.each([["StrictMode", true], ["plain render", false]])("useConjugationHo
       expect(h.back.bound).toBe(1);
       await h.back.click(); await macrotasks();
       expect(h.model.kinds()).toContain("session.stop"); expect(h.onToday).not.toHaveBeenCalled();
+    });
+
+    // NOTICE_PENDING (project notices §6.1, T5): a final refusal of the start like SESSION_BUSY; the host tells the document
+    // once (it reads GET /notices and shows the notice) and sends nothing more — no new ID, no POST, no Stop.
+    it("H5n a start refused NOTICE_PENDING tells the document once; nothing more is sent and nothing is claimed", async () => {
+      const h = setup();
+      h.model.server.rejectStart = "NOTICE_PENDING";
+      await h.start();
+      await waitFor(() => expect(h.onNoticePending).toHaveBeenCalledOnce());
+      await macrotasks();
+      expect(h.onNoticePending).toHaveBeenCalledOnce();
+      expect(h.starts()).toHaveLength(1); expect(h.model.posted).toHaveLength(1);
+      expect(hasPending(h.values, studyKey)).toBe(false);
+      expect(h.onToday).not.toHaveBeenCalled();
+    });
+
+    it.each(["SESSION_BUSY", "NO_MATERIAL"])("H5n a start refused %s does not tell a pending notice", async code => {
+      const h = setup();
+      h.model.server.rejectStart = code;
+      await h.start();
+      await waitFor(() => expect(h.starts()).toHaveLength(1));
+      await macrotasks();
+      expect(h.onNoticePending).not.toHaveBeenCalled();
     });
 
     it.each(["SESSION_BUSY", "SESSION_CLOSED"])("H5 R5: a rejected %s of an answer is no refusal of a start", async code => {

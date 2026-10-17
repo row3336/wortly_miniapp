@@ -1,12 +1,13 @@
 import { gateWaitText } from "../commands/CommandRecovery";
 import { startRefusalIntent } from "../commands/startRefusal";
 import type { ForegroundIntent } from "../app/entryController";
-import { useEffect, useLayoutEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
 import { commandCopy } from "../commands/commandCopy";
 import type { Language } from "../i18n/language";
 import { AssociationBlock } from "../study/AssociationBlock";
 import type { OralDocumentSnapshot } from "./oralDocumentController";
 import { oralRefineCardId } from "./oralRefine";
+import { closedReasonLines } from "../written/WrittenSummary";
 import type { OralDocumentActions } from "./useOralDocument";
 import "./oral.css";
 
@@ -23,7 +24,26 @@ export type OralScreenProps = {
   onToday(intent?: ForegroundIntent): void;
   /** «Уточнить поля»: opens the question's card (М12) on top of the quiz; without it the button is absent. */
   onRefineFields?(cardId: string, assignmentId: string): void;
+  /**
+   * Q32: the «На Сегодня» of a session closed without the person (FORCED_ORAL_REASONS); the host acknowledges its
+   * notice first when the reason has one (NOTICE_ORAL_REASONS; project notices ed.2.4 §6). Without it: onToday.
+   */
+  onForcedToday?(sessionId: string): void;
+  /** That acknowledgement is under way: the button waits. */
+  leaving?: boolean;
 };
+
+/**
+ * Q32 вар.1, R4-03 (TZA :295, tz_app.md SHA-16 7d949301; Codex C520): in the OPEN window every proven closure of the
+ * session without the person shows its summary with the reason and an explicit «На Сегодня» — never the bare closed
+ * line, never a return to Today by itself. R22 limits only the notice of a closed Mini App, not this screen.
+ */
+export const FORCED_ORAL_REASONS: readonly string[] = ["midnight", "timezone_date_changed", "remote_stop", "pair_changed"];
+/**
+ * The reasons the server creates oral_forced_close for (until R22: Codex C486; core N2a), so the only ones whose «На
+ * Сегодня» acknowledges a notice. remote_stop and pair_changed have none: no read is awaited and no ack is sent.
+ */
+export const NOTICE_ORAL_REASONS: readonly string[] = ["midnight", "timezone_date_changed"];
 
 const copy = {
   ru: { title: "Устное занятие", exit: "Выйти", reveal: "Раскрыть", correct: "Правильно", wrong: "Неправильно",
@@ -64,8 +84,51 @@ const copy = {
     busy: "A session is open on another device" },
 } as const;
 
+export type OralForcedSummaryProps = {
+  language: Language;
+  /** The closed status line: «Занятие завершено.», or the failed read of the summary in the open window. */
+  status: string;
+  /** The reason (Q32); нет утверждённого текста — the working copy of the written summary (WrittenSummary reasons, 6.1.O5). */
+  reasonLine: string;
+  /** The numbers of the actual summary (T3): completed, correct, wrong — nothing else, and none when unknown (never zeros). */
+  counts: { completed: number; correct: number; wrong: number } | null;
+  /**
+   * «Осталось» (TZA М19 :83: Пройдено/верно/ошибки/остаток): total − completed of the session's actual progress; null when
+   * no progress of this pair is known — then the line is absent, never a 0. The notice of a closed Mini App has no progress
+   * in core a2c29f4 (study/notices.py takes the summary only): it shows the line once the core sends one (M1b dependency).
+   */
+  remaining: number | null;
+  leaving: boolean;
+  onToday(): void;
+  dataNotice?: string;
+  children?: ReactNode;
+};
+/**
+ * The ONE summary screen of an oral session closed without the person (project notices ed.2.4 §6, Д4, R4-03; Q32): the open
+ * window (OralScreen) and the next open after a closed Mini App (NoticeScreen, oral_forced_close) render this same frame
+ * from the same facts: the reason, Пройдено/Верно/Ошибки and «Осталось» (TZA М19 :83; Codex C525) where the progress is
+ * known; for pair_changed numbers of the other pair never appear (C178); no live practice block.
+ */
+export function OralForcedSummary({ language, status, reasonLine, counts, remaining, leaving, onToday, dataNotice, children }: OralForcedSummaryProps) {
+  const t = copy[language];
+  return <main className="oral-screen" lang={language} aria-label={t.title} data-notice={dataNotice}>
+    <header className="oral-header"><h1>{t.title}</h1></header>
+    <p role="status" aria-live="polite">{status}</p>
+    <section className="oral-summary" aria-label={t.summary}>
+      <h2>{t.summary}</h2>
+      <p>{reasonLine}</p>
+      {counts && <dl><div><dt>{t.completed}</dt><dd>{counts.completed}</dd></div><div><dt>{t.right}</dt><dd>{counts.correct}</dd></div>
+        <div><dt>{t.errors}</dt><dd>{counts.wrong}</dd></div>{remaining !== null && <div><dt>{t.remaining}</dt><dd>{remaining}</dd></div>}</dl>}
+      <button type="button" disabled={leaving} onClick={() => { if (!leaving) onToday(); }}>{t.today}</button>
+    </section>
+    {children}
+  </main>;
+}
+/** The closed status line of the oral summary, shared with the notice screen. */
+export function oralClosedLine(language: Language): string { return copy[language].closed; }
+
 /** A detached renderer: accepted state and command identity belong exclusively to the owner. */
-export function OralScreen({ state, actions, language, active, onToday, onRefineFields }: OralScreenProps) {
+export function OralScreen({ state, actions, language, active, onToday, onRefineFields, onForcedToday, leaving }: OralScreenProps) {
   const t = copy[language], promptElement = useRef<HTMLParagraphElement>(null);
   const assignment = state?.current?.status === "active" ? state.current.assignment : null;
   const ticket = state?.presentationTicket ?? null;
@@ -85,13 +148,25 @@ export function OralScreen({ state, actions, language, active, onToday, onRefine
   const lanes = state ? [state.commands.study, state.commands.stop] : [];
   const saving = state?.commands.study.phase === "sending";
   const phase = state?.phase ?? "loading";
-  // Server facts of this owner's own Stop, or of a closure whose reason is not known yet; any other reason
-  // keeps the plain closed line.
-  const closed = active && phase === "closed" && state?.closed
-    && (state.closed.reason === "stop" || state.closed.reason === null) ? state.closed : null;
+  // Server facts of this owner's own Stop, of a closure without the person (Q32), or of a closure whose reason is not
+  // known yet; any other reason keeps the plain closed line.
+  const forcedReason = state?.closed?.reason != null && FORCED_ORAL_REASONS.includes(state.closed.reason)
+    ? state.closed.reason as "midnight" | "timezone_date_changed" | "remote_stop" | "pair_changed" : null;
+  // pair_changed: the closed session belongs to the old pair; its numbers never reach this pair (C178), so nothing of it
+  // is read or awaited here — only a summary already known for this pair is shown.
+  const otherPair = forcedReason === "pair_changed" && state?.closed?.summaryRead !== "known";
+  const closed = active && phase === "closed" && state?.closed && !otherPair
+    && (state.closed.reason === "stop" || state.closed.reason === null || forcedReason !== null) ? state.closed : null;
   const waiting = closed?.summaryRead === "pending" || closed?.summaryRead === "reading";
   const readFailed = closed?.summaryRead === "failed";
-  const closedSummary = closed?.summaryRead === "known" && closed.reason === "stop" ? closed : null;
+  const closedSummary = closed?.summaryRead === "known" && (closed.reason === "stop" || forcedReason !== null) ? closed : null;
+  // Q32: the reason of a closure without the person, on its summary. нет утверждённого текста: the working copy of the
+  // written and conjugation summaries (WrittenSummary.tsx reasons, 6.1.O5), reused as is.
+  const forcedLine = forcedReason !== null ? closedReasonLines[language][forcedReason] ?? closedReasonLines[language].unknown : null;
+  // Q32: the closure without the person, known (its summary), unread (read failed) or of the other pair (no numbers, C178).
+  const forced = active && phase === "closed" && forcedLine !== null && state?.closed
+    && (closedSummary !== null || readFailed || otherPair) ? state.closed : null;
+  const leaveForced = (sessionId: string) => { if (!leaving) { if (onForcedToday) onForcedToday(sessionId); else onToday(); } };
   const unread = closed?.summaryRead === "pending" ? closed.sessionId.toLowerCase() : null;
   const requested = useRef(new Set<string>());
   useEffect(() => {
@@ -123,7 +198,7 @@ export function OralScreen({ state, actions, language, active, onToday, onRefine
   // Same wording as the written quiz: a refused start names the other device, not a generic refresh failure.
   const problem = suspended ? null
     : localProblem ? t.cleanup : blocked ? t.blocked : busyRefused ? t.busy : checkedAbsent ? null : state?.problem ? t.stale : null;
-  const summary = state?.current?.status === "summary" ? state.current.summary : closedSummary?.summary ?? null;
+  const summary = state?.current?.status === "summary" ? state.current.summary : forced ? null : closedSummary?.summary ?? null;
   const progress = closedSummary ? closedSummary.progress : state?.current?.progress;
   const remaining = progress ? progress.total - progress.completed : null;
   const usable = active && !!state && phase !== "disposed";
@@ -150,6 +225,43 @@ export function OralScreen({ state, actions, language, active, onToday, onRefine
       </svg>
     </div>
   </main>;
+
+  const recovery = showRecovery && <section className="oral-recovery" aria-label={t.recovery}>
+      {state!.commands.study.pending && state!.commands.study.outcome === null && <p>{t.pendingStudy}</p>}
+      {state!.commands.stop.pending && state!.commands.stop.outcome === null && <p>{t.pendingStop}</p>}
+      {/* §4.1 «Правило кнопки» (C335; M-P03-9/10): visible and inactive while the write gate holds, with its wait. */}
+      {gateHeld && state!.gate?.wait && <p role="status" className="command-note">{gateWaitText(language, state!.gate.wait)}</p>}
+      <button type="button" disabled={refreshBusy || checkBlocked}
+        onClick={() => { if (usable && !refreshBusy && !checkBlocked) void actions.refresh(); }}>{t.refresh}</button>
+      {state!.canRetry.study && <button type="button" disabled={studyBlocked}
+        onClick={() => { if (allowed(state!.canRetry.study) && !studyBlocked) void actions.retry("study"); }}>{t.retryStudy}</button>}
+      {state!.canRetry.stop && <button type="button" disabled={stopBlocked}
+        onClick={() => { if (allowed(state!.canRetry.stop) && !stopBlocked) void actions.retry("stop"); }}>{t.retryStop}</button>}
+    </section>;
+
+  // Q32: the same frame as the notice of a closed Mini App; the check of the open window stays only where it has work —
+  // a failed read of the summary (its repeat) or an own action still pending — never for the other pair (C178).
+  // P2-B (C537): the fresh closure of the own earlier session of the pair this window left — its reason and the explicit
+  // way to Today only: no numbers of that pair (C178), no check, no notice (R22).
+  const prior = active && phase === "idle" && state?.priorClosure && FORCED_ORAL_REASONS.includes(state.priorClosure.reason)
+    ? state.priorClosure : null;
+  if (prior) {
+    const line = closedReasonLines[language][prior.reason as "midnight" | "timezone_date_changed" | "remote_stop" | "pair_changed"]
+      ?? closedReasonLines[language].unknown;
+    return <OralForcedSummary language={language} status={t.closed} reasonLine={line} counts={null} remaining={null}
+      leaving={!!leaving} onToday={() => leaveForced(prior.sessionId)} />;
+  }
+  if (forced) {
+    const counts = closedSummary?.summary ?? null, done = closedSummary?.progress ?? null;
+    const lanesOpen = lanes.some(lane => lane.pending) || !!state?.canRetry.study || !!state?.canRetry.stop || !!problem;
+    return <OralForcedSummary language={language} status={readFailed ? t.stale : t.closed} reasonLine={forcedLine!}
+      counts={counts && { completed: counts.completed, correct: counts.correct, wrong: counts.wrong }}
+      remaining={counts && done ? done.total - done.completed : null} leaving={!!leaving}
+      onToday={() => leaveForced(forced.sessionId)}>
+      {problem && <p role="status">{problem}</p>}
+      {(readFailed || lanesOpen) && recovery}
+    </OralForcedSummary>;
+  }
 
   return <main className="oral-screen" lang={language} aria-label={t.title}>
     <header className="oral-header"><h1>{t.title}</h1>
@@ -193,17 +305,6 @@ export function OralScreen({ state, actions, language, active, onToday, onRefine
     {problem && <p role="status">{problem}</p>}
     {startRefused && <button type="button" className="oral-today"
       onClick={() => onToday(startRefusalIntent(study))}>{t.today}</button>}
-    {showRecovery && <section className="oral-recovery" aria-label={t.recovery}>
-      {state!.commands.study.pending && state!.commands.study.outcome === null && <p>{t.pendingStudy}</p>}
-      {state!.commands.stop.pending && state!.commands.stop.outcome === null && <p>{t.pendingStop}</p>}
-      {/* §4.1 «Правило кнопки» (C335; M-P03-9/10): visible and inactive while the write gate holds, with its wait. */}
-      {gateHeld && state!.gate?.wait && <p role="status" className="command-note">{gateWaitText(language, state!.gate.wait)}</p>}
-      <button type="button" disabled={refreshBusy || checkBlocked}
-        onClick={() => { if (usable && !refreshBusy && !checkBlocked) void actions.refresh(); }}>{t.refresh}</button>
-      {state!.canRetry.study && <button type="button" disabled={studyBlocked}
-        onClick={() => { if (allowed(state!.canRetry.study) && !studyBlocked) void actions.retry("study"); }}>{t.retryStudy}</button>}
-      {state!.canRetry.stop && <button type="button" disabled={stopBlocked}
-        onClick={() => { if (allowed(state!.canRetry.stop) && !stopBlocked) void actions.retry("stop"); }}>{t.retryStop}</button>}
-    </section>}
+    {recovery}
   </main>;
 }

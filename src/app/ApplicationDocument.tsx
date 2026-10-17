@@ -33,6 +33,8 @@ import type { LearningPageStarts } from "../learning/learningPageStarts";
 import { useOralHost, type OralStores } from "./OralHost";
 import { useConjugationHost, type ConjugationStores } from "./ConjugationHost";
 import type { DeletionEnd } from "../profile/profileDeleteController";
+import { useNoticeBoard } from "../notices/noticeBoard";
+import { NoticeScreen } from "../notices/NoticeScreen";
 
 type Props = {
   access: OpenedAccess; transport: HttpOptions; pendingStore: SettingsPendingStore; language: Language;
@@ -282,6 +284,29 @@ export function ApplicationDocument(props: Props) {
     navigate({ type: "home" });
     void synchronize(intent);
   };
+  // The pending notices of this document (project notices ed.2.4 §6; CON §7.2 п.4): from every client.open, and from
+  // GET /notices when the window needs it. They stand in place of Today, one at a time, until the person's press.
+  const notices = useNoticeBoard({ access: props.access, transport: props.transport, newId: props.newId });
+  const noticeBoard = notices.board;
+  const latestToday = useRef(today); latestToday.current = today;
+  // §6.1 «Восстановление клиента»: a start refused as NOTICE_PENDING (directly or found by the check of an unknown start)
+  // reads GET /notices and shows the waiting summary on Today's place. Nothing else follows: no new ID, no POST; a new
+  // session needs a new press of «Начать» after the acknowledgement.
+  const noticePending = useCallback(() => {
+    noticeBoard.require();
+    latestToday.current();
+  }, [noticeBoard]);
+  // Q32 / Д4: an active oral session of this window was closed without the person. Т2: after the confirmed closure the
+  // window reads GET /notices; its «На Сегодня» acknowledges the oral_forced_close of that session (the same notice the
+  // next open would show), then goes to Today. A failed acknowledgement keeps the summary on screen (§5).
+  const oralForcedClosure = useCallback(() => { void noticeBoard.read(); }, [noticeBoard]);
+  const leaveForcedOral = useCallback(async (sessionId: string): Promise<boolean> => {
+    let notice = noticeBoard.find(sessionId, "oral_forced_close");
+    if (!notice) { await noticeBoard.read(); notice = noticeBoard.find(sessionId, "oral_forced_close"); }
+    if (notice && !(await noticeBoard.acknowledge(notice.notice_id))) return false;
+    latestToday.current();
+    return true;
+  }, [noticeBoard]);
   // fix4 (П01): a study host passes the intent only from the screen of a start refused as SESSION_BUSY (startRefusalIntent).
   // Native Back of a non-study screen (TA:86): a return to Today is its «Сегодня» (SettingsScreen onToday) with the
   // same refresh; a session supplies its own exit from its owner. A gate-hidden Host is not Settings.
@@ -332,6 +357,18 @@ export function ApplicationDocument(props: Props) {
           notice={settingsExit(settings.state) && <button type="button" className="today-retry"
             onClick={openSettings}>{navigationText(props.language).settings}</button>} />
         : <DictionaryChoiceScreen document={settings} language={props.language} settled={settledChoice} onLeave={leaveChoice} />;
+    } else if (notices.notices.length > 0) {
+      // One notice at a time, oldest first, in place of Today and before any start (CON §7.2 п.4): no modal window and no
+      // line on Today; only the press acknowledges it (§5).
+      hostRoute = "settings";
+      const first = notices.notices[0];
+      screen = <NoticeScreen key={first.notice_id} notice={first} language={props.language}
+        acking={notices.snapshot.acking !== null} onAcknowledge={() => { void noticeBoard.acknowledge(first.notice_id); }} />;
+    } else if (notices.snapshot.required) {
+      // NOTICE_PENDING: Today waits for GET /notices; a failed read offers only the repeat of that read (Т2).
+      hostRoute = "settings";
+      screen = notices.snapshot.read === "failed" ? <TodayScreen state={{ kind: "failed", reason: "load" }} language={props.language}
+        onRetry={() => { void noticeBoard.read(); }} /> : loading;
     } else if (launchReady && launchCard.current?.has()) {
       // The card is pushed by the effect right after this render; Today is not shown under it first.
       hostRoute = "settings";
@@ -349,6 +386,7 @@ export function ApplicationDocument(props: Props) {
     initialSessionId: oralSeed, seedPending: at === "oral" && readAfter && (read.kind === "pending" || read.kind === "oral"),
     route: at === "oral" ? "oral" : todayShown ? "today" : "hidden",
     onOral: () => navigate({ type: "open", screen: "oral" }), onToday: today, onForeignStart: refreshForStart,
+    onNoticePending: noticePending, onForcedClosure: oralForcedClosure, onLeaveForcedClosure: leaveForcedOral,
     // «Уточнить поля» in М18 (M-ORAL-ENTRY): the card opens on top of the oral quiz; Back returns to the same question.
     onOpenCard: (cardId, details) => navigate({ type: "push", screen: "card", subject: cardId, details }) });
   // The written owner also lives for the whole document; L1→De rows of Today start it (tz_app М09).
@@ -356,6 +394,7 @@ export function ApplicationDocument(props: Props) {
     language: props.language, settings, minimumStateVersion: highest(floor?.version, writtenSelected?.version),
     initialSessionId: writtenSeed, route: at === "written" ? "written" : todayShown ? "today" : "hidden",
     onWritten: () => navigate({ type: "open", screen: "written" }), onToday: today, onForeignStart: refreshForStart,
+    onNoticePending: noticePending,
     // «Уточнить поля» (M-ACTIONS): the answered card opens on top of the quiz and returns to it.
     onOpenCard: (cardId, details) => navigate({ type: "push", screen: "card", subject: cardId, details }) });
   // The conjugation owner lives for the whole document too; the Today button «Тест спряжений» starts it (М16).
@@ -364,7 +403,8 @@ export function ApplicationDocument(props: Props) {
     minimumStateVersion: highest(floor?.version, conjugationSelected?.version), initialSessionId: conjugationSeed,
     seedPending: at === "conjugation" && readAfter && (read.kind === "pending" || read.kind === "conjugation"),
     route: at === "conjugation" ? "conjugation" : todayShown ? "today" : "hidden",
-    onConjugation: () => navigate({ type: "open", screen: "conjugation" }), onToday: today, onForeignStart: refreshForStart });
+    onConjugation: () => navigate({ type: "open", screen: "conjugation" }), onToday: today, onForeignStart: refreshForStart,
+    onNoticePending: noticePending });
   useEffect(() => { if (choosing) setChoiceShown(true); }, [choosing]);
   if (todayShown && (oral.blocksToday || written.blocksToday || conjugation.blocksToday)) { hostRoute = "settings"; screen = loading; }
   // One host per opened card route (TA:86, К07-096): a fresh key per route object, so reopening a card while its
@@ -390,7 +430,7 @@ export function ApplicationDocument(props: Props) {
       route={hostRoute} submitOnEnter renderPreview={renderPreview} quizzes={quizzes} page={props.learningPage}
       onLearning={() => { hostClaimed.current = true; navigate({ type: "open", screen: "learning" }); }}
       onToday={intent => { hostClaimed.current = false; seedReleased.current = true; today(intent); }}
-      onSettings={openSettings} onForeignStart={refreshForStart}
+      onSettings={openSettings} onForeignStart={refreshForStart} onNoticePending={noticePending}
       onNavigate={destination => destination === "statistics" ? navigate({ type: "push", screen: "statistics" }) : openTab(destination)} />}
     {screen}
     {oral.screen}

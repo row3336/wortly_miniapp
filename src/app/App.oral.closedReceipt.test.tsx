@@ -78,7 +78,7 @@ function app() {
     BackButton: { show() {}, hide() {}, onClick(handler: () => void) { backHandlers.add(handler); }, offClick(handler: () => void) { backHandlers.delete(handler); } } } });
   const posts = () => fetcher.mock.calls.filter(([url, init]) => init?.method === "POST" && String(url).endsWith("/commands"))
     .map(([, init]) => JSON.parse(String(init!.body)) as OralCommand);
-  return { state, posts };
+  return { state, posts, fetcher };
 }
 const settled = async () => { for (let i = 0; i < 15; i++) await act(async () => { await new Promise(done => setTimeout(done, 0)); }); };
 const foreground = () => act(async () => { window.dispatchEvent(new Event("pageshow")); });
@@ -91,20 +91,54 @@ beforeEach(() => {
 afterEach(() => { cleanup(); localStorage.clear(); vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 
 describe("M-ORAL-STUCK-A: an applied step of a session closed by a pair change", () => {
-  for (const changed of [true, false]) it(`leaves for Today of the ${changed ? "new" : "same"} pair without the old numbers`, async () => {
+  // Q32 вар.1, R4-03 (tz_app.md:295, SHA-16 7d949301; Codex C520): before M1a the same-pair case left for Today by itself;
+  // the open window now shows the reason and leaves only by «На Сегодня». The numbers of the old pair still never show (C178).
+  it("same pair: the reason, its own-pair numbers and «На Сегодня»; Today only after the press", async () => {
     const a = app(); render(<App />);
     await screen.findByText("wenn");
     await waitFor(() => expect((screen.getByRole("button", { name: "Раскрыть" }) as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(screen.getByRole("button", { name: "Раскрыть" }));
     await settled();
-    a.state.lose = false; a.state.closed = true; if (changed) a.state.pair = "uk";
+    a.state.lose = false; a.state.closed = true;
     await foreground(); await settled();
-    await screen.findByText(changed ? "Активная пара: Украинский ↔ Немецкий" : "Активная пара: Русский ↔ Немецкий");
+    await screen.findByText("Занятие закрыто: изменилась языковая пара");
+    expect(screen.queryByText("Активная пара: Русский ↔ Немецкий")).toBeNull();
     expect(screen.queryByText("Действие ещё не подтверждено. Проверь состояние.")).toBeNull();
     expect(screen.queryByText("Не удалось обновить занятие. Проверь состояние.")).toBeNull();
-    // The closure of the old pair grants no summary here: its numbers never reach the screen of this pair.
+    // Its projection names this same pair: its numbers are of this pair and may show (C178 bars only another pair's).
+    expect(Array.from(document.querySelectorAll("dd"), e => e.textContent)).toEqual(["7", "5", "2", "2"]);
+    fireEvent.click(screen.getByRole("button", { name: "На Сегодня" }));
+    await screen.findByText("Активная пара: Русский ↔ Немецкий");
     expect(screen.queryByRole("region", { name: "Итог занятия" })).toBeNull();
-    // Nothing is sent again: the only command is the original reveal.
     expect(a.posts().map(post => post.kind)).toEqual(["oral.reveal"]);
+  });
+  // P2-B (Codex C537; Q32 вар.1, R4-03, tz_app.md:295): the pair moved and the document follows it, but the fresh receipt of
+  // its own reveal proves the closure of its earlier session: the window shows that reason with «На Сегодня» and leaves
+  // only by the press — before v3 it left for Today by itself. The old pair's numbers never show (C178); nothing is sent.
+  it("new pair: the reason of the earlier session's closure and «На Сегодня», no old numbers, no request; Today only after the press", async () => {
+    const a = app(); render(<App />);
+    await screen.findByText("wenn");
+    await waitFor(() => expect((screen.getByRole("button", { name: "Раскрыть" }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "Раскрыть" }));
+    await settled();
+    a.state.lose = false; a.state.closed = true; a.state.pair = "uk";
+    await foreground(); await settled();
+    await screen.findByText("Занятие закрыто: изменилась языковая пара");
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 300)); });
+    expect(screen.queryByText("Активная пара: Украинский ↔ Немецкий")).toBeNull();
+    expect(screen.queryByText("Действие ещё не подтверждено. Проверь состояние.")).toBeNull();
+    expect(screen.queryByText("Не удалось обновить занятие. Проверь состояние.")).toBeNull();
+    // The closure of the old pair grants no numbers here, and no check of it.
+    expect(document.querySelectorAll("dd")).toHaveLength(0);
+    expect(screen.queryByRole("button", { name: "Проверить состояние" })).toBeNull();
+    const sent = () => a.posts().map(post => post.kind);
+    expect(sent()).toEqual(["oral.reveal"]);
+    fireEvent.click(screen.getByRole("button", { name: "На Сегодня" }));
+    await screen.findByText("Активная пара: Украинский ↔ Немецкий");
+    await settled();
+    expect(screen.queryByText("Занятие закрыто: изменилась языковая пара")).toBeNull();
+    // Nothing is sent again: the only command is the original reveal; no notice is read or acknowledged (R22).
+    expect(sent()).toEqual(["oral.reveal"]);
+    expect(a.fetcher.mock.calls.filter(([url]) => /\/notices/.test(String(url)))).toEqual([]);
   });
 });

@@ -118,14 +118,29 @@ describe("Oral host through the actual App document", () => {
     expect(a.posts()).toEqual([]);
   });
 
-  it("A3 a closure by another cause while on the oral route returns to Today once, without a summary or Stop", async () => {
-    const a = app({ session: true }); render(<App />);
-    await screen.findByText("wenn");
-    a.close("midnight");
-    await act(async () => { window.dispatchEvent(new Event("pageshow")); });
-    await screen.findByText(pairText);
-    expect(screen.queryByRole("region", { name: "Итог занятия" })).toBeNull(); expect(a.posts()).toEqual([]);
-  });
+  // Q32 вар.1, R4-03 (tz_app.md:295, SHA-16 7d949301; Codex C520): before M1a such a closure returned to Today by itself
+  // without a summary; now the open window shows the summary with the reason and leaves only by «На Сегодня». The
+  // calendar reason also has its notice (App.notices.test.tsx); remote_stop has none, so nothing is acknowledged.
+  it.each([["midnight", "Занятие закрыто: начался новый день"], ["timezone_date_changed", "Занятие закрыто: сменилась дата"],
+    ["remote_stop", "Занятие завершено на другом устройстве"]] as const)(
+    "A3 (Q32) a closure by another cause (%s) on the oral route shows its summary with the reason until «На Сегодня»", async (reason, line) => {
+      const a = app({ session: true }); render(<App />);
+      await screen.findByText("wenn");
+      a.close(reason);
+      await act(async () => { window.dispatchEvent(new Event("pageshow")); });
+      await screen.findByText(line, undefined, { timeout: 5000 });
+      await act(async () => { await new Promise(resolve => setTimeout(resolve, 300)); });
+      expect(screen.queryByText(pairText)).toBeNull(); expect(screen.getByRole("region", { name: "Итог занятия" })).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "На Сегодня" }));
+      await screen.findByText(pairText, undefined, { timeout: 5000 });
+      expect(a.posts()).toEqual([]);
+      // No acknowledgement for a reason without a notice; the calendar one has none on this synthetic core either.
+      expect(a.fetcher.mock.calls.filter(([url, init]) => init?.method === "POST" && /\/notices\//.test(String(url)))).toEqual([]);
+      // Т2 reads GET /notices only for the calendar reason (its oral_forced_close); remote_stop awaits no notice.
+      const reads = a.fetcher.mock.calls.filter(([url, init]) => (init?.method ?? "GET") === "GET"
+        && new URL(String(url), "http://localhost").pathname === "/api/v1/notices").length;
+      if (reason === "remote_stop") expect(reads).toBe(0); else expect(reads).toBeGreaterThanOrEqual(1);
+    });
 
   // CP14 bound B-ENTRY is lifted by M-ORAL-ENTRY (editors M-EDIT, card actions M-ACTIONS); the start itself — App.oralEntry.test.tsx E1.
   it("A4 Today offers both De→L1 rows once the oral owner may start; nothing is sent before a tap", async () => {

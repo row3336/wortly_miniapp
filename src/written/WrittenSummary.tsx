@@ -63,3 +63,11 @@ export function WrittenSummary({ summary, outcome, language, closedReason, canTo
     </div>
   </section>;
 }
+
+/**
+ * The same working copy for the other summaries of a closed session (project notices ed.2.4 §6; Q32): the notice screen
+ * and the oral summary reuse these lines as they are, so no new text appears. The reason lines are working text, not
+ * approved (6.1.O5, above).
+ */
+export { copy as summaryCopy, reasons as closedReasonLines };
+export type { ShownReason };

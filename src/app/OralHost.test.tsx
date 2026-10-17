@@ -223,11 +223,30 @@ describe("useOralHost: closure, summary, native Back and haptics", () => {
     expect(h.onToday).toHaveBeenCalledOnce(); expect(h.kinds()).toEqual(["session.stop"]);
   });
 
-  it("O9 an external closure returns to Today exactly once and shows no summary", async () => {
-    const h = setup({ step: "closed", reason: "midnight", seed: true });
-    await waitFor(() => expect(h.onToday).toHaveBeenCalledOnce()); await settled();
-    expect(h.onToday).toHaveBeenCalledOnce(); expect(h.posts).toEqual([]); expect(h.haptic).not.toHaveBeenCalled();
-  });
+  // Q32 вар.1, R4-03 (tz_app.md:295, SHA-16 7d949301; Codex C520): before M1a an external closure returned to Today by
+  // itself without a summary; now the open window keeps its summary with the reason until the explicit «На Сегодня».
+  const forced = [["midnight", "Занятие закрыто: начался новый день"], ["timezone_date_changed", "Занятие закрыто: сменилась дата"],
+    ["remote_stop", "Занятие завершено на другом устройстве"], ["pair_changed", "Занятие закрыто: изменилась языковая пара"]] as const;
+  it.each(forced)(
+    "O9b (Q32) %s: native Back on that summary is the same explicit way to Today, once, nothing sent", async (reason, line) => {
+      const h = setup({ step: "closed", reason, seed: true });
+      await screen.findByText(line, undefined, { timeout: 5000 });
+      await waitFor(() => expect(h.back.bound).toBe(1));
+      expect(h.onToday).not.toHaveBeenCalled();
+      await h.back.click(); await settled();
+      expect(h.onToday).toHaveBeenCalledOnce(); expect(h.posts).toEqual([]);
+    });
+  it.each(forced)(
+    "O9 (Q32) an external closure (%s) stays on its summary with the reason; only «На Сегодня» or Back leaves, once", async (reason, line) => {
+      const h = setup({ step: "closed", reason, seed: true });
+      await screen.findByText(line, undefined, { timeout: 5000 }); await settled();
+      await act(async () => { await new Promise(resolve => setTimeout(resolve, 200)); });
+      expect(h.onToday).not.toHaveBeenCalled(); expect(screen.getByRole("region", { name: "Итог занятия" })).toBeTruthy();
+      // The numbers of this pair's closed projection (the harness core keeps the pair); C178 bars only another pair's.
+      expect(dd()).toEqual(["0", "0", "0", "2"]);
+      fireEvent.click(button("На Сегодня")); await settled();
+      expect(h.onToday).toHaveBeenCalledOnce(); expect(h.posts).toEqual([]); expect(h.haptic).not.toHaveBeenCalled();
+    });
 
   it("O10 the natural summary: Back mirrors На Сегодня (summary_home), and its confirmed closure returns to Today once", async () => {
     const h = setup({ step: "summary", completed: 2, seed: true });

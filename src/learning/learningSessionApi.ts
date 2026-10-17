@@ -35,7 +35,9 @@ export type LearningSessionStatus = { state_version: string } & (
  * never this number: the idle «На Сегодня» opens the document afresh and that open shows T's busy state. SESSION_CLOSED
  * may name an existing session of this number and keeps its own handling.
  */
-export const LEAVING_START_REFUSALS: ReadonlySet<string> = new Set(["SETUP_REQUIRED", "NO_MATERIAL", "SESSION_BUSY"]);
+// NOTICE_PENDING (project notices ed.2.4 §6.1; FINAL_START_CODES since core a2c29f4): like SESSION_BUSY it is about the
+// profile (a notice waits), never this number; the document reads GET /notices and shows it (noticePending.ts).
+export const LEAVING_START_REFUSALS: ReadonlySet<string> = new Set(["SETUP_REQUIRED", "NO_MATERIAL", "SESSION_BUSY", "NOTICE_PENDING"]);
 /**
  * Every code the core stores as a final start refusal (session_start_refusal.FINAL_START_CODES), so every one a status
  * read with include_refusal may answer. Reading it proves only the refusal; which of them the view leaves is

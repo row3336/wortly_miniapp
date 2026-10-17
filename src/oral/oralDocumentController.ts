@@ -51,6 +51,13 @@ export type OralDocumentSnapshot = {
    * agrees, so an older marker of the other lane never hides a read failure, a lost connection or a stale answer.
    */
   checkedAbsent?: true;
+  /**
+   * P2-B (Codex C537; Q32, TZA :295): the fresh, lane-proven closure of this client's own earlier oral session of the pair it
+   * left (commandLane ownClosureOfOtherPair: its profile, its installation, its record's pair), seen by an owner of the new
+   * pair that has no session of its own yet. Only the closure and its real reason: never this pair's current session,
+   * never its numbers, cards or rights. Absent once this owner has a session.
+   */
+  priorClosure?: { sessionId: string; reason: NonNullable<OralClosed["reason"]> };
 };
 const busyRefusal = (commands: Record<OralCommandLane, OralCommandSnapshot>): "SESSION_BUSY" | null =>
   commands.study.rejectionCode === "SESSION_BUSY" || commands.stop.rejectionCode === "SESSION_BUSY" ? "SESSION_BUSY" : null;
@@ -100,6 +107,7 @@ export class OralDocumentController {
   private shownPending = false;
   private stopRight: { sessionId: string; version: string; stop: boolean; home: boolean } | null = null;
   private closedFacts: OralClosed | null = null;
+  private priorClosure: { sessionId: string; reason: NonNullable<OralClosed["reason"]> } | null = null;
   private readonly slotBlocked: Record<OralCommandLane, boolean> = { study: false, stop: false };
 
   constructor(options: OralDocumentOptions) {
@@ -243,6 +251,14 @@ export class OralDocumentController {
     if (lane === "study" && snapshot.outcome !== null && snapshot.resolved) {
       this.current = null; this.currentVersion = null; this.ticket = null;
     }
+    // P2-B: the lane keeps a projection of another pair only as the own closure of its record's session; it is a fact of
+    // that earlier session (its reason), taken only while this owner has no session of its own.
+    const prior = snapshot.current;
+    if (prior && "pair" in prior && prior.status === "closed" && prior.close_reason !== null
+      && prior.pair !== `${this.options.access.profile.dictionary_language}-de` && !this.sessionId
+      && snapshot.resolved && sameId(snapshot.resolved.sessionId, prior.session_id)) {
+      this.priorClosure ??= { sessionId: prior.session_id, reason: prior.close_reason };
+    }
     if (snapshot.closedSession) this.markClosed(snapshot.closedSession.session_id);
     // The boundary proves closure and its reason, not the summary.
     if (snapshot.closedSession) this.recordClosed(snapshot.closedSession.session_id, snapshot.closedSession.close_reason, null);
@@ -327,7 +343,8 @@ export class OralDocumentController {
       pairMismatch: live && !closed && this.mismatch !== null && !!this.sessionId && sameId(this.mismatch, this.sessionId)
         ? this.mismatch : null,
       ...(live && this.foregroundBlocked && phase === "loading" ? { suspended: true as const } : {}),
-      ...(checkedAbsent ? { checkedAbsent: true as const } : {}) };
+      ...(checkedAbsent ? { checkedAbsent: true as const } : {}),
+      ...(live && !this.sessionId && this.priorClosure ? { priorClosure: { ...this.priorClosure } } : {}) };
   }
   private closedSnapshot(sessionId: string): OralClosed {
     const facts = this.closedFacts && sameId(this.closedFacts.sessionId, sessionId) ? this.closedFacts : null;

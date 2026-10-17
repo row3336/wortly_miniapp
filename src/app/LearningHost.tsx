@@ -13,6 +13,7 @@ import type { TodayScreenProps } from "../today/TodayScreen";
 import { useBackLayer } from "./navigationBack";
 import type { OpenedAccess } from "./openedAccess";
 import { TodayHost } from "./TodayHost";
+import { noticePendingStart, useNoticePendingSignal } from "../notices/noticePending";
 
 export type LearningHostProps = {
   access: OpenedAccess;
@@ -44,6 +45,11 @@ export type LearningHostProps = {
   onForeignStart?(sessionId: string): void;
   /** The starts of this page (35.1-А); the JS document's own unless a test models another page. */
   page?: LearningPageStarts;
+  /**
+   * NOTICE_PENDING (project notices ed.2.4 §6.1): a start of this owner was refused because a notice waits. The document
+   * reads GET /notices and shows it; the owner sends nothing more for that start (no new ID, no POST).
+   */
+  onNoticePending?(): void;
 };
 
 const copy = {
@@ -142,6 +148,8 @@ export function LearningHost(props: LearningHostProps) {
 
   const startedElsewhere = state && state.phase !== "disposed" ? acceptedForeignStart(state.commands.primary, state) : null;
   useEffect(() => { if (startedElsewhere !== null) latest.current.onForeignStart?.(startedElsewhere); }, [startedElsewhere]);
+  useNoticePendingSignal(state && state.phase !== "disposed" ? noticePendingStart(state.commands.primary) : null,
+    props.onNoticePending);
 
   const requestStart = () => {
     if (bound.starting || bound.requested || !props.access.isLive()) return;

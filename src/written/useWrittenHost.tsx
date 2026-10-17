@@ -10,6 +10,7 @@ import type { AsyncStorage } from "../platform/storage";
 import type { SettingsDocument } from "../settings/useSettingsDocument";
 import { useWrittenDocument, type WrittenActions } from "./useWrittenDocument";
 import { WrittenScreen } from "./WrittenScreen";
+import { noticePendingStart, useNoticePendingSignal } from "../notices/noticePending";
 
 export type WrittenHostOptions = {
   access: OpenedAccess;
@@ -38,6 +39,11 @@ export type WrittenHostOptions = {
    * refreshes its access once per such session and goes into it; the owner only reports it.
    */
   onForeignStart?(sessionId: string): void;
+  /**
+   * NOTICE_PENDING (project notices ed.2.4 §6.1): a start of this owner was refused because a notice waits. The document
+   * reads GET /notices and shows it; the owner sends nothing more for that start (no new ID, no POST).
+   */
+  onNoticePending?(): void;
 };
 /**
  * An accepted card study action of a card opened from this quiz (M-ACTIONS cardActionsController), or its manual interval
@@ -181,6 +187,8 @@ export function useWrittenHost(options: WrittenHostOptions): WrittenHost {
 
   const startedElsewhere = state && state.phase !== "disposed" ? acceptedForeignStart(state.commands.primary, state) : null;
   useEffect(() => { if (startedElsewhere !== null) latest.current.onForeignStart?.(startedElsewhere); }, [startedElsewhere]);
+  useNoticePendingSignal(state && state.phase !== "disposed" ? noticePendingStart(state.commands.primary) : null,
+    options.onNoticePending);
 
   // root decision, pending owner (M-ACTIONS Р4): the quiz goes on by itself only from the result of that card, and only
   // after a read at least as new as the action (canNext needs a fresh projection); any other step means it already moved.

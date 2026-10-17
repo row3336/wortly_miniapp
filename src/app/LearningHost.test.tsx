@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
 import type { SettingsResponse, TodayResponse } from "../api/generated";
 import { learningViewFixture } from "../learning/learningView.test-support";
 import { accepted, current, deferred, id, original, pending, primaryKey, profile, response, missing, stop, stopKey } from "../learning/learningFixtures.test-support";
@@ -40,7 +41,11 @@ type Route = LearningHostProps["route"];
 function setup(options: { initialSessionId?: string | null; route?: Route; confirmed?: boolean; status?: TodayResponse["learning"]["status"];
   deferredNavigation?: boolean; pendingSave?: boolean; language?: "ru" | "uk" | "en";
   /** A sent settings reset of this client whose status check waits for the promise, then fails (the outcome stays unknown). */
-  pendingReset?: Promise<void>; fixture?: ReturnType<typeof learningViewFixture>; saved?: { primary?: LearningCommandIntent; stop?: LearningCommandIntent } } = {}) {
+  pendingReset?: Promise<void>; fixture?: ReturnType<typeof learningViewFixture>; saved?: { primary?: LearningCommandIntent; stop?: LearningCommandIntent };
+  /** A new start is refused with this code (core new_session_start, a kept final refusal). */
+  rejectStart?: string;
+  /** The saved start's status read answers its kept final refusal with this code (include_refusal, Ж01). */
+  savedRefusal?: string } = {}) {
   const seed = options.initialSessionId === undefined ? null : options.initialSessionId;
   const f = options.fixture ?? learningViewFixture("normal", seed); fixtures.push(f); f.view.dispose(); f.owner.dispose();
   if (options.saved?.primary) seedRaw(f.values, primaryKey, JSON.stringify(pending(options.saved.primary)), id(50));
@@ -55,13 +60,25 @@ function setup(options: { initialSessionId?: string | null; route?: Route; confi
   const data = settingsData(); if (options.confirmed === false) data.settings.transition_mode.value = null;
   const transport = { fetcher: f.fetcher, timeoutMs: 30000, maxResponseBytes: 100000, gate: testGate() };
   const store = new SettingsPendingStore(f.storage), settingsRead = vi.fn(async () => response(data));
-  const onToday = vi.fn(), onLearning = vi.fn(), renderPreview = vi.fn((preview: Parameters<LearningHostProps["renderPreview"]>[0]) =>
+  const onToday = vi.fn(), onLearning = vi.fn(), onNoticePending = vi.fn(), renderPreview = vi.fn((preview: Parameters<LearningHostProps["renderPreview"]>[0]) =>
     <p data-testid="approved-preview">{preview.content.card.lemma}</p>);
   f.fetcher.mockImplementation(async (...call) => {
     const path = new URL(String(call[0]), "http://localhost").pathname;
     if (options.pendingSave && path.includes("/commands/")) throw new TypeError("network");
     if (options.pendingReset && path.endsWith(`/commands/${id(61)}`)) { await options.pendingReset; throw new TypeError("network"); }
+    const body = call[1]?.method === "POST" && call[1].body ? JSON.parse(String(call[1].body)) : null;
+    if (options.rejectStart && path.endsWith("/commands") && body?.kind === "session.start") {
+      return response({ command: { id: body.command_id, status: "rejected" }, current: { session_id: body.session_id, status: "not_found" },
+        state_version: "1", error: { code: options.rejectStart } }, 409);
+    }
     const saved = [options.saved?.primary, options.saved?.stop].find(command => command && path.endsWith(`/commands/${command.command_id}`));
+    if (saved && options.savedRefusal && saved.kind === "session.start") {
+      // core command_status._refused_start: the kept refusal bound to this very intent by its hash.
+      const hash = createHash("sha256").update(`{"kind":"session.start","payload":{"mode":"learning","session_id":"${saved.session_id}"}}`).digest("hex");
+      return response({ command: { id: saved.command_id, kind: "session.start", status: "rejected", refused_at: "2026-10-07T12:00:00Z" },
+        error: { code: options.savedRefusal }, current: { session_id: saved.session_id, status: "not_found" }, state_version: "1",
+        verified_intent_hash: hash });
+    }
     if (saved) return response(saved.kind === "session.start"
       ? accepted(saved, "1", current(saved.session_id), "already_applied") : missing(saved, "1"));
     if (path.endsWith("/settings")) return settingsRead();
@@ -78,13 +95,13 @@ function setup(options: { initialSessionId?: string | null; route?: Route; confi
       <LearningHost access={access} transport={transport} storage={f.storage} newId={f.newId} language={options.language ?? "ru"}
         initialSessionId={seed} route={route} settings={settings} minimumStateVersion={floor} submitOnEnter
         renderPreview={renderPreview} onLearning={() => { onLearning(); if (!options.deferredNavigation) updateRoute("learning"); }}
-        onToday={() => { onToday(); updateRoute("today"); }} onSettings={() => updateRoute("settings")} />
+        onToday={() => { onToday(); updateRoute("today"); }} onSettings={() => updateRoute("settings")} onNoticePending={onNoticePending} />
       {route === "settings" && <SettingsHost access={access} transport={transport} language="ru" active document={settings}
         onToday={() => updateRoute("today")} />}
     </>;
   }
   const ui = render(<Harness />);
-  return { f, data, transport, onToday, onLearning, renderPreview, settingsRead,
+  return { f, data, transport, onToday, onLearning, onNoticePending, renderPreview, settingsRead,
     route: (route: Route) => act(() => setRoute(route)), update: (floor?: string) => ui.rerender(<Harness floor={floor} />), ...ui };
 }
 async function question() {
@@ -119,6 +136,31 @@ describe("LearningHost with real document owners and synthetic HTTP", () => {
     h.unmount(); const next = setup({ initialSessionId: id(3), fixture: h.f });
     await screen.findByRole("textbox"); expect(next.f.posts()).toEqual([]);
     expect(next.f.fetcher.mock.calls.some(call => String(call[0]).includes(id(3)) && call[1]?.method === "GET")).toBe(true);
+  });
+  // NOTICE_PENDING (project notices §6.1, T5): directly and found by the check of an unknown start (the kept refusal, Ж01).
+  it("a start refused NOTICE_PENDING tells the document once and posts nothing more", async () => {
+    const h = setup({ rejectStart: "NOTICE_PENDING" });
+    fireEvent.click(await screen.findByRole("button", { name: /Новая группа слов/ }));
+    await waitFor(() => expect(h.onNoticePending).toHaveBeenCalledOnce());
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 100)); });
+    expect(h.onNoticePending).toHaveBeenCalledOnce();
+    expect(h.f.posts().filter(post => post.kind === "session.start")).toHaveLength(1);
+    expect(hasPending(h.f.values, primaryKey)).toBe(false);
+  });
+  it("an unknown start whose check finds the kept NOTICE_PENDING tells the document once, never sending the start", async () => {
+    const command = original({ kind: "session.start", session_id: id(3), payload: { mode: "learning" } });
+    const h = setup({ saved: { primary: command }, savedRefusal: "NOTICE_PENDING" });
+    await waitFor(() => expect(h.onNoticePending).toHaveBeenCalledOnce());
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 100)); });
+    expect(h.onNoticePending).toHaveBeenCalledOnce(); expect(h.f.posts()).toEqual([]);
+    expect(h.f.fetcher.mock.calls.some(call => String(call[0]).includes(command.command_id) && call[1]?.method === "GET")).toBe(true);
+  });
+  it("a start refused NO_MATERIAL tells no notice", async () => {
+    const h = setup({ rejectStart: "NO_MATERIAL" });
+    fireEvent.click(await screen.findByRole("button", { name: /Новая группа слов/ }));
+    await waitFor(() => expect(h.f.posts().filter(post => post.kind === "session.start")).toHaveLength(1));
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 100)); });
+    expect(h.onNoticePending).not.toHaveBeenCalled();
   });
   it("routes an unresolved saved Stop to Learning even when open has no session seed", async () => {
     const command = original(stop);

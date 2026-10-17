@@ -1,4 +1,4 @@
-import type { OpenedClient, Profile } from "../api/generated";
+import type { NoticeView, OpenedClient, Profile } from "../api/generated";
 import { ApiError } from "../api/http";
 
 type Credentials = Readonly<{ token: string; proof: string; clientInstanceId: string; documentId: string }>;
@@ -7,6 +7,12 @@ export interface OpenedAccess {
   readonly profile: Profile;
   readonly session: OpenedClient["session"];
   readonly document: Readonly<{ clientInstanceId: string; documentId: string; epoch: string }>;
+  /**
+   * The profile's pending notices this open answered with (CON §7.2 п.4: they come when the client opens), oldest first;
+   * null (or absent, as in hand-made accesses) when the core sent none (an older core). Data only: reading them
+   * acknowledges nothing (§5).
+   */
+  readonly notices?: readonly NoticeView[] | null;
   isLive(): boolean;
   run<T>(operation: (credentials: Credentials) => Promise<T>): Promise<T>;
 }
@@ -34,6 +40,7 @@ export function createOpenedAccess(options: {
     get session() { return structuredClone(opened.session); },
     document: Object.freeze({ clientInstanceId: opened.client_instance_id,
       documentId: opened.document_id, epoch: opened.document_epoch }),
+    get notices() { return opened.notices === undefined || opened.notices === null ? null : structuredClone(opened.notices); },
     isLive: options.isLive,
     async run<T>(operation: (credentials: Credentials) => Promise<T>): Promise<T> {
       requireLive();

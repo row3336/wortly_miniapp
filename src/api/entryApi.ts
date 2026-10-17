@@ -28,6 +28,7 @@ export type OpenHooks = { origin?: RequestOrigin; stamped?: (stamp: RequestStamp
 import { ApiError as EntryApiError, createJsonTransport, httpError, type HttpOptions } from "./http";
 import type { RequestOrigin, RequestStamp } from "../commands/writeGate";
 import { exactKeys, uuid } from "./wireValidation";
+import { validNotices } from "../notices/noticeApi";
 export { ApiError as EntryApiError } from "./http";
 
 type FetchOptions = HttpOptions;
@@ -106,9 +107,16 @@ function validIncompatible(value: Record<string, unknown>): boolean {
     && validSessionReference(value.session) && validCompatibility(value.compatibility);
 }
 
+/** The pending notices an opened or busy answer carries (project notices ed.2.4 §5; core a2c29f4): absent or null from an
+ * older core, else every item exactly a NoticeView. */
+function validOpenNotices(value: Record<string, unknown>): boolean {
+  return value.notices === undefined || value.notices === null || validNotices(value.notices);
+}
+
 function validOpen(value: unknown): value is OpenedClient | BusyClient | IncompatibleClient {
   if (record(value) && value.status === "incompatible") return validIncompatible(value);
   if (!record(value) || !validProfile(value.profile) || !validCompatibility(value.compatibility)) return false;
+  if (!validOpenNotices(value)) return false;
   if (value.status === "SESSION_BUSY") {
     if (!record(value.session) || value.session.status !== "busy") return false;
     const { stop_remote_target: target, document_conflict: conflict, document_epoch: epoch } = value.session;
