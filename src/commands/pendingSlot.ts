@@ -280,6 +280,11 @@ export class PendingSlot<T extends { profileId: string; mismatch?: true }> {
     return { kind: "full", value };
   }
 
+  /**
+   * The page this slot belongs to (its storage): the key of the page's send budget store and of the IDs it created
+   * (intentBudget pageBudgetSource, pageOrigin). An owner that is given only the slots (oral, M1d) reaches the page here.
+   */
+  get page(): AsyncStorage { return this.storage; }
   /** This page created the intent of commandId (decision 2.3 А): only such a record may be retried by hand. */
   noteCreated(commandId: string): void { noteCreatedHere(this.storage, commandId); }
   created(commandId: string | null | undefined): boolean { return createdHere(this.storage, commandId); }

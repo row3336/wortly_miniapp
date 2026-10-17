@@ -43,7 +43,9 @@ function retryProblem(intent: OralIntent, current: OralRead["current"], pair: st
   const assignment = step.assignment, capabilities = step.capabilities;
   switch (intent.kind) {
     case "session.start": return "step_changed";
-    case "session.stop": return intent.payload.reason === "stop" ? capabilities.stop ? "not_found" : "step_changed"
+    // The closure C (CON §6.1 п.8, Q30) may go again while the session is open at any step, as in the written mode.
+    case "session.stop": return intent.payload.reason === "save_failed" ? "not_found"
+      : intent.payload.reason === "stop" ? capabilities.stop ? "not_found" : "step_changed"
       : step.status === "summary" && capabilities.summary_home ? "not_found" : "step_changed";
     case "assignment.present": return step.status === "active" && assignment?.status === "prefetched"
       && sameId(assignment.id, intent.assignment_id) ? "not_found" : "step_changed";

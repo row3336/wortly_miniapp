@@ -1,4 +1,6 @@
-import { gateWaitText } from "../commands/CommandRecovery";
+import { gateWaitText, recoveryCover } from "../commands/CommandRecovery";
+import { recoveryCopy } from "../commands/commandCopy";
+import { RecoveryOverlay, recoveryConflict, recoveryScreen } from "../commands/RecoveryOverlay";
 import { startRefusalIntent } from "../commands/startRefusal";
 import type { ForegroundIntent } from "../app/entryController";
 import { useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
@@ -9,6 +11,7 @@ import type { OralDocumentSnapshot } from "./oralDocumentController";
 import { oralRefineCardId } from "./oralRefine";
 import { closedReasonLines } from "../written/WrittenSummary";
 import { NoticeShown } from "../notices/NoticeShown";
+import { FORCED_ORAL_REASONS } from "./oralClosureHandoff";
 import type { OralDocumentActions } from "./useOralDocument";
 import "./oral.css";
 
@@ -40,12 +43,8 @@ export type OralScreenProps = {
   noticeId?: string | null;
 };
 
-/**
- * Q32 вар.1, R4-03 (TZA :295, tz_app.md SHA-16 7d949301; Codex C520): in the OPEN window every proven closure of the
- * session without the person shows its summary with the reason and an explicit «На Сегодня» — never the bare closed
- * line, never a return to Today by itself. R22 limits only the notice of a closed Mini App, not this screen.
- */
-export const FORCED_ORAL_REASONS: readonly string[] = ["midnight", "timezone_date_changed", "remote_stop", "pair_changed"];
+// Q32 вар.1, R4-03: the closures without the person shown with their reason (single source: oralClosureHandoff).
+export { FORCED_ORAL_REASONS };
 /**
  * The reasons the server creates oral_forced_close for (until R22: Codex C486; core N2a), so the only ones whose «На
  * Сегодня» acknowledges a notice. remote_stop and pair_changed have none: no read is awaited and no ack is sent.
@@ -58,6 +57,7 @@ const copy = {
     loading: "Загружаем занятие…", idle: "Занятие ещё не началось.", remember: "Вспомни перевод.",
     present: "Подтверждаем показ задания…", grade: "Оцени свой ответ.", saving: "Сохраняем действие…",
     unknown: "Действие ещё не подтверждено. Проверь состояние.", stale: "Не удалось обновить занятие. Проверь состояние.",
+    staleShort: "Не удалось обновить занятие.",
     stopping: "Завершаем занятие…", closed: "Занятие завершено.", disposed: "Занятие недоступно в этом окне.",
     inactive: "Занятие сейчас не активно.", summary: "Итог занятия", completed: "Пройдено", right: "Верно", errors: "Ошибки",
     remaining: "Осталось", today: "На Сегодня", refresh: commandCopy.ru.check, retryStudy: "Повторить действие",
@@ -70,6 +70,7 @@ const copy = {
     loading: "Завантажуємо заняття…", idle: "Заняття ще не почалося.", remember: "Згадай переклад.",
     present: "Підтверджуємо показ завдання…", grade: "Оціни свою відповідь.", saving: "Зберігаємо дію…",
     unknown: "Дію ще не підтверджено. Перевір стан.", stale: "Не вдалося оновити заняття. Перевір стан.",
+    staleShort: "Не вдалося оновити заняття.",
     stopping: "Завершуємо заняття…", closed: "Заняття завершено.", disposed: "Заняття недоступне в цьому вікні.",
     inactive: "Заняття зараз не активне.", summary: "Підсумок заняття", completed: "Пройдено", right: "Правильно", errors: "Помилки",
     remaining: "Залишилося", today: "На Сьогодні", refresh: commandCopy.uk.check, retryStudy: "Повторити дію",
@@ -82,6 +83,7 @@ const copy = {
     loading: "Loading your session…", idle: "The session has not started yet.", remember: "Recall the translation.",
     present: "Confirming the displayed question…", grade: "Assess your answer.", saving: "Saving the action…",
     unknown: "The action is not confirmed yet. Check status.", stale: "Could not refresh the session. Check status.",
+    staleShort: "Could not refresh the session.",
     stopping: "Ending the session…", closed: "The session has ended.", disposed: "This session is unavailable in this window.",
     inactive: "This session is not active right now.", summary: "Session summary", completed: "Completed", right: "Correct", errors: "Errors",
     remaining: "Remaining", today: "Return to Today", refresh: commandCopy.en.check, retryStudy: "Retry action",
@@ -155,8 +157,14 @@ export function OralScreen({ state, actions, language, active, onToday, onRefine
     return () => { cancelled = true; };
   }, [active, ticket, assignment?.id, assignment?.status, actions]);
 
-  const lanes = state ? [state.commands.study, state.commands.stop] : [];
-  const saving = state?.commands.study.phase === "sending";
+  // M1d (Q19 вариант 1, К19-018): an automatic study step (present, reveal, grade) recovers by its machine — no manual
+  // check or retry of it (Я15, CT §6.1 п.2), as in the written and Learning screens; Stop keeps its own.
+  const automatic = state?.automaticStudy === true;
+  const allLanes = state ? [state.commands.study, state.commands.stop] : [];
+  const lanes = state && automatic ? [state.commands.stop] : allLanes;
+  // The first send of an automatic step goes by its machine, which prepares its budget before the lane holds the intent:
+  // that is the same ordinary indicator, never a failed refresh.
+  const saving = state?.commands.study.phase === "sending" || state?.recovery?.state.name === "sending";
   const phase = state?.phase ?? "loading";
   // Server facts of this owner's own Stop, of a closure without the person (Q32), or of a closure whose reason is not
   // known yet; any other reason keeps the plain closed line.
@@ -165,11 +173,14 @@ export function OralScreen({ state, actions, language, active, onToday, onRefine
   // pair_changed: the closed session belongs to the old pair; its numbers never reach this pair (C178), so nothing of it
   // is read or awaited here — only a summary already known for this pair is shown.
   const otherPair = forcedReason === "pair_changed" && state?.closed?.summaryRead !== "known";
+  // The own closures: the person's Stop and the closure C of this document after the sends of X ran out (save_failed,
+  // CON §6.1 п.8): their summary, with the answer_loss lines the host passes (9.2.7 / R2-05).
+  const own = state?.closed?.reason === "stop" || state?.closed?.reason === "save_failed";
   const closed = active && phase === "closed" && state?.closed && !otherPair
-    && (state.closed.reason === "stop" || state.closed.reason === null || forcedReason !== null) ? state.closed : null;
+    && (own || state.closed.reason === null || forcedReason !== null) ? state.closed : null;
   const waiting = closed?.summaryRead === "pending" || closed?.summaryRead === "reading";
   const readFailed = closed?.summaryRead === "failed";
-  const closedSummary = closed?.summaryRead === "known" && (closed.reason === "stop" || forcedReason !== null) ? closed : null;
+  const closedSummary = closed?.summaryRead === "known" && (own || forcedReason !== null) ? closed : null;
   // Q32: the reason of a closure without the person, on its summary. нет утверждённого текста: the working copy of the
   // written and conjugation summaries (WrittenSummary.tsx reasons, 6.1.O5), reused as is.
   const forcedLine = forcedReason !== null ? closedReasonLines[language][forcedReason] ?? closedReasonLines[language].unknown : null;
@@ -191,13 +202,28 @@ export function OralScreen({ state, actions, language, active, onToday, onRefine
   // A session the server proved open in another pair is a known fact, not a failed update (C178): no failure line for it
   // unless a real problem is named; the check stays (as the written and Learning screens).
   const knownMismatch = !!state?.pairMismatch && state.problem === null;
-  const status = !active ? t.inactive : phase === "disposed" ? t.disposed : phase === "closed" ? readFailed ? t.stale : t.closed
+  // The machine's own status over the study screen (Я15.2; the first send keeps the ordinary indicator).
+  const recovering = active && !!state && phase !== "disposed" && phase !== "closed" && state.suspended !== true
+    ? recoveryCover(recoveryScreen({ recovery: state.recovery ?? null, primary: state.commands.study }), { primary: state.commands.study }) : null;
+  // An automatic step with no cover of its machine (it only checks a record of another window, 2.3 А; or the mark of a
+  // shown question, Q25.2): the short status of the check (9.2.1, R10) or of that mark — never «Проверь состояние».
+  const automaticStatus = state?.commands.study.pendingIntent?.kind === "assignment.present" ? t.present
+    : recovering ? null : recoveryCopy[language].checking;
+  // A screen whose only study action recovers by its machine has no manual check while Stop has none to show either: its
+  // failure line then names the failure without asking for a check (the line of the written and Learning screens).
+  const manualCheck = !!state && (lanes.some(lane => lane.pending) || state.canRetry.study || state.canRetry.stop);
+  const staleLine = automatic && !manualCheck ? t.staleShort : t.stale;
+  const status = !active ? t.inactive : phase === "disposed" ? t.disposed : phase === "closed" ? readFailed ? staleLine : t.closed
     : phase === "stopping" ? t.stopping : phase === "visible_unconfirmed" ? t.present : saving ? t.saving : phase === "loading" ? t.loading
-    : phase === "idle" ? t.idle : phase === "unknown" ? t.unknown : phase === "stale" ? busyRefused || knownMismatch ? null : t.stale
+    // The mark of a shown question waits without the machine's cover (recoveryCover, Q25.2): its own short status says so.
+    : phase === "idle" ? t.idle : phase === "unknown" ? automatic ? automaticStatus : t.unknown : phase === "stale" ? busyRefused || knownMismatch ? null : t.stale
     : phase === "prefetched" ? t.present
     : phase === "question" ? t.remember : phase === "revealed" ? t.grade : null;
-  const localProblem = state?.problem === "storage" || lanes.some(lane => lane.problem === "storage");
-  const blocked = lanes.some(lane => lane.problem === "mismatch" || lane.problem === "invalid_pending" || lane.problem === "pending_changed");
+  const localProblem = state?.problem === "storage" || allLanes.some(lane => lane.problem === "storage");
+  const blocked = allLanes.some(lane => lane.problem === "mismatch" || lane.problem === "invalid_pending" || lane.problem === "pending_changed");
+  // Я17 (CT §6.1 п.10): the machine stopped on another payload under the same command_id of the study step; the conflict's
+  // own text (9.2.5, R10), its action is «Выйти» of the header — as the written screen.
+  const conflict = !!state && recoveryConflict({ recovery: state.recovery ?? null, primary: state.commands.study });
   // A suspended owner shows only «loading» until its window's foreground answers: an earlier refusal or busy line
   // beside it would read as a failure of this return (2.33). The fresh owner after the foreground shows real problems.
   const suspended = state?.suspended === true;
@@ -207,14 +233,16 @@ export function OralScreen({ state, actions, language, active, onToday, onRefine
   const checkedAbsent = state?.checkedAbsent === true;
   // Same wording as the written quiz: a refused start names the other device, not a generic refresh failure.
   const problem = suspended ? null
-    : localProblem ? t.cleanup : blocked ? t.blocked : busyRefused ? t.busy : checkedAbsent ? null : state?.problem ? t.stale : null;
+    : conflict ? recoveryCopy[language].conflict : localProblem ? t.cleanup : blocked ? t.blocked : busyRefused ? t.busy : checkedAbsent ? null : state?.problem ? staleLine : null;
   const summary = state?.current?.status === "summary" ? state.current.summary : forced ? null : closedSummary?.summary ?? null;
   const progress = closedSummary ? closedSummary.progress : state?.current?.progress;
   const remaining = progress ? progress.total - progress.completed : null;
   const usable = active && !!state && phase !== "disposed";
   const refreshBusy = lanes.some(lane => lane.phase === "loading" || lane.phase === "checking");
-  const showRecovery = usable && !suspended && (phase === "unknown" || phase === "stale" || phase === "closed"
-    || !!problem || lanes.some(lane => lane.pending) || state!.canRetry.study || state!.canRetry.stop);
+  // An automatic study step has no manual check (its machine checks it): the controls stay for Stop, as in the written screen.
+  const showRecovery = usable && !suspended && (lanes.some(lane => lane.pending) || state!.canRetry.study || state!.canRetry.stop
+    || !automatic && (phase === "unknown" || phase === "stale" || phase === "closed" || !!problem));
+  // The machine's own status over the study screen (Я15.2; the first send keeps the ordinary indicator).
   const allowed = (capability: boolean | undefined) => usable && capability === true;
   const checkBlocked = state?.gate?.checkable === false;
   const studyBlocked = state?.gate?.primaryWritable === false, stopBlocked = state?.gate?.stopWritable === false;
@@ -237,7 +265,7 @@ export function OralScreen({ state, actions, language, active, onToday, onRefine
   </main>;
 
   const recovery = showRecovery && <section className="oral-recovery" aria-label={t.recovery}>
-      {state!.commands.study.pending && state!.commands.study.outcome === null && <p>{t.pendingStudy}</p>}
+      {!automatic && state!.commands.study.pending && state!.commands.study.outcome === null && <p>{t.pendingStudy}</p>}
       {state!.commands.stop.pending && state!.commands.stop.outcome === null && <p>{t.pendingStop}</p>}
       {/* §4.1 «Правило кнопки» (C335; M-P03-9/10): visible and inactive while the write gate holds, with its wait. */}
       {gateHeld && state!.gate?.wait && <p role="status" className="command-note">{gateWaitText(language, state!.gate.wait)}</p>}
@@ -315,8 +343,15 @@ export function OralScreen({ state, actions, language, active, onToday, onRefine
         onClick={() => { if (closedSummary) onToday(); else if (allowed(state?.canSummaryHome)) void actions.stop("summary_home"); }}>{t.today}</button>
     </section>}
     {problem && <p role="status">{problem}</p>}
+    {/* 9.2.12 + Q30: the closure C's own budget ran out with the session open; its action is «Повторить завершение». */}
+    {usable && state?.closureFailed && <p role="status">{recoveryCopy[language].closeFailed}</p>}
+    {/* WORKING STUB (Q34, C556 В3; text №16 waits for the owner), as the written screen: the send budget of this page cannot
+      be opened, or the last «Начать» met damaged records; no study send was made. The general unavailability line. */}
+    {usable && (state?.storageUnavailable || state?.startBlocked) && <p role="status">{t.disposed}</p>}
     {startRefused && <button type="button" className="oral-today"
       onClick={() => onToday(startRefusalIntent(study))}>{t.today}</button>}
     {recovery}
+    {recovering && <RecoveryOverlay screen={recovering} language={language} canEnd={allowed(state?.canStop)}
+      onEnd={() => { if (allowed(state?.canStop)) void actions.stop("stop"); }} />}
   </main>;
 }

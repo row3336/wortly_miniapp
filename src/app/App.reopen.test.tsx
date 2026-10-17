@@ -18,7 +18,6 @@ const compatibility = { compatible: true, contract_version: "1" };
 const pairText = "Активная пара: Русский ↔ Немецкий";
 const busyTitle = "Wortly уже открыт";
 const busyText = "Вернись в другое открытое окно или на другое устройство.";
-const unconfirmed = "Учебное действие ещё не подтверждено.";
 const oralRefusal = "Не удалось обновить занятие. Проверь состояние.";
 const checkingTitle = "Обновляем Wortly";
 const settle = () => new Promise(resolve => setTimeout(resolve, 30));
@@ -216,12 +215,13 @@ describe("two windows of one installation (decision 2.3)", () => {
     // DOCUMENT_STALE refuses this window's attempt, not the action (C091 §1, Р2): its record stays as sent.
     expect(keptIntent("wortly.pending.oral_session")).toEqual(sentIntents(d, old));
     expect(d.eventsOf(old)).toEqual(["open", "foreground"]);
-    // B keeps the document. Its next reconcile meets A's kept action in the shared slot and offers only its check: what
-    // B shows for it is the owner's question В-1 (D-STALE-WINDOW 5); this pins the current answer, not a decision.
+    // B keeps the document. Its next reconcile meets A's kept action in the shared slot and only checks it: what B shows
+    // for it is the owner's question В-1 (D-STALE-WINDOW 5); this pins the current answer, not a decision. M1d (Q19): the
+    // reveal is checked by its machine — the check's status, no manual check button (2.3 А: X is never sent from B).
     foreground();
     await settle();
-    await within(b.container).findByText(unconfirmed);
-    expect(within(b.container).getByRole("button", { name: "Проверить состояние" })).toBeTruthy();
+    await within(b.container).findByText("Проверяем, сохранилось ли действие…");
+    expect(within(b.container).queryByRole("button", { name: "Проверить состояние" })).toBeNull();
     expect(within(b.container).queryByText(busyTitle)).toBeNull();
     expect(d.server).toMatchObject({ document: d.opens()[1].document_id, epoch: 2 });
     expect(d.eventsOf(old)).toEqual(["open", "foreground"]);
@@ -270,6 +270,8 @@ const unseen = (container: HTMLElement, text: string) =>
 
 describe("no false error while the window checks its document (2.33, contracts §6.4)", () => {
   it("Ф1: the replaced window hides its module's refusal during the foreground check and then closes", async () => {
+    // M1d (Q19): the reveal recovers by its machine, so the module's refusal line carries no call to check by hand.
+    const oralRefusal = "Не удалось обновить занятие.";
     const d = device({ session: true, holdForeground: true });
     const a = render(<App />); await within(a.container).findByText("wenn");
     const b = render(<App />); await within(b.container).findByText("wenn");

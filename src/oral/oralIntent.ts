@@ -18,9 +18,10 @@ export function validOralIntent(value: unknown): value is OralIntent {
     case "session.start":
       valid = exactKeys(value.payload, ["mode", "bucket"]) && value.payload.mode === "oral"
         && oneOf(value.payload.bucket, ["words", "phrases"]); break;
-    // T1 (project notices §4.1): `{reason}` as before, or the person's Stop naming the unconfirmed action X.
+    // T1 (project notices §4.1): `{reason}` as before, or the person's Stop naming the unconfirmed action X; M1d (Q19,
+    // CON §6.1 п.8): the closure C with reason save_failed and X after the automatic sends of X ran out.
     case "session.stop":
-      valid = validStopPayload(value.payload, value.command_id) && value.payload.reason !== "save_failed"; break;
+      valid = validStopPayload(value.payload, value.command_id); break;
     case "assignment.present": case "oral.reveal":
       keys.push("assignment_id"); valid = uuid(value.assignment_id) && exactKeys(value.payload, []); break;
     case "oral.grade":

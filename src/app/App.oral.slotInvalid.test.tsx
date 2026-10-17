@@ -66,7 +66,10 @@ function device() {
       log.push(`POST ${body.kind} ${String(body.command_id).slice(-4)}`);
       return response({ command: { id: body.command_id, kind: body.kind, status: "applied", applied_at: "2026-10-06T10:00:00Z", target_id: id(6),
         action_id: null, result_id: null, context_id: null, object_version: null },
-        current: { ...oral(), assignment: { ...oral().assignment!, revealed: true } }, state_version: String(++server.version) });
+        // A valid revealed step (its translations, the grade as its right): since M1d (Q19) an unreadable reply of the reveal
+        // is a lost one, which its machine checks by the ID at once; this reply is the accepted one.
+        current: { ...oral(), assignment: { ...oral().assignment!, revealed: true, translations: ["если"] },
+          capabilities: { ...oral().capabilities, reveal_target: null, grade_target: id(6) } }, state_version: String(++server.version) });
     }
     if (path.includes("/sessions/")) { log.push("GET session"); return response({ current: oral(), state_version: String(server.version) }); }
     return response({ error: { code: "UNEXPECTED" } }, 500);

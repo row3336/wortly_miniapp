@@ -104,7 +104,8 @@ describe("structure of the readback registry (AC-54, R1, R6, M-P03-8)", () => {
   const owners: [string, string, string][] = [
     ["written/writtenDocumentCommands.ts", "written", "lanes K01/K01s/K03 (written)"],
     ["learning/learningDocumentCommands.ts", "learning", "lanes K01/K01s/K03 (Learning)"],
-    ["oral/oralDocumentController.ts", "oral", "oral K05"],
+    // M1d: the oral lanes moved onto the shared document lanes; their controllers register in oralDocumentCommands.
+    ["oral/oralDocumentCommands.ts", "oral", "oral K05"],
     ["conjugation/conjugationCommandController.ts", "conjugation", "conjugation K06"],
     ["study/remoteStopController.ts", "stop_remote", "stop_remote K07"],
     ["settings/settingsController.ts", "settings", "settings/reset K08"],

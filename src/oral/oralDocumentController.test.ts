@@ -7,6 +7,8 @@ import { OralSessionPendingStore, OralStopPendingStore } from "./oralPending";
 import { OralDocumentController, type OralDocumentOptions } from "./oralDocumentController";
 import { testGate } from "../commands/testGate.test-support";
 import { pendingRaw, hasPending, seedRaw } from "../commands/pendingSeed.test-support";
+import { sendBudgetProvider } from "../commands/intentBudget";
+import { SendBudgetError } from "../commands/sendBudget";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const key = (stop = false) => stop ? "wortly.pending.oral_stop" : "wortly.pending.oral_session";
@@ -430,19 +432,30 @@ describe("oral document: explicit check during an in-flight refresh", () => {
     return { reads: () => reads, release: (n: number, reply: Response | null = null) => gates.get(n)!.resolve(reply) };
   }
   const checks = (f: ReturnType<typeof fixture>) => f.gets.filter(url => url.includes("/commands/")).length;
-  const unknownStudy = () => { const f = fixture({ saved: [intents[2]], step: "presented" }); f.accepted.clear(); return f; };
+  // M1d (Q19): the steps of the oral quiz recover by their machine, which checks on its own; these checks of the explicit
+  // «Проверить» use the study record that stays manual — a start stored before this owner whose session the core never
+  // created (26.1 А): only checked, never retried here.
+  const unknownStudy = () => {
+    const f = fixture({ saved: [intents[0]], step: "presented" }); f.accepted.clear();
+    const base = f.handler;
+    f.handler = async (url, init) => init?.method !== "POST" && String(url).includes(`/sessions/${id(3)}?`)
+      ? response({ current: { session_id: id(3), status: "not_found" }, state_version: "8" }) : base(url, init);
+    return f;
+  };
 
   it("repeated checks queue one later status GET; lifecycle refresh still joins", async () => {
     const f = unknownStudy(), held = hold(f, 2);
     const lifecycle = f.controller.refresh(); await vi.waitFor(() => expect(held.reads()).toBe(2));
-    // 23.1 А (owner, C165): oral.reveal stored before this owner (a reload, another window) is only checked, never retried here.
+    // 26.1 А (owner, C171): a start stored before this owner (a reload, another window) is only checked, never retried here.
     expect(f.controller.snapshot().canRetry.study).toBe(false); expect(checks(f)).toBe(1);
     const first = f.controller.recheck(), second = f.controller.recheck();
     expect(second).toBe(first); expect(f.controller.refresh()).toBe(lifecycle); expect(checks(f)).toBe(1);
     held.release(2); await lifecycle; await first;
     expect(checks(f)).toBe(2); expect(f.posted).toEqual([]);
-    // The lane still holds its verified intent; only the page that created it may offer it again.
-    expect(f.controller.snapshot()).toMatchObject({ commands: { study: { pending: true, canRetry: true } }, canRetry: { study: false } });
+    // The lane still holds its intent, verified absent; only the page that created it may offer it again (2.3 А). Since
+    // M1d the shared lanes (DocumentLanes) apply that page rule to the lane they publish, as for the written start.
+    expect(f.controller.snapshot()).toMatchObject({ commands: { study: { pending: true, problem: "not_found", canRetry: false } },
+      canRetry: { study: false } });
   });
 
   it("a check during the queued follow-up read starts a second episode with its own later status GET", async () => {
@@ -706,12 +719,15 @@ describe("oral document: checkedAbsent", () => {
   async function checked(saved: OralIntent[]) {
     const f = fixture({ saved, step: "presented" }); f.accepted.clear(); f.set("presented", "13");
     await f.controller.refresh();
+    // M1d (Q19): the reveal is checked by its recovery machine; its answer is in once the machine only checks further.
+    await vi.waitFor(() => expect(f.controller.snapshot().recovery?.state.name).toBe("counter_unknown"));
     return f.controller.snapshot();
   }
   it("a single honest not_found (own reveal absent on the open step) is vouched for", async () => {
     const snapshot = await checked([intents[2]]);
     expect(snapshot).toMatchObject({ phase: "unknown", problem: "not_found", checkedAbsent: true });
-    expect(snapshot.commands.study).toMatchObject({ problem: "not_found", canRetry: true });
+    // An automatic step has no manual retry (Q19, Я15): the lane's not_found stays the fact, the retry is masked.
+    expect(snapshot.commands.study).toMatchObject({ problem: "not_found", canRetry: false });
   });
   it("two own lanes that both found their record absent are vouched for", async () => {
     expect(await checked([intents[2], ownStop])).toMatchObject({ problem: "not_found", checkedAbsent: true });
@@ -723,7 +739,9 @@ describe("oral document: checkedAbsent", () => {
     expect(snapshot.checkedAbsent).toBeUndefined();
   });
   it("a failed read of the session beside an own not_found is not vouched for", async () => {
-    const f = fixture({ saved: [intents[2]], step: "presented" }); f.accepted.clear(); f.set("presented", "13");
+    // M1d (Q19): the steps of the quiz are checked by their machine, which reads the session itself too; the own not_found
+    // here is that of the lane that keeps its manual check — the person's Stop absent on the open step.
+    const f = fixture({ saved: [ownStop], step: "presented" }); f.accepted.clear(); f.set("presented", "13");
     const base = f.handler;
     // The lane's own verification read (the first session GET) passes; the owner's follow-up read of the current step fails.
     let reads = 0;
@@ -731,7 +749,80 @@ describe("oral document: checkedAbsent", () => {
       ? response({ error: { code: "UNEXPECTED" } }, 500) : base(url, init));
     await f.controller.refresh();
     const snapshot = f.controller.snapshot();
-    expect(snapshot.commands.study.problem).toBe("not_found");
+    expect(snapshot.commands.stop.problem).toBe("not_found");
+    expect(snapshot.problem).not.toBeNull();
     expect(snapshot.checkedAbsent).toBeUndefined();
+  });});
+
+// C581 AC 5 (C537; Codex C582): the handoff of an own closure between owners of one live document (oralClosureHandoff)
+// carries only an accepted, attributed fact: never one of another installation, never a read that failed its floor.
+describe("oral document: the closure of an own session handed off to the next owner (C581)", () => {
+  const midnight = (f: ReturnType<typeof fixture>, version: string) => {
+    const base = f.handler;
+    f.fetcher.mockImplementation(async (url, init) => init?.method !== "POST" && String(url).includes(`/sessions/${id(3)}?`)
+      ? response({ current: { ...projection("closed"), close_reason: "midnight" }, state_version: version }) : base(url, init));
+  };
+  it("an accepted closure of the own S is shown by a next owner without a session as the earlier session's closure", async () => {
+    const f = fixture(); midnight(f, "20");
+    await f.controller.refresh();
+    expect(f.controller.snapshot()).toMatchObject({ phase: "closed", closed: { reason: "midnight" } });
+    f.controller.dispose();
+    const next = new OralDocumentController({ ...f.options, initialSessionId: null });
+    expect(next.snapshot().priorClosure).toEqual({ sessionId: id(3), reason: "midnight" });
+    // Left once (its «На Сегодня» or Back): no owner shows it again.
+    next.leaveClosure(id(3));
+    expect(next.snapshot().priorClosure).toBeUndefined();
+    expect(new OralDocumentController({ ...f.options, initialSessionId: null }).snapshot().priorClosure).toBeUndefined();
+    expect(f.posted).toEqual([]);
+  });
+  it("another installation's owner never sees it (foreign)", async () => {
+    const f = fixture(); midnight(f, "20");
+    await f.controller.refresh(); f.controller.dispose();
+    const other = createOpenedAccess({ opened: { status: "opened", client_instance_id: id(91), document_id: id(92), document_epoch: "1",
+      proof_version: "1", profile: profile(), session: null, compatibility: { compatible: true, contract_version: "1" } },
+      token: "synthetic-token", proof: "synthetic-proof", generation: 1, isLive: () => true, onDenied: () => undefined });
+    expect(new OralDocumentController({ ...f.options, access: other, initialSessionId: null }).snapshot().priorClosure).toBeUndefined();
+  });
+  it("a read of the closure below the owner's floor is no fact: nothing is handed off (obsolete)", async () => {
+    const f = fixture({ minimum: () => "30" }); midnight(f, "20");
+    await f.controller.refresh();
+    expect(f.controller.snapshot().closed).toBeNull();
+    f.controller.dispose();
+    expect(new OralDocumentController({ ...f.options, initialSessionId: null }).snapshot().priorClosure).toBeUndefined();
+  });
+  // C581 AC 4 (useOralDocument Retained): the facts of the own closed S as the previous owner of the same identity knew
+  // them; this owner reads the summary once more, and a read that fails keeps the accepted one.
+  it("the retained closure of the own S keeps its reason and accepted summary when this owner's re-read fails", async () => {
+    const f = fixture({ step: "closed" });
+    const base = f.handler;
+    f.fetcher.mockImplementation(async (url, init) => init?.method !== "POST" && String(url).includes(`/sessions/${id(3)}?`)
+      ? response({ error: { code: "UNEXPECTED" } }, 500) : base(url, init));
+    f.controller.dispose();
+    const next = new OralDocumentController({ ...f.options, terminalSessionIds: [id(3)], retainedClosed: { sessionId: id(3),
+      reason: "midnight", summary: { completed: 1, correct: 1, wrong: 0, ratio: { numerator: 1, denominator: 1 } },
+      progress: { completed: 1, total: 1, correct: 1, wrong: 0 }, summaryRead: "known" } });
+    await next.refresh();
+    expect(f.fetcher.mock.calls.filter(([url, init]) => init?.method !== "POST" && String(url).includes(`/sessions/${id(3)}?`)).length)
+      .toBeGreaterThanOrEqual(1);
+    expect(next.snapshot()).toMatchObject({ phase: "closed", closed: { reason: "midnight", summaryRead: "known", summary: { completed: 1 } } });
+  });
+});
+
+// M1d-1 v2 (QA a6feacad P3; Q34 вар.1, К19-029): without the page's send budget no study send at all — «Начать» included.
+describe("oral document: Q34 — the start without the page's store", () => {
+  it("the store does not open: canStart is off, «Начать» sends nothing and stores nothing; a refresh tries the open again", async () => {
+    let fail = true;
+    const made = sendBudgetProvider.make;
+    sendBudgetProvider.make = () => fail ? Promise.reject(new SendBudgetError("unavailable")) : made();
+    const f = fixture({ seed: null });
+    await f.controller.refresh(); await vi.waitFor(() => expect(f.controller.snapshot().storageUnavailable).toBe(true));
+    expect(f.controller.snapshot().canStart).toBe(false);
+    await f.controller.start("words");
+    expect(f.posted).toEqual([]); expect(hasPending(f.values, key())).toBe(false);
+    fail = false;
+    await f.controller.refresh(); await vi.waitFor(() => expect(f.controller.snapshot().storageUnavailable).toBeUndefined());
+    await vi.waitFor(() => expect(f.controller.snapshot().canStart).toBe(true));
+    await f.controller.start("words");
+    expect(f.posted.map(command => command.kind)).toEqual(["session.start"]);
   });
 });

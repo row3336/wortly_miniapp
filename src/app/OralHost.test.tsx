@@ -13,6 +13,7 @@ import { createOpenedAccess } from "./openedAccess";
 import { oralBucket, useOralHost, type OralHost, type OralHostOptions } from "./OralHost";
 import { testGate } from "../commands/testGate.test-support";
 import { pendingRaw, seedRaw } from "../commands/pendingSeed.test-support";
+import { hashInPlace, tick } from "../commands/recoveryTime.test-support";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const studyKey = "wortly.pending.oral_session";
@@ -50,7 +51,9 @@ function fakeBack() {
 
 type Options = { step?: Step | null; completed?: number; reason?: Reason; seed?: boolean; saved?: OralIntent; reject?: string;
   route?: OralHostOptions["route"]; holdRoute?: boolean; settings?: (data: SettingsResponse) => void; holdStop?: boolean;
-  openCard?: boolean; closureNotices?: ClosureNotices & { changed?: () => void } };
+  openCard?: boolean; closureNotices?: ClosureNotices & { changed?: () => void };
+  /** M1d-1 v2: the POSTs this predicate names are lost before the core (a TypeError, nothing recorded). */
+  drop?: (command: OralCommand) => boolean };
 /** A synthetic server model for one profile; it makes no claim of backend acceptance. */
 function setup(options: Options = {}) {
   let counter = 100, version = 8n;
@@ -69,6 +72,7 @@ function setup(options: Options = {}) {
     if (init?.method === "POST") {
       const command = JSON.parse(String(init.body)) as OralCommand; posts.push(command);
       const { client_instance_id: _client, document_id: _doc, ...intent } = command;
+      if (options.drop?.(command)) throw new TypeError("network");
       if (command.kind === "session.start" && options.reject) {
         return response({ command: { id: command.command_id, status: "rejected" }, current: { session_id: command.session_id, status: "unavailable" },
           state_version: String(version), error: { code: options.reject } }, 409);
@@ -184,7 +188,13 @@ describe("useOralHost: start, routing and Today", () => {
     const saved: OralIntent = { command_id: id(90), session_id: id(3), assignment_id: id(6), kind: "oral.grade", payload: { correct: true } };
     const h = setup({ saved });
     expect(screen.getByTestId("today").textContent).toBe("held");
-    await screen.findByText("Действие ещё не подтверждено. Проверь состояние.");
+    // M1d (Q19): the grade recovers by its machine; one left by a reload is only checked by it (2.3 А) — its status, no
+    // manual check («Проверь состояние» is gone for a study step).
+    // The check's own status (9.2.1) or, once the machine only checks further, 9.2.10 (R10).
+    await screen.findAllByText(/^(Проверяем, сохранилось ли действие…|Не удалось подтвердить последнее действие\. Мы продолжаем проверять\. Можно завершить занятие\.)$/);
+    expect(screen.queryByText("Действие ещё не подтверждено. Проверь состояние.")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Проверить состояние" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Повторить действие" })).toBeNull();
     // The text needs only the loaded receipt; its status GET follows the intent hash, so await the exchange itself.
     await waitFor(() => expect(h.commandChecks()).toBeGreaterThanOrEqual(1));
     expect(h.onOral).toHaveBeenCalledOnce();
@@ -326,5 +336,60 @@ describe("useOralHost: «Уточнить поля» and the return from the car
     setup({ step: "presented", seed: true });
     await waitFor(() => expect(button("Раскрыть").disabled).toBe(false));
     expect(screen.queryByRole("button", { name: "Уточнить поля" })).toBeNull();
+  });
+});
+
+// M1d-1 v2 (QA a6feacad P2, C587; project notices §6, CON :313, §10 M1): the closure C (save_failed) is this document's own
+// closure, as its Stop: the real host keeps its summary with 9.2.7 read from the notice board, never leaves for Today by
+// itself and acknowledges the answer_loss only by the explicit «На Сегодня» or Back. No lines or notice are handed in.
+describe("M1d-1 v2: the own closure C in the real host", () => {
+  const line927 = "Не удалось сохранить последнее действие. Занятие завершено. Ранее сохранённый прогресс не потерян.";
+  function board(ack: boolean) {
+    const notice = { notice_id: id(101), kind: "answer_loss" as const, session_id: id(3), mode: "oral" as const,
+      close_reason: "save_failed" as const, defect_class: null, created_at: "2026-10-07T00:00:01Z", summary: null };
+    const value = { known: false, changed: undefined as undefined | (() => void),
+      read: vi.fn(() => { value.known = true; queueMicrotask(() => value.changed?.()); }),
+      find: vi.fn((sessionId: string) => value.known && sessionId.toLowerCase() === id(3) ? notice : null),
+      leave: vi.fn(async () => ack) };
+    return value;
+  }
+  async function exhausted(ack: boolean) {
+    vi.useFakeTimers(); hashInPlace();
+    const notices = board(ack);
+    const h = setup({ seed: true, step: "presented", closureNotices: notices, drop: command => command.kind === "oral.reveal" });
+    const step = (ms = 0) => act(() => tick(ms));
+    for (let round = 0; round < 5; round++) await step(10);
+    fireEvent.click(button("Раскрыть"));
+    for (let second = 0; second < 80; second++) await step(1000);
+    return { h, notices, step };
+  }
+  it.each(["button", "back"] as const)("six lost reveals → C accepted → the summary with 9.2.7; no Today, no ack until %s; then ack and Today", async exit => {
+    const { h, notices, step } = await exhausted(true);
+    const reveals = h.posts.filter(post => post.kind === "oral.reveal");
+    expect(reveals).toHaveLength(6);
+    expect(h.posts.filter(post => post.kind === "session.stop").map(post => post.payload))
+      .toEqual([{ reason: "save_failed", unsaved_command_id: reveals[0].command_id }]);
+    expect(screen.getByRole("region", { name: "Итог занятия" })).toBeTruthy();
+    expect(screen.getByText(line927)).toBeTruthy();
+    expect(h.onToday).not.toHaveBeenCalled();
+    expect(notices.read).toHaveBeenCalledTimes(1);
+    expect(notices.leave).not.toHaveBeenCalled();
+    if (exit === "button") fireEvent.click(button("На Сегодня")); else await h.back.click();
+    await step(); await step();
+    expect(notices.leave).toHaveBeenCalledTimes(1); expect(notices.leave).toHaveBeenCalledWith(id(3));
+    expect(h.onToday).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+  it("a failed ack keeps the summary with 9.2.7; only the own notice is read, and nothing more is sent", async () => {
+    const { h, notices, step } = await exhausted(false);
+    const sent = h.posts.length;
+    fireEvent.click(button("На Сегодня")); await step(); await step();
+    expect(notices.leave).toHaveBeenCalledTimes(1);
+    expect(h.onToday).not.toHaveBeenCalled();
+    expect(screen.getByText(line927)).toBeTruthy();
+    expect(notices.read).toHaveBeenCalledTimes(1);
+    expect(notices.find.mock.calls.every(([sessionId]) => sessionId.toLowerCase() === id(3))).toBe(true);
+    expect(h.posts).toHaveLength(sent);
+    vi.useRealTimers();
   });
 });

@@ -4,6 +4,7 @@ import { installTestPageGate } from "./app/pageGate.test-support";
 import { installationProvider } from "./app/installationProvider";
 import { installAppInstallationStore, resetAppInstallationIdb } from "./app/installationApp.test-support";
 import { installTestSendBudget } from "./commands/budget.test-support";
+import { resetOralClosures } from "./oral/oralClosureHandoff";
 
 installTestPageGate();
 
@@ -16,3 +17,6 @@ installAppInstallationStore(installationProvider);
 // CP5b: jsdom has no indexedDB, and the product's send budget fails closed without it. Every test gets the memory model of
 // the same store protocol as the store of its pages (commands/budget.test-support.ts) — a test double, never a fallback.
 beforeEach(() => { installTestSendBudget(); });
+
+// M1d: the closures of oral sessions handed off between owners live as long as the JS document; each test is a new one.
+beforeEach(() => { resetOralClosures(); });

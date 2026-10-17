@@ -1,14 +1,15 @@
-import { laneGate, type LaneGate } from "../commands/gateWait";
+import type { LaneGate } from "../commands/gateWait";
 import type { OralSessionProjection } from "../api/generated";
 import { ApiError, type HttpOptions } from "../api/http";
 import { sameId, uuid, version } from "../api/wireValidation";
 import { ClosedAccessError, type OpenedAccess } from "../app/openedAccess";
 import { onlyCheckedAbsent } from "../commands/commandLane";
+import type { RecoveryView } from "../commands/laneRecovery";
 import { createOralApi, type OralRead } from "./oralApi";
-import { OralCommandController, type OralCommandSnapshot, type OralTransition } from "./oralCommandController";
+import type { OralCommandSnapshot, OralTransition } from "./oralCommandController";
+import { OralDocumentCommands, type OralLanesSnapshot } from "./oralDocumentCommands";
 import type { OralCommandLane, OralSessionPendingStore, OralStopPendingStore } from "./oralPending";
-import { lostAddress } from "../commands/lostEnvelope";
-import { unsavedActionId } from "../commands/closeIntent";
+import { leaveOralClosure, noteOralClosure, oralClosureLeft, unleftOralClosure, type OralClosureOwner } from "./oralClosureHandoff";
 
 type AccessCredentials = Parameters<Parameters<OpenedAccess["run"]>[0]>[0];
 
@@ -61,6 +62,19 @@ export type OralDocumentSnapshot = {
    * never its numbers, cards or rights. Absent once this owner has a session.
    */
   priorClosure?: { sessionId: string; reason: NonNullable<OralClosed["reason"]> };
+  /**
+   * M1d (Q19 вариант 1, К19-018; CON §6.1 п.1–4): the automatic recovery of the study action (present, reveal, grade) on the
+   * shared mechanism of CP5b (DocumentLanes): its machine's view, null when none was needed in this document.
+   */
+  recovery?: RecoveryView | null;
+  /** The study lane holds an automatic step: it is recovered by its machine, never by a manual check or retry. */
+  automaticStudy?: true;
+  /** 9.2.12 + Q30: the closure C's own budget ran out with the session open — «Повторить завершение» (canRetry.stop). */
+  closureFailed?: true;
+  /** Q34 (вар.1, К19-029): the send budget of this page cannot be opened: no study send at all, the start included. */
+  storageUnavailable?: true;
+  /** The last «Начать» sent nothing: damaged records or a failed write of its budget (D-CP5A-DAMAGE-EXIT 3.2). */
+  startBlocked?: "damage" | "storage";
 };
 const busyRefusal = (commands: Record<OralCommandLane, OralCommandSnapshot>): "SESSION_BUSY" | null =>
   commands.study.rejectionCode === "SESSION_BUSY" || commands.stop.rejectionCode === "SESSION_BUSY" ? "SESSION_BUSY" : null;
@@ -74,6 +88,11 @@ export type OralDocumentOptions = {
   initialSessionId: string | null;
   minimumStateVersion?(): string | null;
   terminalSessionIds?: readonly string[];
+  /**
+   * The facts of the initial session as the previous owner of this identity knew them, when that session is terminal
+   * (useOralDocument Retained; M1d, Q32/C577): its reason stays known; numbers only if they were read.
+   */
+  retainedClosed?: OralClosed | null;
   enabled?: boolean;
   /** Adapter source guard also applies before React effect cleanup. */
   isLive?(): boolean;
@@ -85,7 +104,8 @@ export type OralDocumentOptions = {
 /** Owns one immutable opened source. Durable slots outlive this Module. */
 export class OralDocumentController {
   private readonly options: Readonly<OralDocumentOptions>;
-  private readonly commands: Record<OralCommandLane, OralCommandController>;
+  /** Both durable lanes on the shared mechanism of CP5b (M1d): study (its primary lane) and stop. */
+  private readonly lanes: OralDocumentCommands;
   private readonly terminal = new Set<string>();
   private readonly receiptSessions = new Set<string>();
   private readonly processed: Partial<Record<OralCommandLane, string>> = {};
@@ -110,9 +130,14 @@ export class OralDocumentController {
   private shownPending = false;
   private stopRight: { sessionId: string; version: string; stop: boolean; home: boolean } | null = null;
   private closedFacts: OralClosed | null = null;
-  private readonly unsavedClosures = new Set<string>();
   private priorClosure: { sessionId: string; reason: NonNullable<OralClosed["reason"]> } | null = null;
-  private readonly slotBlocked: Record<OralCommandLane, boolean> = { study: false, stop: false };
+  /** The profile and installation of this owner: the key of the closures handed off between owners (oralClosureHandoff). */
+  private readonly closureOwner: OralClosureOwner;
+  /** The study command whose outcome this owner already followed with a read of its session (once per ID). */
+  private followed: string | null = null;
+  private followRead: Promise<void> | null = null;
+  /** The summary of the initial closed session came from the previous owner of this identity (retainedClosed). */
+  private carriedSummary = false;
 
   constructor(options: OralDocumentOptions) {
     if (options.initialSessionId !== null && !uuid(options.initialSessionId)
@@ -123,46 +148,33 @@ export class OralDocumentController {
     this.sessionId = options.initialSessionId;
     this.floor = options.access.profile.state_version;
     for (const item of options.terminalSessionIds ?? []) this.terminal.add(item.toLowerCase());
-    const api = createOralApi(options.transport), access = options.access;
-    const read = (sessionId: string) => this.exchange(({ token, proof, clientInstanceId, documentId }) => {
-      return api.read(token, proof, { session_id: sessionId, client_instance_id: clientInstanceId, document_id: documentId });
-    });
-    const make = (lane: OralCommandLane) => new OralCommandController({
-      profileId: access.profile.profile_id, clientInstanceId: access.document.clientInstanceId,
-      pair: `${access.profile.dictionary_language}-de` as OralSessionProjection["pair"], lane,
-      pendingStore: lane === "study" ? options.studyStore : options.stopStore,
-      stateVersion: this.floor, minimumStateVersion: () => this.minimum(),
-      newId: options.newId, isLive: () => this.live(), read,
-      // 14.8.8.1 А: the seam of fixB; the check of the other window's record follows the end of this step (begin).
-      slotConflict: () => { this.slotBlocked[lane] = true; },
-      // R6: the status of this ID is read only with the gate's ticket (after the identity check, if one is due).
-      check: intent => options.transport.gate.runReadback(intent.command_id, ticket =>
-        this.exchange(({ token, proof, clientInstanceId, documentId }) =>
-          api.status(token, proof, { ...intent, client_instance_id: clientInstanceId, document_id: documentId }, ticket))),
-      // Q27 (C467): a lost self-assessment is read by its ID under the same ticket and open handle; it is never sent.
-      checkLost: lost => options.transport.gate.runReadback(lost.commandId, ticket =>
-        this.exchange(({ token, proof, clientInstanceId, documentId }) =>
-          api.statusLost(token, proof, lostAddress(lost, { client_instance_id: clientInstanceId, document_id: documentId }), ticket))),
-      gate: options.transport.gate, family: "oral",
-      send: intent => this.exchange(({ token, proof, clientInstanceId, documentId }) => {
-        if (!this.active(lane) || this.sendEpoch[lane] !== this.activityEpoch) throw new ClosedAccessError();
-        return api.send(token, proof, { ...intent, client_instance_id: clientInstanceId, document_id: documentId });
-      }),
+    this.closureOwner = { profileId: options.access.profile.profile_id, clientInstanceId: options.access.document.clientInstanceId };
+    // C537/C581: a closure of an own earlier session that an owner before this one accepted and whose frame the person has
+    // not left yet (the window moved to another pair meanwhile): shown as the earlier session's closure while this owner
+    // has no session of its own — the fact and its reason only, never that session as the current one.
+    if (this.sessionId === null) this.priorClosure = unleftOralClosure(this.closureOwner);
+    const retained = options.retainedClosed;
+    if (retained && this.sessionId && sameId(retained.sessionId, this.sessionId) && this.terminal.has(this.sessionId.toLowerCase())) {
+      // The reason stays known; the summary is read once more by this owner as before, and a summary the previous owner
+      // read is kept if that read fails or answers below the floor (it was accepted then).
+      this.closedFacts = { ...structuredClone(retained), summaryRead: "pending" };
+      this.carriedSummary = retained.summaryRead === "known";
+    }
+    this.lanes = new OralDocumentCommands({
+      access: () => options.access, transport: options.transport, studyStore: options.studyStore, stopStore: options.stopStore,
+      newId: options.newId, minimumStateVersion: () => this.live() ? this.minimum() : null,
+      // A manual send goes only in the activity epoch of its tap; a send of a recovery machine follows the visibility of
+      // the window alone (as the written and Learning views: a route away does not stop the recovery, a background does).
+      sendable: (lane, automatic) => automatic ? this.active("stop") : this.active(lane) && this.sendEpoch[lane] === this.activityEpoch,
+      ownerLive: () => this.live(),
       onUpdate: snapshot => {
-        if (!this.live()) return;
-        this.ingest(lane, snapshot);
+        // The shared lanes may publish while they are being built (before this.lanes is set): nothing to show yet.
+        if (!this.lanes || !this.live()) return;
+        this.ingestLanes(snapshot);
         this.emit();
       },
     });
-    this.commands = { study: make("study"), stop: make("stop") };
-    this.unsubscribeGate = options.transport.gate.subscribe(() => {
-      this.readPausedLanes();
-      // The manual controls follow the gate: only a change of what they show is published.
-      const shown = JSON.stringify(laneGate(options.transport.gate, this.commands.study.snapshot(), this.commands.stop.snapshot()));
-      if (shown !== this.shownGate) { this.shownGate = shown; this.emit(); }
-    });
   }
-  private shownGate = "";
   private live(): boolean {
     return !this.disposed && (this.options.isLive?.() ?? true) && this.options.access.isLive()
       && this.options.access.profile.access.status === "admitted";
@@ -215,6 +227,8 @@ export class OralDocumentController {
     const facts = this.closedFacts;
     if (projection && (projection.status !== "closed" || !sameId(projection.session_id, sessionId))) return false;
     facts.reason ??= reason;
+    // The fact of the own closure goes to the owners after this one (C537, C581): S and its real reason only.
+    if (facts.reason !== null) noteOralClosure(this.closureOwner, sessionId, facts.reason);
     // The reason of an own closure is a server fact whatever pair its projection names; only its numbers need this owner's pair.
     if (projection && projection.pair !== `${this.options.access.profile.dictionary_language}-de`) return false;
     if (!projection || facts.summaryRead === "known") return false;
@@ -262,6 +276,7 @@ export class OralDocumentController {
       && prior.pair !== `${this.options.access.profile.dictionary_language}-de` && !this.sessionId
       && snapshot.resolved && sameId(snapshot.resolved.sessionId, prior.session_id)) {
       this.priorClosure ??= { sessionId: prior.session_id, reason: prior.close_reason };
+      noteOralClosure(this.closureOwner, prior.session_id, prior.close_reason);
     }
     if (snapshot.closedSession) this.markClosed(snapshot.closedSession.session_id);
     // The boundary proves closure and its reason, not the summary.
@@ -272,13 +287,40 @@ export class OralDocumentController {
       this.observe({ current: snapshot.current, state_version: snapshot.stateVersion });
     }
   }
+  /** Both lanes of a publication of the shared lanes, then the read that follows a new outcome of the study action. */
+  private ingestLanes(lanes: OralLanesSnapshot): void {
+    this.ingest("study", lanes.primary);
+    this.ingest("stop", lanes.stop);
+    this.follow(lanes.primary);
+  }
+  /**
+   * A command fact never licenses reuse of its former question: once per study command with a known outcome (applied or
+   * refused, however it became known: the tap's own send, a send or a check of the recovery machine), the session is read
+   * again unless the reply already brought a fresh step.
+   */
+  private follow(command: OralCommandSnapshot): void {
+    const id = command.resolved?.commandId.toLowerCase();
+    if (!id || command.outcome === null || this.followed === id) return;
+    this.followed = id;
+    // A refresh reads the session itself once its lanes are checked: no second read for what its check found.
+    if (this.refreshing || command.outcome === "not_applied" || !this.sessionId || this.terminal.has(this.sessionId.toLowerCase())) return;
+    if (command.outcome !== "rejected" && this.current && this.currentVersion !== null
+      && BigInt(this.currentVersion) >= BigInt(this.minimum())) return;
+    this.current = null;
+    const read = this.readCurrent().finally(() => { if (this.followRead === read) this.followRead = null; this.emit(); });
+    this.followRead = read;
+  }
+  private studyLanes(): Record<OralCommandLane, OralCommandSnapshot> {
+    const lanes = this.lanes.snapshot();
+    return { study: lanes.primary, stop: lanes.stop };
+  }
   private ready(snapshot: OralCommandSnapshot): boolean {
     return !snapshot.pending && ["idle", "settled"].includes(snapshot.phase);
   }
   snapshot(): OralDocumentSnapshot {
     const live = this.live();
     if (live) this.minimum();
-    const commands = { study: this.commands.study.snapshot(), stop: this.commands.stop.snapshot() };
+    const lanes = this.lanes.snapshot(), commands = { study: lanes.primary, stop: lanes.stop };
     const closed = !!this.sessionId && this.terminal.has(this.sessionId.toLowerCase());
     const fresh = this.currentVersion !== null && BigInt(this.currentVersion) >= BigInt(this.floor);
     const unknown = commands.study.pending && commands.study.outcome === null;
@@ -286,7 +328,9 @@ export class OralDocumentController {
     const sendingStop = this.busy.stop || commands.stop.phase === "sending";
     const current = this.active("stop") && fresh && !closed
       && !this.refreshing && !unknown && !sendingStudy && !sendingStop ? this.current : null;
-    const studyReady = this.ready(commands.study) && !this.busy.study;
+    // The shared lanes' own readiness for a new study action (no work in flight, no machine busy, Q34); the write gate
+    // is asked by each right below, as before.
+    const studyReady = this.ready(commands.study) && !this.busy.study && (lanes.canBegin || !!lanes.heldByGate);
     const stopReady = this.ready(commands.stop) && !this.busy.stop;
     const foreignHistory = [...this.receiptSessions].some(id => !this.terminal.has(id)
       && (!this.sessionId || !sameId(id, this.sessionId)));
@@ -303,7 +347,7 @@ export class OralDocumentController {
     const right = this.stopRight;
     // §4.1 «Правило кнопки» (K01s, K03, K05; C335, M-P03-10): every manual mutation of the screen waits for mayWrite.
     const writable = this.options.transport.gate.mayWrite();
-    const canStop = this.active("stop") && stopReady && !closed && !!right && writable
+    const canStop = this.active("stop") && stopReady && lanes.canStop && !closed && !!right && writable
       && BigInt(right.version) >= BigInt(this.floor) && !!this.sessionId && sameId(right.sessionId, this.sessionId);
     const assignment = current?.status === "active" ? current.assignment : null;
     if (!current || assignment?.status !== "prefetched" || !this.active("study") || !studyReady || !stopReady) this.ticket = null;
@@ -339,17 +383,23 @@ export class OralDocumentController {
       canStop: canStop && !!right?.stop, canSummaryHome: canStop && !!right?.home,
       // Decision 2.3 А: a study action of another window or of the page before a reload is only checked, never retried
       // by hand here. Stop keeps its own rules.
-      canRetry: { study: this.active("study") && commands.study.canRetry
-        && this.options.studyStore.created(commands.study.pendingIntent?.command_id),
-        stop: this.active("stop") && commands.stop.canRetry },
-      gate: laneGate(this.options.transport.gate, commands.study, commands.stop),
+      // The shared lanes already mask both: an automatic step and a record of another window or of the page before a
+      // reload are never retried by hand (decision 2.3 А); C only by «Повторить завершение» once its budget ran out (Q30).
+      canRetry: { study: this.active("study") && commands.study.canRetry, stop: this.active("stop") && commands.stop.canRetry },
+      gate: lanes.gate,
       closed: live && closed ? this.closedSnapshot(this.sessionId!) : null,
       pairMismatch: live && !closed && this.mismatch !== null && !!this.sessionId && sameId(this.mismatch, this.sessionId)
         ? this.mismatch : null,
       ...(live && this.foregroundBlocked && phase === "loading" ? { suspended: true as const } : {}),
       ...(checkedAbsent ? { checkedAbsent: true as const } : {}),
-      ...(live && !this.sessionId && this.priorClosure ? { priorClosure: { ...this.priorClosure } } : {}),
-      ...(live && this.unsavedClosures.size ? { unsavedClosures: [...this.unsavedClosures] } : {}) };
+      ...(live && !this.sessionId && this.priorClosure && !oralClosureLeft(this.closureOwner, this.priorClosure.sessionId)
+        ? { priorClosure: { ...this.priorClosure } } : {}),
+      recovery: live ? lanes.recovery : null,
+      ...(live && lanes.automaticPrimary ? { automaticStudy: true as const } : {}),
+      ...(live && lanes.closureFailed ? { closureFailed: true as const } : {}),
+      ...(live && lanes.storageUnavailable ? { storageUnavailable: true as const } : {}),
+      ...(live && lanes.startBlocked ? { startBlocked: lanes.startBlocked } : {}),
+      ...(live && lanes.unsavedClosures?.length ? { unsavedClosures: [...lanes.unsavedClosures] } : {}) };
   }
   private closedSnapshot(sessionId: string): OralClosed {
     const facts = this.closedFacts && sameId(this.closedFacts.sessionId, sessionId) ? this.closedFacts : null;
@@ -366,7 +416,11 @@ export class OralDocumentController {
     if (!activity.visible || this.enabled !== activity.enabled) {
       this.activityEpoch++; this.ticket = null; this.shownPending = false;
     }
-    this.enabled = activity.enabled; this.visible = activity.visible; this.emit();
+    this.enabled = activity.enabled; this.visible = activity.visible;
+    // The machines request nothing while the window is in the background (Я15.3); this owner never returns from it (a
+    // new owner with a fresh open handle checks and goes on with the rest of the budget).
+    this.lanes.setRecoveryActive(this.active("stop"));
+    this.emit();
   }
   /** Resolves both durable lanes, then reads only the explicitly confirmed session. Never POSTs. */
   refresh(): Promise<void> {
@@ -375,7 +429,7 @@ export class OralDocumentController {
     this.ticket = null;
     const task = Promise.resolve().then(async () => {
       if (!this.live()) return;
-      await Promise.all([this.commands.study.refresh(), this.commands.stop.refresh()]);
+      await this.lanes.refresh();
       if (!this.live()) return;
       this.recovered = true;
       if (this.sessionId && !this.terminal.has(this.sessionId.toLowerCase())) await this.readCurrent();
@@ -432,40 +486,28 @@ export class OralDocumentController {
         return api.read(token, proof, { session_id: sessionId, client_instance_id: clientInstanceId, document_id: documentId });
       });
     } catch {
-      if (this.live() && this.closedFacts === facts && facts.summaryRead === "reading") facts.summaryRead = "failed";
+      if (this.live() && this.closedFacts === facts && facts.summaryRead === "reading") facts.summaryRead = this.carriedSummary ? "known" : "failed";
       return;
     }
     if (!this.live() || this.sessionId !== sessionId || this.closedFacts !== facts || facts.summaryRead !== "reading") return;
     const current = read.current;
     const kept = current.status === "closed" && BigInt(read.state_version) >= BigInt(this.minimum())
       && this.recordClosed(sessionId, current.close_reason, current);
-    if (!kept) facts.summaryRead = "failed";
+    if (!kept) facts.summaryRead = this.carriedSummary && facts.summary !== null ? "known" : "failed";
   }
   private async begin(lane: OralCommandLane, transition: OralTransition): Promise<void> {
     if (!this.active(lane) || this.busy[lane]) return;
     this.busy[lane] = true; this.sendEpoch[lane] = this.activityEpoch; this.ticket = null;
     try {
-      this.slotBlocked[lane] = false;
-      await this.commands[lane].begin(transition);
+      // The shared lanes (M1d): an automatic step goes to its recovery machine (resolved once its first send has its
+      // answer), the start is counted in its budget (Q34: no send without the page's store), Stop names X itself (T1).
+      // 14.8.8.1 А: a new action that met another record in the shared slot is checked there, never sent (2.3 А).
+      await this.lanes.begin(transition);
       if (!this.live()) return;
-      // 14.8.8.1 А (owner, C117): the new study action met another record in the shared slot and was neither stored nor
-      // sent; read that record now and check it by its own ID, once. It is never sent from here (2.3 А).
-      if (lane === "study" && this.slotBlocked.study) {
-        this.slotBlocked.study = false;
-        await this.commands.study.adopt();
-        if (!this.live()) return;
-      }
-      this.ingest(lane, this.commands[lane].snapshot());
+      this.ingestLanes(this.lanes.snapshot());
       this.shownPending = false;
-      const command = this.commands[lane].snapshot();
-      // A command fact never licenses reuse of its former question.
-      if (command.outcome !== null && command.outcome !== "not_applied"
-        && this.sessionId && !this.terminal.has(this.sessionId.toLowerCase())
-        && (command.outcome === "rejected" || !this.current || this.currentVersion === null
-          || BigInt(this.currentVersion) < BigInt(this.minimum()))) {
-        this.current = null; this.emit();
-        if (this.live()) await this.readCurrent();
-      }
+      // The read that follows a known outcome (follow) is awaited by the tap that caused it.
+      if (this.followRead) await this.followRead;
     } finally {
       this.busy[lane] = false;
       this.emit();
@@ -506,23 +548,22 @@ export class OralDocumentController {
   stop(reason: "stop" | "summary_home"): Promise<void> {
     if (reason !== "stop" && reason !== "summary_home") throw new Error("oral stop reason required");
     const snapshot = this.snapshot();
-    // T1 (project notices §4.1): the person's Stop names the unconfirmed study action X of this session, if any.
-    const unsaved = reason === "stop" ? unsavedActionId(this.commands.study.snapshot(), snapshot.sessionId) : null;
-    if (unsaved && snapshot.sessionId && snapshot.canStop) this.unsavedClosures.add(snapshot.sessionId.toLowerCase());
+    // T1 (project notices §4.1): the shared lanes name the unconfirmed study action X of this session, if any, in the
+    // person's Stop; without X the payload stays `{reason}`.
     return (reason === "stop" ? snapshot.canStop : snapshot.canSummaryHome)
-      ? this.begin("stop", { kind: "session.stop", session_id: snapshot.sessionId!,
-        payload: unsaved ? { reason: "stop", unsaved_command_id: unsaved } : { reason } }) : Promise.resolve();
+      ? this.begin("stop", { kind: "session.stop", session_id: snapshot.sessionId!, payload: { reason } }) : Promise.resolve();
   }
   async retry(lane: OralCommandLane): Promise<void> {
     if (lane !== "study" && lane !== "stop") throw new Error("invalid oral lane");
     if (!this.snapshot().canRetry[lane] || this.busy[lane]) return;
-    const intent = this.commands[lane].snapshot().pendingIntent;
+    const intent = this.studyLanes()[lane].pendingIntent;
     this.busy[lane] = true; this.sendEpoch[lane] = this.activityEpoch; this.ticket = null;
     try {
-      await this.commands[lane].retry();
+      // The shared lanes: a start through its budget (a counted slot), C only through «Повторить завершение» (its machine).
+      await this.lanes.retry(lane === "study" ? "primary" : "stop");
       if (!this.live()) return;
-      const command = this.commands[lane].snapshot();
-      this.ingest(lane, command);
+      const command = this.studyLanes()[lane];
+      this.ingestLanes(this.lanes.snapshot());
       // A manual retry of the retained start is an explicit choice of that exact
       // session. Passive recovery never elects a session from receipt order.
       if (intent?.kind === "session.start" && command.outcome === "accepted" && !this.sessionId
@@ -538,23 +579,18 @@ export class OralDocumentController {
   }
 
   /**
-   * M03 (P03 §5.2): once the gate lets a write through again, an intent the gate kept on the client is read by its ID
-   * (refresh reads only, never POSTs); the lane then offers the same send again.
+   * The person left the frame of that closure of an own session («На Сегодня» or the native Back on it): no owner of this
+   * document shows it again — another render, another owner, the pair changed back (C581). Sends nothing.
    */
-  private readPausedLanes(): void {
-    if (!this.live()) return;
-    const gate = this.options.transport.gate;
-    const paused = (["study", "stop"] as const).some(lane => {
-      const state = this.commands[lane].snapshot(), id = state.pendingIntent?.command_id;
-      return state.problem === "paused" && !!id && gate.mayWrite(id);
-    });
-    if (paused) void this.refresh();
+  leaveClosure(sessionId: string): void {
+    if (!uuid(sessionId)) return;
+    leaveOralClosure(this.closureOwner, sessionId);
+    this.emit();
   }
-  private unsubscribeGate: () => void = () => undefined;
   dispose(): void {
-    this.unsubscribeGate();
     this.disposed = true; this.activityEpoch++; this.ticket = null; this.current = null; this.stopRight = null;
     this.closedFacts = null;
-    this.commands.study.dispose(); this.commands.stop.dispose();
+    // M03 (P03 §5.2) and the gate's repaint now belong to the shared lanes: their subscription ends with them.
+    this.lanes.dispose();
   }
 }

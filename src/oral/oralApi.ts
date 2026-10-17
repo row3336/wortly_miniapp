@@ -27,7 +27,8 @@ export type OralStatus = { state_version: string } & (
 
 export interface OralApi {
   read(token: string, proof: string, address: OralAddress): Promise<OralRead>;
-  send(token: string, proof: string, command: OralCommand): Promise<OralReply>;
+  /** started, when given, is told right before the built request goes to fetch (after every local check; C565). */
+  send(token: string, proof: string, command: OralCommand, started?: () => void): Promise<OralReply>;
   status(token: string, proof: string, command: OralCommand, ticket: ReadbackTicket): Promise<OralStatus>;
   /**
    * Q27 (C467): the status of a lost self-assessment (oral.grade whose content is gone) by its ID only — the same ticket
@@ -78,9 +79,9 @@ export function createOralApi(options: HttpOptions): OralApi {
       if (!validOralCurrent(reply.current, address.session_id)) throw new ApiError("invalid_response");
       return { current: reply.current, state_version: reply.state_version };
     },
-    async send(token, proof, original) {
+    async send(token, proof, original, started) {
       const command = prepareCommand(token, proof, original);
-      const reply = await request("/commands", { method: "POST", token, proof, body: command });
+      const reply = await request("/commands", { method: "POST", token, proof, body: command, ...(started ? { started } : {}) });
       // A refusal of this attempt only (window) never reads as a refused intent (commandRefusal.ts).
       if (!reply.ok && attemptRefusal(reply.status, errorCode(reply.value))) throw httpError(reply);
       const value = reply.value;

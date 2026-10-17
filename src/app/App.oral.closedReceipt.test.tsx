@@ -40,8 +40,18 @@ function oral(step: "presented" | "closed"): OralSessionProjection {
  * The real App over one synthetic server. The reveal is applied but its reply is lost; then the session closes and,
  * when changed, the pair becomes uk-de. The check by the same ID answers already_applied with the closed projection.
  */
-function app() {
+/**
+ * checksOffline (M1d): since Q19 the reveal recovers by its machine, which checks it by its ID at once after the loss.
+ * Default: that check is answered (the closure is learned before the return — the case of the same pair). With
+ * checksOffline the loss is that of the connection: the check fails too while it lasts, and the closure is learned only
+ * by the check after the return — the case the new-pair tests describe (see the open question of M1d on the new pair
+ * with an answered check).
+ */
+function app(options: { checksOffline?: boolean; holdChecks?: boolean } = {}) {
   const state = { pair: "ru", lose: true, closed: false };
+  // holdChecks: the check by the same ID is answered, but only once the test releases it (a slow answer of the core).
+  let releaseChecks: () => void = () => undefined;
+  const checks = new Promise<void>(resolve => { releaseChecks = resolve; });
   const stored = settingsResponse(); stored.needs_setup = false;
   stored.settings.ui_language.value = "ru"; stored.settings.transition_mode.value = "normal";
   const account = (): Profile => ({ profile_id: id(50), role: "user", ui_language: "ru", dictionary_language: state.pair as Profile["dictionary_language"],
@@ -65,6 +75,8 @@ function app() {
       if ((body as OralCommand).kind === "oral.reveal" && state.lose) throw new TypeError("network");
       return response({ error: { code: "UNEXPECTED" } }, 500);
     }
+    if (path.includes("/commands/") && options.checksOffline && state.lose) throw new TypeError("network");
+    if (path.includes("/commands/") && options.holdChecks) await checks;
     if (path.includes("/commands/")) return response({ command: { id: path.split("/").at(-1), kind: "oral.reveal", status: "already_applied",
       applied_at: "2026-10-01T12:00:00Z", target_id: id(6), action_id: null, result_id: null, context_id: null, object_version: null },
       current: oral("closed"), state_version: "20", verified_intent_hash: target.searchParams.get("expected_intent_hash") });
@@ -78,7 +90,7 @@ function app() {
     BackButton: { show() {}, hide() {}, onClick(handler: () => void) { backHandlers.add(handler); }, offClick(handler: () => void) { backHandlers.delete(handler); } } } });
   const posts = () => fetcher.mock.calls.filter(([url, init]) => init?.method === "POST" && String(url).endsWith("/commands"))
     .map(([, init]) => JSON.parse(String(init!.body)) as OralCommand);
-  return { state, posts, fetcher };
+  return { state, posts, fetcher, back: () => backHandlers, releaseChecks: () => releaseChecks() };
 }
 const settled = async () => { for (let i = 0; i < 15; i++) await act(async () => { await new Promise(done => setTimeout(done, 0)); }); };
 const foreground = () => act(async () => { window.dispatchEvent(new Event("pageshow")); });
@@ -140,5 +152,78 @@ describe("M-ORAL-STUCK-A: an applied step of a session closed by a pair change",
     // Nothing is sent again: the only command is the original reveal; no notice is read or acknowledged (R22).
     expect(sent()).toEqual(["oral.reveal"]);
     expect(a.fetcher.mock.calls.filter(([url]) => /\/notices/.test(String(url)))).toEqual([]);
+  });
+  // M1d: the same case when the connection itself was lost — the check by the same ID fails too until the return, and the
+  // closure is learned by the check after it (an additional case; the one above keeps the check answered).
+  it("new pair, the check offline until the return: the reason of the earlier session's closure and «На Сегодня»; Today only after the press", async () => {
+    const a = app({ checksOffline: true }); render(<App />);
+    await screen.findByText("wenn");
+    await waitFor(() => expect((screen.getByRole("button", { name: "Раскрыть" }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "Раскрыть" }));
+    await settled();
+    a.state.lose = false; a.state.closed = true; a.state.pair = "uk";
+    await foreground(); await settled();
+    await screen.findByText("Занятие закрыто: изменилась языковая пара");
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 300)); });
+    expect(screen.queryByText("Активная пара: Украинский ↔ Немецкий")).toBeNull();
+    expect(screen.queryByText("Действие ещё не подтверждено. Проверь состояние.")).toBeNull();
+    expect(screen.queryByText("Не удалось обновить занятие. Проверь состояние.")).toBeNull();
+    // The closure of the old pair grants no numbers here, and no check of it.
+    expect(document.querySelectorAll("dd")).toHaveLength(0);
+    expect(screen.queryByRole("button", { name: "Проверить состояние" })).toBeNull();
+    const sent = () => a.posts().map(post => post.kind);
+    expect(sent()).toEqual(["oral.reveal"]);
+    fireEvent.click(screen.getByRole("button", { name: "На Сегодня" }));
+    await screen.findByText("Активная пара: Украинский ↔ Немецкий");
+    await settled();
+    expect(screen.queryByText("Занятие закрыто: изменилась языковая пара")).toBeNull();
+    // Nothing is sent again: the only command is the original reveal; no notice is read or acknowledged (R22).
+    expect(sent()).toEqual(["oral.reveal"]);
+    expect(a.fetcher.mock.calls.filter(([url]) => /\/notices/.test(String(url)))).toEqual([]);
+  });
+
+  // C581 AC 3 (C537): the person left the frame of the closure before the pair changed — by «На Сегодня» or by the native
+  // Back on it; the owner of the new pair never shows it again.
+  it.each(["button", "back"] as const)("the frame left by %s before the pair changed is not shown again by the owner of the new pair", async exit => {
+    const a = app(); render(<App />);
+    await screen.findByText("wenn");
+    await waitFor(() => expect((screen.getByRole("button", { name: "Раскрыть" }) as HTMLButtonElement).disabled).toBe(false));
+    // The core closed S (the pair moved elsewhere) as the reveal landed.
+    a.state.closed = true;
+    fireEvent.click(screen.getByRole("button", { name: "Раскрыть" }));
+    await settled();
+    // The check of the reveal's machine answered: the closure of S is known in the old pair, its frame is on screen.
+    await screen.findByText("Занятие закрыто: изменилась языковая пара");
+    if (exit === "button") fireEvent.click(screen.getByRole("button", { name: "На Сегодня" }));
+    else act(() => { for (const handler of [...a.back()]) handler(); });
+    await screen.findByText("Активная пара: Русский ↔ Немецкий");
+    a.state.lose = false; a.state.closed = true; a.state.pair = "uk";
+    await foreground(); await settled();
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 300)); });
+    // Today stays (its plan read is the fixture's own matter here); the frame of S is not shown again.
+    expect(screen.getByRole("heading", { name: "Сегодня" })).toBeTruthy();
+    expect(screen.queryByText("Занятие закрыто: изменилась языковая пара")).toBeNull();
+    expect(screen.queryByRole("region", { name: "Итог занятия" })).toBeNull();
+    expect(a.posts().map(post => post.kind)).toEqual(["oral.reveal"]);
+  });
+  // The other order (C581 AC 1): the check by the same ID is answered, but only after the pair changed (a slow answer): the
+  // owner of the old pair is gone by then; the owner of the new pair learns the closure of S by its own check.
+  it("new pair, the check answered only after the change: the reason and «На Сегодня», no old numbers, no request", async () => {
+    const a = app({ holdChecks: true }); render(<App />);
+    await screen.findByText("wenn");
+    await waitFor(() => expect((screen.getByRole("button", { name: "Раскрыть" }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "Раскрыть" }));
+    await settled();
+    expect(screen.queryByText("Занятие закрыто: изменилась языковая пара")).toBeNull();
+    a.state.lose = false; a.state.closed = true; a.state.pair = "uk";
+    await foreground(); await settled();
+    a.releaseChecks(); await settled();
+    await screen.findByText("Занятие закрыто: изменилась языковая пара");
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 300)); });
+    expect(screen.queryByText("Активная пара: Украинский ↔ Немецкий")).toBeNull();
+    expect(document.querySelectorAll("dd")).toHaveLength(0);
+    fireEvent.click(screen.getByRole("button", { name: "На Сегодня" }));
+    await screen.findByText("Активная пара: Украинский ↔ Немецкий");
+    expect(a.posts().map(post => post.kind)).toEqual(["oral.reveal"]);
   });
 });

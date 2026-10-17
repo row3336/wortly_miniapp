@@ -131,71 +131,75 @@ async function lostReplyOfA(statusMode: "not_found" | "500") {
 }
 
 const STALE = "Не удалось обновить занятие. Проверь состояние.";
-const UNKNOWN = "Действие ещё не подтверждено. Проверь состояние.";
+/**
+ * M1d (Q19 вариант 1, К19-018): the reveal X is a step that recovers by its machine; in B (X was created in A) the machine
+ * only checks it by its ID (2.3 А: origin elsewhere) — no manual check button, the short status of the check (9.2.1, R10)
+ * in place of the former «Проверь состояние» line. The vouching of the cause (D-FALSE-TEXTS A) is unchanged: the failure
+ * line hides only when a successful check that found X absent is the one current cause.
+ */
+const CHECKING = "Проверяем, сохранилось ли действие…";
+/** The same failure line without a call to check by hand: B has no manual check to offer then (only Stop has one). */
+const STALE_SHORT = "Не удалось обновить занятие.";
 const lines = (container: HTMLElement) => (JSON.parse(seen(container)) as { lines: string[] }).lines;
 const slotId = () => slot().split("id=")[1];
+const returned = async () => { foreground(); await settle(); await settle(); await settle(); };
 
 describe("D-FALSE-TEXTS A, oral: the source of the current cause is vouched for", () => {
   it("a successful check that found X absent on the same step is the only cause: no refresh failure, X is the one checked", async () => {
     const { d, b } = await lostReplyOfA("not_found");
     const x = slotId();
-    foreground(); await settle(); await settle(); await settle();
-    fireEvent.click(button(b.container, "Проверить состояние")!); await settle(); await settle();
-    expect(lines(b.container)).toContain(UNKNOWN);
-    expect(lines(b.container)).not.toContain(STALE);
+    await returned();
+    expect(lines(b.container)).toContain(CHECKING);
+    expect(lines(b.container)).not.toContain(STALE); expect(lines(b.container)).not.toContain(STALE_SHORT);
+    expect(button(b.container, "Проверить состояние")).toBeUndefined();
     const statuses = d.log.filter(entry => entry.startsWith("GET status"));
     expect(statuses.length).toBeGreaterThan(0);
     expect(statuses.every(entry => entry.startsWith(`GET status ${x} `))).toBe(true);
     expect(d.log.filter(entry => entry.startsWith("POST"))).toEqual([`POST oral.reveal doc=A id=${x}`]);
   });
 
-  it("the check found X absent, but the session read failed afterwards: the refresh failure stays", async () => {
+  it("the check found X absent, but the session reads failed: the refresh failure stays", async () => {
     const { d, b } = await lostReplyOfA("not_found");
-    foreground(); await settle(); await settle(); await settle();
     d.server.failReads = true;
-    fireEvent.click(button(b.container, "Проверить состояние")!); await settle(); await settle();
-    expect(lines(b.container)).toContain(STALE);
+    await returned();
+    expect(d.log.filter(entry => entry.startsWith("GET status")).length).toBeGreaterThan(0);
+    expect(lines(b.container)).toContain(STALE_SHORT);
   });
 
   it("the lane check read the session fine and found X absent, but the owner's own follow-up read failed: the refresh failure stays", async () => {
     const { d, b } = await lostReplyOfA("not_found");
-    foreground(); await settle(); await settle(); await settle();
-    // Session reads of the next check: the lane's verification (1) passes, the owner's read of the current step (2) fails.
+    // Session reads of B's check: the lane's verification (1) passes, every later read fails.
     d.server.readBudget = 1;
-    fireEvent.click(button(b.container, "Проверить состояние")!); await settle(); await settle();
+    await returned();
     expect(d.log.filter(entry => entry.startsWith("GET status")).length).toBeGreaterThan(0);
-    expect(lines(b.container)).toContain(UNKNOWN);
-    expect(lines(b.container)).toContain(STALE);
+    expect(lines(b.container)).toContain(STALE_SHORT);
   });
 
   // An older not_found of the study lane must not hide a NEW cause found by the other lane (C116 п. 2).
   it("O7: the study lane holds an older not_found, then Stop fails over the network: the refresh failure stays", async () => {
     const { d, b } = await lostReplyOfA("not_found");
-    foreground(); await settle(); await settle(); await settle();
-    fireEvent.click(button(b.container, "Проверить состояние")!); await settle(); await settle();
-    expect(lines(b.container)).not.toContain(STALE);
+    await returned();
+    expect(lines(b.container)).not.toContain(STALE); expect(lines(b.container)).not.toContain(STALE_SHORT);
     d.server.stop = "net";
     fireEvent.click(button(b.container, "Выйти")!); await settle(); await settle();
     expect(d.log.filter(entry => entry.startsWith("POST session.stop")).length).toBe(1);
-    expect(lines(b.container)).toContain(UNKNOWN);
+    // The lost Stop has its own manual check: the full line, with its call to check.
     expect(lines(b.container)).toContain(STALE);
   });
 
   it("O10: the study lane holds an older not_found, then Stop is refused by the server: the refresh failure stays", async () => {
     const { d, b } = await lostReplyOfA("not_found");
-    foreground(); await settle(); await settle(); await settle();
-    fireEvent.click(button(b.container, "Проверить состояние")!); await settle(); await settle();
-    expect(lines(b.container)).not.toContain(STALE);
+    await returned();
+    expect(lines(b.container)).not.toContain(STALE); expect(lines(b.container)).not.toContain(STALE_SHORT);
     d.server.stop = "forbidden";
     fireEvent.click(button(b.container, "Выйти")!); await settle(); await settle();
     expect(d.log.filter(entry => entry.startsWith("POST session.stop")).length).toBe(1);
-    expect(lines(b.container)).toContain(STALE);
+    expect(lines(b.container)).toContain(STALE_SHORT);
   });
 
   it("the check itself failed (HTTP 500): the refresh failure stays", async () => {
     const { b } = await lostReplyOfA("500");
-    foreground(); await settle(); await settle(); await settle();
-    fireEvent.click(button(b.container, "Проверить состояние")!); await settle(); await settle();
-    expect(lines(b.container)).toContain(STALE);
+    await returned();
+    expect(lines(b.container)).toContain(STALE_SHORT);
   });
 });

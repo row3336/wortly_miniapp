@@ -148,7 +148,8 @@ describe("OralScreen: public Interface with real owner, stores and API", () => {
     expect(screen.getByText("Сохраняем действие…")).toBeTruthy(); fireEvent.click(button("Выйти"));
     await waitFor(() => expect(screen.getByText("Занятие завершено.")).toBeTruthy());
     expect(f.posts[1]).toMatchObject({ kind: "session.stop", payload: { reason: "stop" } });
-    expect(button("Проверить состояние").disabled).toBe(false); expect(Array.from(screen.getByRole("region", { name: "Итог занятия" }).querySelectorAll("dd"), e => e.textContent)).toEqual(["1", "1", "0", "1"]);
+    // M1d (Q19, D-CP4 3.1.4 Н6): the hung grade is the machine's to settle — no manual check of it on the closed summary.
+    expect(screen.queryByRole("button", { name: "Проверить состояние" })).toBeNull(); expect(Array.from(screen.getByRole("region", { name: "Итог занятия" }).querySelectorAll("dd"), e => e.textContent)).toEqual(["1", "1", "0", "1"]);
     await act(async () => { gate.resolve(); }); expect(screen.queryByText("die Straße")).toBeNull();
     expect(screen.getByText("Занятие завершено.")).toBeTruthy();
   });
@@ -208,39 +209,28 @@ describe("OralScreen: visible commit lifetime", () => {
 });
 
 describe("OralScreen: recovery stays separate from accepted results", () => {
-  // Decision 23.1 А (owner, C165): a study action (oral.reveal here) whose record a reload or another window left behind is
-  // only checked and its confirmed outcome shown; it is never sent from this page, so no retry is offered. Stop keeps its rules.
-  it("unknown study left by a reload is checked by GET only: no retry is offered, nothing is sent, the record stays (23.1 А)", async () => {
-    const f = fixture("presented");
-    const intent: OralIntent = { command_id: id(4), session_id: id(3), assignment_id: id(6), kind: "oral.reveal", payload: {} };
-    seedRaw(f.values, studyKey, JSON.stringify({ schemaVersion: 1, profileId: id(50), clientInstanceId: id(1), pair: "ru-de", intent }), id(50));
-    render(<f.Harness />); await waitFor(() => expect(button("Проверить состояние").disabled).toBe(false));
-    expect(f.gets.filter(url => url.includes("/commands/")).length).toBeGreaterThanOrEqual(1);
-    expect(screen.queryByRole("button", { name: "Повторить действие" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Повторить завершение" })).toBeNull(); expect(f.posts).toEqual([]);
-    fireEvent.click(button("Проверить состояние"));
-    await waitFor(() => expect(f.gets.filter(url => url.includes("/commands/")).length).toBeGreaterThanOrEqual(2));
-    await waitFor(() => expect(button("Проверить состояние").disabled).toBe(false));
-    expect(screen.queryByRole("button", { name: "Повторить действие" })).toBeNull();
-    expect(f.posts).toEqual([]); expect(hasPending(f.values, studyKey)).toBe(true);
-    expect(JSON.parse(pendingRaw(f.values, studyKey)!).intent).toEqual(intent);
-  });
-
-  // 23.1 А covers every study kind of the oral quiz (oral.reveal above, oral.grade, assignment.present): the same rule.
+  // Decision 23.1 А (owner, C165) under M1d (Q19 вариант 1, К19-018): a study step of the oral quiz (reveal, grade, the mark
+  // of a shown question) whose record a reload or another window left behind is checked by its recovery machine only — it
+  // is never sent from this page (2.3 А) — and the screen shows the machine's status: no manual check or retry of that step
+  // (Я15, as the written and Learning screens). Stop keeps its rules.
+  const unconfirmed = "Не удалось подтвердить последнее действие. Мы продолжаем проверять. Можно завершить занятие.";
   it.each([
-    ["oral.grade", "revealed", { command_id: id(4), session_id: id(3), assignment_id: id(6), kind: "oral.grade", payload: { correct: true } }],
-    ["assignment.present", "prefetched", { command_id: id(4), session_id: id(3), assignment_id: id(6), kind: "assignment.present", payload: {} }],
-  ] as const)("unknown %s left by a reload is checked by GET only: no retry is offered, nothing is sent, the record stays (23.1 А)", async (_kind, step, intent) => {
+    ["oral.reveal", "presented", { command_id: id(4), session_id: id(3), assignment_id: id(6), kind: "oral.reveal", payload: {} }, unconfirmed],
+    ["oral.grade", "revealed", { command_id: id(4), session_id: id(3), assignment_id: id(6), kind: "oral.grade", payload: { correct: true } }, unconfirmed],
+    // The mark of a shown question waits without the cover (Q25.2): its own short status.
+    ["assignment.present", "prefetched", { command_id: id(4), session_id: id(3), assignment_id: id(6), kind: "assignment.present", payload: {} },
+      "Подтверждаем показ задания…"],
+  ] as const)("unknown %s left by a reload is checked by its machine only: no manual check or retry, nothing is sent, the record stays (23.1 А, Q19)", async (_kind, step, intent, line) => {
     const f = fixture(step);
     seedRaw(f.values, studyKey, JSON.stringify({ schemaVersion: 1, profileId: id(50), clientInstanceId: id(1), pair: "ru-de", intent }), id(50));
-    render(<f.Harness />); await waitFor(() => expect(button("Проверить состояние").disabled).toBe(false));
+    render(<f.Harness />);
+    await waitFor(() => expect(screen.getByText(line)).toBeTruthy());
     expect(f.gets.filter(url => url.includes(`/commands/${id(4)}`)).length).toBeGreaterThanOrEqual(1);
-    expect(screen.queryByRole("button", { name: "Повторить действие" })).toBeNull(); expect(f.posts).toEqual([]);
-    fireEvent.click(button("Проверить состояние"));
-    await waitFor(() => expect(f.gets.filter(url => url.includes(`/commands/${id(4)}`)).length).toBeGreaterThanOrEqual(2));
-    await waitFor(() => expect(button("Проверить состояние").disabled).toBe(false));
+    expect(screen.queryByRole("button", { name: "Проверить состояние" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Повторить действие" })).toBeNull();
-    expect(f.posts).toEqual([]); expect(JSON.parse(pendingRaw(f.values, studyKey)!).intent).toEqual(intent);
+    expect(screen.queryByRole("button", { name: "Повторить завершение" })).toBeNull();
+    expect(f.posts).toEqual([]); expect(hasPending(f.values, studyKey)).toBe(true);
+    expect(JSON.parse(pendingRaw(f.values, studyKey)!).intent).toEqual(intent);
   });
 
   it("unknown stop checks GET, retries only that lane and preserves exact intent", async () => {
@@ -257,20 +247,31 @@ describe("OralScreen: recovery stays separate from accepted results", () => {
     expect(f.posts).toHaveLength(1); expect(f.posts[0]).toMatchObject(intent); expect(hasPending(f.values, stopKey)).toBe(false);
   });
 
-  it("closed retains a GET check for an unresolved study receipt without another POST or invented interrupted summary", async () => {
+  // M1d (Q19 вариант 1): a lost grade recovers by its machine — no manual check of it; the person's Stop during its pause
+  // names X (T1). After the confirmed closure the machine checks X by its ID (D-CP4 3.1.4, Н4) and the record goes once X is
+  // proven applied: no second POST of X, no invented interrupted summary.
+  it("closed after a lost grade: its machine checks it by GET, never sends it again, no invented interrupted summary", async () => {
     const f = fixture("revealed"), original = f.handler;
+    // The grade's reply is lost and its status cannot be read (no connection for it) until the person ends the session.
+    let stopped = false;
     f.fetcher.mockImplementation(async (url, init) => {
+      if (!stopped && init?.method !== "POST" && String(url).includes("/commands/")) throw new TypeError("synthetic offline");
+      if (init?.method === "POST" && JSON.parse(String(init.body)).kind === "session.stop") stopped = true;
       const reply = await original(url, init);
       if (init?.method === "POST" && JSON.parse(String(init.body)).kind === "oral.grade") throw new Error("synthetic lost response");
       return reply;
     });
     render(<f.Harness />); await waitFor(() => expect(button("Правильно").disabled).toBe(false)); fireEvent.click(button("Правильно"));
-    await waitFor(() => expect(screen.getByText("Действие ещё не подтверждено. Проверь состояние.")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Нет связи с сервером. Ждём, когда связь восстановится…")).toBeTruthy());
+    expect(screen.queryByRole("button", { name: "Проверить состояние" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Повторить действие" })).toBeNull();
     fireEvent.click(button("Выйти")); await waitFor(() => expect(screen.getByText("Занятие завершено.")).toBeTruthy());
-    expect(hasPending(f.values, studyKey)).toBe(true); expect(Array.from(screen.getByRole("region", { name: "Итог занятия" }).querySelectorAll("dd"), e => e.textContent)).toEqual(["1", "1", "0", "1"]);
-    fireEvent.click(button("Проверить состояние")); await waitFor(() => expect(hasPending(f.values, studyKey)).toBe(false));
-    expect(f.gets.some(url => url.includes("/commands/"))).toBe(true);
-    expect(f.posts.map(p => p.kind)).toEqual(["oral.grade", "session.stop"]); expect(screen.queryByText("die Straße")).toBeNull();
+    expect(Array.from(screen.getByRole("region", { name: "Итог занятия" }).querySelectorAll("dd"), e => e.textContent)).toEqual(["1", "1", "0", "1"]);
+    await waitFor(() => expect(hasPending(f.values, studyKey)).toBe(false));
+    expect(f.gets.some(url => url.includes(`/commands/${f.posts[0].command_id}`))).toBe(true);
+    expect(f.posts.map(p => p.kind)).toEqual(["oral.grade", "session.stop"]);
+    expect(f.posts[1].payload).toEqual({ reason: "stop", unsaved_command_id: f.posts[0].command_id });
+    expect(screen.queryByText("die Straße")).toBeNull();
   });
 
   it("closed with accepted receipt but failed clear keeps local failure and manual GET/cleanup recovery", async () => {
@@ -283,29 +284,33 @@ describe("OralScreen: recovery stays separate from accepted results", () => {
     expect(f.posts).toHaveLength(1); expect(screen.queryByText("Не удалось обновить данные на этом устройстве. Проверь состояние.")).toBeNull();
   });
 
-  it("mismatched pending payload never becomes success or enables retry; closed still checks unresolved receipt", async () => {
+  // Я17 (CT §6.1 п.10) on the shared mechanism (M1d): another payload under the same ID is a conflict of the machine — its own
+  // text, no retry, the way out is «Выйти»; after the confirmed closure the conflict's record is cleared (Н2), nothing sent.
+  it("mismatched pending payload never becomes success or enables retry; the conflict's record goes after the closure", async () => {
     const f = fixture("revealed"), intent: OralIntent = { command_id: id(4), session_id: id(3), assignment_id: id(6), kind: "oral.grade", payload: { correct: true } };
     seedRaw(f.values, studyKey, JSON.stringify({ schemaVersion: 1, profileId: id(50), clientInstanceId: id(1), pair: "ru-de", intent }), id(50));
     const original = f.handler;
     f.fetcher.mockImplementation((url, init) => String(url).includes("/commands/")
       ? Promise.resolve(response({ error: { code: "COMMAND_PAYLOAD_MISMATCH" } }, 409)) : original(url, init));
-    render(<f.Harness />); await waitFor(() => expect(button("Выйти").disabled).toBe(false));
-    expect(screen.getByText("Действие нельзя повторить. Проверь состояние занятия.")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Повторить действие" })).toBeNull(); fireEvent.click(button("Выйти"));
+    render(<f.Harness />);
+    await waitFor(() => expect(screen.getByText("Не удалось подтвердить это действие. Повторить его нельзя. Заверши занятие, чтобы продолжить.")).toBeTruthy());
+    await waitFor(() => expect(button("Выйти").disabled).toBe(false));
+    expect(screen.queryByRole("button", { name: "Повторить действие" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Проверить состояние" })).toBeNull(); fireEvent.click(button("Выйти"));
     await waitFor(() => expect(screen.getByText("Занятие завершено.")).toBeTruthy());
-    expect(hasPending(f.values, studyKey)).toBe(true); expect(button("Проверить состояние").disabled).toBe(false);
-    fireEvent.click(button("Проверить состояние")); await act(async () => {});
-    expect(f.posts.map(p => p.kind)).toEqual(["session.stop"]); expect(hasPending(f.values, studyKey)).toBe(true);
+    await waitFor(() => expect(hasPending(f.values, studyKey)).toBe(false));
+    expect(f.posts.map(p => p.kind)).toEqual(["session.stop"]);
     expect(screen.queryByText("COMMAND_PAYLOAD_MISMATCH")).toBeNull(); expect(screen.queryByText(id(4))).toBeNull();
   });
 
-  it.each(["study", "stop"] as const)("check while the mount document read is in flight still verifies unknown %s by GET", async lane => {
-    const f = fixture(lane === "study" ? "presented" : "revealed");
-    const intent: OralIntent = lane === "study" ? { command_id: id(4), session_id: id(3), assignment_id: id(6), kind: "oral.reveal", payload: {} }
-      : { command_id: id(5), session_id: id(3), kind: "session.stop", payload: { reason: "stop" } };
-    const receiptKey = lane === "study" ? studyKey : stopKey, retry = lane === "study" ? "Повторить действие" : "Повторить завершение";
-    // 23.1 А (owner, C165): the study record left by a reload is only checked, never retried here; Stop keeps its retry.
-    const offered = lane === "stop";
+  // M1d (Q19): a study step of the oral quiz has no manual check any more — its machine checks it (the reload test above);
+  // the explicit check while the mount read is in flight stays for the lane that keeps it, Stop.
+  it.each(["stop"] as const)("check while the mount document read is in flight still verifies unknown %s by GET", async _lane => {
+    const f = fixture("revealed");
+    const intent: OralIntent = { command_id: id(5), session_id: id(3), kind: "session.stop", payload: { reason: "stop" } };
+    const receiptKey = stopKey, retry = "Повторить завершение";
+    // Stop keeps its retry.
+    const offered = true;
     seedRaw(f.values, receiptKey, JSON.stringify({ schemaVersion: 1, profileId: id(50), clientInstanceId: id(1), pair: "ru-de", intent }), id(50));
     const original = f.handler, gate = deferred<void>(); let reads = 0;
     // Hold the document read that follows the mount lane check, so the check is clicked while it is in flight.

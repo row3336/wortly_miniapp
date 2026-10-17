@@ -1,18 +1,26 @@
 import { useEffect, useMemo, useReducer, useRef } from "react";
 import type { OpenedAccess } from "../app/openedAccess";
-import { OralDocumentController, type OralDocumentOptions, type OralDocumentSnapshot, type OralPresentationTicket } from "./oralDocumentController";
+import { OralDocumentController, type OralClosed, type OralDocumentOptions, type OralDocumentSnapshot, type OralPresentationTicket } from "./oralDocumentController";
 import type { OralCommandLane } from "./oralPending";
 
-export type OralDocumentHookOptions = Omit<OralDocumentOptions, "onUpdate" | "minimumStateVersion" | "terminalSessionIds" | "isLive" | "activity"> & {
+export type OralDocumentHookOptions = Omit<OralDocumentOptions, "onUpdate" | "minimumStateVersion" | "terminalSessionIds" | "isLive" | "activity"
+  | "retainedClosed"> & {
   minimumStateVersion?: string;
 };
 export type OralDocumentActions = {
   refresh(): Promise<void>; start(bucket: "words" | "phrases"): Promise<void>;
   shown(ticket: OralPresentationTicket): Promise<void>; reveal(): Promise<void>; grade(correct: boolean): Promise<void>;
   stop(reason: "stop" | "summary_home"): Promise<void>; retry(lane: OralCommandLane): Promise<void>;
+  /** The person left the frame of the closure of that own session (C581): it is not shown again in this document. */
+  leaveClosure?(sessionId: string): void;
 };
 type Identity = Pick<OralDocumentHookOptions, "transport" | "studyStore" | "stopStore"> & { key: string };
-type Retained = { identity: Identity; floor: string; terminal: Set<string>; closed: string | null };
+/**
+ * closedFacts (M1d, Q32/C577): the server facts of that own closed session (its reason, and its numbers once read) as the
+ * last owner knew them; the next owner of the same identity starts from them, so a reason proven once (a check of the
+ * recovery machine, a read) is not lost to a later read that fails or answers below the floor.
+ */
+type Retained = { identity: Identity; floor: string; terminal: Set<string>; closed: string | null; closedFacts: OralClosed | null };
 type Owner = { identity: Identity; access: OpenedAccess; seed: string | null; controller: OralDocumentController; waiting: boolean };
 function identity(options: OralDocumentHookOptions): Identity {
   const { access, transport, studyStore, stopStore } = options;
@@ -37,6 +45,14 @@ export function useOralDocument(options: OralDocumentHookOptions): { state: Oral
     snapshot.terminalSessionIds.forEach(item => retained.current!.terminal.add(item));
     // Only the latest own session counts, and only while terminal; a null session (disposed) leaves the address.
     if (snapshot.sessionId !== null) retained.current.closed = snapshot.phase === "closed" ? snapshot.sessionId : null;
+    if (snapshot.sessionId !== null) {
+      const facts = snapshot.phase === "closed" ? snapshot.closed : null;
+      const kept = retained.current.closedFacts;
+      // A fact is never replaced by a poorer one: the owner after a failed read knows less than the one before it.
+      if (!facts) retained.current.closedFacts = null;
+      else if (!kept || kept.sessionId.toLowerCase() !== facts.sessionId.toLowerCase() || facts.reason !== null
+        && (kept.reason === null || facts.summaryRead === "known" || kept.summaryRead !== "known")) retained.current.closedFacts = structuredClone(facts);
+    }
   };
   const lookup = () => {
     const bound = owner.current, current = latest.current;
@@ -48,7 +64,7 @@ export function useOralDocument(options: OralDocumentHookOptions): { state: Oral
     const current = latest.current, id = identity(current);
     if (!current.access.isLive() || current.access.profile.access.status !== "admitted") return;
     if (!retained.current || !same(retained.current.identity, id)) {
-      retained.current = { identity: id, floor: minimum(), terminal: new Set(), closed: null };
+      retained.current = { identity: id, floor: minimum(), terminal: new Set(), closed: null, closedFacts: null };
     }
     if (BigInt(minimum()) > BigInt(retained.current.floor)) retained.current.floor = minimum();
     // A possibly active props seed wins; otherwise this identity's own terminal session keeps its address.
@@ -57,7 +73,10 @@ export function useOralDocument(options: OralDocumentHookOptions): { state: Oral
     const effective = seed !== null && !terminal(seed) ? seed
       : saved.closed !== null && terminal(saved.closed) ? saved.closed : seed;
     let active = true;
-    const controller = new OralDocumentController({ ...current, initialSessionId: effective, isLive: () => active && find.current() === bound,
+    const retainedClosed = effective !== null && saved.closedFacts?.sessionId.toLowerCase() === effective.toLowerCase()
+      && terminal(effective) ? saved.closedFacts : null;
+    const controller = new OralDocumentController({ ...current, initialSessionId: effective, retainedClosed,
+      isLive: () => active && find.current() === bound,
       activity: () => ({ enabled: latest.current.enabled !== false,
         visible: !bound.waiting && document.visibilityState === "visible" }),
       minimumStateVersion: () => {
@@ -104,7 +123,8 @@ export function useOralDocument(options: OralDocumentHookOptions): { state: Oral
     return { refresh: () => perform(controller => controller.recheck()), start: bucket => perform(controller => controller.start(bucket)),
       shown: ticket => perform(controller => controller.shown(ticket)), reveal: () => perform(controller => controller.reveal()),
       grade: correct => perform(controller => controller.grade(correct)), stop: reason => perform(controller => controller.stop(reason)),
-      retry: lane => perform(controller => controller.retry(lane)) };
+      retry: lane => perform(controller => controller.retry(lane)),
+      leaveClosure: sessionId => { const bound = find.current(); bound?.controller.leaveClosure(sessionId); } };
   }, []);
   const bound = lookup();
   // Mask the replaced source on render, before passive effect cleanup can dispose it.

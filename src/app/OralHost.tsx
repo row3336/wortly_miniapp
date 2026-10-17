@@ -16,6 +16,12 @@ import { FORCED_ORAL_REASONS, NOTICE_ORAL_REASONS } from "../oral/OralScreen";
 import type { ClosureNotices } from "../notices/noticeBoard";
 import { useClosureNotice } from "../notices/useClosureNotice";
 
+/**
+ * The closures this document made itself: the person's Stop and the closure C after the sends of X ran out (save_failed,
+ * CON §6.1 п.8; project notices §6): their own summary, an answer_loss read once, its ack only by the explicit exit.
+ */
+const OWN_CLOSURE_REASONS: readonly string[] = ["stop", "save_failed"];
+
 /** One pair per storage: the pending slots serialize through their shared in-memory queue. */
 export type OralStores = { study: OralSessionPendingStore; stop: OralStopPendingStore };
 export type OralHostOptions = {
@@ -190,9 +196,10 @@ export function useOralHost(options: OralHostOptions): OralHost {
       if (!bound.notified.has(resolvedStart!)) { bound.notified.add(resolvedStart!); bound.awaitingStart = false; }
       return;
     }
-    // The own Stop shows its summary; a closure without the person (Q32: any proven cause) shows its summary with the
-    // reason until «На Сегодня»; a calendar one also reads its notice (Т2). summary_home and the client's own automatic
-    // closure return to Today once.
+    // The own Stop and the own closure C (save_failed, M1d; project notices §6: answer_loss — the summary with 9.2.7, its
+    // ack only by «На Сегодня» or Back) show their summary; a closure without the person (Q32: any proven cause) shows its
+    // summary with the reason until «На Сегодня»; a calendar one also reads its notice (Т2). summary_home returns to
+    // Today once.
     const reason = state.closed?.reason ?? null;
     if (state.phase === "closed" && sessionId !== null && reason !== null && FORCED_ORAL_REASONS.includes(reason)) {
       if (!bound.notified.has(sessionId)) {
@@ -201,7 +208,8 @@ export function useOralHost(options: OralHostOptions): OralHost {
       }
       return;
     }
-    if (state.phase === "closed" && sessionId !== null && reason !== null && reason !== "stop" && !bound.notified.has(sessionId)) {
+    if (state.phase === "closed" && sessionId !== null && reason !== null && !OWN_CLOSURE_REASONS.includes(reason)
+      && !bound.notified.has(sessionId)) {
       bound.notified.add(sessionId);
       void current.onToday();
       return;
@@ -221,6 +229,8 @@ export function useOralHost(options: OralHostOptions): OralHost {
   // Q32: the «На Сегодня» of a summary closed without the person acknowledges its notice first; held while that runs.
   const leaving = useRef(false);
   const leaveForced = (sessionId: string) => {
+    // C581: «На Сегодня» and the native Back on this frame mark S as left for every owner of this document.
+    actions.leaveClosure?.(sessionId);
     // P2-B: the earlier session of the left pair has no notice here (R22): plain navigation, remembered as left.
     const prior = latestState.current?.priorClosure;
     if (prior && prior.sessionId.toLowerCase() === sessionId.toLowerCase()) {
@@ -236,7 +246,7 @@ export function useOralHost(options: OralHostOptions): OralHost {
 
   // answer_loss in the open window (§6): the own Stop's summary shows the notice's line; its «На Сегодня» acknowledges it.
   const closure = useClosureNotice({ notices: options.closureNotices,
-    closed: state?.phase === "closed" && state.closed?.reason === "stop" ? state.closed : null,
+    closed: state?.phase === "closed" && OWN_CLOSURE_REASONS.includes(state.closed?.reason ?? "") ? state.closed : null,
     unsavedClosures: state?.unsavedClosures, language: options.language, visible: route === "oral" });
   const closureRef = useRef(closure); closureRef.current = closure;
   const leaveOwn = () => {
@@ -253,7 +263,8 @@ export function useOralHost(options: OralHostOptions): OralHost {
   let back: (() => void) | null = null;
   if (route === "oral" && state && !seedPending && state.phase !== "disposed") {
     const awaitingStop = state.phase === "stopping" || !!stop?.pending || ["sending", "checking", "loading"].includes(stop?.phase ?? "");
-    const ownSummary = state.phase === "closed" && state.closed?.reason === "stop" && state.closed.summaryRead === "known";
+    const ownSummary = state.phase === "closed" && OWN_CLOSURE_REASONS.includes(state.closed?.reason ?? "")
+      && state.closed!.summaryRead === "known";
     const forcedSummary = state.phase === "closed" && state.closed !== null && state.closed.reason !== null
       && FORCED_ORAL_REASONS.includes(state.closed.reason) && (state.closed.summaryRead === "known" || state.closed.summaryRead === "failed");
     if (state.phase === "summary" && state.canSummaryHome) back = () => { void actions.stop("summary_home"); };
@@ -279,7 +290,8 @@ export function useOralHost(options: OralHostOptions): OralHost {
     canRequestStart: gate,
     requestStart,
     screen: route === "oral" ? <OralScreen state={seedPending ? null : shownState} actions={screenActions} language={options.language}
-      active onToday={intent => { if (intent === undefined && state?.closed?.reason === "stop") leaveOwn(); else void latest.current.onToday(intent); }}
+      active onToday={intent => { if (intent === undefined && OWN_CLOSURE_REASONS.includes(state?.closed?.reason ?? "")) leaveOwn();
+        else void latest.current.onToday(intent); }}
       onRefineFields={openCard} onForcedToday={leaveForced} leaving={leaving.current || closure.leaving}
       noticeLines={closure.lines} noticeId={closure.notice?.notice_id ?? null}
       forcedNoticeId={state?.closed ? options.forcedNotice?.(state.closed.sessionId) ?? null : null} /> : null,

@@ -133,6 +133,11 @@ async function lostReplyOfA(statusMode: "not_found" | "500") {
 }
 
 const slotId = () => slot().split("id=")[1];
+/** The window comes back to the foreground: the document is checked and its owners are opened anew (contracts §6.4). */
+const foreground = () => {
+  vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+  fireEvent(document, new Event("visibilitychange"));
+};
 
 describe("D-FALSE-TEXTS B, oral: a new action meets the record of another window", () => {
   const statuses = (d: ReturnType<typeof device>) => d.log.filter(entry => entry.startsWith("GET status"));
@@ -154,7 +159,10 @@ describe("D-FALSE-TEXTS B, oral: a new action meets the record of another window
     // X is not presented as an accepted reveal of Y: no revealed card, no grading.
     expect(within(b.container).queryByText("если")).toBeNull();
     expect(button(b.container, "Правильно")).toBeUndefined();
-    fireEvent.click(button(b.container, "Проверить состояние")!); await settle(); await settle();
+    // M1d (Q19): the reveal X is a step that recovers by its machine; B (X was created in A) only checks it by its ID, by
+    // itself — there is no manual check of it to press (2.3 А, Я15).
+    expect(button(b.container, "Проверить состояние")).toBeUndefined();
+    await settle(); await settle();
     expect(statuses(d).every(entry => entry.startsWith(`GET status ${x} `))).toBe(true);
     expect(d.log.filter(entry => entry.startsWith("POST"))).toEqual([`POST oral.reveal doc=A id=${x}`]);
     expect(lsPendingRaw(SLOT)).toBe(raw);
@@ -168,10 +176,15 @@ describe("D-FALSE-TEXTS B, oral: a new action meets the record of another window
     fireEvent.click(button(b.container, "Раскрыть")!); await settle(); await settle();
     // A's reveal reached the core although its reply was lost: the check by the same ID now finds it applied.
     d.server.recorded = JSON.parse(lsPendingRaw(SLOT)!).intent.command_id as string; d.server.version += 1;
-    fireEvent.click(button(b.container, "Проверить состояние")!); await settle(); await settle();
+    // M1d (Q19): no manual check of the automatic X; the next check of B's document (its return to the foreground: the
+    // owner opened anew checks the record by its ID) finds it applied.
+    foreground(); await settle(); await settle(); await settle();
     expect(statuses(d).every(entry => entry.startsWith(`GET status ${x} `))).toBe(true);
     expect(statuses(d).at(-1)).toBe(`GET status ${x} -> applied`);
     expect(lsPendingRaw(SLOT)).toBeNull();
+    // The owner opened anew offers the grade once its own check and read ended (traced: still off after the settles above
+    // in a full run, logs/dbg6.txt of M1d) — the press waits for the enabled button, as a person would.
+    await waitFor(() => expect(button(b.container, "Правильно")?.disabled).toBe(false));
     fireEvent.click(button(b.container, "Правильно")!); await settle(); await settle();
     const posts = d.log.filter(entry => entry.startsWith("POST") && !entry.includes(`id=${x}`));
     expect(posts).toHaveLength(1);
