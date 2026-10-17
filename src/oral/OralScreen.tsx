@@ -8,6 +8,7 @@ import { AssociationBlock } from "../study/AssociationBlock";
 import type { OralDocumentSnapshot } from "./oralDocumentController";
 import { oralRefineCardId } from "./oralRefine";
 import { closedReasonLines } from "../written/WrittenSummary";
+import { NoticeShown } from "../notices/NoticeShown";
 import type { OralDocumentActions } from "./useOralDocument";
 import "./oral.css";
 
@@ -31,6 +32,12 @@ export type OralScreenProps = {
   onForcedToday?(sessionId: string): void;
   /** That acknowledgement is under way: the button waits. */
   leaving?: boolean;
+  /** The oral_forced_close of this closed session known to the board (calendar causes): named once its summary is drawn. */
+  forcedNoticeId?: string | null;
+  /** answer_loss of the own Stop's session (project notices §6): its lines on the summary, set by the host. */
+  noticeLines?: string[] | null;
+  /** That notice's id, named once the summary with it is drawn (c.screen(notice_shown)). */
+  noticeId?: string | null;
 };
 
 /**
@@ -101,6 +108,8 @@ export type OralForcedSummaryProps = {
   leaving: boolean;
   onToday(): void;
   dataNotice?: string;
+  /** The oral_forced_close drawn here, named once shown (c.screen(notice_shown), project notices §8). */
+  noticeId?: string | null;
   children?: ReactNode;
 };
 /**
@@ -109,7 +118,7 @@ export type OralForcedSummaryProps = {
  * from the same facts: the reason, Пройдено/Верно/Ошибки and «Осталось» (TZA М19 :83; Codex C525) where the progress is
  * known; for pair_changed numbers of the other pair never appear (C178); no live practice block.
  */
-export function OralForcedSummary({ language, status, reasonLine, counts, remaining, leaving, onToday, dataNotice, children }: OralForcedSummaryProps) {
+export function OralForcedSummary({ language, status, reasonLine, counts, remaining, leaving, onToday, dataNotice, noticeId, children }: OralForcedSummaryProps) {
   const t = copy[language];
   return <main className="oral-screen" lang={language} aria-label={t.title} data-notice={dataNotice}>
     <header className="oral-header"><h1>{t.title}</h1></header>
@@ -117,6 +126,7 @@ export function OralForcedSummary({ language, status, reasonLine, counts, remain
     <section className="oral-summary" aria-label={t.summary}>
       <h2>{t.summary}</h2>
       <p>{reasonLine}</p>
+      {noticeId && <NoticeShown noticeId={noticeId} />}
       {counts && <dl><div><dt>{t.completed}</dt><dd>{counts.completed}</dd></div><div><dt>{t.right}</dt><dd>{counts.correct}</dd></div>
         <div><dt>{t.errors}</dt><dd>{counts.wrong}</dd></div>{remaining !== null && <div><dt>{t.remaining}</dt><dd>{remaining}</dd></div>}</dl>}
       <button type="button" disabled={leaving} onClick={() => { if (!leaving) onToday(); }}>{t.today}</button>
@@ -128,7 +138,7 @@ export function OralForcedSummary({ language, status, reasonLine, counts, remain
 export function oralClosedLine(language: Language): string { return copy[language].closed; }
 
 /** A detached renderer: accepted state and command identity belong exclusively to the owner. */
-export function OralScreen({ state, actions, language, active, onToday, onRefineFields, onForcedToday, leaving }: OralScreenProps) {
+export function OralScreen({ state, actions, language, active, onToday, onRefineFields, onForcedToday, leaving, noticeLines, noticeId, forcedNoticeId }: OralScreenProps) {
   const t = copy[language], promptElement = useRef<HTMLParagraphElement>(null);
   const assignment = state?.current?.status === "active" ? state.current.assignment : null;
   const ticket = state?.presentationTicket ?? null;
@@ -257,7 +267,7 @@ export function OralScreen({ state, actions, language, active, onToday, onRefine
     return <OralForcedSummary language={language} status={readFailed ? t.stale : t.closed} reasonLine={forcedLine!}
       counts={counts && { completed: counts.completed, correct: counts.correct, wrong: counts.wrong }}
       remaining={counts && done ? done.total - done.completed : null} leaving={!!leaving}
-      onToday={() => leaveForced(forced.sessionId)}>
+      noticeId={forcedNoticeId} onToday={() => leaveForced(forced.sessionId)}>
       {problem && <p role="status">{problem}</p>}
       {(readFailed || lanesOpen) && recovery}
     </OralForcedSummary>;
@@ -297,9 +307,11 @@ export function OralScreen({ state, actions, language, active, onToday, onRefine
     </section>}
     {summary && <section className="oral-summary" aria-label={t.summary}>
       <h2>{t.summary}</h2>
+      {closedSummary && noticeLines?.map((line, index) => <p key={index}>{line}</p>)}
+      {closedSummary && noticeId && <NoticeShown noticeId={noticeId} />}
       <dl><div><dt>{t.completed}</dt><dd>{summary.completed}</dd></div><div><dt>{t.right}</dt><dd>{summary.correct}</dd></div>
         <div><dt>{t.errors}</dt><dd>{summary.wrong}</dd></div>{remaining !== null && <div><dt>{t.remaining}</dt><dd>{remaining}</dd></div>}</dl>
-      <button type="button" disabled={!toToday}
+      <button type="button" disabled={!toToday || !!closedSummary && !!leaving}
         onClick={() => { if (closedSummary) onToday(); else if (allowed(state?.canSummaryHome)) void actions.stop("summary_home"); }}>{t.today}</button>
     </section>}
     {problem && <p role="status">{problem}</p>}

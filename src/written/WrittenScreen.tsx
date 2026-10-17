@@ -23,6 +23,12 @@ export type WrittenScreenProps = {
   /** Navigation only: leaves an already closed session of this owner for Today. */
   /** intent (fix4, П01): the «На Сегодня» of a start refused as SESSION_BUSY carries startRefusalIntent. */
   onToday(intent?: ForegroundIntent): void;
+  /** answer_loss of the closed session (project notices §6): its lines on the summary, set by the host. */
+  noticeLines?: string[] | null;
+  /** The acknowledgement of that notice runs: «На Сегодня» waits. */
+  noticeLeaving?: boolean;
+  /** That notice's id, named once its summary is drawn (c.screen(notice_shown)). */
+  noticeId?: string | null;
   /** «Уточнить поля» (TA:115, К05-080): opens the full card of the answered assignment; the card returns to this quiz. */
   onRefineFields?(cardId: string, assignmentId: string): void;
 };
@@ -75,7 +81,7 @@ export function practiceText(language: Language, phrases: boolean, count: number
 }
 
 /** Connects the local display to the owner's exact capabilities; command identity and outcome are never invented here. */
-export function WrittenScreen({ state, language, submitOnEnter, actions, onToday, onRefineFields }: WrittenScreenProps) {
+export function WrittenScreen({ state, language, submitOnEnter, actions, onToday, onRefineFields, noticeLines, noticeLeaving, noticeId }: WrittenScreenProps) {
   const t = copy[language], composing = useRef(false), root = useRef<HTMLElement>(null);
   const primary = state.commands.primary, stop = state.commands.stop;
   const revising = primary.pendingIntent?.kind === "result.grade" || primary.pendingIntent?.kind === "result.correct";
@@ -171,7 +177,8 @@ export function WrittenScreen({ state, language, submitOnEnter, actions, onToday
     {state.canPrevious && <button type="button" className="written-previous" onClick={() => actions.previousResult()}>{t.previous}</button>}
     {summary && <WrittenSummary summary={summary} outcome={state.phase === "summary" || naturalClosed ? "completed" : "interrupted"} language={language}
       closedReason={!interrupted || closed.reason === "stop" || closed.reason === "summary_home" ? undefined : closed.reason}
-      canToday={state.phase === "summary" ? state.canSummaryHome : true}
+      canToday={state.phase === "summary" ? state.canSummaryHome : !noticeLeaving}
+      noticeLines={state.phase === "summary" ? null : noticeLines} noticeId={state.phase === "summary" ? null : noticeId}
       onUndo={state.phase === "summary" && state.canUndo ? () => { void actions.undo(); } : undefined}
       onToday={() => { if (state.phase === "summary") void actions.stop("summary_home"); else onToday(); }} />}
     {["loading", "stopping", "disposed", "undoing"].includes(state.phase) && <p role="status">
@@ -180,6 +187,8 @@ export function WrittenScreen({ state, language, submitOnEnter, actions, onToday
     {state.phase === "closed" && !summary && <p role="status">{undecided ? t.unknown : t.closed}</p>}
     {state.phase === "unknown" && !state.question && !unknownAnswer && !result && <p role="status">{t.unknown}</p>}
     {problem && !isClosed && <p role="status">{problem}</p>}
+    {/* 9.2.12 + Q30: the closure C's own budget ran out with the session open (documentLanes closureFailed). */}
+    {state.commands.closureFailed && <p role="status">{recoveryCopy[language].closeFailed}</p>}
     {showRecovery && <CommandRecovery className="written-recovery" language={language} lanes={manualLanes} localOnly={localOnly}
       canRetryPrimary={state.canRetryPrimary} canRetryStop={stop.canRetry} gate={state.commands.gate}
       onCheck={() => { void (localOnly ? actions.cleanup() : actions.refresh()); }} onRetry={lane => { void actions.retry(lane); }} />}

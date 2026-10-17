@@ -165,6 +165,8 @@ export function LearningScreen({ state, language, submitOnEnter, actions, render
     </p>}
     {state.phase === "unknown" && !state.question && !unknownAnswer && !result && <p role="status">{t.unknown}</p>}
     {problem && !isClosed && <p role="status">{problem}</p>}
+    {/* 9.2.12 + Q30: the closure C's own budget ran out with the session open (documentLanes closureFailed). */}
+    {state.commands.closureFailed && <p role="status">{recoveryCopy[language].closeFailed}</p>}
     {showRecovery && <CommandRecovery className="learning-recovery" language={language} lanes={manualLanes} localOnly={localOnly}
       canRetryPrimary={state.canRetryPrimary} canRetryStop={stop.canRetry} gate={state.commands.gate}
       onCheck={() => { void (localOnly ? actions.cleanup() : actions.refresh()); }} onRetry={lane => { void actions.retry(lane); }} />}

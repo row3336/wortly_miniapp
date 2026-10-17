@@ -1,6 +1,7 @@
 import type { ConjugationSummary, ConjugationSummaryBlock } from "../api/generated";
 import type { Language } from "../i18n/language";
 import type { CloseReason } from "./conjugationDocumentController";
+import { NoticeShown } from "../notices/NoticeShown";
 
 export type ConjugationSummaryViewProps = {
   /** null = the frozen summary is not known (closed without a read); never shown as zeros. */
@@ -10,6 +11,10 @@ export type ConjugationSummaryViewProps = {
   language: Language;
   /** Today: summary_home in the summary phase, navigation only when closed; null = not allowed now. */
   onHome: (() => void) | null;
+  /** answer_loss of this closed session in the open window (project notices §6): its lines in place of the reason line. */
+  noticeLines?: string[] | null;
+  /** That notice's id, named once this summary is drawn (c.screen(notice_shown)). */
+  noticeId?: string | null;
 };
 
 // Working copy for G05: the owner fixes final wording. Grade words repeat the written result labels.
@@ -50,7 +55,7 @@ function BlockLabel({ block }: { block: ConjugationSummaryBlock }) {
 }
 
 /** М17 working presentation (T3B_PRESENTATION_HANDOFF §1 A/B/C): only server facts, grouped, never sorted or recomputed. */
-export function ConjugationSummaryView({ summary, closedReason, language, onHome }: ConjugationSummaryViewProps) {
+export function ConjugationSummaryView({ summary, closedReason, language, onHome, noticeLines, noticeId }: ConjugationSummaryViewProps) {
   const t = copy[language];
   // save_failed has no entry in t.reasons yet (owner question N4.4): it falls back to the generic closed text.
   const reasons: Partial<Record<CloseReason, string>> = t.reasons;
@@ -83,7 +88,10 @@ export function ConjugationSummaryView({ summary, closedReason, language, onHome
     </>;
   } else body = <p>{t.unavailable}</p>; // L0: indistinguishable from the synthetic zero, so nothing is claimed.
   return <section aria-label={t.title}>
-    {reason && <p role="status">{reason}</p>}
+    {noticeId && <NoticeShown noticeId={noticeId} />}
+    {noticeLines && noticeLines.length > 0
+      ? noticeLines.map((line, index) => <p key={index} role={index === 0 ? "status" : undefined}>{line}</p>)
+      : reason && <p role="status">{reason}</p>}
     <h2>{t.title}</h2>
     {body}
     <button type="button" className="learning-previous" disabled={!onHome} onClick={() => onHome?.()}>{t.home}</button>

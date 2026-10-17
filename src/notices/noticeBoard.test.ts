@@ -92,3 +92,20 @@ describe("NoticeBoard (project notices ed.2.4 §5, §6, §6.1)", () => {
     expect(board.find(id(202), "oral_forced_close")).toBeNull();
   });
 });
+
+describe("closureNotices: the modes' face of the board (QA M1b P3)", () => {
+  it("finds and acknowledges only the answer_loss of the asked session", async () => {
+    const { closureNotices } = await import("./noticeBoard");
+    const loss = (n: number, session: string): NoticeView => ({ ...view(n), session_id: session });
+    const forced: NoticeView = { ...view(3), kind: "oral_forced_close", mode: "oral", close_reason: "midnight", session_id: id(201) };
+    const remote = api(), board = new NoticeBoard({ api: remote, newId: () => id(9), access: access([loss(1, id(202)), forced]) });
+    const face = closureNotices(board);
+    expect(face.find(id(201))).toBeNull();
+    expect(face.find(id(202))?.notice_id).toBe(id(101));
+    expect(face.find(id(203))).toBeNull();
+    expect(await face.leave(id(201))).toBe(true);
+    expect(remote.ack).not.toHaveBeenCalled();
+    expect(await face.leave(id(202))).toBe(true);
+    expect(remote.ack).toHaveBeenCalledExactlyOnceWith("tok", "proof", id(101), { command_id: id(9), client_instance_id: id(1) });
+  });
+});

@@ -46,7 +46,7 @@ const endedStale = (h: ReturnType<typeof harness>, commandId: string) => h.onUpd
 });
 
 describe("the budget of one Learning action (Я15.5, Я15.6)", () => {
-  it("six lost answers: exactly six POSTs 2, 5, 10, 20, 30 s apart with one body, then nothing", async () => {
+  it("six lost answers: exactly six POSTs 2, 5, 10, 20, 30 s apart with one body, then only the closure C", async () => {
     const h = harness(); await h.view.refresh(); h.view.setDraft("Haus");
     h.route(request => request.kind === "answer.submit" ? "drop" : undefined);
     await h.view.submit(); await tick();
@@ -54,9 +54,11 @@ describe("the budget of one Learning action (Я15.5, Я15.6)", () => {
     const times = h.times("answer.submit");
     expect(times.map(at => at - times[0])).toEqual([0, 2000, 7000, 17000, 37000, 67000]);
     expect(new Set(h.sends("answer.submit").map(post => JSON.stringify(post))).size).toBe(1);
-    expect(h.recovery()).toMatchObject({ state: { name: "exhausted" }, sends: 6, transmitted: 6 });
-    expect(h.posts().map(post => post.kind)).toEqual(Array(6).fill("answer.submit"));
-    expect(h.view.snapshot()).toMatchObject({ phase: "unknown", canRetryPrimary: false, canStop: true });
+    // Since M1b (CP4b, CON §6.1 п.8): the spent budget closes the session by the closure C naming X (before, nothing).
+    expect(h.recovery()).toMatchObject({ state: { name: "terminated", reason: "session_closed" }, sends: 6, transmitted: 6 });
+    expect(h.posts().map(post => post.kind)).toEqual([...Array(6).fill("answer.submit"), "session.stop"]);
+    expect(h.posts().at(-1)!.payload).toEqual({ reason: "save_failed", unsaved_command_id: h.sends("answer.submit")[0].command_id });
+    expect(h.view.snapshot()).toMatchObject({ phase: "closed", canRetryPrimary: false });
   });
   it("a lost answer committed on the server is shown by its ID, with its timer from the confirmation, never sent again", async () => {
     const h = harness(); await h.view.refresh(); h.view.setDraft("Haus");
@@ -161,7 +163,7 @@ describe("the mark that a question was shown (assignment.present; owner answers 
       canSubmit: true, problem: null });
     expect(hasPending(h.values, primaryKey)).toBe(false);
   });
-  it("six lost presents: exactly six POSTs 2, 5, 10, 20, 30 s apart with one body, then nothing; B's answer is never sent", async () => {
+  it("six lost presents: exactly six POSTs 2, 5, 10, 20, 30 s apart with one body, then only the closure C; B's answer is never sent", async () => {
     const h = harness();
     h.route(request => request.kind === "assignment.present" ? "drop" : undefined);
     await showB(h); h.view.setDraft("Baum");
@@ -169,10 +171,12 @@ describe("the mark that a question was shown (assignment.present; owner answers 
     const times = h.times("assignment.present");
     expect(times.map(at => at - times[0])).toEqual([0, 2000, 7000, 17000, 37000, 67000]);
     expect(new Set(h.sends("assignment.present").map(post => JSON.stringify(post))).size).toBe(1);
-    expect(h.recovery()).toMatchObject({ state: { name: "exhausted" }, sends: 6, transmitted: 6 });
+    // Since M1b (CP4b, CON §6.1 п.8): the spent budget closes the session by the closure C naming X (before, nothing).
+    expect(h.recovery()).toMatchObject({ state: { name: "terminated", reason: "session_closed" }, sends: 6, transmitted: 6 });
     await h.view.submit();
-    expect(h.posts().map(post => post.kind)).toEqual(["answer.submit", ...Array(6).fill("assignment.present")]);
-    expect(h.view.snapshot()).toMatchObject({ phase: "visible_unconfirmed", canSubmit: false, canRetryPrimary: false, canStop: true });
+    expect(h.posts().map(post => post.kind)).toEqual(["answer.submit", ...Array(6).fill("assignment.present"), "session.stop"]);
+    expect(h.posts().at(-1)!.payload).toEqual({ reason: "save_failed", unsaved_command_id: h.sends("assignment.present")[0].command_id });
+    expect(h.view.snapshot()).toMatchObject({ phase: "closed", canSubmit: false, canRetryPrimary: false });
   });
 });
 

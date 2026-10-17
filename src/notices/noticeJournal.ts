@@ -1,21 +1,24 @@
 import type { ScreenEvent } from "../api/generated";
 import { journalRecord } from "../journal/clientJournal";
-import type { JournalEvent } from "../journal/events";
 
 /**
- * c.screen(notice_shown) (events ed.3.6.3 §4.5; project notices ed.2.4 §8): once the summary with a notice is shown, the
- * client names that notice — `notice`, `kind=notice_shown`. The intake of core a2c29f4 does not accept it yet: its
- * ScreenEvent has no kind notice_shown and no field notice (api/models.py). Until the core's types carry both, this seam
- * stays closed and records nothing (M1b, after the core's intake): the constant below stops compiling the moment the
- * generated contract gains the kind, so the seam cannot be forgotten open or shut.
+ * c.screen(notice_shown) (events ред.3.6.4 §4.5; project notices ed.2.4 §8): once the summary with a notice is shown, the
+ * client names that notice — `notice`, `kind=notice_shown`, no cmd, code or grade (core 35c3844 ScreenEvent). The
+ * guard below stays: it is true exactly while the generated contract carries the kind.
  */
 type NoticeShownAccepted = "notice_shown" extends ScreenEvent["kind"] ? true : false;
-// No cast here (C532): the day the generated kind appears, this assignment fails tsc with TS2322 and the seam must be opened.
-export const NOTICE_SHOWN_ACCEPTED: NoticeShownAccepted = false;
+export const NOTICE_SHOWN_ACCEPTED: NoticeShownAccepted = true;
 
-/** Called by the notice screen once per shown notice; a no-op while the seam is closed. */
+/** The notices this page already named: one c.screen(notice_shown) per notice and page. */
+const named = new Set<string>();
+
+/** Called once the summary with this notice is on screen (never before, never without a notice). */
 export function noticeShown(noticeId: string): void {
-  if (!NOTICE_SHOWN_ACCEPTED) return;
-  // M1b: events.ts must list kind notice_shown and the field notice before this record passes acceptedEvent.
-  journalRecord({ ev: "c.screen", kind: "notice_shown", notice: noticeId } as unknown as JournalEvent);
+  const id = noticeId.toLowerCase();
+  if (!NOTICE_SHOWN_ACCEPTED || named.has(id)) return;
+  named.add(id);
+  journalRecord({ ev: "c.screen", kind: "notice_shown", notice: id });
 }
+
+/** Tests only: forget what this page named. */
+export function resetNoticeShown(): void { named.clear(); }

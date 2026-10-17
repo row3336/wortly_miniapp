@@ -1,6 +1,7 @@
 import type { PresentCommand, SessionStartCommand, SessionStartPayload, SessionStopCommand } from "../api/generated";
 import { exactKeys, oneOf, record, uuid } from "../api/wireValidation";
-import { copySaveFailedStop, validSaveFailedStop, type SaveFailedStopIntent } from "../commands/closeIntent";
+import { copySaveFailedStop, copyStopPayload, stopHashPayload, validSaveFailedStop, validStopPayload,
+  type SaveFailedStopIntent } from "../commands/closeIntent";
 import { copyResultUndoIntent, validResultUndoIntent, type ResultUndoIntent } from "../commands/resultUndo";
 // The answer and grade envelopes are shared with Learning; only the session payloads are written-specific.
 import { copyLearningAnswerIntent, validLearningAnswerIntent, type LearningAnswerIntent } from "../learning/learningCommandIntent";
@@ -28,7 +29,8 @@ export function validWrittenSessionIntent(value: unknown): value is SendableSess
   switch (value.kind) {
     case "session.start": valid = exactKeys(value.payload, ["mode", "bucket"]) && value.payload.mode === "written"
       && oneOf(value.payload.bucket, ["words", "phrases"]); break;
-    case "session.stop": valid = exactKeys(value.payload, ["reason"]) && oneOf(value.payload.reason, ["stop", "summary_home"]); break;
+    // T1 (project notices §4.1): `{reason}` as before, or with the unconfirmed action X (stop optional, save_failed required).
+    case "session.stop": valid = validStopPayload(value.payload, value.command_id); break;
     case "assignment.present": keys.push("assignment_id"); valid = uuid(value.assignment_id) && exactKeys(value.payload, []); break;
   }
   return valid && exactKeys(value, keys);
@@ -62,7 +64,7 @@ export function copyWrittenIntent(value: WrittenIntent): WrittenIntent {
   const address = { command_id: value.command_id, session_id: value.session_id };
   switch (value.kind) {
     case "session.start": return { ...address, kind: value.kind, payload: { mode: "written", bucket: value.payload.bucket } };
-    case "session.stop": return { ...address, kind: value.kind, payload: { reason: value.payload.reason } };
+    case "session.stop": return { ...address, kind: value.kind, payload: copyStopPayload(value.payload as Parameters<typeof copyStopPayload>[0]) } as WrittenIntent;
     case "assignment.present": return { ...address, kind: value.kind, assignment_id: value.assignment_id, payload: {} };
   }
 }
@@ -81,8 +83,7 @@ export async function writtenIntentHash(value: WrittenIntent): Promise<string> {
   switch (intent.kind) {
     case "session.start": payload = { session_id: session, mode: intent.payload.mode, bucket: intent.payload.bucket }; break;
     // DS 2.1.6: the closure C adds the ID of its unsaved action to the fingerprint.
-    case "session.stop": payload = { session_id: session, reason: intent.payload.reason,
-      ...("unsaved_command_id" in intent.payload ? { unsaved_command_id: intent.payload.unsaved_command_id.toLowerCase() } : {}) }; break;
+    case "session.stop": payload = stopHashPayload(session, intent.payload as Parameters<typeof stopHashPayload>[1]); break;
     case "assignment.present": payload = { session_id: session, assignment_id: intent.assignment_id.toLowerCase() }; break;
     case "answer.submit": payload = { session_id: session, assignment_id: intent.assignment_id.toLowerCase(),
       payload: "text" in intent.payload ? { text: intent.payload.text } : { forgot: true } }; break;

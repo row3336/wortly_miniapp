@@ -23,7 +23,8 @@ const endButton = (name: string) => screen.getByRole("button", { name }) as HTML
 
 /** A reload with a saved answer whose receipt is missing: the count is unknown, only checks remain (CT §6.1 п. 4). */
 async function reloaded(language: Language = "ru", routeStop?: (call: Parameters<typeof fetch>) => Promise<Response> | undefined) {
-  const f = learningViewFixture(); owners.push(f.view); const intent = original();
+  // The saved answer of the page before has its own id (this fixture's newId counts from id(100) as well).
+  const f = learningViewFixture(); owners.push(f.view); const intent = original(undefined, 900);
   seedRaw(f.values, primaryKey, JSON.stringify(pending(intent)), id(50));
   f.fetcher.mockImplementation(async (url, init) => {
     if (init?.method === "GET" && String(url).includes(`/commands/${intent.command_id}`)) return response(missing(intent, "1"));
@@ -51,7 +52,8 @@ describe("Learning, an unknown count of sends", () => {
     expect(endButton("Завершить занятие").disabled).toBe(false);
     fireEvent.click(endButton("Завершить занятие"));
     await waitFor(() => expect(f.posts().map(post => post.kind)).toEqual(["session.stop"]));
-    expect(f.posts()[0].payload).toEqual({ reason: "stop" });
+    // T1 (project notices §4.1, core 35c3844): the person's Stop names the unconfirmed answer X; before M1b it was {reason: "stop"}.
+    expect(f.posts()[0].payload).toEqual({ reason: "stop", unsaved_command_id: id(900) });
     expect(f.view.snapshot().phase).not.toBe("closed");
     expect(endButton("Завершить занятие").disabled).toBe(true);
     fireEvent.click(endButton("Завершить занятие"));

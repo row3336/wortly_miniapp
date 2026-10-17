@@ -607,6 +607,8 @@ export abstract class CommandLane<S extends LaneSpec, O extends LaneOptions<S> =
     // Open question В-2 (D-STALE-WINDOW 5, Codex C093 п. 5): the record names no document, so a record kept after
     // DOCUMENT_STALE that another document loaded can be sent from here with that document's id after a manual retry, as a
     // record after a reload already is. CT §6.1 п. 5 asks for the same working document; no transfer is added here.
+    // The closure C goes out like every intent of this lane; its own budget and its manual retry are the document's
+    // (documentLanes closureRecovery, CON §6.1 п.8, Q30 of 08.10).
     if (!pending || !this.live() || !sendableIntent(pending.intent)) return;
     if (retry && (!this.retryVerified || !this.retryFresh())) return;
     this.phase = "sending"; this.problem = null; this.retryVerified = false; this.clearCurrent(); this.emit();

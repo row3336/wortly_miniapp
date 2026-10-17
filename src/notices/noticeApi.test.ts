@@ -178,10 +178,11 @@ describe("NOTICE_PENDING (§6.1): the same lane state from the reply and from th
   });
 });
 
-describe("c.screen(notice_shown): the seam stays closed until the core's intake accepts it (M1b)", () => {
-  it("core a2c29f4 has no kind notice_shown: nothing is recorded", () => {
-    expect(NOTICE_SHOWN_ACCEPTED).toBe(false);
-    noticeShown(id(101));
-    expect(vi.mocked(journalRecord)).not.toHaveBeenCalled();
+// M1a kept this seam closed (core a2c29f4 had no kind notice_shown); core 35c3844 accepts it, so M1b opens it.
+describe("c.screen(notice_shown): open since core 35c3844 (M1b)", () => {
+  it("records the shown notice once per page, with the notice only", () => {
+    expect(NOTICE_SHOWN_ACCEPTED).toBe(true);
+    noticeShown(id(101).toUpperCase()); noticeShown(id(101));
+    expect(vi.mocked(journalRecord).mock.calls).toEqual([[{ ev: "c.screen", kind: "notice_shown", notice: id(101) }]]);
   });
 });

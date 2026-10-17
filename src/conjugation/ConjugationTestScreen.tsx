@@ -16,6 +16,8 @@ export type ConjugationTestScreenProps = {
   flow: ConjugationTestFlow;
   language: Language;
   submitOnEnter: boolean;
+  /** answer_loss of the closed session (project notices §6), set by the host: its lines and its «На Сегодня». */
+  closureNotice?: { lines: string[] | null; leaving: boolean; home(): void; noticeId?: string | null } | null;
 };
 
 // Working copy for G05, except the loading line (Б4.3.3 / Б4.3.4): wording approved by the owner (R10, 08.10.2026); display conditions follow TA.
@@ -85,7 +87,7 @@ function QuestionPanel({ view, flow, language, submitOnEnter, status }: {
 }
 
 /** Renderer of the conjugation test view. Rights and memory stay in the flow; every action goes through it. */
-export function ConjugationTestScreen({ view, flow, language, submitOnEnter }: ConjugationTestScreenProps) {
+export function ConjugationTestScreen({ view, flow, language, submitOnEnter, closureNotice }: ConjugationTestScreenProps) {
   const t = copy[language], root = useRef<HTMLElement>(null), composing = useRef(false);
 
   useEffect(() => {
@@ -164,7 +166,8 @@ export function ConjugationTestScreen({ view, flow, language, submitOnEnter }: C
     {/* A refusal or failure while studying reaches the person (recovery and stale render their own). */}
     {problem && (view.screen === "question" || view.screen === "result" || view.screen === "summary") && <p role="status">{problem}</p>}
     {view.screen === "closed" && <>
-      <ConjugationSummaryView summary={view.summary} closedReason={view.reason} language={language} onHome={() => flow.today()} />
+      <ConjugationSummaryView summary={view.summary} closedReason={view.reason} language={language}
+        noticeLines={closureNotice?.lines} noticeId={closureNotice?.noticeId} onHome={closureNotice ? closureNotice.leaving ? null : closureNotice.home : () => flow.today()} />
       {/* T2 C2: the only way to learn an unknown frozen summary is this manual addressed read. */}
       {view.summary === null && <div className="learning-recovery">
         <button type="button" onClick={() => flow.refresh()}>{t.refreshSummary}</button></div>}

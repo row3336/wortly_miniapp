@@ -8,6 +8,7 @@ import { createOralApi, type OralRead } from "./oralApi";
 import { OralCommandController, type OralCommandSnapshot, type OralTransition } from "./oralCommandController";
 import type { OralCommandLane, OralSessionPendingStore, OralStopPendingStore } from "./oralPending";
 import { lostAddress } from "../commands/lostEnvelope";
+import { unsavedActionId } from "../commands/closeIntent";
 
 type AccessCredentials = Parameters<Parameters<OpenedAccess["run"]>[0]>[0];
 
@@ -37,6 +38,8 @@ export type OralDocumentSnapshot = {
   /** The write gate of the manual controls (C335; M-P03-10): «Проверить» and the resends wait for it, visibly. */
   gate?: LaneGate;
   closed: OralClosed | null;
+  /** Sessions this owner closed by a Stop naming X (T1): only their summary reads GET /notices for answer_loss (Т2). */
+  unsavedClosures?: readonly string[];
   /**
    * The own session the server proved open in another pair (a read or a reply not below the floor): a fact about the
    * session, not a failed update, so it is never the shown problem (C149, C178; as StudyViewFields). null when nothing
@@ -107,6 +110,7 @@ export class OralDocumentController {
   private shownPending = false;
   private stopRight: { sessionId: string; version: string; stop: boolean; home: boolean } | null = null;
   private closedFacts: OralClosed | null = null;
+  private readonly unsavedClosures = new Set<string>();
   private priorClosure: { sessionId: string; reason: NonNullable<OralClosed["reason"]> } | null = null;
   private readonly slotBlocked: Record<OralCommandLane, boolean> = { study: false, stop: false };
 
@@ -344,7 +348,8 @@ export class OralDocumentController {
         ? this.mismatch : null,
       ...(live && this.foregroundBlocked && phase === "loading" ? { suspended: true as const } : {}),
       ...(checkedAbsent ? { checkedAbsent: true as const } : {}),
-      ...(live && !this.sessionId && this.priorClosure ? { priorClosure: { ...this.priorClosure } } : {}) };
+      ...(live && !this.sessionId && this.priorClosure ? { priorClosure: { ...this.priorClosure } } : {}),
+      ...(live && this.unsavedClosures.size ? { unsavedClosures: [...this.unsavedClosures] } : {}) };
   }
   private closedSnapshot(sessionId: string): OralClosed {
     const facts = this.closedFacts && sameId(this.closedFacts.sessionId, sessionId) ? this.closedFacts : null;
@@ -501,8 +506,12 @@ export class OralDocumentController {
   stop(reason: "stop" | "summary_home"): Promise<void> {
     if (reason !== "stop" && reason !== "summary_home") throw new Error("oral stop reason required");
     const snapshot = this.snapshot();
+    // T1 (project notices §4.1): the person's Stop names the unconfirmed study action X of this session, if any.
+    const unsaved = reason === "stop" ? unsavedActionId(this.commands.study.snapshot(), snapshot.sessionId) : null;
+    if (unsaved && snapshot.sessionId && snapshot.canStop) this.unsavedClosures.add(snapshot.sessionId.toLowerCase());
     return (reason === "stop" ? snapshot.canStop : snapshot.canSummaryHome)
-      ? this.begin("stop", { kind: "session.stop", session_id: snapshot.sessionId!, payload: { reason } }) : Promise.resolve();
+      ? this.begin("stop", { kind: "session.stop", session_id: snapshot.sessionId!,
+        payload: unsaved ? { reason: "stop", unsaved_command_id: unsaved } : { reason } }) : Promise.resolve();
   }
   async retry(lane: OralCommandLane): Promise<void> {
     if (lane !== "study" && lane !== "stop") throw new Error("invalid oral lane");

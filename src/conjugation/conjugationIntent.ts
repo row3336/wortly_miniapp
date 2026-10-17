@@ -2,6 +2,7 @@ import type { AnswerSubmitCommand, ConjugationScheduleCommand, ConjugationStartP
   PresentCommand, ResultCorrectCommand, ResultGradeCommand, SessionStartCommand, SessionStopCommand } from "../api/generated";
 import { exactKeys, oneOf, record, uuid, version } from "../api/wireValidation";
 import { intentHash } from "../commands/intentHash";
+import { copyStopPayload, stopHashPayload, validStopPayload, type StopPayload } from "../commands/closeIntent";
 import type { ResultUndoIntent } from "../commands/resultUndo";
 
 type WithoutOrigin<T> = T extends unknown ? Omit<T, "client_instance_id" | "document_id"> : never;
@@ -32,8 +33,8 @@ export function validConjugationIntent(value: unknown): value is ConjugationInte
     case "session.start":
       return exactKeys(value, keys) && exactKeys(value.payload, ["mode"]) && value.payload.mode === "conjugation";
     case "session.stop":
-      return exactKeys(value, keys) && exactKeys(value.payload, ["reason"])
-        && oneOf(value.payload.reason, ["stop", "summary_home"]);
+      // T1 (project notices §4.1): `{reason}` as before, or the person's Stop naming the unconfirmed action X.
+      return exactKeys(value, keys) && validStopPayload(value.payload, value.command_id) && value.payload.reason !== "save_failed";
     case "assignment.present": case "answer.submit":
       keys.push("assignment_id");
       if (!uuid(value.assignment_id) || !exactKeys(value, keys)) return false;
@@ -52,7 +53,8 @@ export function validConjugationIntent(value: unknown): value is ConjugationInte
 
 export function copyConjugationIntent(value: ConjugationIntent): ConjugationIntent {
   if (!validConjugationIntent(value)) throw new Error("invalid conjugation intent");
-  // Every permitted payload is flat and scalar. Copy before any asynchronous exchange.
+  // Every permitted payload is flat and scalar. Copy before any asynchronous exchange; a Stop keeps X only when named.
+  if (value.kind === "session.stop") return { ...value, payload: copyStopPayload(value.payload as StopPayload) } as ConjugationIntent;
   return { ...value, payload: { ...value.payload } } as ConjugationIntent;
 }
 
@@ -65,7 +67,8 @@ export async function conjugationIntentHash(value: ConjugationIntent): Promise<s
   } else {
     payload = { session_id: intent.session_id.toLowerCase() };
     switch (intent.kind) {
-      case "session.start": case "session.stop": Object.assign(payload, intent.payload); break;
+      case "session.start": Object.assign(payload, intent.payload); break;
+      case "session.stop": Object.assign(payload, stopHashPayload(intent.session_id, intent.payload as StopPayload)); break;
       case "assignment.present": payload.assignment_id = intent.assignment_id.toLowerCase(); break;
       case "answer.submit":
         Object.assign(payload, { assignment_id: intent.assignment_id.toLowerCase(), payload: intent.payload }); break;

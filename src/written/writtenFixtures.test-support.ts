@@ -76,6 +76,8 @@ export function writtenServer(options: ServerOptions = {}) {
     latest: null as string | null, epoch: 1,
   };
   const results = new Map<string, Stored>(), receipts = new Map<string, Receipt>();
+  /** The notices answer_loss this synthetic core wrote (session, X, the closing reason). */
+  const lostAnswers: { sessionId: string | null; commandId: string; reason: string }[] = [];
   /** Results whose revision rights another context ended (e.g. a manual interval, К05-057). */
   const revoked = new Set<string>();
   const grade = options.grade ?? ((text: string | null) => text === "Haus" ? 4 : 2);
@@ -156,9 +158,14 @@ export function writtenServer(options: ServerOptions = {}) {
       return { status: 200, body: { command: fact(intent), current: projection(), state_version: String(state.version) } };
     }
     if (intent.kind === "session.stop") {
+      // core study/session_stop.py (35c3844, N2/N3): X with a fact — the automatic closure C is refused ACTION_ALREADY_SAVED
+      // and closes nothing, a Stop closes without a notice; X without a fact — the closure writes the notice answer_loss.
+      const unsaved = "unsaved_command_id" in intent.payload ? intent.payload.unsaved_command_id as string : null;
+      const saved = unsaved !== null && receipts.has(unsaved);
+      if (saved && intent.payload.reason === "save_failed") return refuse(intent, "ACTION_ALREADY_SAVED");
       if (state.status === "closed") return refuse(intent, "SESSION_CLOSED");
-      // This synthetic core is R1/R2a: it never applies the closure C (save_failed), whose record the client only reads.
-      state.status = "closed"; state.closeReason = intent.payload.reason as "stop" | "summary_home"; state.assignment = null; state.version++;
+      if (unsaved !== null && !saved) lostAnswers.push({ sessionId: state.sessionId, commandId: unsaved, reason: intent.payload.reason });
+      state.status = "closed"; state.closeReason = intent.payload.reason as "stop" | "summary_home" | "save_failed"; state.assignment = null; state.version++;
       return { status: 200, body: { command: fact(intent), current: projection(), state_version: String(state.version) } };
     }
     if (intent.kind === "answer.submit") {
@@ -258,7 +265,7 @@ export function writtenServer(options: ServerOptions = {}) {
   const revokeRights = (resultId: string) => { revoked.add(resultId); state.version++; };
   /** A new document of the same installation (a restart): the undo right of earlier answers ends (К05-074). */
   const newDocument = () => { state.epoch++; state.version++; };
-  return { state, results, receipts, handle, step, projection, view, revokeRights, newDocument };
+  return { state, results, receipts, lostAnswers, handle, step, projection, view, revokeRights, newDocument };
 }
 
 /** Real access, storage and transport around one synthetic server. */

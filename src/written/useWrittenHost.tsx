@@ -11,6 +11,8 @@ import type { SettingsDocument } from "../settings/useSettingsDocument";
 import { useWrittenDocument, type WrittenActions } from "./useWrittenDocument";
 import { WrittenScreen } from "./WrittenScreen";
 import { noticePendingStart, useNoticePendingSignal } from "../notices/noticePending";
+import type { ClosureNotices } from "../notices/noticeBoard";
+import { useClosureNotice } from "../notices/useClosureNotice";
 
 export type WrittenHostOptions = {
   access: OpenedAccess;
@@ -44,6 +46,8 @@ export type WrittenHostOptions = {
    * reads GET /notices and shows it; the owner sends nothing more for that start (no new ID, no POST).
    */
   onNoticePending?(): void;
+  /** answer_loss of a session this owner closed with X or by the closure C (project notices §6; Т2). */
+  closureNotices?: ClosureNotices;
 };
 /**
  * An accepted card study action of a card opened from this quiz (M-ACTIONS cardActionsController), or its manual interval
@@ -185,6 +189,9 @@ export function useWrittenHost(options: WrittenHostOptions): WrittenHost {
     }
   }, [bound, state, route, claim, lanesPending, ownSummary]);
 
+  const closure = useClosureNotice({ notices: options.closureNotices, closed: state?.phase === "closed" ? state.closed : null,
+    unsavedClosures: state?.commands.unsavedClosures, language: options.language, visible: route === "written" });
+  const closureRef = useRef(closure); closureRef.current = closure;
   const startedElsewhere = state && state.phase !== "disposed" ? acceptedForeignStart(state.commands.primary, state) : null;
   useEffect(() => { if (startedElsewhere !== null) latest.current.onForeignStart?.(startedElsewhere); }, [startedElsewhere]);
   useNoticePendingSignal(state && state.phase !== "disposed" ? noticePendingStart(state.commands.primary) : null,
@@ -220,6 +227,7 @@ export function useWrittenHost(options: WrittenHostOptions): WrittenHost {
     if (state.canSummaryHome) back = () => { void actions.stop("summary_home"); };
     else if (state.canStop) back = () => { void actions.stop("stop"); };
     else if (awaitingStop) back = () => {};
+    else if (ownSummary && closureRef.current.notice) back = () => { closureRef.current.leave(() => { void latest.current.onToday(); }); };
     else if (ownSummary || state.phase === "idle" && !lanesPending) back = () => { void latest.current.onToday(); };
   }
   useBackLayer("screen", back);
@@ -259,6 +267,10 @@ export function useWrittenHost(options: WrittenHostOptions): WrittenHost {
       <button type="button" onClick={() => { void options.settings.actions.refresh(); }}>{t.refresh}</button>
       <button type="button" onClick={() => { void latest.current.onToday(); }}>{t.today}</button>
     </section> : state ? <WrittenScreen state={state} language={options.language} submitOnEnter actions={screenActions}
-      onToday={intent => { void latest.current.onToday(intent); }} onRefineFields={openCard} /> : null,
+      // The summary's «На Сегодня» acknowledges its answer_loss first (§5: only after the press; a failed ack keeps it).
+      onToday={intent => { if (intent === undefined && closure.notice) closure.leave(() => { void latest.current.onToday(); });
+        else void latest.current.onToday(intent); }}
+      onRefineFields={openCard} noticeLines={closure.lines} noticeLeaving={closure.leaving}
+      noticeId={closure.notice?.notice_id ?? null} /> : null,
   };
 }

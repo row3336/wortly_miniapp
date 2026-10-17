@@ -29,6 +29,8 @@ async function closedWhileChecking(check: Check) {
     const method = init?.method ?? "GET", path = new URL(String(url), "http://localhost").pathname;
     const kind = method === "POST" ? JSON.parse(String(init!.body)).kind as string : null;
     if (kind === "answer.submit") throw new TypeError("network");
+    // CP4b: the automatic closure C follows the spent budget; from it on the checks of X meet `check`.
+    if (kind === "session.stop") checks = check;
     if (checks && method === "GET" && path.startsWith("/api/v1/commands/")) {
       if (checks === "drop") throw new TypeError("network");
       if (checks === "hang") return new Promise<Response>(() => {});
@@ -42,11 +44,14 @@ async function closedWhileChecking(check: Check) {
     return f.handler(url, init);
   });
   await f.view.refresh(); f.view.setDraft("Haus"); void f.view.submit(); await tick();
-  // Six lost sends: the budget is spent, the answer stays unknown.
+  // Six lost sends: the budget is spent; since M1b (CP4b, CON §6.1 п.8) the document closes the session itself with the
+  // closure C naming X — before, the person's Stop closed it here.
   for (let spent = 0; spent < 70_000; spent += 1000) await tick(1000);
-  checks = check;
-  expect(f.view.snapshot().commands.recovery?.state.name).toBe("exhausted");
-  await f.view.stop(); await tick(); await tick(1000);
+  await tick(); await tick(1000);
+  const close = f.posts().filter(post => post.kind === "session.stop");
+  // X is the spent answer itself (QA M1b P3).
+  expect(close.map(post => post.payload)).toEqual([{ reason: "save_failed",
+    unsaved_command_id: f.posts().find(post => post.kind === "answer.submit")!.command_id }]);
   expect(f.view.snapshot()).toMatchObject({ phase: "closed", commands: { closedAction: { state: "checking" } } });
   render(<LearningScreen state={f.view.snapshot()} actions={f.view} language="ru" submitOnEnter renderPreview={() => null} />);
   expect(document.querySelector(".learning-closed-check .wortly-loader")).toBeTruthy();

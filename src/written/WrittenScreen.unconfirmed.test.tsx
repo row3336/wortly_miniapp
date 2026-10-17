@@ -51,7 +51,8 @@ describe("the written quiz, an unknown count of sends", () => {
     expect(end().disabled).toBe(false);
     fireEvent.click(end()); await h.step();
     expect(h.posts().map(post => post.kind)).toEqual(["session.stop"]);
-    expect(h.posts()[0].payload).toEqual({ reason: "stop" });
+    // T1 (project notices §4.1, core 35c3844): the person's Stop names the unconfirmed answer X; before M1b it was {reason: "stop"}.
+    expect(h.posts()[0].payload).toEqual({ reason: "stop", unsaved_command_id: id(400) });
     expect(end().disabled).toBe(true);
     fireEvent.click(end()); await h.step();
     expect(h.posts()).toHaveLength(1);

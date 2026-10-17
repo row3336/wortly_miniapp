@@ -1,4 +1,4 @@
-import { StrictMode, useState } from "react";
+import { StrictMode, useReducer, useState } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SettingsResponse } from "../api/generated";
@@ -14,6 +14,7 @@ import { ConjugationTestFlow } from "../conjugation/conjugationTestFlow";
 import { createOpenedAccess, type OpenedAccess } from "./openedAccess";
 import { testGate } from "../commands/testGate.test-support";
 import { hasPending, seedRaw } from "../commands/pendingSeed.test-support";
+import type { ClosureNotices } from "../notices/noticeBoard";
 
 const S1 = id(3), studyKey = "wortly.pending.conjugation_session";
 const response = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status });
@@ -30,7 +31,8 @@ function fakeBack() {
 const active = (over: Partial<ModelSession> = {}): ModelSession => ({ id: S1, status: "active", assignment: FORMS[0], presented: true, results: [], ...over });
 
 type Options = { sessions?: ModelSession[]; seed?: boolean; route?: ConjugationHostOptions["route"]; holdRoute?: boolean;
-  seedPending?: boolean; strict?: boolean; settings?: (data: SettingsResponse) => void; holdSettings?: boolean; saved?: ConjugationIntent };
+  seedPending?: boolean; strict?: boolean; settings?: (data: SettingsResponse) => void; holdSettings?: boolean; saved?: ConjugationIntent;
+  closureNotices?: ClosureNotices & { changed?: () => void } };
 /** The host over a synthetic server model for one profile; it makes no claim of backend acceptance. */
 function setup(options: Options = {}) {
   const model = conjugationServer({ sessions: options.sessions, version: "10" });
@@ -74,11 +76,13 @@ function setup(options: Options = {}) {
     if (++renders > 500) throw new Error("render storm: the host does not settle");
     const [route, update] = useState<ConjugationHostOptions["route"]>(options.route ?? (seed ? "conjugation" : "today")); setRoute = update;
     const [access, replace] = useState(() => opened(1)); setAccess = replace;
+    const [, repaintBoard] = useReducer((n: number) => n + 1, 0);
+    if (options.closureNotices) options.closureNotices.changed = repaintBoard;
     const settings = useSettingsDocument({ access, transport, pendingStore: settingsStore, onCurrent() {} });
     const value = useConjugationHost({ access, transport, stores, newId: model.newId, language: "ru", settings,
       initialSessionId: seed, seedPending: options.seedPending ?? false, route,
       onConjugation: () => { onConjugation(); if (!options.holdRoute) update("conjugation"); },
-      onToday: intent => { onToday(intent); update("today"); }, onNoticePending });
+      onToday: intent => { onToday(intent); update("today"); }, onNoticePending, closureNotices: options.closureNotices });
     host.current = value;
     return <>{value.screen}{route === "today" && <p data-testid="today">{value.blocksToday ? "held" : "shown"}</p>}</>;
   }
@@ -143,6 +147,34 @@ describe.each([["StrictMode", true], ["plain render", false]])("useConjugationHo
     expect(h.stops().map(stop => stop.payload)).toEqual([{ reason: "stop" }]);
     await h.back.click();
     await macrotasks();
+    expect(h.onToday).toHaveBeenCalledOnce(); expect(h.stops()).toHaveLength(1);
+  });
+
+  // answer_loss in the open window (project notices §6, Т2; T1): the person's Stop names the unconfirmed answer X; the closed
+  // summary shows R2-05 from the notice; its Back acknowledges first, then the flow's way to Today.
+  it("S4n the own Stop while the answer is unconfirmed names X; the closed summary shows R2-05 and acknowledges before Today", async () => {
+    const notice = { notice_id: id(101), kind: "answer_loss" as const, session_id: S1, mode: "conjugation" as const,
+      close_reason: "stop" as const, defect_class: null, created_at: "2026-10-07T00:00:01Z", summary: null };
+    const board = { known: false, changed: undefined as undefined | (() => void),
+      read: vi.fn(() => { board.known = true; queueMicrotask(() => board.changed?.()); }),
+      find: vi.fn((sessionId: string) => board.known && sessionId.toLowerCase() === S1.toLowerCase() ? notice : null),
+      leave: vi.fn(async () => true) };
+    const h = setup({ seed: true, strict, sessions: [active()], closureNotices: board });
+    fireEvent.change(await editable(), { target: { value: "komm" } });
+    h.model.server.loseNextPost = true;
+    fireEvent.click(screen.getByRole("button", { name: "Проверить" }));
+    await waitFor(() => expect(h.model.posted.some(post => post.kind === "answer.submit")).toBe(true));
+    const x = h.model.posted.find(post => post.kind === "answer.submit")!.command_id;
+    await waitFor(() => expect((screen.getByRole("button", { name: "Завершить" }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "Завершить" }));
+    await screen.findByText("Последний ответ не сохранился. Остальные ответы сохранены.");
+    expect(h.stops().map(stop => stop.payload)).toEqual([{ reason: "stop", unsaved_command_id: x }]);
+    expect(board.read).toHaveBeenCalledOnce();
+    await macrotasks();
+    expect(h.onToday).not.toHaveBeenCalled();
+    await h.back.click();
+    await macrotasks();
+    expect(board.leave).toHaveBeenCalledOnce();
     expect(h.onToday).toHaveBeenCalledOnce(); expect(h.stops()).toHaveLength(1);
   });
 

@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useReducer, useState } from "react";
+import type { ClosureNotices } from "../notices/noticeBoard";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenedClient, OralSessionProjection, SettingsResponse } from "../api/generated";
@@ -49,7 +50,7 @@ function fakeBack() {
 
 type Options = { step?: Step | null; completed?: number; reason?: Reason; seed?: boolean; saved?: OralIntent; reject?: string;
   route?: OralHostOptions["route"]; holdRoute?: boolean; settings?: (data: SettingsResponse) => void; holdStop?: boolean;
-  openCard?: boolean };
+  openCard?: boolean; closureNotices?: ClosureNotices & { changed?: () => void } };
 /** A synthetic server model for one profile; it makes no claim of backend acceptance. */
 function setup(options: Options = {}) {
   let counter = 100, version = 8n;
@@ -106,8 +107,10 @@ function setup(options: Options = {}) {
   function Harness() {
     const [route, update] = useState<OralHostOptions["route"]>(options.route ?? (seed ? "oral" : "today")); setRoute = update;
     const settings = useSettingsDocument({ access, transport, pendingStore: settingsStore, onCurrent() {} });
+    const [, repaintBoard] = useReducer((n: number) => n + 1, 0);
+    if (options.closureNotices) options.closureNotices.changed = repaintBoard;
     const value = useOralHost({ access, transport, stores, newId: () => id(counter++), language: "ru", settings,
-      initialSessionId: seed, seedPending: false, route,
+      initialSessionId: seed, seedPending: false, route, closureNotices: options.closureNotices,
       onOral: () => { onOral(); if (!options.holdRoute) update("oral"); }, onToday: intent => { onToday(intent); update("today"); },
       onOpenCard: options.openCard ? onOpenCard : undefined });
     host.current = value;
@@ -187,6 +190,26 @@ describe("useOralHost: start, routing and Today", () => {
     expect(h.onOral).toHaveBeenCalledOnce();
     expect(h.posts).toEqual([]); expect(h.onToday).not.toHaveBeenCalled();
     expect(JSON.parse(pendingRaw(h.values, studyKey)!).intent.command_id).toBe(id(90));
+  });
+
+  // answer_loss in the open window (project notices §6, Т2; T1): the own Stop names the unconfirmed grade X; its summary
+  // shows R2-05 from the notice and «На Сегодня» acknowledges before Today.
+  it("O5n the own Stop while a grade is unconfirmed names X; the summary shows R2-05; «На Сегодня» acknowledges first", async () => {
+    const saved: OralIntent = { command_id: id(90), session_id: id(3), assignment_id: id(6), kind: "oral.grade", payload: { correct: true } };
+    const notice = { notice_id: id(101), kind: "answer_loss" as const, session_id: id(3), mode: "oral" as const, close_reason: "stop" as const,
+      defect_class: null, created_at: "2026-10-07T00:00:01Z", summary: null };
+    const board = { known: false, changed: undefined as undefined | (() => void),
+      read: vi.fn(() => { board.known = true; queueMicrotask(() => board.changed?.()); }),
+      find: vi.fn((sessionId: string) => board.known && sessionId.toLowerCase() === id(3) ? notice : null), leave: vi.fn(async () => true) };
+    const h = setup({ saved, seed: true, step: "revealed", closureNotices: board });
+    await waitFor(() => expect(button("Выйти").disabled).toBe(false), { timeout: 5000 });
+    fireEvent.click(button("Выйти"));
+    await screen.findByText("Последний ответ не сохранился. Остальные ответы сохранены.", undefined, { timeout: 5000 });
+    expect(h.posts.filter(post => post.kind === "session.stop").map(post => post.payload)).toEqual([{ reason: "stop", unsaved_command_id: id(90) }]);
+    expect(board.read).toHaveBeenCalledOnce();
+    expect(h.onToday).not.toHaveBeenCalled();
+    fireEvent.click(button("На Сегодня")); await settled();
+    expect(board.leave).toHaveBeenCalledOnce(); expect(h.onToday).toHaveBeenCalledOnce();
   });
 
   // Q29 (fix5): the refusal stays on the oral screen until the person leaves it; its «На Сегодня» names the refused start

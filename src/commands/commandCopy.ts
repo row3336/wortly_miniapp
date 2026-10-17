@@ -21,6 +21,8 @@ export const commandCopy = {
  * conflict: the same command_id carries another payload (Я17, CT §6.1 п. 10); its action is the screen's own «Выйти».
  * lost (Q27, C458): the answer's text is gone from this device and the server does not hold its ID — it is never sent
  * again; its action is the screen's own «Выйти». WORKING TEXT, pending owner approval.
+ * closeFailed: 9.2.12 of the catalogue R10 (questions/answers_claude_round2_20261008.md:194; approval :38, :117; TZA :234) —
+ * the closure C's own budget ran out with the session open; its action is «Повторить завершение» (commandCopy.retryStop, Q30).
  */
 export const recoveryCopy = {
   ru: { checking: "Проверяем, сохранилось ли действие…", offline: "Нет связи с сервером. Ждём, когда связь восстановится…",
@@ -29,21 +31,24 @@ export const recoveryCopy = {
     unconfirmed: "Не удалось подтвердить последнее действие. Мы продолжаем проверять. Можно завершить занятие.",
     endSession: "Завершить занятие",
     conflict: "Не удалось подтвердить это действие. Повторить его нельзя. Заверши занятие, чтобы продолжить.",
-    lost: "Последний ответ не сохранился на этом устройстве и не дошёл до сервера. Повторить его нельзя. Заверши занятие, чтобы продолжить." },
+    lost: "Последний ответ не сохранился на этом устройстве и не дошёл до сервера. Повторить его нельзя. Заверши занятие, чтобы продолжить.",
+    closeFailed: "Не удалось завершить занятие." },
   uk: { checking: "Перевіряємо, чи збереглася дія…", offline: "Немає зв’язку з сервером. Чекаємо на відновлення зв’язку…",
     resending: "Надсилаємо дію повторно…", maintenance: "Триває планове оновлення. Зачекай, ми продовжимо самі.",
     unsaved: "Не вдалося зберегти останню дію. Зв’язок відновлено.",
     unconfirmed: "Не вдалося підтвердити останню дію. Ми продовжуємо перевіряти. Можна завершити заняття.",
     endSession: "Завершити заняття",
     conflict: "Не вдалося підтвердити цю дію. Повторити її не можна. Заверши заняття, щоб продовжити.",
-    lost: "Остання відповідь не збереглася на цьому пристрої й не дійшла до сервера. Повторити її не можна. Заверши заняття, щоб продовжити." },
+    lost: "Остання відповідь не збереглася на цьому пристрої й не дійшла до сервера. Повторити її не можна. Заверши заняття, щоб продовжити.",
+    closeFailed: "Не вдалося завершити заняття." },
   en: { checking: "Checking whether your action was saved…", offline: "No connection to the server. Waiting for the connection to come back…",
     resending: "Sending your action again…", maintenance: "A planned update is in progress. Please wait, we'll continue automatically.",
     unsaved: "We couldn't save your last action. The connection is back.",
     unconfirmed: "We couldn't confirm your last action. We keep checking. You can end the session.",
     endSession: "End session",
     conflict: "We couldn't confirm this action. It can't be repeated. End the session to continue.",
-    lost: "Your last answer wasn't saved on this device and didn't reach the server. It can't be repeated. End the session to continue." },
+    lost: "Your last answer wasn't saved on this device and didn't reach the server. It can't be repeated. End the session to continue.",
+    closeFailed: "Couldn't end the session." },
 } as const;
 
 /**

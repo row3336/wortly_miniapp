@@ -2,6 +2,7 @@ import type { WrittenSummary as Summary } from "../api/generated";
 import { StepBackButton } from "../commands/StepBackButton";
 import type { Language } from "../i18n/language";
 import type { WrittenClosed } from "./writtenViewController";
+import { NoticeShown } from "../notices/NoticeShown";
 
 export type WrittenSummaryProps = {
   summary: Summary;
@@ -17,6 +18,13 @@ export type WrittenSummaryProps = {
   onToday(): void;
   /** Present only while the server grants «Шаг назад» on the summary of an open session (RA Д02, К10-127). */
   onUndo?(): void;
+  /**
+   * answer_loss of this closed session in the open window (project notices §6): its lines (9.2.7 / R2-05) stand in place
+   * of the closed status and reason lines.
+   */
+  noticeLines?: string[] | null;
+  /** The notice whose lines these are: named in c.screen(notice_shown) once drawn. */
+  noticeId?: string | null;
 };
 const copy = {
   ru: { title: "Итог занятия", completed: "Занятие завершено.", interrupted: "Занятие прервано.", done: "Пройдено", right: "Верно",
@@ -43,14 +51,19 @@ const reasons: Record<Language, Partial<Record<ShownReason, string>> & { unknown
 const locales = { ru: "ru-RU", uk: "uk-UA", en: "en-US" } as const;
 
 /** Д02 renders only confirmed server numbers: no answers is «—», never 0 % (В06.3); drills never add cards. */
-export function WrittenSummary({ summary, outcome, language, closedReason, canToday, onToday, onUndo }: WrittenSummaryProps) {
+export function WrittenSummary({ summary, outcome, language, closedReason, canToday, onToday, onUndo, noticeLines, noticeId }: WrittenSummaryProps) {
   const t = copy[language], ratio = summary.ratio;
   const percent = ratio === null || ratio.denominator === 0 ? "—"
     : new Intl.NumberFormat(locales[language], { style: "percent", maximumFractionDigits: 0 }).format(ratio.numerator / ratio.denominator);
   return <section className="written-summary" aria-label={t.title}>
     <h2>{t.title}</h2>
-    <p role="status">{outcome === "completed" ? t.completed : t.interrupted}</p>
-    {closedReason !== undefined && <p>{(closedReason === null ? undefined : reasons[language][closedReason]) ?? reasons[language].unknown}</p>}
+    {noticeId && <NoticeShown noticeId={noticeId} />}
+    {noticeLines && noticeLines.length > 0
+      ? noticeLines.map((line, index) => <p key={index} role={index === 0 ? "status" : undefined}>{line}</p>)
+      : <>
+        <p role="status">{outcome === "completed" ? t.completed : t.interrupted}</p>
+        {closedReason !== undefined && <p>{(closedReason === null ? undefined : reasons[language][closedReason]) ?? reasons[language].unknown}</p>}
+      </>}
     <dl>
       <div><dt>{t.done}</dt><dd>{summary.completed}</dd></div>
       <div><dt>{t.right}</dt><dd>{summary.correct}</dd></div>

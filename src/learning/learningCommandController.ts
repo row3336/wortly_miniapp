@@ -291,7 +291,7 @@ export class LearningCommandController extends LaneCore<LearningCommandIntent, L
   /** first: the new intent of start, never stored or sent before; resend and retry pass a retained one. */
   private async sendPending(transmitted?: () => void, first = false): Promise<void> {
     const pending = this.pending;
-    // A stored closure record is only checked by its ID (D-CP4 4.6.1): never sent from here.
+    // The closure C goes out like every intent of this lane; its budget and manual retry are the document's (closureRecovery).
     if (!pending || !this.live() || !sendableIntent(pending.intent)) return;
     this.phase = "sending"; this.problem = null; this.retryVerified = false; this.clearCurrent(); this.emit();
     if (!this.live()) return;
@@ -394,7 +394,9 @@ function retryProblem(intent: Exclude<LearningCommandIntent, LearningResultInten
   if (typeof step === "string") return step;
   switch (intent.kind) {
     case "session.start": return "step_changed";
-    case "session.stop": return intent.payload.reason === "stop" || step.status === "summary" ? "not_found" : "step_changed";
+    // A Stop and the closure C (CON §6.1 п.8, Q30) may go again while the session is open at any step; summary_home only
+    // from the summary.
+    case "session.stop": return intent.payload.reason !== "summary_home" || step.status === "summary" ? "not_found" : "step_changed";
     case "assignment.present": return step.status === "active" && step.assignment?.status === "prefetched"
       && sameId(step.assignment.id, intent.assignment_id) ? "not_found" : "step_changed";
     case "answer.submit": return step.status === "active" && step.assignment?.status === "presented"

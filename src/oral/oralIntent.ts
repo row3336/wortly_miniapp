@@ -1,6 +1,7 @@
 import type { OralGradeCommand, OralRevealCommand, OralStartPayload, PresentCommand,
   SessionStartCommand, SessionStopCommand } from "../api/generated";
 import { exactKeys, oneOf, record, uuid } from "../api/wireValidation";
+import { copyStopPayload, stopHashPayload, validStopPayload, type StopPayload } from "../commands/closeIntent";
 
 type WithoutOrigin<T> = T extends unknown ? Omit<T, "client_instance_id" | "document_id"> : never;
 export type OralIntent = WithoutOrigin<
@@ -17,8 +18,9 @@ export function validOralIntent(value: unknown): value is OralIntent {
     case "session.start":
       valid = exactKeys(value.payload, ["mode", "bucket"]) && value.payload.mode === "oral"
         && oneOf(value.payload.bucket, ["words", "phrases"]); break;
+    // T1 (project notices §4.1): `{reason}` as before, or the person's Stop naming the unconfirmed action X.
     case "session.stop":
-      valid = exactKeys(value.payload, ["reason"]) && oneOf(value.payload.reason, ["stop", "summary_home"]); break;
+      valid = validStopPayload(value.payload, value.command_id) && value.payload.reason !== "save_failed"; break;
     case "assignment.present": case "oral.reveal":
       keys.push("assignment_id"); valid = uuid(value.assignment_id) && exactKeys(value.payload, []); break;
     case "oral.grade":
@@ -33,7 +35,7 @@ export function copyOralIntent(value: OralIntent): OralIntent {
   const address = { command_id: value.command_id, session_id: value.session_id };
   switch (value.kind) {
     case "session.start": return { ...address, kind: value.kind, payload: { mode: "oral", bucket: value.payload.bucket } };
-    case "session.stop": return { ...address, kind: value.kind, payload: { reason: value.payload.reason } };
+    case "session.stop": return { ...address, kind: value.kind, payload: copyStopPayload(value.payload as StopPayload) } as OralIntent;
     case "assignment.present": case "oral.reveal":
       return { ...address, kind: value.kind, assignment_id: value.assignment_id, payload: {} };
     case "oral.grade":
@@ -44,10 +46,10 @@ export function copyOralIntent(value: OralIntent): OralIntent {
 /** Match identity.intent_hash over the service payload, which excludes access and command IDs. */
 export async function oralIntentHash(value: OralIntent): Promise<string> {
   const intent = copyOralIntent(value);
-  const payload: Record<string, string | boolean> = {
-    ...intent.payload, session_id: intent.session_id.toLowerCase(),
-    ...("assignment_id" in intent ? { assignment_id: intent.assignment_id.toLowerCase() } : {}),
-  };
+  const payload: Record<string, string | boolean> = intent.kind === "session.stop"
+    ? stopHashPayload(intent.session_id, intent.payload as StopPayload)
+    : { ...intent.payload as Record<string, string | boolean>, session_id: intent.session_id.toLowerCase(),
+      ...("assignment_id" in intent ? { assignment_id: intent.assignment_id.toLowerCase() } : {}) };
   const canonical = JSON.stringify({ kind: intent.kind,
     payload: Object.fromEntries(Object.keys(payload).sort().map(key => [key, payload[key]])) });
   const digest = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical));

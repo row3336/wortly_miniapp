@@ -13,6 +13,8 @@ import type { SettingsDocument } from "../settings/useSettingsDocument";
 import { useBackLayer } from "./navigationBack";
 import type { OpenedAccess } from "./openedAccess";
 import { noticePendingStart, useNoticePendingSignal } from "../notices/noticePending";
+import type { ClosureNotices } from "../notices/noticeBoard";
+import { useClosureNotice } from "../notices/useClosureNotice";
 
 /** One pair per storage: the pending slots serialize through their shared in-memory queue. */
 export type ConjugationStores = { study: ConjugationSessionPendingStore; stop: ConjugationStopPendingStore };
@@ -45,6 +47,8 @@ export type ConjugationHostOptions = {
    * reads GET /notices and shows it; the owner sends nothing more for that start (no new ID, no POST).
    */
   onNoticePending?(): void;
+  /** answer_loss of a session this owner closed with X (project notices §6; Т2). */
+  closureNotices?: ClosureNotices;
 };
 export type ConjugationHost = {
   /** Today waits for the first recovery and for own receipts or sessions it must show first. */
@@ -177,6 +181,11 @@ export function useConjugationHost(options: ConjugationHostOptions): Conjugation
   const claim = live && !refusedStart && (lanesPending || state.phase === "unknown"
     || state.sessionId !== null && state.phase !== "closed" && state.phase !== "idle")
     ? state.sessionId ?? study?.sessionId ?? stop?.sessionId ?? "receipt" : null;
+  // answer_loss in the open window (project notices §6): the closed summary of an own Stop with X shows its line, and its
+  // «На Сегодня» (and Back) acknowledges the notice before the flow's own way to Today.
+  const closure = useClosureNotice({ notices: options.closureNotices, closed: state?.phase === "closed" ? state.closed : null,
+    unsavedClosures: state?.unsavedClosures, language: options.language, visible: route === "conjugation" });
+  const closureHome = closure.notice ? () => closure.leave(() => flow.today()) : null;
   const startedElsewhere = state && state.phase !== "disposed" ? acceptedForeignStart(study, state) : null;
   useEffect(() => { if (startedElsewhere !== null) latest.current.onForeignStart?.(startedElsewhere); }, [startedElsewhere]);
   useNoticePendingSignal(refusedStart ? noticePendingStart(study) : null, options.onNoticePending);
@@ -222,7 +231,7 @@ export function useConjugationHost(options: ConjugationHostOptions): Conjugation
     const awaitingStop = view.stopping || !!stop?.pending || ["sending", "checking", "loading"].includes(stop?.phase ?? "");
     if (view.screen === "summary" && view.canHome) back = () => flow.home();
     else if (view.screen !== "closed" && view.canStop) back = () => flow.stop();
-    else if (view.screen === "closed") back = () => flow.today();
+    else if (view.screen === "closed") back = closureHome ?? (() => flow.today());
     // Q29 (was «5.1.1»): only an explicit Back leaves a refused start (C085); the screen and its wording stay as the module
     // has them, and nothing returns by itself. fix5 (C388): this Back is the exit of the shown refusal, so it names that
     // command (startRefusalIntent: SESSION_BUSY only) — the П01 episode of exactly it, as the «На Сегодня» of the other modes.
@@ -249,6 +258,8 @@ export function useConjugationHost(options: ConjugationHostOptions): Conjugation
       <button type="button" onClick={() => { void options.settings.actions.refresh(); }}>{t.refresh}</button>
       <button type="button" onClick={() => { void latest.current.onToday(); }}>{t.today}</button>
     </section>;
-  } else if (view) screen = <ConjugationTestScreen view={view} flow={flow} language={options.language} submitOnEnter />;
+  } else if (view) screen = <ConjugationTestScreen view={view} flow={flow} language={options.language} submitOnEnter
+    closureNotice={closure.notice && closureHome ? { lines: closure.lines, leaving: closure.leaving, home: closureHome,
+      noticeId: closure.notice?.notice_id ?? null } : null} />;
   return { blocksToday: !bound.recovered || claim !== null, canRequestStart: gate, requestStart, screen };
 }

@@ -97,7 +97,7 @@ describe("a read during the first send", () => {
 });
 
 describe("the budget of one action (Я15.5, Я15.6, 8.3)", () => {
-  it("six losses in a row: exactly six POSTs, 2, 5, 10, 20 and 30 s apart, then the exhausted state without more sends", async () => {
+  it("six losses in a row: exactly six POSTs, 2, 5, 10, 20 and 30 s apart, then only the closure C naming X", async () => {
     const h = harness(); await h.started(); h.route(lostAnswers);
     await h.view.submit(); await tick();
     // One-second steps for the exact moments, then coarse steps for the rest of ten minutes.
@@ -105,10 +105,16 @@ describe("the budget of one action (Я15.5, Я15.6, 8.3)", () => {
     expect(h.sentAt.map(at => at - h.sentAt[0])).toEqual([0, 2000, 7000, 17000, 37000, 67000]);
     const ids = new Set(h.answers().map(post => JSON.stringify(post)));
     expect(ids.size).toBe(1);
-    expect(h.recovery()).toMatchObject({ state: { name: "exhausted" }, sends: 6, transmitted: 6, remaining: 0 });
-    // CP4 closes the session; until then nothing else is sent (Stop stays manual).
-    expect(h.kinds()).toEqual(["session.start", "assignment.present", ...Array(6).fill("answer.submit")]);
-    expect(h.view.snapshot()).toMatchObject({ phase: "unknown", canRetryPrimary: false, canStop: true });
+    // The six sends are spent; the automatic closure below then ends the machine with its session (CT §6.1 п.7).
+    expect(h.recovery()).toMatchObject({ state: { name: "terminated", reason: "session_closed" }, sends: 6, transmitted: 6, remaining: 0 });
+    // CP4b (CON §6.1 п.8; project notices §4.1; before M1b nothing followed here): the session is closed automatically
+    // — one session.stop save_failed naming X, its own new command_id — and nothing else is sent.
+    expect(h.kinds()).toEqual(["session.start", "assignment.present", ...Array(6).fill("answer.submit"), "session.stop"]);
+    const close = h.posts().at(-1)!, x = h.answers()[0].command_id;
+    expect(close.payload).toEqual({ reason: "save_failed", unsaved_command_id: x });
+    expect(close.command_id).not.toBe(x);
+    expect(h.server.lostAnswers).toEqual([{ sessionId: close.session_id, commandId: x, reason: "save_failed" }]);
+    expect(h.view.snapshot()).toMatchObject({ phase: "closed" });
   });
   it("whatever the server answers, one action never goes out more than six times (random replies, 40 runs)", async () => {
     for (let seed = 1; seed <= 40; seed++) {
@@ -177,10 +183,12 @@ describe("the mark that a question was shown (assignment.present; owner answers 
     const times = h.log.filter(entry => entry.kind === "assignment.present").map(entry => entry.at);
     expect(times.map(at => at - times[0])).toEqual([0, 2000, 7000, 17000, 37000, 67000]);
     expect(new Set(presents(h).map(post => JSON.stringify(post))).size).toBe(1);
-    expect(h.recovery()).toMatchObject({ state: { name: "exhausted" }, sends: 6, transmitted: 6, remaining: 0 });
+    // CP4b (CON §6.1 п.8; before M1b nothing followed): the spent present closes the session with save_failed naming it.
+    expect(h.recovery()).toMatchObject({ state: { name: "terminated", reason: "session_closed" }, sends: 6, transmitted: 6, remaining: 0 });
     await h.view.submit();
-    expect(h.kinds()).toEqual(["session.start", ...Array(6).fill("assignment.present")]);
-    expect(h.view.snapshot()).toMatchObject({ phase: "visible_unconfirmed", canSubmit: false, canRetryPrimary: false, canStop: true });
+    expect(h.kinds()).toEqual(["session.start", ...Array(6).fill("assignment.present"), "session.stop"]);
+    expect(h.posts().at(-1)!.payload).toEqual({ reason: "save_failed", unsaved_command_id: presents(h)[0].command_id });
+    expect(h.view.snapshot()).toMatchObject({ phase: "closed", canSubmit: false, canRetryPrimary: false });
   });
 });
 
@@ -516,7 +524,8 @@ describe("cases the independent QA found uncovered (QA CP2 QM05b, QM11, QM22)", 
     h.replace(); gate.resolve(); await tick();
     await h.run(10 * 60_000, 5000);
     expect(h.answers()).toHaveLength(6);
-    expect(h.recovery()).toMatchObject({ state: { name: "exhausted" }, sends: 6, transmitted: 6 });
+    // Spent, then closed by the automatic closure C (CP4b).
+    expect(h.recovery()).toMatchObject({ state: { name: "terminated", reason: "session_closed" }, sends: 6, transmitted: 6 });
   });
   it("DOCUMENT_STALE on a retry of a live window: nothing for 5 s, then a check and the rest of the budget", async () => {
     // A wrong answer waits for «Далее»: no timer shows the next question, whose present would take over the recovery view.
@@ -572,5 +581,155 @@ describe("an ended recovery shows the server's state (CT §6.1 п. 7, QA CP2 Н2
     expect(answers[1].command_id).not.toBe(old.command_id);
     expect(answers.filter(post => post.command_id === old.command_id)).toHaveLength(1);
     expect(h.view.snapshot().phase).toBe("result_correct");
+  });
+});
+
+// CP4b / T1 (core 35c3844 N2/N3; CON table 2.1 :82, table 2.2 :152; project notices ed.2.4 §4.1; C543).
+describe("the automatic closure C and the Stop with X", () => {
+  it("ACTION_ALREADY_SAVED: X landed after all — nothing closes, X is read again by its own ID, the quiz goes on, no second C", async () => {
+    const h = harness(); await h.started();
+    let landX: (() => Promise<void>) | null = null;
+    h.route(request => {
+      if (request.kind === "answer.submit") {
+        const answer = h.posts().filter(post => post.kind === "answer.submit").at(-1)!;
+        landX = async () => { await h.server.handle("/api/v1/commands" as unknown as RequestInfo,
+          { method: "POST", body: JSON.stringify(answer) }); };
+        return "drop";
+      }
+      return undefined;
+    });
+    // C finds X saved: the answer committed just before the closure (DS 2.3.1).
+    const base = h.fetcher.getMockImplementation()!;
+    h.fetcher.mockImplementation(async (url, init) => {
+      const body = init?.method === "POST" ? JSON.parse(String(init.body)) : null;
+      if (body?.kind === "session.stop" && body.payload.reason === "save_failed" && landX) { await landX(); landX = null; }
+      return base(url, init);
+    });
+    await h.view.submit(); await tick();
+    await h.run(70_000); await h.run(3 * 60_000, 30_000);
+    const x = h.answers()[0].command_id;
+    const closes = h.posts().filter(post => post.kind === "session.stop");
+    expect(closes).toHaveLength(1);
+    expect(closes[0].payload).toEqual({ reason: "save_failed", unsaved_command_id: x });
+    // Nothing closed and no notice; X was read by GET /commands/{X} after the refusal, with its own intent.
+    expect(h.server.state.status).not.toBe("closed");
+    expect(h.server.lostAnswers).toEqual([]);
+    const stopAt = h.log.findIndex(entry => entry.kind === "session.stop");
+    expect(h.log.slice(stopAt + 1).some(entry => entry.method === "GET" && entry.path === `/api/v1/commands/${x}`)).toBe(true);
+    // C543 / QA M1b P3: only X itself is read again by its ID — no other command, no new ID.
+    const stopId = closes[0].command_id;
+    expect(h.log.slice(stopAt + 1).filter(entry => entry.method === "GET" && entry.path.startsWith("/api/v1/commands/"))
+      .map(entry => entry.path.split("/").at(-1)).every(read => read === x || read === stopId)).toBe(true);
+    expect(h.answers()).toHaveLength(6);
+    expect(new Set(h.answers().map(post => post.command_id))).toEqual(new Set([x]));
+    expect(h.view.snapshot().commands.primary).toMatchObject({ outcome: "accepted" });
+    expect(h.view.snapshot().commands.stop).toMatchObject({ outcome: null, rejectionCode: null });
+    expect(h.view.snapshot().phase).not.toBe("closed");
+  });
+  it("the person's Stop while X is unconfirmed names X; the server writes the loss of X", async () => {
+    const h = harness({ cards: [6, 7] }); await h.started();
+    h.route(request => request.kind === "answer.submit" ? "drop" : undefined);
+    await h.view.submit(); await tick();
+    expect(h.recovery()?.state.name).toBe("retry_wait");
+    await h.view.stop(); await tick();
+    const x = h.answers()[0].command_id, stop = h.posts().find(post => post.kind === "session.stop")!;
+    expect(stop.payload).toEqual({ reason: "stop", unsaved_command_id: x });
+    expect(h.server.lostAnswers).toEqual([{ sessionId: stop.session_id, commandId: x, reason: "stop" }]);
+  });
+  // C545 (б): an unconfirmed non-answer step (assignment.present) and the person's Stop. X stays unnamed (ANSWER_KINDS): the
+  // payload is the former {reason}; the core writes no answer_loss, so no false «Последний ответ не сохранился»; the
+  // present is then only checked by its own ID after the closure (reconcileClosedPrimary), never sent again.
+  it("a Stop while only a present is unconfirmed names no X: {reason}, no notice, the present checked after the closure", async () => {
+    const h = harness({ cards: [6, 7] }); await h.view.refresh();
+    h.route(request => request.kind === "assignment.present" ? "drop" : undefined);
+    await h.view.start("words"); await tick();
+    expect(h.recovery()?.state.name).toBe("retry_wait");
+    const present = h.posts().find(post => post.kind === "assignment.present")!;
+    h.route(() => undefined);
+    await h.view.stop(); await tick(); await h.run(6000);
+    const stop = h.posts().find(post => post.kind === "session.stop")!;
+    expect(JSON.stringify(stop.payload)).toBe('{"reason":"stop"}');
+    expect(h.server.lostAnswers).toEqual([]);
+    expect(h.view.snapshot().phase).toBe("closed");
+    expect(h.checks(present.command_id)).toBeGreaterThanOrEqual(1);
+    expect(h.posts().filter(post => post.kind === "assignment.present")).toHaveLength(1);
+  });
+  it("a Stop without an unconfirmed action keeps the payload byte for byte {reason}", async () => {
+    const h = harness({ cards: [6, 7] }); await h.started();
+    await h.view.stop(); await tick();
+    const stop = h.posts().find(post => post.kind === "session.stop")!;
+    expect(JSON.stringify(stop.payload)).toBe('{"reason":"stop"}');
+    expect(h.server.lostAnswers).toEqual([]);
+  });
+});
+
+// Q30 of 08.10 (CON §6.1 п.8 :260; TZA §12.3 :234; C546/C547): the closure C has its own budget of six sends with the
+// pauses 2/5/10/20/30 s and a check before each; X is never sent again; after the budget ran out and the session is
+// proved open, «Повторить завершение» sends the same C once per press. An unknown outcome only checks.
+describe("the closure C's own budget and «Повторить завершение» (Q30)", () => {
+  async function exhaustX(h: ReturnType<typeof harness>) {
+    await h.started(); await h.view.submit(); await tick();
+    for (let spent = 0; spent < 80_000 && !h.posts().some(post => post.kind === "session.stop"); spent += 1000) await tick(1000);
+  }
+  const closures = (h: ReturnType<typeof harness>) => h.posts().filter(post => post.kind === "session.stop");
+  it("six sends of the same C 2, 5, 10, 20, 30 s apart; X not refilled; then the button sends the same C once per press", async () => {
+    const h = harness();
+    h.route(request => request.kind === "answer.submit" || request.kind === "session.stop" ? "drop" : undefined);
+    await exhaustX(h);
+    const first = h.since();
+    await h.run(70_000); await h.run(3 * 60_000, 30_000);
+    const stops = h.log.filter(entry => entry.kind === "session.stop").map(entry => Math.round((entry.at - first) / 1000));
+    expect(stops).toEqual([0, 2, 7, 17, 37, 67]);
+    const c = closures(h);
+    expect(new Set(c.map(post => JSON.stringify(post))).size).toBe(1);
+    expect(c[0].payload).toEqual({ reason: "save_failed", unsaved_command_id: h.answers()[0].command_id });
+    expect(h.answers()).toHaveLength(6);
+    // Absence of C and the open session are proved by the last check: the manual retry is offered (9.2.12 + Q30 button).
+    expect(h.view.snapshot().commands).toMatchObject({ closureFailed: true, stop: { pending: true, canRetry: true } });
+    expect(h.view.snapshot().commands.stop.canRetry).toBe(true);
+    h.route(request => request.kind === "answer.submit" ? "drop" : undefined);
+    await h.view.retry("stop"); await tick();
+    expect(closures(h)).toHaveLength(7);
+    expect(JSON.stringify(closures(h).at(-1))).toBe(JSON.stringify(c[0]));
+    expect(h.view.snapshot().phase).toBe("closed");
+    expect(h.answers()).toHaveLength(6);
+  });
+  it("an unknown outcome of C (its checks fail) only checks: no button, no seventh send", async () => {
+    const h = harness();
+    h.route(request => request.kind === "answer.submit" || request.kind === "session.stop" ? "drop"
+      : request.method === "GET" && request.path.startsWith("/api/v1/commands/") && h.posts().some(post => post.kind === "session.stop")
+        ? "drop" : undefined);
+    await exhaustX(h);
+    await h.run(10 * 60_000, 5000);
+    expect(closures(h).length).toBeLessThanOrEqual(1);
+    expect(h.view.snapshot().commands.closureFailed).toBeUndefined();
+    expect(h.view.snapshot().commands.stop.canRetry).toBe(false);
+    await h.view.retry("stop"); await tick();
+    expect(closures(h).length).toBeLessThanOrEqual(1);
+  });
+  it("a C of another page (a reload: its count unknown) is only checked even with the session open: no button, no send", async () => {
+    const c = { command_id: id(300), session_id: id(3), kind: "session.stop" as const,
+      payload: { reason: "save_failed" as const, unsaved_command_id: id(100) } };
+    const h = harness({ active: true, saved: { stop: c } }, id(3));
+    await h.view.refresh(); await h.run(70_000);
+    expect(h.checks(c.command_id)).toBeGreaterThan(0);
+    expect(h.view.snapshot().commands.stop).toMatchObject({ pending: true, canRetry: false });
+    expect(h.view.snapshot().commands.closureFailed).toBeUndefined();
+    await h.view.retry("stop"); await tick();
+    expect(h.posts()).toEqual([]);
+  });
+});
+
+describe("the closure C refused otherwise (QA M1b P3)", () => {
+  it("a C refused VALIDATION_FAILED is not sent again and X is not resent", async () => {
+    const h = harness(); await h.started();
+    h.route(request => request.kind === "answer.submit" ? "drop"
+      // The core's attributed refusal of exactly this C (study/coordinator.py envelope).
+      : request.kind === "session.stop" ? response({ current: h.server.projection(), command: { id: request.body!.command_id, status: "rejected" },
+        state_version: String(h.server.state.version), error: { code: "VALIDATION_FAILED" } }, 422) : undefined);
+    await h.view.submit(); await tick();
+    await h.run(70_000); await h.run(5 * 60_000, 30_000);
+    expect(h.posts().filter(post => post.kind === "session.stop")).toHaveLength(1);
+    expect(h.answers()).toHaveLength(6);
   });
 });

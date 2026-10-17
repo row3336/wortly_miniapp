@@ -1,3 +1,4 @@
+import { unsavedActionId } from "../commands/closeIntent";
 import { laneGate, type LaneGate } from "../commands/gateWait";
 import type { ClosedSessionBoundary, ConjugationSessionProjection, ConjugationSummary, Profile } from "../api/generated";
 import { ApiError, type HttpOptions } from "../api/http";
@@ -42,6 +43,8 @@ export type ConjugationDocumentSnapshot = {
   stateVersion: string;
   terminalSessionIds: string[];
   closed: ConjugationClosed | null;
+  /** Sessions this owner closed by a Stop naming X (T1): only their summary reads GET /notices for answer_loss (Т2). */
+  unsavedClosures?: readonly string[];
   /** C3: A's address of the selected live session, published regardless of view freshness; never a right. */
   acceptedAddress: ConjugationAcceptedAddress | null;
   commands: Record<ConjugationLane, ConjugationCommandSnapshot>;
@@ -110,6 +113,7 @@ export class ConjugationDocumentController implements ConjugationDocumentActions
   private readonly api: ReturnType<typeof createConjugationApi>;
   private readonly makeOwner: (lane: ConjugationLane, stateVersion: string) => ConjugationCommandController;
   private commands: Record<ConjugationLane, ConjugationCommandController>;
+  private readonly unsavedClosures = new Set<string>();
   private readonly terminal = new Set<string>();
   private readonly processed: Partial<Record<ConjugationLane, string>> = {};
   private readonly seenAnswers = new Set<string>();
@@ -472,6 +476,7 @@ export class ConjugationDocumentController implements ConjugationDocumentActions
     return {
       phase, sessionId: live ? this.sessionId : null, stateVersion: this.floor, terminalSessionIds: [...this.terminal],
       closed: live && closed ? this.closedSnapshot(this.sessionId!) : null,
+      ...(live && this.unsavedClosures.size ? { unsavedClosures: [...this.unsavedClosures] } : {}),
       acceptedAddress: live && !closed && this.acceptedA && this.selected(this.acceptedA.session_id) ? { ...this.acceptedA } : null, commands,
       // A known server refusal of a lane reaches the screen as its code (CT табл. 2.2), as in Learning and written.
       problem: live ? commands.study.problem ?? commands.study.rejectionCode ?? commands.stop.problem ?? commands.stop.rejectionCode
@@ -730,7 +735,11 @@ export class ConjugationDocumentController implements ConjugationDocumentActions
     if (reason !== "stop" && reason !== "summary_home") return Promise.reject(new Error("conjugation stop reason required"));
     const snapshot = this.snapshot();
     if (!(reason === "stop" ? snapshot.canStop : snapshot.canSummaryHome)) return this.tasks.stop ?? Promise.resolve();
-    return this.begin("stop", { kind: "session.stop", session_id: snapshot.sessionId!, payload: { reason } }, this.stopRight?.version ?? null);
+    // T1 (project notices §4.1): the person's Stop names the unconfirmed study action X of this session, if any.
+    const unsaved = reason === "stop" ? unsavedActionId(this.commands.study.snapshot(), snapshot.sessionId) : null;
+    if (unsaved && snapshot.sessionId && snapshot.canStop) this.unsavedClosures.add(snapshot.sessionId.toLowerCase());
+    return this.begin("stop", { kind: "session.stop", session_id: snapshot.sessionId!,
+      payload: unsaved ? { reason: "stop", unsaved_command_id: unsaved } : { reason } }, this.stopRight?.version ?? null);
   }
   /** Manual only: the owner re-proves the exact retained UUID/payload by GET before its one POST. */
   retry(lane: ConjugationLane): Promise<void> {

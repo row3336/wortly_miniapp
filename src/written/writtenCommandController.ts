@@ -66,7 +66,9 @@ function retryProblem(intent: Exclude<WrittenIntent, WrittenResultIntent>, curre
   const assignment = step.status === "active" ? step.assignment : null;
   switch (intent.kind) {
     case "session.start": return "step_changed";
-    case "session.stop": return intent.payload.reason === "stop" || step.status === "summary" ? "not_found" : "step_changed";
+    // A Stop and the closure C (CON §6.1 п.8, Q30) may go again while the session is open at any step; summary_home only
+    // from the summary.
+    case "session.stop": return intent.payload.reason !== "summary_home" || step.status === "summary" ? "not_found" : "step_changed";
     case "assignment.present": return assignment?.status === "prefetched" && sameId(assignment.id, intent.assignment_id) ? "not_found" : "step_changed";
     case "answer.submit": return assignment?.status === "presented" && sameId(assignment.id, intent.assignment_id) ? "not_found" : "step_changed";
   }

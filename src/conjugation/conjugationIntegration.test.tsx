@@ -20,7 +20,7 @@ const S1 = id(3), B1 = id(21), B2 = id(22), B3 = id(23);
 const studyKey = "wortly.pending.conjugation_session";
 type Result = { result_id: string; assignment_id: string; action_id: string; version: string; grade: 2 | 3 | 4 | 5; undone?: true };
 type Session = { id: string; status: "active" | "summary" | "closed"; assignment: string | null; presented: boolean; results: Result[];
-  reason?: "stop" | "summary_home" };
+  reason?: "stop" | "summary_home" | "save_failed" };
 function setVisibility(state: "visible" | "hidden") {
   Object.defineProperty(document, "visibilityState", { configurable: true, get: () => state });
 }

@@ -138,7 +138,8 @@ describe("Learning screen with its real command owner", () => {
     expect(f.newId).not.toHaveBeenCalled();
   });
   it("a study result never offers a primary retry; Stop remains available", async () => {
-    const f = learningViewFixture(); owners.push(f.view); const intent = original();
+    // The saved answer of the page before has its own id (this fixture's newId counts from id(100) as well).
+    const f = learningViewFixture(); owners.push(f.view); const intent = original(undefined, 900);
     seedRaw(f.values, primaryKey, JSON.stringify(pending(intent)), id(50));
     f.fetcher.mockImplementation(async (url, init) => init?.method === "GET" && String(url).includes(`/commands/${intent.command_id}`)
       ? response(missing(intent, "1")) : f.handler(url, init));
@@ -150,6 +151,8 @@ describe("Learning screen with its real command owner", () => {
     await act(() => f.view.retry("primary")); expect(f.posts()).toEqual([]);
     click("Выйти"); await waitFor(() => expect(f.view.snapshot().phase).toBe("closed"));
     expect(f.posts().map(post => post.kind)).toEqual(["session.stop"]);
+    // T1 (project notices §4.1, core 35c3844): the person's Stop names the unconfirmed answer X; before M1b it was {reason: "stop"}.
+    expect(f.posts()[0].payload).toEqual({ reason: "stop", unsaved_command_id: intent.command_id });
   });
   it("shows the saved answer separately when the current question has changed", async () => {
     const f = learningViewFixture(); owners.push(f.view); const intent = original();
@@ -253,7 +256,8 @@ describe("Learning screen with its real command owner", () => {
     await act(async () => { gate.resolve(old); });
     expect(screen.queryByRole("textbox")).toBeNull(); expect(screen.queryByText("Верно")).toBeNull();
     expect(f.posts().map(post => post.kind)).toEqual(["answer.submit", "session.stop"]);
-    expect(f.posts()[1].payload).toEqual({ reason: "stop" });
+    // T1 (project notices §4.1, core 35c3844): the person's Stop names the unconfirmed answer X; before M1b it was {reason: "stop"}.
+    expect(f.posts()[1].payload).toEqual({ reason: "stop", unsaved_command_id: f.posts()[0].command_id });
   });
   it("an uncertain Stop blocks the old lesson and recovers its accepted receipt without another POST", async () => {
     const { f } = await mount(); fireEvent.change(input(), { target: { value: "unsent" } });

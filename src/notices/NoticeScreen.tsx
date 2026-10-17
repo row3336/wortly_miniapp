@@ -35,27 +35,34 @@ const forcedReasons: readonly string[] = ["midnight", "timezone_date_changed", "
  * oral_forced_close: the oral summary with its reason and «На Сегодня» (Q32, R4-03). defect_class is always null (Д1):
  * no «знаем и работаем».
  */
+/**
+ * The lines of an answer_loss (§6): 9.2.7 after the automatic closure (save_failed), R2-05 after the person's Stop (ru only;
+ * uk/en нет утверждённого текста — no line). The same lines on the summary of the open window and on this screen.
+ */
+export function answerLossLines(notice: Pick<NoticeView, "kind" | "close_reason">, language: Language): string[] {
+  const lines = noticeLines[language];
+  if (notice.kind !== "answer_loss") return [];
+  if (notice.close_reason === "save_failed") return [lines.saveFailed];
+  if (notice.close_reason === "stop") return [lines.stopClosed, lines.stopLost].filter((line): line is string => line !== null);
+  return [];
+}
+
 export function NoticeScreen({ notice, language, acking, onAcknowledge }: NoticeScreenProps) {
-  const t = summaryCopy[language], lines = noticeLines[language], numbers = counts(notice.summary);
+  const t = summaryCopy[language], numbers = counts(notice.summary);
   useEffect(() => { noticeShown(notice.notice_id); }, [notice.notice_id]);
   const shown: string[] = [];
-  if (notice.kind === "answer_loss") {
-    if (notice.close_reason === "save_failed") shown.push(lines.saveFailed);
-    else if (notice.close_reason === "stop") {
-      if (lines.stopClosed !== null) shown.push(lines.stopClosed);
-      if (lines.stopLost !== null) shown.push(lines.stopLost);
-    }
-  } else {
+  if (notice.kind === "answer_loss") shown.push(...answerLossLines(notice, language));
+  else {
     const reason = forcedReasons.includes(notice.close_reason) ? notice.close_reason as ShownReason : null;
     shown.push((reason === null ? undefined : closedReasonLines[language][reason]) ?? closedReasonLines[language].unknown);
   }
   if (notice.kind === "oral_forced_close") {
     // Д4, R4-03: the same screen as the open window shows for this closure (OralScreen → OralForcedSummary).
     // «Осталось» once the core sends the progress of the closed session (M1b dependency; Codex C525); until then absent.
-    const progress = noticeProgress((notice as { progress?: unknown }).progress);
+    const progress = noticeProgress(notice.progress);
     return <OralForcedSummary language={language} status={oralClosedLine(language)} reasonLine={shown[0]} counts={numbers}
       remaining={numbers && progress ? progress.total - progress.completed : null}
-      leaving={acking} onToday={onAcknowledge} dataNotice={notice.notice_id} />;
+      leaving={acking} onToday={onAcknowledge} dataNotice={notice.notice_id} noticeId={notice.notice_id} />;
   }
   const button = iconLabel(language, "next");
   return <section className="written-summary notice-summary" aria-label={t.title} data-notice={notice.notice_id}>

@@ -28,7 +28,7 @@ export const COMMAND_KINDS = [
 exact<Exactly<typeof COMMAND_KINDS[number], CommandSendEvent["kind"]>>();
 
 export const ERROR_CODES = [
-  "ACCESS_PENDING", "ACCESS_REJECTED", "ANSWER_SPEC_UNAVAILABLE", "ASSIGNMENT_STALE", "AUTH_EXPIRED", "AUTH_INVALID",
+  "ACCESS_PENDING", "ACCESS_REJECTED", "ACTION_ALREADY_SAVED", "ANSWER_SPEC_UNAVAILABLE", "ASSIGNMENT_STALE", "AUTH_EXPIRED", "AUTH_INVALID",
   "CAPABILITY_EXPIRED", "CLIENT_INCOMPATIBLE", "CLIENT_OPEN_REQUIRED", "CLIENT_REGISTRATION_CONFLICT",
   "COMMAND_PAYLOAD_MISMATCH", "DICTIONARY_LANGUAGE_LOCKED", "DOCUMENT_STALE", "FORBIDDEN", "INTERNAL_ERROR", "LEASE_HELD",
   "LEASE_LOST", "MAINTENANCE", "METHOD_NOT_ALLOWED", "NOT_FOUND", "NO_MATERIAL", "NOTICE_PENDING", "NOTIFICATIONS_NOT_OPENED", "PRECEDENCE_ANOMALY", "PROFILE_DELETED",
@@ -49,7 +49,8 @@ exact<Exactly<typeof RECOVERY_STATES[number], RecoveryEvent["from"]>>();
 export const RECOVERY_REASONS = ["access_lost", "client_incompatible", "session_closed", "step_stale", "window_replaced"] as const;
 exact<Exactly<typeof RECOVERY_REASONS[number], NonNullable<RecoveryEvent["reason"]>>>();
 
-export const SCREEN_KINDS = ["result_shown", "already_recorded", "lost", "unsaved_shown", "refusal_shown", "update_required"] as const;
+export const SCREEN_KINDS = ["result_shown", "already_recorded", "lost", "unsaved_shown", "notice_shown", "refusal_shown",
+  "update_required"] as const;
 exact<Exactly<typeof SCREEN_KINDS[number], ScreenEvent["kind"]>>();
 
 export const REPLY_OUTCOMES = ["applied", "already_applied", "refused", "unknown", "network", "timeout"] as const;
@@ -112,7 +113,9 @@ const FIELDS: Record<ClientEvent["ev"], Record<string, { check: Check; required:
   "c.recovery": { cmd: req(uuid), from: req(value => among(RECOVERY_STATES, value)), to: req(value => among(RECOVERY_STATES, value)),
     reason: opt(value => among(RECOVERY_REASONS, value)) },
   "c.screen": { cmd: opt(uuid), kind: req(value => among(SCREEN_KINDS, value)), code: opt(isErrorCode),
-    grade: opt(value => value === "correct" || value === "wrong" || value === "partial") },
+    grade: opt(value => value === "correct" || value === "wrong" || value === "partial"),
+    // notice_shown (events ред.3.6.4 §4.5; project notices §8; core 35c3844 ScreenEvent): the shown notice's id — see screenRule.
+    notice: opt(uuid) },
   "c.budget": { cmd: req(uuid), n: req(value => whole(value, 0, 100)), outcome: req(value => value === "failed" || value === "cancel_sent") },
   "c.storage": { kind: req(value => value === "storage_read" || value === "storage_write" || value === "idb_unavailable") },
   "c.error": { err: req(value => among(ERROR_CLASSES, value)) },
@@ -146,7 +149,18 @@ export function acceptedEvent(value: unknown): ClientEvent | null {
     if (!rule.check(item)) return null;
     event[name] = item;
   }
+  if (ev === "c.screen" && !screenRule(event)) return null;
   return event as ClientEvent;
+}
+
+/**
+ * core ScreenEvent._notice_by_kind (35c3844): notice_shown names its notice and nothing else (no cmd, code or grade);
+ * no other kind names a notice.
+ */
+function screenRule(event: Record<string, unknown>): boolean {
+  if (event.kind === "notice_shown") return event.notice !== undefined && event.cmd === undefined
+    && event.code === undefined && event.grade === undefined;
+  return event.notice === undefined;
 }
 
 /** The size the core measures: compact JSON in UTF-8. */

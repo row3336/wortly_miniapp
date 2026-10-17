@@ -8,6 +8,7 @@ import { LaneRecovery, pageSendCounter, type RecoveryIntent, type RecoveryView }
 import { systemRecoveryClock } from "./recoveryClock";
 import { createdHere, noteCreatedHere } from "./pageOrigin";
 import { laneGate, type LaneGate } from "./gateWait";
+import { isClosureIntent, unsavedActionId } from "./closeIntent";
 export type { LaneGate } from "./gateWait";
 
 export type DocumentLane = "primary" | "stop";
@@ -73,6 +74,13 @@ export type DocumentLanesSnapshot<C> = {
   gate?: LaneGate;
   /** Only the write gate keeps canBegin false now (fix1): a view pauses its timers instead of dropping them. */
   heldByGate?: boolean;
+  /**
+   * The sessions this document closed by a Stop naming X or by the closure C (T1, CP4b): only they may carry a notice
+   * answer_loss, so only their summary reads GET /notices (Т2, project notices §5) — a plain Stop reads nothing more.
+   */
+  unsavedClosures?: readonly string[];
+  /** 9.2.12 (R10): the closure C's own budget ran out with the session open — «Повторить завершение» is offered (Q30). */
+  closureFailed?: true;
 };
 export type DocumentLanesOptions<C> = {
   access(): OpenedAccess;
@@ -145,12 +153,25 @@ export class DocumentLanes<C extends LaneState, T extends { kind: string; sessio
   /** Sessions this document sent its own (voluntary) Stop for. */
   private readonly ownStops = new Set<string>();
   private closedAction: { sessionId: string; commandId: string } | null = null;
+  /**
+   * The automatic closures C of this document by their X (CON §6.1 п.8; project notices §4.1): sent once per X; set to
+   * already_saved when the core answered ACTION_ALREADY_SAVED — X is then read again by its own ID and the session goes on.
+   */
+  private readonly closures = new Map<string, "sent" | "already_saved">();
+  /** Sessions of this document's own Stop with X or closure C (unsavedClosures of the snapshot). */
+  private readonly unsavedClosures = new Set<string>();
   private floor: string;
   private disposed = false;
   private refreshing: Promise<void> | null = null;
   private readonly automatic: ReadonlySet<string>;
   private readonly lanePage: ReadonlySet<string>;
   private readonly recovery: LaneRecovery;
+  /**
+   * The closure C's own budget (CON §6.1 п.8; Q30 of 08.10): the same machine as a study action's — up to six sends of
+   * the same C (2/5/10/20/30 s, a check of its outcome and of the open session before each), on the Stop lane. A C this
+   * page did not create, or whose count is unknown (a reload), is only checked (CON §7.2 п.2; R2-07 Б).
+   */
+  private readonly closureRecovery: LaneRecovery;
 
   constructor(private readonly options: DocumentLanesOptions<C>, mode: DocumentLanesMode<C, T, SR, RR>) {
     const access = options.access();
@@ -200,6 +221,26 @@ export class DocumentLanes<C extends LaneState, T extends { kind: string; sessio
       gate: options.transport.gate,
     }, pageSendCounter(options.storage), systemRecoveryClock,
     `${this.profileId}:${this.clientInstanceId}:${access.document.documentId}:${access.document.epoch}`);
+    // The Stop lane as the closure machine sees it: only a retained C is its intent; a voluntary Stop keeps its rules.
+    const closureLane = () => {
+      const stop = this.controllers.stop.snapshot();
+      return isClosureIntent(stop.pendingIntent) ? stop : { ...stop, pending: false, pendingIntent: null };
+    };
+    this.closureRecovery = new LaneRecovery({
+      automatic: kind => kind === "session.stop",
+      primary: closureLane,
+      failure: () => this.controllers.stop.lastFailure(),
+      send: (intent, first, transmitted) => this.closureSend(intent, first, transmitted),
+      check: () => this.live() ? this.track("stop", () => this.controllers.stop.refresh()) : Promise.resolve(),
+      // The machine never drops a C record itself: only the lane's own reconcile may clear it, after the server proved its
+      // outcome or the closure (CON §6.1 п.8: the local wait is cleared only after the server confirmed the closing).
+      release: () => Promise.resolve(),
+      isLive: () => this.live(),
+      onUpdate: () => this.emit(),
+      maySend: commandId => createdHere(options.storage, commandId),
+      gate: options.transport.gate,
+    }, pageSendCounter(options.storage), systemRecoveryClock,
+    `${this.profileId}:${this.clientInstanceId}:${access.document.documentId}:${access.document.epoch}:closure`);
     this.controllers = { primary: controller("primary"), stop: controller("stop") };
     // M03 (P03 §5.2): once the gate lets a write through again, a manual intent the gate kept on the client is read by
     // its ID; the lane then offers the same send again («Повторить отправку»). Nothing is sent by this.
@@ -220,7 +261,8 @@ export class DocumentLanes<C extends LaneState, T extends { kind: string; sessio
     if (!this.live()) return;
     for (const lane of ["primary", "stop"] as const) {
       const state = this.controllers[lane].snapshot(), id = state.pendingIntent?.command_id;
-      if (state.problem !== "paused" || !id || this.work[lane] || lane === "primary" && this.recovery.drives(id)) continue;
+      if (state.problem !== "paused" || !id || this.work[lane] || lane === "primary" && this.recovery.drives(id)
+        || lane === "stop" && this.closureRecovery.drives(id)) continue;
       if (!this.options.transport.gate.mayWrite(id)) continue;
       void this.track(lane, () => this.controllers[lane].refresh());
     }
@@ -279,7 +321,65 @@ export class DocumentLanes<C extends LaneState, T extends { kind: string; sessio
     const reply = await this.loadResult(address);
     return this.acceptRead(reply, reply.step);
   }
-  private emit(): void { if (this.live()) this.options.onUpdate(this.snapshot()); }
+  private emit(): void {
+    if (!this.live()) return;
+    this.closeExhausted();
+    this.options.onUpdate(this.snapshot());
+  }
+  /** The refusal ACTION_ALREADY_SAVED of this document's own closure C (CON табл. 2.2 :152). */
+  private alreadySaved(stop: C): boolean {
+    const code = (stop as C & { rejectionCode?: string | null }).rejectionCode;
+    return stop.outcome === "rejected" && stop.resolved?.kind === "session.stop" && code === "ACTION_ALREADY_SAVED";
+  }
+  /**
+   * Я15.8 / CP4b (CON §6.1 п.8; project notices §4.1 table 4): six sends of X provably went out and the server confirmed
+   * its absence — the machine is exhausted. This document then closes the session itself, once per X: session.stop with
+   * reason save_failed and unsaved_command_id X, through the Stop lane (its record, check and retry as every Stop).
+   * ACTION_ALREADY_SAVED (2.3.1/2.3.4: X landed after all) closes nothing: X is read again by its own ID (GET
+   * /commands/{X}, the same intent and hash, C543) and the session goes on; no new ID, nothing assumed.
+   */
+  private closeExhausted(): void {
+    const stop = this.controllers?.stop?.snapshot(), primary = this.controllers?.primary?.snapshot();
+    if (!stop || !primary) return;
+    const intent = primary.pendingIntent;
+    if (this.alreadySaved(stop) && intent && this.closures.get(intent.command_id.toLowerCase()) === "sent") {
+      this.closures.set(intent.command_id.toLowerCase(), "already_saved");
+      if (!this.recovery.drives(intent.command_id)) queueMicrotask(() => { if (this.live()) this.recovery.recheck(intent); });
+      return;
+    }
+    const view = this.recovery.view();
+    if (!view) return;
+    const exhausted = view.state.name === "exhausted" || view.state.name === "checks_only" && view.state.cause === "exhausted";
+    if (!exhausted || !primary.pending || primary.outcome !== null || !intent
+      || intent.command_id.toLowerCase() !== view.commandId.toLowerCase()) return;
+    const x = intent.command_id.toLowerCase(), sessionId = intent.session_id;
+    if (this.closures.has(x) || this.closed.has(sessionId.toLowerCase()) || this.work.stop || !ready(stop)
+      || !this.options.transport.gate.mayWrite()) return;
+    this.closures.set(x, "sent"); this.unsavedClosures.add(sessionId.toLowerCase());
+    const closure = this.controllers.stop.prepare({ kind: "session.stop", session_id: sessionId,
+      payload: { reason: "save_failed", unsaved_command_id: intent.command_id } } as unknown as T);
+    if (closure instanceof Error) return;
+    // Created here (2.3 А): the closure machine may send it; its budget is its own, X's is not refilled.
+    noteCreatedHere(this.options.storage, closure.command_id);
+    queueMicrotask(() => { if (this.live()) void this.closureRecovery.begin(closure); });
+  }
+  /** One send of the closure machine: the same C through the current open handle; never overtakes the Stop lane's work. */
+  private closureSend(intent: RecoveryIntent, first: boolean, transmitted: () => void): Promise<void> {
+    if (!this.live() || this.work.stop || this.closed.has(intent.session_id.toLowerCase())) return Promise.resolve();
+    this.sendSources.stop = this.options.access();
+    const lane = this.controllers.stop;
+    return this.track("stop", () => first ? lane.start(intent, transmitted) : lane.resend(transmitted));
+  }
+  /**
+   * Q30 of 08.10 (CON §6.1 п.8): the manual «Повторить завершение» of C — only once its own budget provably ran out (six
+   * sends went out, absence confirmed: the machine is exhausted) and the last check proved C absent and the session open
+   * (the lane's canRetry). An unknown count or outcome only checks: no button (R2-07 Б, CON §7.2 п.2).
+   */
+  private closureRetryable(stop: C): boolean {
+    const view = this.closureRecovery.view(), id = stop.pendingIntent?.command_id;
+    return !!view && !!id && view.commandId.toLowerCase() === id.toLowerCase() && view.state.name === "exhausted"
+      && stop.pending && stop.outcome === null && stop.canRetry;
+  }
   snapshot(): DocumentLanesSnapshot<C> {
     const stateVersion = this.minimumVersion(), live = this.live();
     const lane = this.controllers.primary.snapshot(), stop = this.controllers.stop.snapshot();
@@ -292,17 +392,23 @@ export class DocumentLanes<C extends LaneState, T extends { kind: string; sessio
     const foreign = lane.canRetry && !this.lanePage.has(lane.kind ?? "")
       && !createdHere(this.options.storage, lane.pendingIntent?.command_id);
     const primary = automaticPrimary || foreign ? { ...lane, canRetry: false } : lane;
+    // ACTION_ALREADY_SAVED closed nothing and is no refusal to show: the Stop lane is as before, X is being read again.
+    const shownStop = this.alreadySaved(stop) ? { ...stop, outcome: null, resolved: null, rejectionCode: null, problem: null } as C
+      // C has no manual retry while its own machine sends or checks; only the exhausted budget opens «Повторить завершение».
+      : isClosureIntent(stop.pendingIntent) && stop.canRetry && !this.closureRetryable(stop) ? { ...stop, canRetry: false } as C : stop;
     const gate = this.laneGate();
     this.shownGate = JSON.stringify(gate);
     const begin = live && !this.refreshing && !this.work.primary && !this.work.stop && ready(primary) && ready(stop) && !this.recovery.busy();
-    return { live, stateVersion, primary, stop, gate,
+    return { live, stateVersion, primary, stop: shownStop, gate,
       // §4.1 «Правило кнопки» (K01s start, K03 Stop; C335, M-P03-10): a new action waits for mayWrite — visibly inactive.
       canBegin: begin && this.options.transport.gate.mayWrite(),
       heldByGate: begin && !this.options.transport.gate.mayWrite(),
       // Q27: with a lost answer, Stop follows its usual rights only once the session of that answer was read open.
       canStop: live && !this.work.stop && ready(stop) && (!lane.lost || lane.lost.sessionOpen)
         && this.options.transport.gate.mayWrite(), recovery: live ? this.recovery.view() : null, automaticPrimary,
-      closedAction: live ? this.closedActionView(lane, stop) : null };
+      closedAction: live ? this.closedActionView(lane, stop) : null,
+      ...(live && this.closureRetryable(stop) ? { closureFailed: true } : {}),
+      ...(live && this.unsavedClosures.size ? { unsavedClosures: [...this.unsavedClosures] } : {}) };
   }
   private closedActionView(primary: C, stop: C): ClosedAction | null {
     const action = this.closedAction;
@@ -325,6 +431,7 @@ export class DocumentLanes<C extends LaneState, T extends { kind: string; sessio
       this.reconcileClosedPrimary();
       // A check may have found an automatic intent this owner does not drive yet (reload, another owner).
       if (lane === "primary" && this.live() && !this.work.primary) this.recovery.sync();
+      if (lane === "stop" && this.live() && !this.work.stop) this.closureRecovery.sync();
       this.emit();
     };
     void task.then(finish, finish);
@@ -396,7 +503,10 @@ export class DocumentLanes<C extends LaneState, T extends { kind: string; sessio
     const release = this.recovery.busy() ? null : this.recovery.retryRelease();
     const primary = this.recovery.busy() ? (this.work.primary ?? Promise.resolve()).then(() => undefined, () => undefined)
       : release ?? refreshLane("primary");
-    const task = Promise.all([primary, refreshLane("stop")]).then(() => undefined).finally(() => {
+    // The closure machine alone checks its C while it sends or checks (as the study machine its action).
+    const stopLane = this.closureRecovery.busy() ? (this.work.stop ?? Promise.resolve()).then(() => undefined, () => undefined)
+      : refreshLane("stop");
+    const task = Promise.all([primary, stopLane]).then(() => undefined).finally(() => {
       if (this.refreshing === task) this.refreshing = null;
       this.emit();
     });
@@ -422,6 +532,9 @@ export class DocumentLanes<C extends LaneState, T extends { kind: string; sessio
     const state = this.snapshot();
     if (!(lane === "stop" ? state.canStop : state.canBegin)) return Promise.resolve();
     if (lane === "stop") this.ownStops.add(action.session_id.toLowerCase());
+    // T1 (project notices §4.1): the person's Stop names the unconfirmed study action X of this session, if any; without X
+    // the payload stays byte for byte `{reason}`.
+    if (lane === "stop") action = this.withUnsaved(action);
     if (lane === "primary" && this.automatic.has(action.kind)) {
       const intent = this.controllers.primary.prepare(action);
       if (intent instanceof Error) return Promise.reject(intent);
@@ -432,6 +545,13 @@ export class DocumentLanes<C extends LaneState, T extends { kind: string; sessio
     }
     this.sendSources[lane] = this.options.access();
     return this.track(lane, () => this.controllers[lane].begin(action));
+  }
+  private withUnsaved(action: T): T {
+    const payload = (action as T & { payload?: Record<string, unknown> }).payload;
+    if (!payload || payload.reason !== "stop" || "unsaved_command_id" in payload) return action;
+    const unsaved = unsavedActionId(this.controllers.primary.snapshot(), action.session_id);
+    if (unsaved) this.unsavedClosures.add(action.session_id.toLowerCase());
+    return unsaved ? { ...action, payload: { reason: "stop", unsaved_command_id: unsaved } } as T : action;
   }
   /**
    * One send of the recovery machine. Like a retry it goes through the current open handle (DESIGN 5.8) and never
@@ -456,7 +576,7 @@ export class DocumentLanes<C extends LaneState, T extends { kind: string; sessio
     return this.track("primary", () => this.controllers.primary.refresh());
   }
   /** The study view's activity (visible, fresh handle, study route on): the machine requests nothing otherwise. */
-  setRecoveryActive(active: boolean): void { this.recovery.setActive(active); }
+  setRecoveryActive(active: boolean): void { this.recovery.setActive(active); this.closureRecovery.setActive(active); }
   retry(lane: DocumentLane): Promise<void> {
     if (!this.live()) return Promise.resolve();
     if (this.work[lane]) return this.work[lane];
@@ -465,6 +585,8 @@ export class DocumentLanes<C extends LaneState, T extends { kind: string; sessio
     if (lane === "primary" && this.automatic.has(state.primary.kind ?? "")) return Promise.resolve();
     if (lane === "primary" && !state.primary.canRetry) return Promise.resolve();
     if (lane === "primary" && (this.work.stop || !ready(state.stop))) return Promise.resolve();
+    // Q30: a C is retried by hand only through «Повторить завершение» (state.stop.canRetry is already masked by its budget).
+    if (lane === "stop" && isClosureIntent(this.controllers.stop.snapshot().pendingIntent) && !state.stop.canRetry) return Promise.resolve();
     this.sendSources[lane] = this.options.access();
     return this.track(lane, () => this.controllers[lane].retry());
   }
@@ -473,6 +595,7 @@ export class DocumentLanes<C extends LaneState, T extends { kind: string; sessio
     this.unsubscribeGate();
     this.sendSources.primary = this.sendSources.stop = null;
     this.recovery.dispose();
+    this.closureRecovery.dispose();
     this.controllers.primary.dispose();
     this.controllers.stop.dispose();
   }

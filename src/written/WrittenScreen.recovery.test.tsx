@@ -10,6 +10,8 @@ import { hasPending } from "../commands/pendingSeed.test-support";
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 
 type Route = (request: { method: string; kind: string | null }) => undefined | "drop" | Response;
+/** 9.2.7 by language: the line the host passes once GET /notices found the answer_loss of the closure C (useClosureNotice). */
+const line927 = { ru: "Не удалось сохранить последнее действие. Занятие завершено. Ранее сохранённый прогресс не потерян.", uk: "Не вдалося зберегти останню дію. Заняття завершено. Раніше збережений прогрес не втрачено.", en: "We couldn't save your last action. The session has ended. Your earlier progress is safe." } as const;
 async function setup(language: "ru" | "uk" | "en" = "ru") {
   vi.useFakeTimers();
   const f = writtenFixture();
@@ -26,7 +28,8 @@ async function setup(language: "ru" | "uk" | "en" = "ru") {
     if (!state) return null;
     return <>
       <button type="button" onClick={() => { void actions.start("words"); }}>start-words</button>
-      <WrittenScreen state={state} language={language} submitOnEnter actions={actions} onToday={vi.fn()} />
+      <WrittenScreen state={state} language={language} submitOnEnter actions={actions} onToday={vi.fn()}
+        noticeLines={state.phase === "closed" && state.closed?.reason === "save_failed" ? [line927[language]] : null} />
     </>;
   }
   render(<Harness />);
@@ -86,16 +89,22 @@ describe("the waiting screen of a lost study result", () => {
     expect(h.overlay()?.textContent).not.toContain("провер");
     h.noManual();
   });
-  it("six lost sends end on the unsaved status without any action but Exit (temporary until CP4)", async () => {
+  // CP4 arrived (M1b, core 35c3844; CON §6.1 п.8): the spent budget no longer ends on the interim unsaved status — the
+  // closure C closes the session; its summary and the notice line follow (useClosureNotice, project notices §6).
+  it("six lost sends end in the automatic closure C: no unsaved cover, no manual action, the session is closed", async () => {
     const h = await setup("en");
     h.route(request => request.kind === "answer.submit" ? "drop" : undefined);
     await h.answer("Haus");
     for (let second = 0; second < 70; second++) await h.step(1000);
     expect(h.answers()).toHaveLength(6);
-    expect(h.overlay()?.textContent).toBe("We couldn't save your last action. The connection is back.");
-    expect(h.overlay()?.querySelector(".wortly-loader")).toBeNull();
+    expect(h.posts().filter(post => post.kind === "session.stop").map(post => post.payload))
+      .toEqual([{ reason: "save_failed", unsaved_command_id: h.answers()[0].command_id }]);
+    expect(h.overlay()).toBeNull();
+    // The closed summary with 9.2.7 in place of the closed status (project notices §6; QA M1b P3).
+    expect(screen.getByRole("region", { name: "Session summary" })).toBeTruthy();
+    expect(screen.getByText("We couldn't save your last action. The session has ended. Your earlier progress is safe.")).toBeTruthy();
+    expect(screen.queryByText("The session was interrupted.")).toBeNull();
     h.noManual();
-    expect((screen.getByRole("button", { name: "Exit" }) as HTMLButtonElement).disabled).toBe(false);
   });
 });
 
@@ -139,15 +148,36 @@ describe("the mark that a question was shown waits without the cover (owner answ
     fireEvent.click(confirmed); await h.step();
     expect(h.answers()).toHaveLength(2);
   });
-  it("six lost presents end on the unsaved status, as any study action until CP4 (Я15.8)", async () => {
+  // Q30 of 08.10 (CON §6.1 п.8; TZA §12.3 :234; 9.2.12 R10): the closure C's own six sends ran out, the session is open —
+  // the screen says 9.2.12 and offers «Повторить завершение»; one press sends the same C once.
+  it("the spent closure budget shows 9.2.12 and «Повторить завершение»; one press sends the same C once", async () => {
+    const h = await setup();
+    h.route(request => request.kind === "answer.submit" || request.kind === "session.stop" ? "drop" : undefined);
+    await h.answer("Haus");
+    for (let second = 0; second < 80; second++) await h.step(1000);
+    for (let second = 0; second < 80; second++) await h.step(1000);
+    const closes = () => h.posts().filter(post => post.kind === "session.stop");
+    expect(closes()).toHaveLength(6);
+    expect(screen.getByText("Не удалось завершить занятие.")).toBeTruthy();
+    const retry = screen.getByRole("button", { name: "Повторить завершение" }) as HTMLButtonElement;
+    h.route(request => request.kind === "answer.submit" ? "drop" : undefined);
+    fireEvent.click(retry); await h.step(); await h.step(1000);
+    expect(closes()).toHaveLength(7);
+    expect(JSON.stringify(closes().at(-1))).toBe(JSON.stringify(closes()[0]));
+    expect(screen.queryByText("Не удалось завершить занятие.")).toBeNull();
+  });
+  it("six lost presents end in the automatic closure C, as any study action (Я15.8; CP4b since M1b)", async () => {
     const h = await setup();
     await h.answer("Haus");
     h.route(request => request.kind === "assignment.present" ? "drop" : undefined);
     for (let second = 0; second < 75; second++) await h.step(1000);
     expect(h.posts().filter(post => post.kind === "assignment.present")).toHaveLength(7);
-    expect(h.overlay()?.textContent).toBe("Не удалось сохранить последнее действие. Связь восстановлена.");
+    expect(h.posts().filter(post => post.kind === "session.stop").map(post => post.payload)).toEqual([{ reason: "save_failed",
+      unsaved_command_id: h.posts().filter(post => post.kind === "assignment.present").at(-1)!.command_id }]);
+    expect(h.overlay()).toBeNull();
+    expect(screen.getByRole("region", { name: "Итог занятия" })).toBeTruthy();
+    expect(screen.getByText("Не удалось сохранить последнее действие. Занятие завершено. Ранее сохранённый прогресс не потерян.")).toBeTruthy();
     h.noManual();
-    expect((screen.getByRole("button", { name: "Выйти" }) as HTMLButtonElement).disabled).toBe(false);
   });
 });
 

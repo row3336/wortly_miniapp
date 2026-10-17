@@ -204,38 +204,50 @@ describe("Н3: a refused action whose record could not be cleared (D-CP4 3.1.2)"
   });
 });
 
+/** The checks after the closure C in the order of the log (C runs at the same fake instant as the checks before it). */
+function afterClosure(h: { log: { method: string; kind: string | null; path: string }[]; checks(): unknown[] }) {
+  const at = h.log.findIndex(entry => entry.method === "POST" && entry.kind === "session.stop");
+  const checks = new Set(h.checks());
+  return h.log.slice(at + 1).filter(entry => checks.has(entry)) as unknown as { at: number }[];
+}
+/** Fake time in one-second steps until the automatic closure C was posted (at most 80 s). */
+async function untilClosure(h: { posts(kind: string): unknown[]; run(ms: number): Promise<void> }) {
+  for (let spent = 0; spent < 80_000 && h.posts("session.stop").length === 0; spent += 1000) await h.run(1000);
+  await tick();
+}
+
 describe("Н4: the check of an action after the closure (D-CP4 3.1.3)", () => {
-  it("4.8.6 six lost sends, «Выйти», the first check fails: the next one at 5 s clears the record (QA P6.1)", async () => {
+  // Since M1b (CP4b, CON §6.1 п.8) the spent budget closes the session by the closure C naming X; before, «Выйти» did.
+  it("4.8.6 six lost sends, the automatic closure C, the first check fails: the next one at 5 s clears the record (QA P6.1)", async () => {
     const h = harness();
-    h.route(request => request.kind === "answer.submit" ? "drop" : undefined);
-    await answer(h); await h.run(70_000);
-    expect(h.view.snapshot().commands.recovery?.state.name).toBe("exhausted");
     let failChecks = 1;
-    h.route(request => isCheck(request) && failChecks-- > 0 ? "drop" : undefined);
-    await h.view.stop(); await tick();
+    h.route(request => request.kind === "answer.submit" ? "drop"
+      : isCheck(request) && h.posts("session.stop").length > 0 && failChecks-- > 0 ? "drop" : undefined);
+    await answer(h); await untilClosure(h);
+    const closure = h.fetcher.mock.calls.map(call => call[1]?.body ? JSON.parse(String(call[1].body)) : null)
+      .filter(body => body?.kind === "session.stop");
+    expect(closure.map(body => body.payload)).toEqual([{ reason: "save_failed", unsaved_command_id: h.posts("answer.submit")[0].commandId }]);
     const stopAt = h.posts("session.stop")[0].at;
     expect(h.view.snapshot().phase).toBe("closed");
     expect(hasPending(h.values, primaryKey)).toBe(true);
     expect(h.view.snapshot().commands.closedAction?.state).toBe("checking");
     await h.run(4000);
-    expect(h.checks().filter(entry => entry.at >= stopAt)).toHaveLength(1);
+    expect(afterClosure(h)).toHaveLength(1);
     await h.run(2000);
-    const checks = h.checks().filter(entry => entry.at >= stopAt).map(entry => Math.round((entry.at - stopAt) / 1000));
+    const checks = afterClosure(h).map(entry => Math.round((entry.at - stopAt) / 1000));
     expect(checks).toEqual([0, 5]);
     expect({ pending: h.view.snapshot().commands.primary.pending, record: hasPending(h.values, primaryKey) }).toEqual({ pending: false, record: false });
     // Nothing more is sent: no answer after the closure.
     expect(h.posts("answer.submit")).toHaveLength(6);
     expect(h.view.snapshot().commands.closedAction?.state).toBe("ended");
   });
-  it("the checks after the closure follow 5, 10, 20, 30 s while offline and request nothing in the background", async () => {
+  it("the checks after the closure C follow 5, 10, 20, 30 s while offline and request nothing in the background", async () => {
     const h = harness();
-    h.route(request => request.kind === "answer.submit" ? "drop" : undefined);
-    await answer(h); await h.run(70_000);
-    h.route(request => isCheck(request) ? "drop" : undefined);
-    await h.view.stop(); await tick();
+    h.route(request => request.kind === "answer.submit" ? "drop" : isCheck(request) && h.posts("session.stop").length > 0 ? "drop" : undefined);
+    await answer(h); await untilClosure(h);
     const stopAt = h.posts("session.stop")[0].at;
     await h.run(66_000);
-    const offsets = h.checks().filter(entry => entry.at >= stopAt).map(entry => Math.round((entry.at - stopAt) / 1000));
+    const offsets = afterClosure(h).map(entry => Math.round((entry.at - stopAt) / 1000));
     expect(offsets).toEqual([0, 5, 15, 35, 65]);
     h.view.suspend(); const requests = h.log.length;
     await h.run(10 * 60_000, 10_000);
@@ -307,7 +319,9 @@ describe("the closure record C in the Stop slot (D-CP4 4.6.1, 7.3)", () => {
     await h.view.refresh(); await tick();
     expect(hasPending(h.values, stopKey)).toBe(true);
     h.setStep(closed()); h.setClosedOnServer();
-    await h.view.refresh(); await tick();
+    // Since M1c (C546/C547) the retained C is checked by its own closure machine on the probe schedule (a refresh waits
+    // for it, as for a study action), not by the refresh itself.
+    await h.view.refresh(); await h.run(70_000);
     expect({ pending: h.view.snapshot().commands.stop.pending, record: hasPending(h.values, stopKey) }).toEqual({ pending: false, record: false });
     expect(h.posts()).toEqual([]);
   });
@@ -318,7 +332,8 @@ describe("the closure record C in the Stop slot (D-CP4 4.6.1, 7.3)", () => {
     await h.view.refresh(); await tick();
     expect(hasPending(h.values, stopKey)).toBe(true);
     applied = true; h.setStep(closed());
-    await h.view.refresh(); await tick();
+    // The closure machine checks the retained C on its probe schedule (M1c).
+    await h.view.refresh(); await h.run(70_000);
     const s = h.view.snapshot();
     expect({ phase: s.phase, pending: s.commands.stop.pending, outcome: s.commands.stop.outcome, record: hasPending(h.values, stopKey) })
       .toEqual({ phase: "closed", pending: false, outcome: "accepted", record: false });
@@ -343,15 +358,18 @@ describe("the closure record C in the Stop slot (D-CP4 4.6.1, 7.3)", () => {
   });
 });
 
-describe("a closure record is never sent by any path", () => {
-  it("the Learning session API refuses to send it, but checks it", async () => {
+// Before M1b C was never sent; since core 35c3844 (CP4b) the document sends it once, a retained C is only checked.
+describe("the closure record C on the wire", () => {
+  it("the Learning session API sends it as is and checks it", async () => {
     const { createLearningSessionApi } = await import("./learningSessionApi");
     const fetcher = vi.fn<typeof fetch>(async () => response(missing({ command_id: id(300), session_id: id(3) } as never)));
     const api = createLearningSessionApi({ fetcher, timeoutMs: 1000, maxResponseBytes: 100000, gate: testGate() });
     const command = { command_id: id(300), session_id: id(3), kind: "session.stop" as const,
       payload: { reason: "save_failed" as const, unsaved_command_id: id(100) }, client_instance_id: id(1), document_id: id(2) };
-    await expect(api.send("token", "proof", command)).rejects.toThrow("invalid Learning command");
-    expect(fetcher).not.toHaveBeenCalled();
+    await expect(api.send("token", "proof", command)).rejects.toMatchObject({ kind: "invalid_response" });
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(JSON.parse(String(fetcher.mock.calls[0][1]!.body)).payload).toEqual({ reason: "save_failed", unsaved_command_id: id(100) });
+    fetcher.mockClear();
     await expect(readWithTicket(command, (__command, __ticket) => api.status("token", "proof", __command, __ticket))).resolves.toMatchObject({ outcome: "not_found" });
     expect(fetcher).toHaveBeenCalledOnce();
   });

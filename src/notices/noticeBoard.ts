@@ -160,3 +160,28 @@ export function useNoticeBoard(options: { access: OpenedAccess; transport: HttpO
   const notices = board.hasSeen(options.access) ? snapshot.notices : board.pendingOf(options.access);
   return { board, snapshot, notices };
 }
+
+/**
+ * answer_loss in the OPEN window (project notices §6; Т2): after this window's own Stop naming X or its closure C was
+ * accepted, the mode's summary reads GET /notices once, shows the notice's line with the summary of its session and
+ * acknowledges it by its «На Сегодня». The modes get only this narrow face of the board.
+ */
+export type ClosureNotices = {
+  /** Т2: read GET /notices (a failed read leaves the summary as it is; the next open shows the notice). */
+  read(): void;
+  /** The pending answer_loss of that closed session, if the board knows it. */
+  find(sessionId: string): NoticeView | null;
+  /** The «На Сегодня» of that summary: true to go on (acknowledged, gone, or no notice); false keeps the summary. */
+  leave(sessionId: string): Promise<boolean>;
+};
+
+export function closureNotices(board: NoticeBoard): ClosureNotices {
+  return {
+    read: () => { void board.read(); },
+    find: sessionId => board.find(sessionId, "answer_loss"),
+    async leave(sessionId) {
+      const notice = board.find(sessionId, "answer_loss");
+      return notice ? board.acknowledge(notice.notice_id) : true;
+    },
+  };
+}

@@ -43,7 +43,11 @@ export function canonicalConjugationIntent(value: ConjugationIntent): Conjugatio
   const session_id = value.session_id.toLowerCase();
   switch (value.kind) {
     case "session.start": return { command_id, kind: value.kind, session_id, payload: { mode: "conjugation" } };
-    case "session.stop": return { command_id, kind: value.kind, session_id, payload: { reason: value.payload.reason } };
+    // T1: X (lower case, as every id here) only when named; without it the payload stays `{reason}`.
+    case "session.stop": return { command_id, kind: value.kind, session_id,
+      payload: "unsaved_command_id" in value.payload && typeof value.payload.unsaved_command_id === "string"
+        ? { reason: value.payload.reason, unsaved_command_id: value.payload.unsaved_command_id.toLowerCase() }
+        : { reason: value.payload.reason } } as ConjugationIntent;
     case "assignment.present": return { command_id, kind: value.kind, session_id,
       assignment_id: value.assignment_id.toLowerCase(), payload: {} };
     case "answer.submit": return { command_id, kind: value.kind, session_id,

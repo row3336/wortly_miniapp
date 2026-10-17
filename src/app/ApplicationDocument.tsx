@@ -33,7 +33,7 @@ import type { LearningPageStarts } from "../learning/learningPageStarts";
 import { useOralHost, type OralStores } from "./OralHost";
 import { useConjugationHost, type ConjugationStores } from "./ConjugationHost";
 import type { DeletionEnd } from "../profile/profileDeleteController";
-import { useNoticeBoard } from "../notices/noticeBoard";
+import { closureNotices, useNoticeBoard } from "../notices/noticeBoard";
 import { NoticeScreen } from "../notices/NoticeScreen";
 
 type Props = {
@@ -288,6 +288,8 @@ export function ApplicationDocument(props: Props) {
   // GET /notices when the window needs it. They stand in place of Today, one at a time, until the person's press.
   const notices = useNoticeBoard({ access: props.access, transport: props.transport, newId: props.newId });
   const noticeBoard = notices.board;
+  // answer_loss in the open window (§6): the modes' narrow face of the board; stable for the document's lifetime.
+  const closures = useMemo(() => closureNotices(noticeBoard), [noticeBoard]);
   const latestToday = useRef(today); latestToday.current = today;
   // §6.1 «Восстановление клиента»: a start refused as NOTICE_PENDING (directly or found by the check of an unknown start)
   // reads GET /notices and shows the waiting summary on Today's place. Nothing else follows: no new ID, no POST; a new
@@ -386,7 +388,8 @@ export function ApplicationDocument(props: Props) {
     initialSessionId: oralSeed, seedPending: at === "oral" && readAfter && (read.kind === "pending" || read.kind === "oral"),
     route: at === "oral" ? "oral" : todayShown ? "today" : "hidden",
     onOral: () => navigate({ type: "open", screen: "oral" }), onToday: today, onForeignStart: refreshForStart,
-    onNoticePending: noticePending, onForcedClosure: oralForcedClosure, onLeaveForcedClosure: leaveForcedOral,
+    onNoticePending: noticePending, onForcedClosure: oralForcedClosure, onLeaveForcedClosure: leaveForcedOral, closureNotices: closures,
+    forcedNotice: sessionId => noticeBoard.find(sessionId, "oral_forced_close")?.notice_id ?? null,
     // «Уточнить поля» in М18 (M-ORAL-ENTRY): the card opens on top of the oral quiz; Back returns to the same question.
     onOpenCard: (cardId, details) => navigate({ type: "push", screen: "card", subject: cardId, details }) });
   // The written owner also lives for the whole document; L1→De rows of Today start it (tz_app М09).
@@ -394,7 +397,7 @@ export function ApplicationDocument(props: Props) {
     language: props.language, settings, minimumStateVersion: highest(floor?.version, writtenSelected?.version),
     initialSessionId: writtenSeed, route: at === "written" ? "written" : todayShown ? "today" : "hidden",
     onWritten: () => navigate({ type: "open", screen: "written" }), onToday: today, onForeignStart: refreshForStart,
-    onNoticePending: noticePending,
+    onNoticePending: noticePending, closureNotices: closures,
     // «Уточнить поля» (M-ACTIONS): the answered card opens on top of the quiz and returns to it.
     onOpenCard: (cardId, details) => navigate({ type: "push", screen: "card", subject: cardId, details }) });
   // The conjugation owner lives for the whole document too; the Today button «Тест спряжений» starts it (М16).
@@ -404,7 +407,7 @@ export function ApplicationDocument(props: Props) {
     seedPending: at === "conjugation" && readAfter && (read.kind === "pending" || read.kind === "conjugation"),
     route: at === "conjugation" ? "conjugation" : todayShown ? "today" : "hidden",
     onConjugation: () => navigate({ type: "open", screen: "conjugation" }), onToday: today, onForeignStart: refreshForStart,
-    onNoticePending: noticePending });
+    onNoticePending: noticePending, closureNotices: closures });
   useEffect(() => { if (choosing) setChoiceShown(true); }, [choosing]);
   if (todayShown && (oral.blocksToday || written.blocksToday || conjugation.blocksToday)) { hostRoute = "settings"; screen = loading; }
   // One host per opened card route (TA:86, К07-096): a fresh key per route object, so reopening a card while its

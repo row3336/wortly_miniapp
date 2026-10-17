@@ -105,7 +105,12 @@ describe("Learning undo refusals", () => {
     const undos = h.undos();
     expect(undos).toHaveLength(6);
     expect(new Set(undos.map(post => JSON.stringify(post))).size).toBe(1);
-    expect(h.view.snapshot()).toMatchObject({ phase: "unknown", canRetryPrimary: false, commands: { recovery: { state: { name: "exhausted" } } } });
+    // Since M1b (CP4b, CON §6.1 п.8): the spent budget closes the session by the closure C naming the undo (before: unknown).
+    expect(h.view.snapshot()).toMatchObject({ phase: "closed", canRetryPrimary: false,
+      commands: { recovery: { state: { name: "terminated", reason: "session_closed" } } } });
+    expect(h.kinds().at(-1)).toBe("session.stop");
+    // X is the spent undo itself (CON §6.1 п.8; QA M1b P3).
+    expect(h.posts().at(-1)!.payload).toEqual({ reason: "save_failed", unsaved_command_id: undos[0].command_id });
     await h.view.retry(); await tick(60_000); expect(h.undos()).toHaveLength(6);
   });
 });

@@ -605,6 +605,26 @@ describe("OralScreen: summary of the own Stop", () => {
     f.controller.dispose();
   });
 
+  // QA M1b P3 (project notices §8): c.screen(notice_shown) follows the drawn summary with the notice — never the route
+  // nor the read: while the own Stop's summary is still read (the loader), nothing is recorded.
+  it("notice_shown is recorded once the summary with its line is drawn, not while it is still read", async () => {
+    const { installClientJournal } = await import("../journal/clientJournal");
+    const { resetNoticeShown } = await import("../notices/noticeJournal");
+    const record = vi.fn(); installClientJournal({ record } as never); resetNoticeShown();
+    try {
+      const { f, base } = await detached(), lines = ["Занятие завершено.", "Последний ответ не сохранился. Остальные ответы сохранены."];
+      const props = { actions: f.actions, language: "ru" as const, active: true, onToday: () => {}, noticeLines: lines, noticeId: id(101) };
+      const { rerender } = render(<OralScreen state={{ ...base, phase: "closed", current: null, closed: facts("stop", "reading") }} {...props} />);
+      await act(async () => {});
+      expect(document.querySelector(".wortly-loader")).toBeTruthy(); expect(record).not.toHaveBeenCalled();
+      rerender(<OralScreen state={{ ...base, phase: "closed", current: null, closed: facts("stop", "known") }} {...props} />);
+      await act(async () => {});
+      expect(screen.getByText(lines[1])).toBeTruthy();
+      expect(record.mock.calls).toEqual([[{ ev: "c.screen", kind: "notice_shown", notice: id(101) }]]);
+      f.controller.dispose();
+    } finally { installClientJournal(null); resetNoticeShown(); }
+  });
+
   it("V1-5 the natural summary still finishes the session through summary_home", async () => {
     const f = fixture("summary"); f.set(projection("summary", 2, 1)); await f.controller.refresh();
     const stop = vi.spyOn(f.actions, "stop").mockResolvedValue(undefined), onToday = vi.fn();
